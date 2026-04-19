@@ -1,0 +1,133 @@
+{
+  "id": "traecnclaw",
+  "name": "TraeCNclaw",
+  "version": "0.1.0",
+  "description": "Delegate IDE tasks from OpenClaw to a local TraeCNclaw instance that drives the TraeCN desktop app.",
+  "baseUrl": "http://127.0.0.1:8788",
+  "quickstart": {
+    "macos": "start-traecnapi.command",
+    "windows": "start-traecnapi.cmd"
+  },
+  "tools": [
+    {
+      "name": "traecn_status",
+      "description": "Check if TraeCNclaw gateway is reachable and TraeCN automation is ready.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "allowAutoStart": {
+            "type": "boolean",
+            "description": "Allow automatically starting TraeCN if not running",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_new_chat",
+      "description": "Create a new chat in TraeCN and switch the UI to it.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "allowAutoStart": {
+            "type": "boolean",
+            "description": "Allow automatically starting TraeCN if not running",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_delegate",
+      "description": "Delegate an IDE task to TraeCN desktop app and return the AI response.",
+      "parameters": {
+        "type": "object",
+        "required": ["task"],
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "The task description to delegate to TraeCN"
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Path to the project to open in TraeCN"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Existing session ID to use instead of creating a new one"
+          },
+          "allowAutoStart": {
+            "type": "boolean",
+            "description": "Allow automatically starting TraeCN if not running",
+            "default": false
+          },
+          "includeProcessText": {
+            "type": "boolean",
+            "description": "Include process/thinking information in the response",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_switch_mode",
+      "description": "Switch TraeCN between SOLO and IDE modes.",
+      "parameters": {
+        "type": "object",
+        "required": ["mode"],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["solo", "ide"],
+            "description": "The mode to switch to"
+          },
+          "allowAutoStart": {
+            "type": "boolean",
+            "description": "Allow automatically starting TraeCN if not running",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_open_project",
+      "description": "Open a project in TraeCN.",
+      "parameters": {
+        "type": "object",
+        "required": ["projectPath"],
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Path to the project to open"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_update_self",
+      "description": "Update the TraeCNclaw plugin to the latest version.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "force": {
+            "type": "boolean",
+            "description": "Force update even if already up to date",
+            "default": false
+          }
+        }
+      }
+    }
+  ],
+  "slashCommands": [
+    {
+      "command": "/TraeCN",
+      "description": "Create a new chat and delegate a task to TraeCN, returning only the final response",
+      "usage": "/TraeCN <task>"
+    },
+    {
+      "command": "/TraeCN process",
+      "description": "Create a new chat and delegate a task to TraeCN, returning the full output including process information",
+      "usage": "/TraeCN process <task>"
+    }
+  ]
+}

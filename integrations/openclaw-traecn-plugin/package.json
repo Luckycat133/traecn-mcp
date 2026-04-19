@@ -1,0 +1,8 @@
+{
+  "name": "openclaw-traecn-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw plugin for TraeCNclaw integration",
+  "main": "index.js",
+  "keywords": ["openclaw", "traecn", "plugin"]
+}
