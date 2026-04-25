@@ -3,13 +3,10 @@
 const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-
-function _getEnvWithFallback(traecnKey, traeKey, defaultValue) {
-  return process.env[traecnKey] || process.env[traeKey] || defaultValue;
-}
+const { getEnvWithFallback } = require('../shared/utils');
 
 function findTraeCNBinary() {
-  const envBin = _getEnvWithFallback('TRAECN_BIN', 'TRAE_BIN', '');
+  const envBin = getEnvWithFallback('TRAECN_BIN', 'TRAE_BIN', '');
   if (envBin) return envBin;
 
   const platform = process.platform;
@@ -60,15 +57,15 @@ function startTraeCN(options = {}) {
   }
 
   const args = [];
-  const remotePort = _getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const remotePort = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
   args.push(`--remote-debugging-port=${remotePort}`);
 
-  const extraArgs = _getEnvWithFallback('TRAECN_ARGS', 'TRAE_ARGS', '');
+  const extraArgs = getEnvWithFallback('TRAECN_ARGS', 'TRAE_ARGS', '');
   if (extraArgs) {
     args.push(...extraArgs.split(' '));
   }
 
-  const projectPath = options.projectPath || _getEnvWithFallback('TRAECN_PROJECT_PATH', 'TRAE_PROJECT_PATH', '');
+  const projectPath = options.projectPath || getEnvWithFallback('TRAECN_PROJECT_PATH', 'TRAE_PROJECT_PATH', '');
   if (projectPath) {
     args.push(projectPath);
   }
@@ -98,10 +95,10 @@ function startTraeCN(options = {}) {
 
 function getQuickstartConfig() {
   return {
-    useIsolatedProfile: _getEnvWithFallback('TRAECN_QUICKSTART_USE_ISOLATED_PROFILE', 'TRAE_QUICKSTART_USE_ISOLATED_PROFILE', '1') === '1',
-    remoteDebuggingPort: _getEnvWithFallback('TRAECN_QUICKSTART_REMOTE_DEBUGGING_PORT', 'TRAE_QUICKSTART_REMOTE_DEBUGGING_PORT', '9333'),
-    gatewayPort: _getEnvWithFallback('PORT', 'PORT', '8788'),
-    gatewayHost: _getEnvWithFallback('HOST', 'HOST', '127.0.0.1')
+    useIsolatedProfile: getEnvWithFallback('TRAECN_QUICKSTART_USE_ISOLATED_PROFILE', 'TRAE_QUICKSTART_USE_ISOLATED_PROFILE', '1') === '1',
+    remoteDebuggingPort: getEnvWithFallback('TRAECN_QUICKSTART_REMOTE_DEBUGGING_PORT', 'TRAE_QUICKSTART_REMOTE_DEBUGGING_PORT', '9333'),
+    gatewayPort: getEnvWithFallback('PORT', 'PORT', '8788'),
+    gatewayHost: getEnvWithFallback('HOST', 'HOST', '127.0.0.1')
   };
 }
 

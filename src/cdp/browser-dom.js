@@ -1,7 +1,34 @@
 'use strict';
 
+const DOM_DOC_CACHE_TTL = 2000;
+
+class DomCache {
+  constructor() {
+    this._doc = null;
+    this._docTs = 0;
+  }
+
+  async getDocument(client) {
+    const now = Date.now();
+    if (this._doc && now - this._docTs < DOM_DOC_CACHE_TTL) {
+      return this._doc;
+    }
+    const { root } = await client.send('DOM.getDocument', { depth: -1 });
+    this._doc = root;
+    this._docTs = now;
+    return root;
+  }
+
+  invalidate() {
+    this._doc = null;
+    this._docTs = 0;
+  }
+}
+
+const _globalCache = new DomCache();
+
 async function querySelector(client, selector) {
-  const { root } = await client.send('DOM.getDocument', { depth: -1 });
+  const root = await _globalCache.getDocument(client);
   const { nodeId } = await client.send('DOM.querySelector', {
     nodeId: root.nodeId,
     selector
@@ -10,7 +37,7 @@ async function querySelector(client, selector) {
 }
 
 async function querySelectorAll(client, selector) {
-  const { root } = await client.send('DOM.getDocument', { depth: -1 });
+  const root = await _globalCache.getDocument(client);
   const { nodeIds } = await client.send('DOM.querySelectorAll', {
     nodeId: root.nodeId,
     selector
@@ -61,7 +88,7 @@ async function getInnerText(client, nodeId) {
     });
     return result.value || '';
   } catch(e) {
-    // Node may have been removed/replaced — return empty to signal need for re-query
+    _globalCache.invalidate();
     return '';
   }
 }
@@ -121,16 +148,20 @@ async function setInputValue(client, nodeId, value) {
 
 async function setContentEditableText(client, nodeId, text) {
   const objectId = await _getNodeObjectId(client, nodeId);
-  // Use execCommand('insertText') which properly triggers beforeinput/input events
-  // that Trae CN's Lexical editor listens to for enabling the send button
   await client.send('Runtime.callFunctionOn', {
     functionDeclaration: `function() {
-      this.innerText = '';
       this.focus();
+      var sel = window.getSelection();
+      var range = document.createRange();
+      range.selectNodeContents(this);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand('delete', false, null);
       document.execCommand('insertText', false, ${JSON.stringify(text)});
     }`,
     objectId
   });
+  _globalCache.invalidate();
 }
 
 async function pressEnter(client) {
@@ -170,5 +201,6 @@ module.exports = {
   setInputValue,
   setContentEditableText,
   pressEnter,
-  findFirstMatching
+  findFirstMatching,
+  DomCache
 };

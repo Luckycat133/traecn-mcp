@@ -1,10 +1,7 @@
 'use strict';
 
 const { findTraeCNBinary, isTraeCNRunning, startTraeCN } = require('../src/config/quickstart');
-
-function _getEnvWithFallback(traecnKey, traeKey, defaultValue) {
-  return process.env[traecnKey] || process.env[traeKey] || defaultValue;
-}
+const { getEnvWithFallback } = require('../src/shared/utils');
 
 async function main() {
   console.log('[TRAECNclaw] Checking TraeCN status...');
@@ -31,8 +28,8 @@ async function main() {
     }
   }
 
-  const host = _getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
-  const port = _getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const host = getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
+  const port = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
 
   console.log(`[TRAECNclaw] Checking CDP at ${host}:${port}...`);
 

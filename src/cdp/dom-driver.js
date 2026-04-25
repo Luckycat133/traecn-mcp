@@ -4,6 +4,8 @@ const http = require('http');
 const { TraeCNAutomationError } = require('./errors');
 const { CDPClient } = require('./client');
 const dom = require('./browser-dom');
+const { SettingsDriver } = require('./settings-driver');
+const { getEnvWithFallback, parseSelectors, sleep, escapeJsString } = require('../shared/utils');
 
 const DEFAULT_COMPOSER_SELECTORS = [
   '.chat-input-v2-input-box-editable',
@@ -50,51 +52,40 @@ const DEFAULT_MODE_TAB_SELECTORS = [
   "[data-testid*='mode-tab']"
 ];
 
-function _getEnvWithFallback(traecnKey, traeKey, defaultValue) {
-  return process.env[traecnKey] || process.env[traeKey] || defaultValue;
-}
-
-function _parseSelectors(envValue, defaults) {
-  if (envValue) {
-    return envValue.split(',').map(s => s.trim()).filter(Boolean);
-  }
-  return defaults;
-}
-
 function getConfig() {
   return {
-    composerSelectors: _parseSelectors(
-      _getEnvWithFallback('TRAECN_COMPOSER_SELECTORS', 'TRAE_COMPOSER_SELECTORS'),
+    composerSelectors: parseSelectors(
+      getEnvWithFallback('TRAECN_COMPOSER_SELECTORS', 'TRAE_COMPOSER_SELECTORS'),
       DEFAULT_COMPOSER_SELECTORS
     ),
-    sendButtonSelectors: _parseSelectors(
-      _getEnvWithFallback('TRAECN_SEND_BUTTON_SELECTORS', 'TRAE_SEND_BUTTON_SELECTORS'),
+    sendButtonSelectors: parseSelectors(
+      getEnvWithFallback('TRAECN_SEND_BUTTON_SELECTORS', 'TRAE_SEND_BUTTON_SELECTORS'),
       DEFAULT_SEND_BUTTON_SELECTORS
     ),
-    responseSelectors: _parseSelectors(
-      _getEnvWithFallback('TRAECN_RESPONSE_SELECTORS', 'TRAE_RESPONSE_SELECTORS'),
+    responseSelectors: parseSelectors(
+      getEnvWithFallback('TRAECN_RESPONSE_SELECTORS', 'TRAE_RESPONSE_SELECTORS'),
       DEFAULT_RESPONSE_SELECTORS
     ),
-    activitySelectors: _parseSelectors(
-      _getEnvWithFallback('TRAECN_ACTIVITY_SELECTORS', 'TRAE_ACTIVITY_SELECTORS'),
+    activitySelectors: parseSelectors(
+      getEnvWithFallback('TRAECN_ACTIVITY_SELECTORS', 'TRAE_ACTIVITY_SELECTORS'),
       DEFAULT_ACTIVITY_SELECTORS
     ),
-    newChatSelectors: _parseSelectors(
-      _getEnvWithFallback('TRAECN_NEW_CHAT_SELECTORS', 'TRAE_NEW_CHAT_SELECTORS'),
+    newChatSelectors: parseSelectors(
+      getEnvWithFallback('TRAECN_NEW_CHAT_SELECTORS', 'TRAE_NEW_CHAT_SELECTORS'),
       DEFAULT_NEW_CHAT_SELECTORS
     ),
-    modeTabSelectors: _parseSelectors(
-      _getEnvWithFallback('TRAECN_MODE_TAB_SELECTORS', 'TRAE_MODE_TAB_SELECTORS'),
+    modeTabSelectors: parseSelectors(
+      getEnvWithFallback('TRAECN_MODE_TAB_SELECTORS', 'TRAE_MODE_TAB_SELECTORS'),
       DEFAULT_MODE_TAB_SELECTORS
     ),
-    sendTrigger: _getEnvWithFallback('TRAECN_SEND_TRIGGER', 'TRAE_SEND_TRIGGER', 'button'),
-    pollIntervalMs: parseInt(_getEnvWithFallback('TRAECN_RESPONSE_POLL_INTERVAL_MS', 'TRAE_RESPONSE_POLL_INTERVAL_MS', '350'), 10),
-    idleMs: parseInt(_getEnvWithFallback('TRAECN_RESPONSE_IDLE_MS', 'TRAE_RESPONSE_IDLE_MS', '1200'), 10),
-    timeoutMs: parseInt(_getEnvWithFallback('TRAECN_RESPONSE_TIMEOUT_MS', 'TRAE_RESPONSE_TIMEOUT_MS', '30000'), 10),
-    postActionDelayMs: parseInt(_getEnvWithFallback('TRAECN_POST_ACTION_DELAY_MS', 'TRAE_POST_ACTION_DELAY_MS', '350'), 10),
-    sessionPrepareTimeoutMs: parseInt(_getEnvWithFallback('TRAECN_SESSION_PREPARE_TIMEOUT_MS', 'TRAE_SESSION_PREPARE_TIMEOUT_MS', '5000'), 10),
-    queuePollIntervalMs: parseInt(_getEnvWithFallback('TRAECN_QUEUE_POLL_INTERVAL_MS', 'TRAE_QUEUE_POLL_INTERVAL_MS', '15000'), 10),
-    queueWaitTimeoutMs: parseInt(_getEnvWithFallback('TRAECN_QUEUE_WAIT_TIMEOUT_MS', 'TRAE_QUEUE_WAIT_TIMEOUT_MS', '600000'), 10)
+    sendTrigger: getEnvWithFallback('TRAECN_SEND_TRIGGER', 'TRAE_SEND_TRIGGER', 'button'),
+    pollIntervalMs: parseInt(getEnvWithFallback('TRAECN_RESPONSE_POLL_INTERVAL_MS', 'TRAE_RESPONSE_POLL_INTERVAL_MS', '350'), 10),
+    idleMs: parseInt(getEnvWithFallback('TRAECN_RESPONSE_IDLE_MS', 'TRAE_RESPONSE_IDLE_MS', '1200'), 10),
+    timeoutMs: parseInt(getEnvWithFallback('TRAECN_RESPONSE_TIMEOUT_MS', 'TRAE_RESPONSE_TIMEOUT_MS', '30000'), 10),
+    postActionDelayMs: parseInt(getEnvWithFallback('TRAECN_POST_ACTION_DELAY_MS', 'TRAE_POST_ACTION_DELAY_MS', '350'), 10),
+    sessionPrepareTimeoutMs: parseInt(getEnvWithFallback('TRAECN_SESSION_PREPARE_TIMEOUT_MS', 'TRAE_SESSION_PREPARE_TIMEOUT_MS', '5000'), 10),
+    queuePollIntervalMs: parseInt(getEnvWithFallback('TRAECN_QUEUE_POLL_INTERVAL_MS', 'TRAE_QUEUE_POLL_INTERVAL_MS', '15000'), 10),
+    queueWaitTimeoutMs: parseInt(getEnvWithFallback('TRAECN_QUEUE_WAIT_TIMEOUT_MS', 'TRAE_QUEUE_WAIT_TIMEOUT_MS', '600000'), 10)
   };
 }
 
@@ -109,14 +100,8 @@ function sanitizeActivityText(text) {
     .trim();
 }
 
-/**
- * Detects if text represents a truncation/abort signal rather than real content.
- * "Builder手动终止输出" = AI generated content but manually truncated by user
- * vs actual AI response content.
- */
 function isTruncationSignal(text) {
   if (!text) return false;
-  // These patterns indicate truncation or empty response
   const truncatePatterns = [
     'Builder手动终止输出',
     '手动终止输出',
@@ -129,10 +114,6 @@ function isTruncationSignal(text) {
     '正在分析问题…'
   ];
   return truncatePatterns.some(p => text.includes(p));
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 class DomDriver {
@@ -150,7 +131,6 @@ class DomDriver {
   }
 
   async findResponseRegion() {
-    // Try response selectors first; fall back to activity container if none found
     const region = await dom.findFirstMatching(this.client, this.config.responseSelectors);
     if (region) return region;
     return dom.findFirstMatching(this.client, this.config.activitySelectors);
@@ -191,9 +171,6 @@ class DomDriver {
   }
 
   async sendMessage(text) {
-    // CRITICAL: Clear the editor first by selecting all and deleting
-    // After a delegate call, the SOLO Coder response stays in the DOM.
-    // If we don't clear, Ctrl+A selects the old response instead of user input.
     await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 });
     await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 });
     await sleep(50);
@@ -201,7 +178,6 @@ class DomDriver {
     await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace' });
     await sleep(100);
 
-    // Now type the actual message character by character
     for (const char of text) {
       if (char === '\n') {
         await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter' });
@@ -214,24 +190,23 @@ class DomDriver {
           type: 'keyUp', key: char, code: 'Key' + char.toUpperCase()
         });
       }
-      await sleep(30); // Allow Lexical to process each keystroke
+      await sleep(30);
     }
     await sleep(this.config.postActionDelayMs);
 
-    // Verify: check if text was inserted via keyboard
+    const primaryComposer = escapeJsString(this.config.composerSelectors[0] || '.chat-input-v2-input-box-editable');
     const verifyResult = await this.client.send('Runtime.evaluate', {
-      expression: `document.querySelector('.chat-input-v2-input-box-editable')?.textContent || ''`,
+      expression: `document.querySelector('${primaryComposer}')?.textContent || ''`,
       returnByValue: true
     });
     const currentText = (verifyResult.result?.value || '').trim();
 
-    // If keyboard typing didn't work, use innerText as fallback
     if (currentText !== text.trim()) {
-      const escaped = text.replace(/'/g, "\\'");
+      const escaped = escapeJsString(text);
       await this.client.send('Runtime.evaluate', {
         expression: `
           (function() {
-            var el = document.querySelector('.chat-input-v2-input-box-editable');
+            var el = document.querySelector('${primaryComposer}');
             if (!el) return;
             el.innerText = '${escaped}';
             el.dispatchEvent(new InputEvent('input', {bubbles: true, cancelable: true}));
@@ -242,7 +217,6 @@ class DomDriver {
       await sleep(this.config.postActionDelayMs * 2);
     }
 
-    // Submit via Ctrl+Enter
     await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 2 });
     await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
     await sleep(this.config.postActionDelayMs);
@@ -258,17 +232,16 @@ class DomDriver {
     let stableCount = 0;
     let warmingUp = true;
     let lastText = '';
-    let initialText = null; // Track what the response region said before we started
+    let initialText = null;
     let inQueueSince = null;
     let truncationSince = null;
-    const truncationTimeout = 20000; // Wait max 20s for content beyond truncation signal
+    const truncationTimeout = 20000;
 
     while (Date.now() - startTime < this.config.timeoutMs) {
       let responseRegion;
       try {
         responseRegion = await this.findResponseRegion();
       } catch(e) {
-        // Response region not found yet, wait and retry
         await sleep(pollInterval);
         continue;
       }
@@ -277,22 +250,17 @@ class DomDriver {
         try {
           currentText = await dom.getInnerText(this.client, responseRegion.nodeId);
           currentText = sanitizeActivityText(currentText);
-          // Capture initial text once, before new conversation response arrives
           if (initialText === null) initialText = currentText;
         } catch(e) {
-          // NodeId became stale — force re-resolve on next iteration
-          // Keep lastText to maintain truncation/queue tracking
           await sleep(pollInterval);
           continue;
         }
       }
 
       if (warmingUp) {
-        // If content changed from initial text, SOLO Coder started generating new response
         if (currentText !== initialText) {
           lastText = currentText;
           stableCount = 0;
-          // Keep warmingUp true until the content stabilizes as new content
         }
         if (Date.now() - startTime >= warmupMs) {
           warmingUp = false;
@@ -302,7 +270,6 @@ class DomDriver {
         continue;
       }
 
-      // Detect queue state
       const isQueued = currentText && (
         currentText.includes('排队') ||
         currentText.includes('等待') ||
@@ -311,10 +278,7 @@ class DomDriver {
       );
 
       if (isQueued) {
-        // Track how long we've been in queue
         if (!inQueueSince) inQueueSince = Date.now();
-
-        // Check if we've exceeded queue wait timeout
         if (Date.now() - inQueueSince > queueWaitTimeout) {
           return {
             text: currentText,
@@ -325,21 +289,16 @@ class DomDriver {
             timedOut: true
           };
         }
-
-        // Still in queue, wait for next check at longer interval
         lastText = currentText;
         await sleep(queuePollInterval);
         continue;
       }
 
-      // Not in queue — reset queue tracking
       inQueueSince = null;
 
-      // If truncation/abort signal detected, don't treat as stable — keep polling
       const truncationSignal = isTruncationSignal(currentText);
       if (truncationSignal) {
         if (!truncationSince) truncationSince = Date.now();
-        // If only seeing truncation signal for too long, return it as final
         if (Date.now() - truncationSince > truncationTimeout) {
           return {
             text: currentText,
@@ -354,10 +313,8 @@ class DomDriver {
         continue;
       }
 
-      // Real content — reset truncation tracker
       truncationSince = null;
 
-      // Consider response stable if text is unchanged AND has meaningful length
       const isStable = currentText && currentText === lastText && currentText.length >= 4;
       if (isStable) {
         stableCount++;
@@ -376,22 +333,29 @@ class DomDriver {
   async delegate(task, options = {}) {
     await this.newChat();
 
-    // IMPORTANT: Clear response region before sending new task.
-    // After newChat(), the SOLO Coder response from the PREVIOUS conversation
-    // may still be visible in the DOM. If we don't clear it, collectResponse
-    // will use the old response as initialText and incorrectly return it as stable.
+    const responseSel1 = escapeJsString(this.config.responseSelectors[0] || "[data-role='assistant']");
+    const responseSel2 = escapeJsString(this.config.responseSelectors[1] || '.agent-plan-items');
     await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
-          var el = document.querySelector('[data-role="assistant"]');
+          var el = document.querySelector('${responseSel1}');
           if (el) el.textContent = '';
-          var items = document.querySelectorAll('.agent-plan-items');
+          var items = document.querySelectorAll('${responseSel2}');
           for (var i = 0; i < items.length; i++) items[i].textContent = '';
         })()
       `,
       returnByValue: true
     });
     await sleep(200);
+
+    const queueWaitTimeoutMs = this.config.queueWaitTimeoutMs || 600000;
+    const queuePollIntervalMs = this.config.queuePollIntervalMs || 15000;
+    const maxQueueRetries = Math.ceil(queueWaitTimeoutMs / queuePollIntervalMs);
+    for (let attempt = 0; attempt < maxQueueRetries; attempt++) {
+      const status = await this.checkQueueStatus();
+      if (!status.queued) break;
+      await sleep(queuePollIntervalMs);
+    }
 
     await this.sendMessage(task);
     const response = await this.collectResponse();
@@ -404,14 +368,12 @@ class DomDriver {
   }
 
   async newChat() {
-    // Use Cmd+N keyboard shortcut — more reliable than DOM click for SOLO Coder webview
     await this.client.send('Input.dispatchKeyEvent', {
-      type: 'keyDown', key: 'n', code: 'KeyN', modifiers: 256 // Cmd modifier
+      type: 'keyDown', key: 'n', code: 'KeyN', modifiers: 256
     });
     await this.client.send('Input.dispatchKeyEvent', {
       type: 'keyUp', key: 'n', code: 'KeyN', modifiers: 256
     });
-    // Wait for SOLO Coder webview to fully load the new conversation
     await sleep(2000);
     return true;
   }
@@ -422,13 +384,12 @@ class DomDriver {
     const target = tabs.find(t => t.text.toLowerCase().includes(modeLower));
 
     if (target) {
-      // Use dispatchEvent instead of .click() — .click() doesn't reach SOLO Coder webview
-      // Map text to index: SOLO=tabs[0], IDE=tabs[1]
       const tabIndex = target.text.toLowerCase().includes('solo') ? 0 : 1;
+      const modeTabSel = escapeJsString(this.config.modeTabSelectors[0] || '.icube-mode-tab-item');
       await this.client.send('Runtime.evaluate', {
         expression: `
           (function() {
-            var tabs = document.querySelectorAll('.icube-mode-tab-item');
+            var tabs = document.querySelectorAll('${modeTabSel}');
             if (tabs[${tabIndex}]) {
               tabs[${tabIndex}].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
               return 'clicked: ' + tabs[${tabIndex}].textContent?.trim();
@@ -444,62 +405,122 @@ class DomDriver {
     return false;
   }
 
+  static KNOWN_MODELS = [
+    'Doubao-Seed-2.0-Code', 'Doubao-Seed-1.8', 'Doubao-Seed-Code',
+    'MiniMax-M2.7', 'MiniMax-M2.5',
+    'GLM-5.1', 'GLM-5V-Turbo', 'GLM-5',
+    'DeepSeek-V3.1-Terminus', 'Kimi-K2.5', 'Qwen3.6-Plus', 'Qwen3.5-Plus'
+  ];
+
+  async checkQueueStatus(timeoutMs = 5000) {
+    try {
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('checkQueueStatus timeout')), timeoutMs)
+      );
+      const result = await Promise.race([
+        this._checkQueueStatusRaw(),
+        timeoutPromise
+      ]);
+      return result;
+    } catch (e) {
+      return { queued: false };
+    }
+  }
+
+  async _checkQueueStatusRaw() {
+    const triggerResult = await this.client.send('Runtime.evaluate', {
+        expression: `
+          (function() {
+            const trigger = document.querySelector('.icd-model-select-trigger');
+            if (!trigger) return { found: false };
+            const isDisabled = trigger.disabled ||
+                              trigger.getAttribute('aria-disabled') === 'true';
+            const wrapper = trigger.closest('.ai-model-select') ||
+                          trigger.closest('[class*="ai-model-select"]');
+            const hasDisabledClass = wrapper ?
+              /ai-model-select-disabled|model-select-disabled/.test(wrapper.className) : false;
+            const sendBtn = document.querySelector('.chat-input-v2-send-button');
+            const sendDisabled = sendBtn ?
+              (sendBtn.disabled || /disabled/.test(sendBtn.className)) : false;
+            const currentModel = trigger.textContent?.replace(/\\s+/g, ' ').trim() || '';
+            return {
+              found: true,
+              isDisabled,
+              hasDisabledClass,
+              sendDisabled,
+              currentModel
+            };
+          })()
+        `,
+        returnByValue: true
+      });
+
+      const info = triggerResult.result?.value || {};
+
+      if (info.found && (info.isDisabled || info.hasDisabledClass)) {
+        return {
+          queued: true,
+          position: null,
+          message: `Model "${info.currentModel}" is currently unavailable (queued/busy). Model selector disabled: ${info.isDisabled}, wrapper disabled class: ${info.hasDisabledClass}`
+        };
+      }
+
+      return { queued: false };
+  }
+
   async switchModel(modelName) {
     const MODEL_SELECTOR = '.icd-model-select-trigger';
 
-    // Check if dropdown is already open
-    const isOpen = await this.client.send('Runtime.evaluate', {
-      expression: `document.querySelector('${MODEL_SELECTOR}')?.getAttribute('aria-expanded') === 'true'`,
+    await this.client.send('Runtime.evaluate', {
+      expression: `document.querySelector('${MODEL_SELECTOR}')?.focus()`,
       returnByValue: true
     });
+    await sleep(100);
+    await this.client.send('Input.dispatchKeyEvent', {
+      type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', modifiers: 0
+    });
+    await this.client.send('Input.dispatchKeyEvent', {
+      type: 'keyUp', key: 'ArrowDown', code: 'ArrowDown', modifiers: 0
+    });
+    await sleep(500);
 
-    if (!isOpen.result?.value) {
-      // Open dropdown via keyboard (click alone doesn't open this control)
-      await this.client.send('Runtime.evaluate', {
-        expression: `document.querySelector('${MODEL_SELECTOR}')?.focus()`,
-        returnByValue: true
-      });
-      await this.client.send('Input.dispatchKeyEvent', {
-        type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', modifiers: 4
-      });
-      await this.client.send('Input.dispatchKeyEvent', {
-        type: 'keyUp', key: 'ArrowDown', code: 'ArrowDown', modifiers: 4
-      });
-      await sleep(600);
-    }
-
-    // Now find and click the target model option — use TreeWalker for reliable traversal
-    const escaped = modelName.replace(/'/g, "\\'");
+    const escaped = escapeJsString(modelName);
     const result = await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
-          var listbox = document.querySelector('[role="listbox"]');
-          if (!listbox) return 'no listbox';
-          // TreeWalker is more reliable than querySelectorAll for nested elements
-          var walker = document.createTreeWalker(listbox, NodeFilter.SHOW_TEXT, null);
-          var node;
-          while (node = walker.nextNode()) {
-            if (node.textContent?.trim() === '${escaped}') {
-              var el = node.parentElement;
-              while (el && el !== listbox) {
-                var cls = el.className || '';
-                if (cls.includes('model-item') || cls.includes('select-item')) {
-                  el.click();
-                  return 'selected: ${escaped}';
-                }
-                el = el.parentElement;
-              }
+          var items = document.querySelectorAll('.icube-model-select-portal-model-item');
+          if (!items.length) return 'no model items found';
+          var targetName = '${escaped}';
+          for (var i = 0; i < items.length; i++) {
+            var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
+            if (name === targetName || name.startsWith(targetName + 'Beta') || name.startsWith(targetName + ' ')) {
+              items[i].click();
+              return 'clicked: ' + name + ' at index ' + i;
             }
           }
-          // Fallback: try all elements
-          var allEls = listbox.querySelectorAll('*');
-          for (var el of allEls) {
-            if (el.textContent?.trim() === '${escaped}' && el.offsetParent !== null) {
-              el.click();
-              return 'selected (fallback): ${escaped}';
+          var normalizedTarget = targetName.replace(/\\s*Beta\\s*/i, '');
+          for (var i = 0; i < items.length; i++) {
+            var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim().replace(/\\s*Beta\\s*/i, '') : '';
+            if (name === normalizedTarget) {
+              items[i].click();
+              return 'clicked (normalized): ' + items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper').textContent.trim() + ' at index ' + i;
             }
           }
-          return 'model not found: ${escaped}';
+          for (var i = 0; i < items.length; i++) {
+            var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
+            var cleanName = name.replace(/Beta/i, '').trim();
+            if (cleanName === targetName) {
+              items[i].click();
+              return 'clicked (partial): ' + name + ' at index ' + i;
+            }
+          }
+          return 'model not found: ' + targetName + ', available: ' + [].map.call(items, function(el) {
+            var n = el.querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            return n ? n.textContent.replace(/\\s+/g, ' ').trim() : '';
+          }).join(', ');
         })()
       `,
       returnByValue: true
@@ -520,6 +541,13 @@ class DomDriver {
       responseRegion: response ? { matchedSelector: response.matchedSelector } : null
     };
   }
+
+  get settings() {
+    if (!this._settingsDriver) {
+      this._settingsDriver = new SettingsDriver(this.client, this.config);
+    }
+    return this._settingsDriver;
+  }
 }
 
 module.exports = {
@@ -531,5 +559,6 @@ module.exports = {
   DEFAULT_RESPONSE_SELECTORS,
   DEFAULT_ACTIVITY_SELECTORS,
   DEFAULT_NEW_CHAT_SELECTORS,
-  DEFAULT_MODE_TAB_SELECTORS
+  DEFAULT_MODE_TAB_SELECTORS,
+  SettingsDriver
 };

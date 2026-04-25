@@ -74,6 +74,33 @@ const toolDefinitions = [
     }
   },
   {
+    name: 'traecn_switch_model',
+    description: 'Switch the AI model used by TraeCN. Available models include: Doubao-Seed-2.0-Code, Doubao-Seed-1.8, GLM-5.1, DeepSeek-V3.1-Terminus, etc.',
+    parameters: {
+      type: 'object',
+      required: ['model'],
+      properties: {
+        model: { type: 'string', description: 'The model name to switch to (e.g. "GLM-5.1", "DeepSeek-V3.1-Terminus")' }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      return client.switchModel(params.model);
+    }
+  },
+  {
+    name: 'traecn_queue_status',
+    description: 'Check if the current TraeCN AI model is in a queued/busy state.',
+    parameters: {
+      type: 'object',
+      properties: {}
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      return client.checkQueueStatus();
+    }
+  },
+  {
     name: 'traecn_open_project',
     description: 'Open a project in TraeCN.',
     parameters: {
@@ -86,6 +113,52 @@ const toolDefinitions = [
     handler: async (params, context) => {
       const client = new TraeCNApiClient(context);
       return client.openProject(params.projectPath);
+    }
+  },
+  {
+    name: 'traecn_chat',
+    description: 'Quickly trigger a task via trae-cn chat CLI (fire-and-forget, does not return AI response). Use traecn_delegate instead when you need to read the response.',
+    parameters: {
+      type: 'object',
+      required: ['prompt'],
+      properties: {
+        prompt: { type: 'string', description: 'The prompt to send to TraeCN via CLI' },
+        mode: { type: 'string', enum: ['ask', 'edit', 'agent'], description: 'CLI mode: ask, edit, or agent (default agent)' },
+        addFile: { type: 'string', description: 'Add file as context' },
+        maximize: { type: 'boolean', description: 'Maximize chat window', default: false },
+        reuseWindow: { type: 'boolean', description: 'Reuse last window', default: false },
+        newWindow: { type: 'boolean', description: 'Open new window', default: false }
+      }
+    },
+    handler: async (params, context) => {
+      const { spawn } = require('child_process');
+      const args = ['chat'];
+      if (params.mode) args.push('--mode', params.mode);
+      if (params.maximize) args.push('--maximize');
+      if (params.reuseWindow) args.push('--reuse-window');
+      if (params.newWindow) args.push('--new-window');
+      if (params.addFile) args.push('--add-file', params.addFile);
+      args.push('--', params.prompt);
+
+      const child = spawn('trae-cn', args, { stdio: 'pipe' });
+      return new Promise((resolve) => {
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', d => stdout += d);
+        child.stderr.on('data', d => stderr += d);
+        child.on('close', (code) => {
+          resolve({
+            launched: true,
+            exitCode: code,
+            stdout: stdout.trim(),
+            stderr: stderr.trim(),
+            note: 'CLI mode does not return AI response. Use traecn_delegate for full interaction.'
+          });
+        });
+        child.on('error', (err) => {
+          resolve({ launched: false, error: err.message, note: 'trae-cn CLI not available' });
+        });
+      });
     }
   },
   {

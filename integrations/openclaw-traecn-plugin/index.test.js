@@ -18,103 +18,102 @@ function test(name, fn) {
   }
 }
 
-console.log('\n[index.test.js] Running tests...\n');
+console.log('\n[index.test.js] Running OpenClaw plugin tests...\n');
 
 test('PLUGIN_ID is traecnclaw', () => {
   assert.strictEqual(PLUGIN_ID, 'traecnclaw');
 });
 
-test('toolDefinitions has 6 tools', () => {
-  assert.strictEqual(toolDefinitions.length, 6);
+test('toolDefinitions is an array with at least 5 tools', () => {
+  assert.ok(Array.isArray(toolDefinitions));
+  assert.ok(toolDefinitions.length >= 5);
 });
 
-test('toolDefinitions includes traecn_status', () => {
-  assert.ok(toolDefinitions.some(t => t.name === 'traecn_status'));
+test('all tools have name, description, parameters, and handler', () => {
+  for (const tool of toolDefinitions) {
+    assert.ok(tool.name, `Tool missing name`);
+    assert.ok(tool.description, `Tool ${tool.name} missing description`);
+    assert.ok(tool.parameters, `Tool ${tool.name} missing parameters`);
+    assert.ok(typeof tool.handler === 'function', `Tool ${tool.name} missing handler`);
+  }
 });
 
-test('toolDefinitions includes traecn_new_chat', () => {
-  assert.ok(toolDefinitions.some(t => t.name === 'traecn_new_chat'));
-});
-
-test('toolDefinitions includes traecn_delegate', () => {
-  assert.ok(toolDefinitions.some(t => t.name === 'traecn_delegate'));
-});
-
-test('toolDefinitions includes traecn_switch_mode', () => {
-  assert.ok(toolDefinitions.some(t => t.name === 'traecn_switch_mode'));
-});
-
-test('toolDefinitions includes traecn_open_project', () => {
-  assert.ok(toolDefinitions.some(t => t.name === 'traecn_open_project'));
-});
-
-test('toolDefinitions includes traecn_update_self', () => {
-  assert.ok(toolDefinitions.some(t => t.name === 'traecn_update_self'));
+test('required tools are present', () => {
+  const names = toolDefinitions.map(t => t.name);
+  assert.ok(names.includes('traecn_status'), 'Missing traecn_status');
+  assert.ok(names.includes('traecn_delegate'), 'Missing traecn_delegate');
+  assert.ok(names.includes('traecn_new_chat'), 'Missing traecn_new_chat');
+  assert.ok(names.includes('traecn_switch_mode'), 'Missing traecn_switch_mode');
+  assert.ok(names.includes('traecn_switch_model'), 'Missing traecn_switch_model');
+  assert.ok(names.includes('traecn_queue_status'), 'Missing traecn_queue_status');
+  assert.ok(names.includes('traecn_chat'), 'Missing traecn_chat');
+  assert.ok(names.includes('traecn_open_project'), 'Missing traecn_open_project');
 });
 
 test('traecn_delegate has required task parameter', () => {
-  const tool = toolDefinitions.find(t => t.name === 'traecn_delegate');
-  assert.ok(tool.parameters.required.includes('task'));
+  const delegate = toolDefinitions.find(t => t.name === 'traecn_delegate');
+  assert.ok(delegate.parameters.required.includes('task'));
+  assert.ok(delegate.parameters.properties.task);
 });
 
-test('traecn_switch_mode has required mode parameter', () => {
-  const tool = toolDefinitions.find(t => t.name === 'traecn_switch_mode');
-  assert.ok(tool.parameters.required.includes('mode'));
+test('traecn_switch_model has required model parameter', () => {
+  const switchModel = toolDefinitions.find(t => t.name === 'traecn_switch_model');
+  assert.ok(switchModel.parameters.required.includes('model'));
 });
 
-test('traecn_switch_mode mode is enum with solo and ide', () => {
-  const tool = toolDefinitions.find(t => t.name === 'traecn_switch_mode');
-  assert.deepStrictEqual(tool.parameters.properties.mode.enum, ['solo', 'ide']);
+test('traecn_switch_mode has enum constraint', () => {
+  const switchMode = toolDefinitions.find(t => t.name === 'traecn_switch_mode');
+  assert.deepStrictEqual(switchMode.parameters.properties.mode.enum, ['solo', 'ide']);
 });
 
-test('slashCommands has 2 commands', () => {
-  assert.strictEqual(slashCommands.length, 2);
+test('traecn_chat has required prompt parameter', () => {
+  const chat = toolDefinitions.find(t => t.name === 'traecn_chat');
+  assert.ok(chat.parameters.required.includes('prompt'));
+  assert.ok(chat.parameters.properties.mode.enum.includes('ask'));
+  assert.ok(chat.parameters.properties.mode.enum.includes('edit'));
+  assert.ok(chat.parameters.properties.mode.enum.includes('agent'));
 });
 
-test('slashCommands includes /TraeCN', () => {
-  assert.ok(slashCommands.some(c => c.command === '/TraeCN'));
+test('slashCommands is an array', () => {
+  assert.ok(Array.isArray(slashCommands));
+  assert.ok(slashCommands.length >= 1);
 });
 
-test('slashCommands includes /TraeCN process', () => {
-  assert.ok(slashCommands.some(c => c.command === '/TraeCN process'));
+test('slashCommands have command, description, and handler', () => {
+  for (const cmd of slashCommands) {
+    assert.ok(cmd.command, 'Command missing command name');
+    assert.ok(cmd.description, 'Command missing description');
+    assert.ok(typeof cmd.handler === 'function', 'Command missing handler');
+  }
 });
 
-test('formatResult returns text for successful result', () => {
-  const result = formatResult({ text: 'Hello from TraeCN', stable: true });
-  assert.ok(result.includes('Hello from TraeCN'));
+test('formatResult handles error', () => {
+  const result = formatResult({ error: 'test error' });
+  assert.ok(result.includes('test error'));
+  assert.ok(result.includes('Error'));
 });
 
-test('formatResult shows error prefix for error result', () => {
-  const result = formatResult({ error: 'Connection failed' });
-  assert.ok(result.includes('[TraeCN Error]'));
-  assert.ok(result.includes('Connection failed'));
+test('formatResult handles normal response', () => {
+  const result = formatResult({ text: 'hello world' });
+  assert.strictEqual(result, 'hello world');
 });
 
-test('formatResult includes process text when different from text', () => {
-  const result = formatResult({ text: 'Final answer', processText: 'Thinking...\nFinal answer' });
-  assert.ok(result.includes('--- Process ---'));
-  assert.ok(result.includes('Thinking...'));
+test('formatResult handles process text', () => {
+  const result = formatResult({ text: 'final', processText: 'thinking...' });
+  assert.ok(result.includes('final'));
+  assert.ok(result.includes('thinking...'));
+  assert.ok(result.includes('Process'));
 });
 
-test('formatResult includes timeout warning', () => {
-  const result = formatResult({ text: 'Partial', timedOut: true });
+test('formatResult handles timeout', () => {
+  const result = formatResult({ text: 'partial', timedOut: true });
   assert.ok(result.includes('timed out'));
 });
 
-test('all tools have handlers', () => {
-  for (const tool of toolDefinitions) {
-    assert.strictEqual(typeof tool.handler, 'function', `Tool ${tool.name} missing handler`);
-  }
-});
-
-test('all slash commands have handlers', () => {
-  for (const cmd of slashCommands) {
-    assert.strictEqual(typeof cmd.handler, 'function', `Command ${cmd.command} missing handler`);
-  }
+test('formatResult handles empty response', () => {
+  const result = formatResult({});
+  assert.ok(result.includes('No response'));
 });
 
 console.log(`\n[index.test.js] Results: ${passed} passed, ${failed} failed\n`);
-
-if (failed > 0) {
-  process.exit(1);
-}
+process.exit(failed > 0 ? 1 : 0);

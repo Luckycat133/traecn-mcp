@@ -5,10 +5,7 @@ const { TraeCNAutomationError } = require('./errors');
 const { CDPClient } = require('./client');
 const dom = require('./browser-dom');
 const { DomDriver } = require('./dom-driver');
-
-function _getEnvWithFallback(traecnKey, traeKey, defaultValue) {
-  return process.env[traecnKey] || process.env[traeKey] || defaultValue;
-}
+const { getEnvWithFallback } = require('../shared/utils');
 
 async function fetchCDPTargets(host, port) {
   return new Promise((resolve, reject) => {
@@ -86,10 +83,10 @@ async function validateTargetHasContent(client, readiness) {
 }
 
 async function discoverTarget(options = {}) {
-  const host = _getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
-  const port = _getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
-  const titleContains = _getEnvWithFallback('TRAECN_CDP_TARGET_TITLE_CONTAINS', 'TRAE_CDP_TARGET_TITLE_CONTAINS', 'Trae');
-  const urlContains = _getEnvWithFallback('TRAECN_CDP_TARGET_URL_CONTAINS', 'TRAE_CDP_TARGET_URL_CONTAINS', '');
+  const host = getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
+  const port = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const titleContains = getEnvWithFallback('TRAECN_CDP_TARGET_TITLE_CONTAINS', 'TRAE_CDP_TARGET_TITLE_CONTAINS', 'Trae');
+  const urlContains = getEnvWithFallback('TRAECN_CDP_TARGET_URL_CONTAINS', 'TRAE_CDP_TARGET_URL_CONTAINS', '');
 
   const effectiveHost = options.host || host;
   const effectivePort = options.port || port;

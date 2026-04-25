@@ -1,13 +1,10 @@
 'use strict';
 
 const { findTraeCNBinary, isTraeCNRunning, startTraeCN } = require('../src/config/quickstart');
-
-function _getEnvWithFallback(traecnKey, traeKey, defaultValue) {
-  return process.env[traecnKey] || process.env[traeKey] || defaultValue;
-}
+const { getEnvWithFallback } = require('../src/shared/utils');
 
 async function main() {
-  const projectPath = process.argv[2] || _getEnvWithFallback('TRAECN_PROJECT_PATH', 'TRAE_PROJECT_PATH', '');
+  const projectPath = process.argv[2] || getEnvWithFallback('TRAECN_PROJECT_PATH', 'TRAE_PROJECT_PATH', '');
 
   if (isTraeCNRunning()) {
     console.log('[TRAECNclaw] TraeCN is already running.');
