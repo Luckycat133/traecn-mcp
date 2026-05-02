@@ -5,6 +5,7 @@ const http = require('http');
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8788;
 const DEFAULT_TIMEOUT = 120000;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
 
 class TraeCNApiClient {
   constructor(options = {}) {
@@ -36,14 +37,22 @@ class TraeCNApiClient {
         headers,
         timeout: this.timeout
       }, (res) => {
-        let body = '';
-        res.on('data', chunk => body += chunk);
+        let responseBody = '';
+        let responseBytes = 0;
+        res.on('data', chunk => {
+          responseBytes += chunk.length;
+          if (responseBytes > MAX_RESPONSE_BYTES) {
+            req.destroy(new Error('Response body too large'));
+            return;
+          }
+          responseBody += chunk;
+        });
         res.on('end', () => {
           try {
-            const parsed = JSON.parse(body);
+            const parsed = JSON.parse(responseBody);
             resolve({ status: res.statusCode, data: parsed });
           } catch(e) {
-            resolve({ status: res.statusCode, data: body });
+            resolve({ status: res.statusCode, data: responseBody });
           }
         });
       });
@@ -95,12 +104,12 @@ class TraeCNApiClient {
   }
 
   async settingsRead(section = null) {
-    const path = section ? `/api/settings?section=${encodeURIComponent(section)}` : '/api/settings';
+    const path = section ? `/api/settings/read?section=${encodeURIComponent(section)}` : '/api/settings/read';
     return this._request('GET', path);
   }
 
   async settingsWrite(section, data) {
-    return this._request('POST', '/api/settings', { section, ...data });
+    return this._request('POST', '/api/settings/set', { section, ...data });
   }
 
   async updateSelf(force = false) {

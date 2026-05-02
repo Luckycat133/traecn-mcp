@@ -1,7 +1,9 @@
 'use strict';
 
 const http = require('http');
+const crypto = require('crypto');
 const { URL } = require('url');
+const packageInfo = require('../../package.json');
 const { discoverTarget, connectToTarget, fetchCDPVersion } = require('../cdp/discovery');
 const { DomDriver, getConfig } = require('../cdp/dom-driver');
 const { SETTINGS_SECTIONS } = require('../cdp/settings-driver');
@@ -9,7 +11,7 @@ const { MockDriver } = require('../cdp/mock-driver');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
-const { getEnvWithFallback } = require('../shared/utils');
+const { getEnvWithFallback, parsePositiveInt } = require('../shared/utils');
 
 function normalizeUrl(rawUrl) {
   return rawUrl.replace(/[\x80-\xff]/g, ch => {
@@ -19,6 +21,19 @@ function normalizeUrl(rawUrl) {
 }
 
 const SENSITIVE_KEYS = ['token', 'password', 'secret', 'credential', 'authorization'];
+const DEFAULT_JSON_HEADERS = {
+  'Content-Type': 'application/json; charset=utf-8',
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer'
+};
+const DEFAULT_HTML_HEADERS = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline' 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"
+};
 
 function sanitizeLog(obj) {
   if (!obj || typeof obj !== 'object') return obj;
@@ -33,6 +48,14 @@ function sanitizeLog(obj) {
     }
   }
   return sanitized;
+}
+
+function secureCompare(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 class RateLimiter {
@@ -84,7 +107,8 @@ function parseBody(req) {
     req.on('data', chunk => {
       size += chunk.length;
       if (size > maxSize) {
-        reject(new Error('Request body too large'));
+        reject(new HttpError('Request body too large', 413, 'REQUEST_BODY_TOO_LARGE'));
+        req.destroy();
         return;
       }
       body += chunk;
@@ -94,7 +118,7 @@ function parseBody(req) {
       try {
         resolve(body ? JSON.parse(body) : {});
       } catch {
-        resolve({});
+        reject(new HttpError('Invalid JSON body', 400, 'INVALID_JSON'));
       }
     });
 
@@ -102,17 +126,27 @@ function parseBody(req) {
   });
 }
 
-function jsonResponse(res, data, statusCode = 200) {
+class HttpError extends Error {
+  constructor(message, statusCode = 500, code = 'HTTP_ERROR') {
+    super(message);
+    this.name = 'HttpError';
+    this.statusCode = statusCode;
+    this.code = code;
+  }
+}
+
+function jsonResponse(res, data, statusCode = 200, headers = {}) {
   res.writeHead(statusCode, {
-    'Content-Type': 'application/json',
-    'X-Powered-By': 'traecn-cdp-http-bridge'
+    ...DEFAULT_JSON_HEADERS,
+    ...headers
   });
   res.end(JSON.stringify(data));
 }
 
-function htmlResponse(res, html, statusCode = 200) {
+function htmlResponse(res, html, statusCode = 200, headers = {}) {
   res.writeHead(statusCode, {
-    'Content-Type': 'text/html; charset=utf-8'
+    ...DEFAULT_HTML_HEADERS,
+    ...headers
   });
   res.end(html);
 }
@@ -162,15 +196,15 @@ function formatResult(result) {
 class Gateway {
   constructor(options = {}) {
     this.host = options.host || getEnvWithFallback('TRAECN_HOST', 'TRAE_HOST', '127.0.0.1');
-    this.port = options.port || parseInt(getEnvWithFallback('TRAECN_PORT', 'TRAE_PORT', '8788'), 10);
+    this.port = options.port !== undefined ? options.port : parsePositiveInt(getEnvWithFallback('TRAECN_PORT', 'TRAE_PORT', '8788'), 8788);
     this.token = getEnvWithFallback('TRAECN_GATEWAY_TOKEN', 'TRAE_GATEWAY_TOKEN', '');
     this.authHeader = getEnvWithFallback('TRAECN_AUTH_HEADER', 'TRAE_AUTH_HEADER', 'Authorization');
     this.allowedOrigins = getEnvWithFallback('TRAECN_ALLOWED_ORIGINS', 'TRAE_ALLOWED_ORIGINS', '');
     this.debugEndpoints = getEnvWithFallback('TRAECN_ENABLE_DEBUG_ENDPOINTS', 'TRAE_ENABLE_DEBUG_ENDPOINTS', '0') === '1';
     this.mockBridge = getEnvWithFallback('TRAECN_ENABLE_MOCK_BRIDGE', 'TRAE_ENABLE_MOCK_BRIDGE', '0') === '1';
 
-    const rateWindowMs = parseInt(getEnvWithFallback('TRAECN_RATE_LIMIT_WINDOW_MS', 'TRAE_RATE_LIMIT_WINDOW_MS', '60000'), 10);
-    const rateMaxRequests = parseInt(getEnvWithFallback('TRAECN_RATE_LIMIT_MAX_REQUESTS', 'TRAE_RATE_LIMIT_MAX_REQUESTS', '60'), 10);
+    const rateWindowMs = parsePositiveInt(getEnvWithFallback('TRAECN_RATE_LIMIT_WINDOW_MS', 'TRAE_RATE_LIMIT_WINDOW_MS', '60000'), 60000);
+    const rateMaxRequests = parsePositiveInt(getEnvWithFallback('TRAECN_RATE_LIMIT_MAX_REQUESTS', 'TRAE_RATE_LIMIT_MAX_REQUESTS', '60'), 60);
     this.rateLimiter = new RateLimiter(rateWindowMs, rateMaxRequests);
 
     this.client = null;
@@ -179,6 +213,30 @@ class Gateway {
     this.sessions = new Map();
     this.idempotencyKeys = new Map();
     this.taskQueue = taskQueue;
+    this.pollingTimer = null;
+  }
+
+  _corsHeaders(req) {
+    const origin = req.headers.origin;
+    if (!this.allowedOrigins) {
+      return { 'Access-Control-Allow-Origin': '*' };
+    }
+    const allowed = this.allowedOrigins.split(',').map(o => o.trim()).filter(Boolean);
+    if (allowed.includes('*')) {
+      return { 'Access-Control-Allow-Origin': '*' };
+    }
+    if (origin && allowed.includes(origin)) {
+      return { 'Access-Control-Allow-Origin': origin, 'Vary': 'Origin' };
+    }
+    return {};
+  }
+
+  _json(req, res, data, statusCode = 200, headers = {}) {
+    return jsonResponse(res, data, statusCode, { ...this._corsHeaders(req), ...headers });
+  }
+
+  _html(req, res, html, statusCode = 200, headers = {}) {
+    return htmlResponse(res, html, statusCode, { ...this._corsHeaders(req), ...headers });
   }
 
   _authenticate(req) {
@@ -186,12 +244,12 @@ class Gateway {
 
     const authHeader = req.headers[this.authHeader.toLowerCase()] || '';
     if (authHeader.startsWith('Bearer ')) {
-      return authHeader.slice(7) === this.token;
+      return secureCompare(authHeader.slice(7), this.token);
     }
 
     const customToken = req.headers['x-traecn-token'];
     if (customToken) {
-      return customToken === this.token;
+      return secureCompare(customToken, this.token);
     }
 
     return false;
@@ -202,7 +260,7 @@ class Gateway {
     const origin = req.headers.origin;
     if (!origin) return true;
 
-    const allowed = this.allowedOrigins.split(',').map(o => o.trim());
+    const allowed = this.allowedOrigins.split(',').map(o => o.trim()).filter(Boolean);
     return allowed.includes(origin) || allowed.includes('*');
   }
 
@@ -251,7 +309,7 @@ class Gateway {
     try {
       parsedUrl = new URL(normalizedUrl, `http://${req.headers.host}`);
     } catch(e) {
-      return jsonResponse(res, { error: 'Invalid URL: ' + e.message }, 400);
+      return this._json(req, res, { error: 'Invalid URL: ' + e.message }, 400);
     }
     req._normalizedUrl = normalizedUrl;
     const pathname = parsedUrl.pathname;
@@ -259,7 +317,7 @@ class Gateway {
 
     if (method === 'OPTIONS') {
       res.writeHead(204, {
-        'Access-Control-Allow-Origin': this.allowedOrigins || '*',
+        ...this._corsHeaders(req),
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-TraeCN-Token, Idempotency-Key',
         'Access-Control-Max-Age': '86400'
@@ -269,7 +327,7 @@ class Gateway {
     }
 
     if (!this._checkOrigin(req)) {
-      return jsonResponse(res, { error: 'Origin not allowed' }, 403);
+      return this._json(req, res, { error: 'Origin not allowed' }, 403);
     }
 
     if (pathname === '/api/status' && method === 'GET') {
@@ -277,16 +335,16 @@ class Gateway {
     }
 
     if (!this._authenticate(req)) {
-      return jsonResponse(res, { error: 'Unauthorized' }, 401);
+      return this._json(req, res, { error: 'Unauthorized' }, 401);
     }
 
     if (!this._checkRateLimit(req)) {
-      return jsonResponse(res, { error: 'Rate limit exceeded' }, 429);
+      return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
     }
 
     const idempotencyResponse = this._checkIdempotency(req);
     if (idempotencyResponse) {
-      return jsonResponse(res, idempotencyResponse.data, idempotencyResponse.statusCode);
+      return this._json(req, res, idempotencyResponse.data, idempotencyResponse.statusCode);
     }
 
     try {
@@ -322,8 +380,14 @@ class Gateway {
       if (pathname === '/api/delegate' && method === 'POST') {
         return await this._handleDelegateAsync(req, res);
       }
+      if (pathname === '/api/delegate-async' && method === 'POST') {
+        return await this._handleDelegateAsync(req, res);
+      }
       if (pathname === '/api/open-project' && method === 'POST') {
         return await this._handleOpenProject(req, res);
+      }
+      if (pathname === '/api/update-self' && method === 'POST') {
+        return await this._handleUpdateSelf(req, res);
       }
       if (pathname === '/api/readiness' && method === 'GET') {
         return await this._handleReadiness(req, res);
@@ -334,7 +398,13 @@ class Gateway {
       if (pathname === '/api/settings/read' && method === 'GET') {
         return await this._handleSettingsRead(req, res);
       }
+      if (pathname === '/api/settings' && method === 'GET') {
+        return await this._handleSettingsRead(req, res);
+      }
       if (pathname === '/api/settings/set' && method === 'POST') {
+        return await this._handleSettingsSet(req, res);
+      }
+      if (pathname === '/api/settings' && method === 'POST') {
         return await this._handleSettingsSet(req, res);
       }
       if (pathname === '/api/settings/switch-tab' && method === 'POST') {
@@ -344,20 +414,20 @@ class Gateway {
         return await this._handleSettingsBackToChat(req, res);
       }
       if (pathname === '/' && method === 'GET') {
-        return htmlResponse(res, renderChatUI());
+        return this._html(req, res, renderChatUI());
       }
       if (pathname === '/openapi.json' && method === 'GET') {
-        return jsonResponse(res, generateOpenAPISpec());
+        return this._json(req, res, generateOpenAPISpec());
       }
       if (pathname === '/debug/automation' && method === 'GET' && this.debugEndpoints) {
         return await this._handleDebugAutomation(req, res);
       }
 
-      jsonResponse(res, { error: 'Not found' }, 404);
+      this._json(req, res, { error: 'Not found' }, 404);
     } catch (err) {
       console.error('[Gateway] Error:', sanitizeLog({ message: err.message, code: err.code }));
-      const statusCode = err instanceof TraeCNAutomationError ? 502 : 500;
-      jsonResponse(res, { error: err.message, code: err.code || 'INTERNAL_ERROR' }, statusCode);
+      const statusCode = err instanceof HttpError ? err.statusCode : (err instanceof TraeCNAutomationError ? 502 : 500);
+      this._json(req, res, { error: err.message, code: err.code || 'INTERNAL_ERROR' }, statusCode);
     }
   }
 
@@ -374,10 +444,10 @@ class Gateway {
       connected = false;
     }
 
-    jsonResponse(res, {
+    this._json(req, res, {
       status: connected ? 'connected' : 'disconnected',
       service: 'traecn-cdp-http-bridge',
-      version: '0.1.0',
+      version: packageInfo.version,
       mockBridge: this.mockBridge,
       cdp: cdpVersion ? { browser: cdpVersion.Browser, protocolVersion: cdpVersion['Protocol-Version'] } : null,
       uptime: process.uptime()
@@ -401,7 +471,7 @@ class Gateway {
 
     const responseData = { sessionId, createdAt: session.createdAt };
     this._storeIdempotency(req.headers['idempotency-key'], { data: responseData, statusCode: 201 });
-    jsonResponse(res, responseData, 201);
+    this._json(req, res, responseData, 201);
   }
 
   _handleListSessions(req, res) {
@@ -410,24 +480,24 @@ class Gateway {
       createdAt: s.createdAt,
       messageCount: s.messages.length
     }));
-    jsonResponse(res, { sessions });
+    this._json(req, res, { sessions });
   }
 
   _handleGetSession(req, res, sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      return jsonResponse(res, { error: 'Session not found' }, 404);
+      return this._json(req, res, { error: 'Session not found' }, 404);
     }
-    jsonResponse(res, session);
+    this._json(req, res, session);
   }
 
   async _handleDelegate(req, res, sessionId) {
     const body = await parseBody(req);
     if (!body.task) {
-      return jsonResponse(res, { error: 'task is required' }, 400);
+      return this._json(req, res, { error: 'task is required' }, 400);
     }
     if (typeof body.task !== 'string' || body.task.length > 100000) {
-      return jsonResponse(res, { error: 'task must be a string with max 100000 characters' }, 400);
+      return this._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
     }
 
     await this._ensureConnection();
@@ -455,33 +525,33 @@ class Gateway {
     }
 
     this._storeIdempotency(req.headers['idempotency-key'], { data: responseData, statusCode: 200 });
-    jsonResponse(res, responseData);
+    this._json(req, res, responseData);
   }
 
   async _handleNewChat(req, res) {
     await this._ensureConnection();
     const success = await this.driver.newChat();
-    jsonResponse(res, { success });
+    this._json(req, res, { success });
   }
 
   async _handleSwitchMode(req, res) {
     const body = await parseBody(req);
     if (!body.mode) {
-      return jsonResponse(res, { error: 'mode is required' }, 400);
+      return this._json(req, res, { error: 'mode is required' }, 400);
     }
     if (!['solo', 'ide'].includes(body.mode.toLowerCase())) {
-      return jsonResponse(res, { error: 'mode must be "solo" or "ide"' }, 400);
+      return this._json(req, res, { error: 'mode must be "solo" or "ide"' }, 400);
     }
 
     await this._ensureConnection();
     const success = await this.driver.switchMode(body.mode);
-    jsonResponse(res, { success, mode: body.mode });
+    this._json(req, res, { success, mode: body.mode });
   }
 
   async _handleSwitchModel(req, res) {
     const body = await parseBody(req);
     if (!body.model) {
-      return jsonResponse(res, { error: 'model is required' }, 400);
+      return this._json(req, res, { error: 'model is required' }, 400);
     }
 
     await this._ensureConnection();
@@ -497,7 +567,7 @@ class Gateway {
       const status = await this.driver.checkQueueStatus();
       if (!status.queued) {
         // Model is ready
-        return jsonResponse(res, {
+        return this._json(req, res, {
           success: true,
           model: body.model,
           switchResult,
@@ -512,7 +582,7 @@ class Gateway {
     }
 
     // Timed out waiting for model to become available
-    return jsonResponse(res, {
+    return this._json(req, res, {
       success: false,
       model: body.model,
       switchResult,
@@ -525,28 +595,38 @@ class Gateway {
   async _handleQueueStatus(req, res) {
     await this._ensureConnection();
     const status = await this.driver.checkQueueStatus();
-    jsonResponse(res, status);
+    this._json(req, res, status);
   }
 
   async _handleOpenProject(req, res) {
     const body = await parseBody(req);
     if (!body.projectPath) {
-      return jsonResponse(res, { error: 'projectPath is required' }, 400);
+      return this._json(req, res, { error: 'projectPath is required' }, 400);
     }
 
-    jsonResponse(res, { success: true, projectPath: body.projectPath, note: 'Project opening requires trae-cn CLI or manual action' });
+    this._json(req, res, { success: true, projectPath: body.projectPath, note: 'Project opening requires trae-cn CLI or manual action' });
+  }
+
+  async _handleUpdateSelf(req, res) {
+    const body = await parseBody(req);
+    this._json(req, res, {
+      success: false,
+      version: packageInfo.version,
+      force: body.force === true,
+      message: 'Automatic self-update is not enabled. Pull the latest repository revision and run npm install.'
+    }, 501);
   }
 
   async _handleReadiness(req, res) {
     await this._ensureConnection();
     const readiness = await this.driver.checkReadiness();
-    jsonResponse(res, readiness);
+    this._json(req, res, readiness);
   }
 
   async _handleSettingsReadAll(req, res) {
     await this._ensureConnection();
     const data = await this.driver.settings.readAll();
-    jsonResponse(res, { sections: SETTINGS_SECTIONS, data });
+    this._json(req, res, { sections: SETTINGS_SECTIONS, data });
   }
 
   async _handleSettingsRead(req, res) {
@@ -576,19 +656,19 @@ class Gateway {
     try {
       data = await this.driver.settings.getContent();
     } catch(e) {
-      return jsonResponse(res, { error: e.message }, 500);
+      return this._json(req, res, { error: e.message }, 500);
     }
 
-    jsonResponse(res, { section: section || 'current', ...data });
+    this._json(req, res, { section: section || 'current', ...data });
   }
 
   async _handleSettingsSet(req, res) {
     const body = await parseBody(req);
     if (!body.label) {
-      return jsonResponse(res, { error: 'label is required' }, 400);
+      return this._json(req, res, { error: 'label is required' }, 400);
     }
     if (body.value === undefined || body.value === null) {
-      return jsonResponse(res, { error: 'value is required' }, 400);
+      return this._json(req, res, { error: 'value is required' }, 400);
     }
 
     await this._ensureConnection();
@@ -599,24 +679,24 @@ class Gateway {
     }
 
     const result = await this.driver.settings.set(body.label, body.value);
-    jsonResponse(res, { label: body.label, value: body.value, result });
+    this._json(req, res, { label: body.label, value: body.value, result });
   }
 
   async _handleSettingsSwitchTab(req, res) {
     const body = await parseBody(req);
     if (!body.section) {
-      return jsonResponse(res, { error: 'section is required' }, 400);
+      return this._json(req, res, { error: 'section is required' }, 400);
     }
 
     await this._ensureConnection();
     const result = await this.driver.settings.switchTab(body.section);
-    jsonResponse(res, result);
+    this._json(req, res, result);
   }
 
   async _handleSettingsBackToChat(req, res) {
     await this._ensureConnection();
     const result = await this.driver.settings.backToChat();
-    jsonResponse(res, { result });
+    this._json(req, res, { result });
   }
 
   async _handleDebugAutomation(req, res) {
@@ -624,7 +704,7 @@ class Gateway {
     await this._ensureConnection();
     const readiness = await this.driver.checkReadiness();
 
-    jsonResponse(res, {
+    this._json(req, res, {
       config: {
         composerSelectors: config.composerSelectors,
         sendButtonSelectors: config.sendButtonSelectors,
@@ -643,10 +723,10 @@ class Gateway {
   async _handleDelegateAsync(req, res) {
     const body = await parseBody(req);
     if (!body.task) {
-      return jsonResponse(res, { error: 'task is required' }, 400);
+      return this._json(req, res, { error: 'task is required' }, 400);
     }
     if (typeof body.task !== 'string' || body.task.length > 100000) {
-      return jsonResponse(res, { error: 'task must be a string with max 100000 characters' }, 400);
+      return this._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
     }
 
     const chatId = body.chatId || null;
@@ -663,7 +743,7 @@ class Gateway {
         createdAt: Date.now(),
         attempts: 0
       });
-      return jsonResponse(res, {
+      return this._json(req, res, {
         taskId,
         status: 'queued',
         message: `Trae 排队中（${queueStatus.message || '模型忙'}），完成后自动通知`
@@ -672,13 +752,16 @@ class Gateway {
 
     // Model ready — execute synchronously with timeout protection
     let result;
+    let timeoutId;
     try {
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('delegate timeout (60s)')), 60000)
+        { timeoutId = setTimeout(() => reject(new Error('delegate timeout (60s)')), 60000); }
       );
       result = await Promise.race([this.driver.delegate(body.task), timeoutPromise]);
     } catch (e) {
-      return jsonResponse(res, { error: 'delegate failed: ' + e.message }, 504);
+      return this._json(req, res, { error: 'delegate failed: ' + e.message }, 504);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
     if (chatId) {
       await notifyOpenClaw(chatId, formatResult(result));
@@ -691,7 +774,7 @@ class Gateway {
       timedOut: result.timedOut || false
     };
     this._storeIdempotency(req.headers['idempotency-key'], { data: responseData, statusCode: 200 });
-    jsonResponse(res, responseData);
+    this._json(req, res, responseData);
   }
 
   _handleQueueStatusList(req, res) {
@@ -702,12 +785,13 @@ class Gateway {
       result: t.status === 'done' ? t.result : undefined,
       error: t.status === 'error' ? t.error : undefined
     }));
-    jsonResponse(res, { tasks });
+    this._json(req, res, { tasks });
   }
 
   _startBackgroundPolling() {
+    if (this.pollingTimer) return;
     const pollInterval = 15000;
-    setInterval(async () => {
+    this.pollingTimer = setInterval(async () => {
       for (const [taskId, task] of this.taskQueue) {
         if (task.status !== 'queued') continue;
         try {
@@ -735,7 +819,16 @@ class Gateway {
         }
       }
     }, pollInterval);
+    if (typeof this.pollingTimer.unref === 'function') {
+      this.pollingTimer.unref();
+    }
     console.log('[Gateway] Background polling started (interval=15s)');
+  }
+
+  _stopBackgroundPolling() {
+    if (!this.pollingTimer) return;
+    clearInterval(this.pollingTimer);
+    this.pollingTimer = null;
   }
 }
 
@@ -745,11 +838,14 @@ async function startGateway(options = {}) {
   const server = http.createServer((req, res) => {
     gateway.handleRequest(req, res).catch(err => {
       console.error('[Gateway] Unhandled error:', err);
-      jsonResponse(res, { error: 'Internal server error' }, 500);
+      gateway._json(req, res, { error: 'Internal server error' }, 500);
     });
   });
+  server.requestTimeout = 120000;
+  server.headersTimeout = 125000;
 
   server.on('close', () => {
+    gateway._stopBackgroundPolling();
     if (gateway.client) {
       gateway.client.close().catch(() => {});
     }

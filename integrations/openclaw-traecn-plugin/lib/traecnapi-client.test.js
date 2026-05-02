@@ -146,7 +146,21 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     const client = new TraeCNApiClient({ port, timeout: 3000 });
     const result = await client.settingsRead('模型');
     assert.strictEqual(result.data.section, '模型');
-    assert.ok(lastRequest.url.includes('section='));
+    assert.ok(lastRequest.url.startsWith('/api/settings/read?section='));
+    server.close();
+  });
+
+  await asyncTest('settingsWrite sends POST to settings set endpoint', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ label: 'Auto Save', value: true }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.settingsWrite('通用', { label: 'Auto Save', value: true });
+    assert.strictEqual(result.data.label, 'Auto Save');
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/settings/set');
+    assert.strictEqual(lastRequest.body.section, '通用');
     server.close();
   });
 

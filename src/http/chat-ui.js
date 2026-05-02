@@ -8,142 +8,392 @@ function renderChatUI() {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TraeCN Bridge Chat</title>
   <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101314;
+      --panel: #171c1d;
+      --panel-strong: #202829;
+      --border: #324044;
+      --text: #eef3ef;
+      --muted: #9ca8a4;
+      --accent: #7fd1a8;
+      --accent-strong: #46b887;
+      --warn: #f0bd68;
+      --danger: #e57373;
+      --user: #263832;
+      --assistant: #18232a;
+      --radius: 8px;
+    }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; }
-    .sidebar { width: 260px; background: #16213e; padding: 20px; border-right: 1px solid #2a2a4a; display: flex; flex-direction: column; }
-    .sidebar h2 { color: #7c8aff; margin-bottom: 15px; font-size: 18px; }
-    .sidebar .status { padding: 10px; background: #1a1a2e; border-radius: 8px; margin-bottom: 15px; font-size: 13px; }
-    .sidebar .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-    .sidebar .status .dot.connected { background: #4caf50; }
-    .sidebar .status .dot.disconnected { background: #f44336; }
-    .sidebar .info { font-size: 12px; color: #888; line-height: 1.8; }
-    .sidebar .info code { background: #1a1a2e; padding: 2px 6px; border-radius: 3px; color: #7c8aff; }
-    .main { flex: 1; display: flex; flex-direction: column; }
-    .header { padding: 15px 20px; background: #16213e; border-bottom: 1px solid #2a2a4a; display: flex; align-items: center; justify-content: space-between; }
-    .header h1 { font-size: 16px; color: #7c8aff; }
-    .header .token-input { display: flex; gap: 8px; }
-    .header .token-input input { background: #1a1a2e; border: 1px solid #2a2a4a; color: #e0e0e0; padding: 6px 10px; border-radius: 4px; font-size: 12px; width: 200px; }
-    .header .token-input button { background: #7c8aff; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-    .messages { flex: 1; overflow-y: auto; padding: 20px; }
-    .message { margin-bottom: 15px; padding: 12px 16px; border-radius: 8px; max-width: 80%; white-space: pre-wrap; word-break: break-word; }
-    .message.user { background: #2a2a4a; margin-left: auto; }
-    .message.assistant { background: #1e2a4a; border: 1px solid #2a2a4a; }
-    .message .role { font-size: 11px; color: #888; margin-bottom: 4px; }
-    .input-area { padding: 15px 20px; background: #16213e; border-top: 1px solid #2a2a4a; display: flex; gap: 10px; }
-    .input-area textarea { flex: 1; background: #1a1a2e; border: 1px solid #2a2a4a; color: #e0e0e0; padding: 10px; border-radius: 8px; resize: none; font-size: 14px; font-family: inherit; min-height: 44px; max-height: 120px; }
-    .input-area button { background: #7c8aff; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; }
-    .input-area button:disabled { background: #444; cursor: not-allowed; }
+
+    body {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input, textarea { font: inherit; }
+
+    .sidebar {
+      min-height: 100vh;
+      padding: 20px;
+      border-right: 1px solid var(--border);
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .brand h1 { font-size: 18px; font-weight: 700; }
+    .brand p { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+    .status {
+      padding: 12px;
+      background: var(--panel-strong);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: grid;
+      gap: 10px;
+    }
+
+    .status-line { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); flex: none; }
+    .dot.connected { background: var(--accent); }
+    .meta { display: grid; gap: 6px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .meta code { color: var(--accent); background: #101818; border: 1px solid #263735; padding: 1px 5px; border-radius: 4px; }
+
+    .main {
+      min-width: 0;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+
+    .header {
+      min-height: 66px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(23, 28, 29, 0.96);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .header-title { display: grid; gap: 2px; }
+    .header-title h2 { font-size: 15px; font-weight: 700; }
+    .header-title span { color: var(--muted); font-size: 12px; }
+
+    .token-input { display: flex; gap: 8px; align-items: center; }
+    .token-input input {
+      width: min(260px, 34vw);
+      min-width: 150px;
+      background: #0f1516;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+    }
+    .token-input input:focus, .input-area textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(127, 209, 168, 0.16); }
+
+    .button {
+      min-height: 36px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #07110d;
+      padding: 8px 13px;
+      cursor: pointer;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .button:hover { background: var(--accent-strong); }
+    .button:disabled { background: #3f4948; color: #9aa5a2; cursor: not-allowed; }
+    .button.secondary { background: transparent; border-color: var(--border); color: var(--text); }
+    .button.secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+    .messages {
+      overflow-y: auto;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .empty-state {
+      margin: auto;
+      max-width: 520px;
+      text-align: center;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .message {
+      width: min(760px, 86%);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+    .message.user { align-self: flex-end; background: var(--user); }
+    .message.assistant { align-self: flex-start; background: var(--assistant); }
+    .message.error { border-color: rgba(229, 115, 115, 0.55); color: #ffd6d6; }
+    .role { color: var(--muted); font-size: 11px; font-weight: 700; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.08em; }
+
+    .input-area {
+      padding: 14px 18px;
+      border-top: 1px solid var(--border);
+      background: var(--panel);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+    .input-area textarea {
+      min-height: 44px;
+      max-height: 160px;
+      resize: none;
+      background: #0f1516;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 11px 12px;
+      border-radius: var(--radius);
+      outline: none;
+      line-height: 1.45;
+    }
+
+    .toast {
+      position: fixed;
+      right: 16px;
+      bottom: 82px;
+      max-width: min(420px, calc(100vw - 32px));
+      background: var(--panel-strong);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 13px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: opacity 160ms ease, transform 160ms ease;
+    }
+    .toast.visible { opacity: 1; transform: translateY(0); }
+    .toast.error { border-left-color: var(--danger); }
+
+    @media (max-width: 760px) {
+      body { grid-template-columns: 1fr; }
+      .sidebar { min-height: auto; border-right: 0; border-bottom: 1px solid var(--border); padding: 14px 16px; }
+      .status { grid-template-columns: 1fr; }
+      .main { min-height: calc(100vh - 164px); }
+      .header { flex-direction: column; align-items: stretch; }
+      .token-input input { width: 100%; min-width: 0; }
+      .messages { padding: 16px; }
+      .message { width: 100%; }
+      .input-area { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <div class="sidebar">
-    <h2>TraeCN Bridge</h2>
-    <div class="status">
-      <span class="dot disconnected" id="statusDot"></span>
-      <span id="statusText">Disconnected</span>
+  <aside class="sidebar">
+    <div class="brand">
+      <h1>TraeCN Bridge</h1>
+      <p>Local CDP gateway for TraeCN desktop automation.</p>
     </div>
-    <div class="info">
-      <p>Gateway: <code>localhost:8788</code></p>
-      <p>CDP Port: <code>9222</code></p>
-      <p>Mode: <span id="modeText">--</span></p>
-    </div>
-  </div>
-  <div class="main">
-    <div class="header">
-      <h1>TraeCN Bridge Chat</h1>
-      <div class="token-input">
-        <input type="password" id="tokenInput" placeholder="Gateway Token (optional)">
-        <button onclick="saveToken()">Save</button>
+    <section class="status" aria-label="Gateway status">
+      <div class="status-line">
+        <span class="dot" id="statusDot" aria-hidden="true"></span>
+        <strong id="statusText">Disconnected</strong>
       </div>
-    </div>
-    <div class="messages" id="messages"></div>
-    <div class="input-area">
-      <textarea id="messageInput" placeholder="Type a message to send to TraeCN..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"></textarea>
-      <button id="sendBtn" onclick="sendMessage()">Send</button>
-    </div>
-  </div>
+      <div class="meta">
+        <span>Gateway <code id="gatewayText">localhost:8788</code></span>
+        <span>Mode <code id="modeText">--</code></span>
+        <span>Uptime <code id="uptimeText">--</code></span>
+      </div>
+    </section>
+  </aside>
+  <main class="main">
+    <header class="header">
+      <div class="header-title">
+        <h2>Bridge Chat</h2>
+        <span>Send a task to TraeCN and read the returned response.</span>
+      </div>
+      <div class="token-input">
+        <input type="password" id="tokenInput" autocomplete="off" placeholder="Gateway token">
+        <button class="button secondary" id="saveTokenBtn" type="button">Save</button>
+      </div>
+    </header>
+    <section class="messages" id="messages" aria-live="polite">
+      <p class="empty-state" id="emptyState">No messages yet. Start with a concrete IDE task or a short question for TraeCN.</p>
+    </section>
+    <form class="input-area" id="messageForm">
+      <textarea id="messageInput" placeholder="Type a message to send to TraeCN..." rows="1"></textarea>
+      <button class="button" id="sendBtn" type="submit">Send</button>
+    </form>
+  </main>
+  <div class="toast" id="toast" role="status"></div>
   <script>
     const API_BASE = window.location.origin;
-    let token = localStorage.getItem('traecn_bridge_token') || '';
+    const TOKEN_KEY = 'traecn_bridge_token';
+    let token = localStorage.getItem(TOKEN_KEY) || '';
+
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const modeText = document.getElementById('modeText');
+    const uptimeText = document.getElementById('uptimeText');
+    const gatewayText = document.getElementById('gatewayText');
+    const tokenInput = document.getElementById('tokenInput');
+    const messages = document.getElementById('messages');
+    const emptyState = document.getElementById('emptyState');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const toast = document.getElementById('toast');
+
+    tokenInput.value = token;
+    gatewayText.textContent = window.location.host;
+
+    document.getElementById('saveTokenBtn').addEventListener('click', saveToken);
+    document.getElementById('messageForm').addEventListener('submit', event => {
+      event.preventDefault();
+      sendMessage();
+    });
+    messageInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+      }
+    });
+    messageInput.addEventListener('input', resizeInput);
 
     function saveToken() {
-      token = document.getElementById('tokenInput').value;
-      localStorage.setItem('traecn_bridge_token', token);
+      token = tokenInput.value.trim();
+      if (token) {
+        localStorage.setItem(TOKEN_KEY, token);
+      } else {
+        localStorage.removeItem(TOKEN_KEY);
+      }
+      showToast('Token saved');
     }
 
     function getHeaders() {
-      const h = { 'Content-Type': 'application/json' };
-      if (token) h['Authorization'] = 'Bearer ' + token;
-      return h;
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = 'Bearer ' + token;
+      return headers;
+    }
+
+    async function requestJson(path, options = {}) {
+      const response = await fetch(API_BASE + path, {
+        ...options,
+        headers: { ...getHeaders(), ...(options.headers || {}) }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const message = data.error || response.statusText || 'Request failed';
+        throw new Error(message + ' (' + response.status + ')');
+      }
+      return data;
     }
 
     async function checkStatus() {
       try {
-        const res = await fetch(API_BASE + '/api/status');
-        const data = await res.json();
-        const dot = document.getElementById('statusDot');
-        const text = document.getElementById('statusText');
-        if (data.status === 'connected') {
-          dot.className = 'dot connected';
-          text.textContent = 'Connected';
-        } else {
-          dot.className = 'dot disconnected';
-          text.textContent = 'Disconnected';
-        }
-        document.getElementById('modeText').textContent = data.mockBridge ? 'Mock' : 'Live';
-      } catch {
-        document.getElementById('statusDot').className = 'dot disconnected';
-        document.getElementById('statusText').textContent = 'Error';
+        const data = await requestJson('/api/status', { method: 'GET' });
+        const connected = data.status === 'connected';
+        statusDot.className = connected ? 'dot connected' : 'dot';
+        statusText.textContent = connected ? 'Connected' : 'Disconnected';
+        modeText.textContent = data.mockBridge ? 'Mock' : 'Live';
+        uptimeText.textContent = formatUptime(data.uptime || 0);
+      } catch (err) {
+        statusDot.className = 'dot';
+        statusText.textContent = 'Error';
+        modeText.textContent = '--';
+        uptimeText.textContent = '--';
       }
     }
 
     async function sendMessage() {
-      const input = document.getElementById('messageInput');
-      const text = input.value.trim();
-      if (!text) return;
+      const text = messageInput.value.trim();
+      if (!text || sendBtn.disabled) return;
 
       addMessage('user', text);
-      input.value = '';
-
-      const btn = document.getElementById('sendBtn');
-      btn.disabled = true;
+      messageInput.value = '';
+      resizeInput();
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending';
 
       try {
-        const sessionRes = await fetch(API_BASE + '/api/sessions', {
+        const session = await requestJson('/api/sessions', {
           method: 'POST',
-          headers: getHeaders(),
           body: JSON.stringify({})
         });
-        const session = await sessionRes.json();
-
-        const delegateRes = await fetch(API_BASE + '/api/sessions/' + session.sessionId + '/delegate', {
+        const result = await requestJson('/api/sessions/' + encodeURIComponent(session.sessionId) + '/delegate', {
           method: 'POST',
-          headers: getHeaders(),
           body: JSON.stringify({ task: text })
         });
-        const result = await delegateRes.json();
         addMessage('assistant', result.text || result.error || 'No response');
       } catch (err) {
-        addMessage('assistant', 'Error: ' + err.message);
+        addMessage('assistant', 'Error: ' + err.message, true);
+        showToast(err.message, true);
+      } finally {
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send';
+        messageInput.focus();
       }
-
-      btn.disabled = false;
     }
 
-    function addMessage(role, content) {
-      const div = document.createElement('div');
-      div.className = 'message ' + role;
-      div.innerHTML = '<div class="role">' + (role === 'user' ? 'You' : 'TraeCN') + '</div>' + escapeHtml(content);
-      document.getElementById('messages').appendChild(div);
-      document.getElementById('messages').scrollTop = 999999;
+    function addMessage(role, content, isError = false) {
+      emptyState.hidden = true;
+      const wrapper = document.createElement('article');
+      wrapper.className = 'message ' + role + (isError ? ' error' : '');
+
+      const roleLabel = document.createElement('div');
+      roleLabel.className = 'role';
+      roleLabel.textContent = role === 'user' ? 'You' : 'TraeCN';
+
+      const body = document.createElement('div');
+      body.textContent = content;
+
+      wrapper.append(roleLabel, body);
+      messages.appendChild(wrapper);
+      messages.scrollTop = messages.scrollHeight;
     }
 
-    function escapeHtml(text) {
-      const d = document.createElement('div');
-      d.textContent = text;
-      return d.innerHTML;
+    function resizeInput() {
+      messageInput.style.height = 'auto';
+      messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + 'px';
     }
 
+    function formatUptime(seconds) {
+      const total = Math.max(0, Math.floor(seconds));
+      const minutes = Math.floor(total / 60);
+      const remainingSeconds = total % 60;
+      if (minutes < 60) return minutes + 'm ' + remainingSeconds + 's';
+      const hours = Math.floor(minutes / 60);
+      return hours + 'h ' + (minutes % 60) + 'm';
+    }
+
+    function showToast(message, isError = false) {
+      toast.textContent = message;
+      toast.className = 'toast visible' + (isError ? ' error' : '');
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => {
+        toast.className = 'toast' + (isError ? ' error' : '');
+      }, 2400);
+    }
+
+    resizeInput();
     checkStatus();
     setInterval(checkStatus, 10000);
   </script>

@@ -11,6 +11,14 @@ function parseSelectors(envValue, defaults) {
   return defaults;
 }
 
+function parsePositiveInt(value, defaultValue) {
+  const parsed = parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return defaultValue;
+  }
+  return parsed;
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -19,4 +27,4 @@ function escapeJsString(str) {
   return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n');
 }
 
-module.exports = { getEnvWithFallback, parseSelectors, sleep, escapeJsString };
+module.exports = { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString };

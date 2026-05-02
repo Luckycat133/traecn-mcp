@@ -1,7 +1,7 @@
 {
   "id": "traecnclaw",
   "name": "TraeCNclaw",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Delegate IDE tasks from OpenClaw to a local TraeCNclaw instance that drives the TraeCN desktop app.",
   "baseUrl": "http://127.0.0.1:8788",
   "quickstart": {
@@ -90,6 +90,28 @@
       }
     },
     {
+      "name": "traecn_switch_model",
+      "description": "Switch the AI model used by TraeCN.",
+      "parameters": {
+        "type": "object",
+        "required": ["model"],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "The model name to switch to"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_queue_status",
+      "description": "Check if the current TraeCN AI model is queued or busy.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
       "name": "traecn_open_project",
       "description": "Open a project in TraeCN.",
       "parameters": {
@@ -99,6 +121,41 @@
           "projectPath": {
             "type": "string",
             "description": "Path to the project to open"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_chat",
+      "description": "Trigger a task via the trae-cn chat CLI without waiting for an AI response.",
+      "parameters": {
+        "type": "object",
+        "required": ["prompt"],
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "Prompt to send to TraeCN"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["ask", "edit", "agent"],
+            "description": "CLI mode"
+          },
+          "addFile": {
+            "type": "string",
+            "description": "File path to add as context"
+          },
+          "maximize": {
+            "type": "boolean",
+            "default": false
+          },
+          "reuseWindow": {
+            "type": "boolean",
+            "default": false
+          },
+          "newWindow": {
+            "type": "boolean",
+            "default": false
           }
         }
       }

@@ -382,6 +382,43 @@ function generateOpenAPISpec() {
           }
         }
       },
+      '/api/update-self': {
+        post: {
+          summary: 'Report self-update support status',
+          operationId: 'updateSelf',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    force: { type: 'boolean', default: false }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '501': {
+              description: 'Automatic self-update is not enabled',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean' },
+                      version: { type: 'string' },
+                      force: { type: 'boolean' },
+                      message: { type: 'string' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       '/api/readiness': {
         get: {
           summary: 'Check TraeCN automation readiness',
@@ -407,7 +444,7 @@ function generateOpenAPISpec() {
           }
         }
       },
-      '/api/settings': {
+      '/api/settings/read': {
         get: {
           summary: 'Read current settings section content',
           operationId: 'settingsRead',
@@ -432,7 +469,9 @@ function generateOpenAPISpec() {
               }
             }
           }
-        },
+        }
+      },
+      '/api/settings/set': {
         post: {
           summary: 'Set a settings value (dropdown or toggle)',
           operationId: 'settingsSet',

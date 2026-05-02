@@ -2,6 +2,7 @@
 
 const path = require('path');
 const { loadEnv } = require('./config/env');
+const { parsePositiveInt } = require('./shared/utils');
 
 const envPath = path.resolve(__dirname, '..', '.env');
 loadEnv(envPath);
@@ -17,7 +18,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const host = process.env.HOST || '127.0.0.1';
-const port = parseInt(process.env.PORT || '8788', 10);
+const port = parsePositiveInt(process.env.PORT || '8788', 8788);
 const mockBridge = process.env.TRAECN_ENABLE_MOCK_BRIDGE === '1';
 
 let server = null;

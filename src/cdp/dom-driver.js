@@ -5,7 +5,7 @@ const { TraeCNAutomationError } = require('./errors');
 const { CDPClient } = require('./client');
 const dom = require('./browser-dom');
 const { SettingsDriver } = require('./settings-driver');
-const { getEnvWithFallback, parseSelectors, sleep, escapeJsString } = require('../shared/utils');
+const { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString } = require('../shared/utils');
 
 const DEFAULT_COMPOSER_SELECTORS = [
   '.chat-input-v2-input-box-editable',
@@ -79,13 +79,13 @@ function getConfig() {
       DEFAULT_MODE_TAB_SELECTORS
     ),
     sendTrigger: getEnvWithFallback('TRAECN_SEND_TRIGGER', 'TRAE_SEND_TRIGGER', 'button'),
-    pollIntervalMs: parseInt(getEnvWithFallback('TRAECN_RESPONSE_POLL_INTERVAL_MS', 'TRAE_RESPONSE_POLL_INTERVAL_MS', '350'), 10),
-    idleMs: parseInt(getEnvWithFallback('TRAECN_RESPONSE_IDLE_MS', 'TRAE_RESPONSE_IDLE_MS', '1200'), 10),
-    timeoutMs: parseInt(getEnvWithFallback('TRAECN_RESPONSE_TIMEOUT_MS', 'TRAE_RESPONSE_TIMEOUT_MS', '30000'), 10),
-    postActionDelayMs: parseInt(getEnvWithFallback('TRAECN_POST_ACTION_DELAY_MS', 'TRAE_POST_ACTION_DELAY_MS', '350'), 10),
-    sessionPrepareTimeoutMs: parseInt(getEnvWithFallback('TRAECN_SESSION_PREPARE_TIMEOUT_MS', 'TRAE_SESSION_PREPARE_TIMEOUT_MS', '5000'), 10),
-    queuePollIntervalMs: parseInt(getEnvWithFallback('TRAECN_QUEUE_POLL_INTERVAL_MS', 'TRAE_QUEUE_POLL_INTERVAL_MS', '15000'), 10),
-    queueWaitTimeoutMs: parseInt(getEnvWithFallback('TRAECN_QUEUE_WAIT_TIMEOUT_MS', 'TRAE_QUEUE_WAIT_TIMEOUT_MS', '600000'), 10)
+    pollIntervalMs: parsePositiveInt(getEnvWithFallback('TRAECN_RESPONSE_POLL_INTERVAL_MS', 'TRAE_RESPONSE_POLL_INTERVAL_MS', '350'), 350),
+    idleMs: parsePositiveInt(getEnvWithFallback('TRAECN_RESPONSE_IDLE_MS', 'TRAE_RESPONSE_IDLE_MS', '1200'), 1200),
+    timeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_RESPONSE_TIMEOUT_MS', 'TRAE_RESPONSE_TIMEOUT_MS', '30000'), 30000),
+    postActionDelayMs: parsePositiveInt(getEnvWithFallback('TRAECN_POST_ACTION_DELAY_MS', 'TRAE_POST_ACTION_DELAY_MS', '350'), 350),
+    sessionPrepareTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_SESSION_PREPARE_TIMEOUT_MS', 'TRAE_SESSION_PREPARE_TIMEOUT_MS', '5000'), 5000),
+    queuePollIntervalMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_POLL_INTERVAL_MS', 'TRAE_QUEUE_POLL_INTERVAL_MS', '15000'), 15000),
+    queueWaitTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_WAIT_TIMEOUT_MS', 'TRAE_QUEUE_WAIT_TIMEOUT_MS', '600000'), 600000)
   };
 }
 
@@ -413,9 +413,10 @@ class DomDriver {
   ];
 
   async checkQueueStatus(timeoutMs = 5000) {
+    let timeoutId;
     try {
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('checkQueueStatus timeout')), timeoutMs)
+        { timeoutId = setTimeout(() => reject(new Error('checkQueueStatus timeout')), timeoutMs); }
       );
       const result = await Promise.race([
         this._checkQueueStatusRaw(),
@@ -424,6 +425,8 @@ class DomDriver {
       return result;
     } catch (e) {
       return { queued: false };
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
   }
 

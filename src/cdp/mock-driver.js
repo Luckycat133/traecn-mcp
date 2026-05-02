@@ -83,6 +83,10 @@ class MockDriver extends DomDriver {
       responseRegion: { matchedSelector: '.mock-response' }
     };
   }
+
+  async checkQueueStatus() {
+    return { queued: false };
+  }
 }
 
 module.exports = { MockDriver };

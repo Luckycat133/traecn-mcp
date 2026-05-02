@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { getEnvWithFallback, parseSelectors, sleep, escapeJsString } = require('../shared/utils');
+const { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString } = require('../shared/utils');
 
 let passed = 0;
 let failed = 0;
@@ -70,6 +70,16 @@ test('parseSelectors trims whitespace', () => {
 
 test('parseSelectors filters empty entries', () => {
   assert.deepStrictEqual(parseSelectors('.x,, .y,', ['.a']), ['.x', '.y']);
+});
+
+test('parsePositiveInt returns parsed positive integers', () => {
+  assert.strictEqual(parsePositiveInt('42', 10), 42);
+});
+
+test('parsePositiveInt falls back for invalid values', () => {
+  assert.strictEqual(parsePositiveInt('abc', 10), 10);
+  assert.strictEqual(parsePositiveInt('0', 10), 10);
+  assert.strictEqual(parsePositiveInt('-5', 10), 10);
 });
 
 test('escapeJsString escapes backslashes', () => {

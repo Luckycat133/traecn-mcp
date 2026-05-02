@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { RateLimiter, sanitizeLog } = require('./gateway');
+const { Gateway, RateLimiter, sanitizeLog } = require('./gateway');
 
 let passed = 0;
 let failed = 0;
@@ -96,6 +96,27 @@ test('sanitizeLog handles null and undefined', () => {
 test('sanitizeLog handles non-objects', () => {
   assert.strictEqual(sanitizeLog('string'), 'string');
   assert.strictEqual(sanitizeLog(42), 42);
+});
+
+test('Gateway authenticates bearer tokens', () => {
+  const gateway = new Gateway();
+  gateway.token = 'secret';
+  assert.strictEqual(gateway._authenticate({ headers: { authorization: 'Bearer secret' } }), true);
+  assert.strictEqual(gateway._authenticate({ headers: { authorization: 'Bearer wrong' } }), false);
+});
+
+test('Gateway authenticates X-TraeCN-Token header', () => {
+  const gateway = new Gateway();
+  gateway.token = 'secret';
+  assert.strictEqual(gateway._authenticate({ headers: { 'x-traecn-token': 'secret' } }), true);
+});
+
+test('Gateway computes CORS headers for allowed origins', () => {
+  const gateway = new Gateway();
+  gateway.allowedOrigins = 'https://example.com';
+  const headers = gateway._corsHeaders({ headers: { origin: 'https://example.com' } });
+  assert.strictEqual(headers['Access-Control-Allow-Origin'], 'https://example.com');
+  assert.strictEqual(headers.Vary, 'Origin');
 });
 
 console.log(`\n[gateway.test.js] Results: ${passed} passed, ${failed} failed\n`);
