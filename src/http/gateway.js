@@ -591,7 +591,73 @@ class Gateway {
       return this._json(req, res, { error: 'projectPath is required' }, 400);
     }
 
-    this._json(req, res, { success: true, projectPath: body.projectPath, note: 'Project opening requires trae-cn CLI or manual action' });
+    const { spawn } = require('child_process');
+    const { sleep } = require('../shared/utils');
+    const projectPath = body.projectPath;
+    let result;
+
+    try {
+      const child = spawn('trae-cn', ['--reuse-window', projectPath], {
+        stdio: 'pipe',
+        timeout: 10000
+      });
+
+      result = await new Promise((resolve) => {
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', d => stdout += d);
+        child.stderr.on('data', d => stderr += d);
+        child.on('error', (err) => resolve({ success: false, error: err.message }));
+        child.on('close', (code) => {
+          resolve({
+            success: code === 0,
+            projectPath,
+            exitCode: code,
+            stdout: stdout.trim(),
+            stderr: stderr.trim()
+          });
+        });
+      });
+
+      if (result.success) {
+        // Wait for the new window/tab to load its DOM
+        await sleep(3000);
+
+        // Try to check for restricted mode dialog via CDP
+        try {
+          const { fetchCDPTargets } = require('../cdp/discovery');
+          const { CDPClient } = require('../cdp/client');
+          const host = process.env.TRAECN_CDP_HOST || process.env.TRAE_CDP_HOST || '127.0.0.1';
+          const port = process.env.TRAECN_REMOTE_DEBUGGING_PORT || process.env.TRAE_REMOTE_DEBUGGING_PORT || '9222';
+          const targets = await fetchCDPTargets(host, port);
+          const pageTarget = targets.find(t => t.type === 'page');
+
+          if (pageTarget && pageTarget.webSocketDebuggerUrl) {
+            const cdpClient = new CDPClient(pageTarget.webSocketDebuggerUrl);
+            await cdpClient.connect();
+            await cdpClient.send('DOM.enable');
+            await cdpClient.send('Runtime.enable');
+            const { DomDriver } = require('../cdp/dom-driver');
+            const tempDriver = new DomDriver(cdpClient);
+            const restrictedCheck = await tempDriver.checkRestrictedMode();
+            await cdpClient.close();
+
+            if (restrictedCheck && restrictedCheck.restricted) {
+              result.restrictedMode = true;
+              result.restrictedInfo = restrictedCheck;
+              result.message = '受限模式已启用，请在Trae CN窗口手动点击「信任」以继续';
+            }
+          }
+        } catch (cdpErr) {
+          // CDP not available yet (gateway just started, browser not ready) — non-fatal
+          result._cdpCheckNote = 'CDP check skipped: ' + cdpErr.message;
+        }
+      }
+    } catch (err) {
+      result = { success: false, error: err.message };
+    }
+
+    this._json(req, res, result);
   }
 
   async _handleUpdateSelf(req, res) {
@@ -742,10 +808,10 @@ class Gateway {
     let timeoutId;
     try {
       const timeoutPromise = new Promise((_, reject) =>
-        { timeoutId = setTimeout(() => reject(new Error('delegate timeout (60s)')), 60000); }
+        { timeoutId = setTimeout(() => reject(new Error('delegate timeout (180s)')), 180000); }
       );
       result = await Promise.race([this.driver.delegate(body.task), timeoutPromise]);
-    } catch (e) {
+        } catch (e) {
       return this._json(req, res, { error: 'delegate failed: ' + e.message }, 504);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);

@@ -221,24 +221,20 @@ function formatResult(result) {
 }
 
 function register(openClaw) {
-  for (const tool of toolDefinitions) {
-    openClaw.registerTool({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      handler: tool.handler
-    });
+  if (typeof openClaw.registerTool === 'function') {
+    for (const tool of toolDefinitions) {
+      openClaw.registerTool({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        handler: tool.handler
+      });
+    }
   }
 
-  for (const cmd of slashCommands) {
-    openClaw.registerSlashCommand({
-      command: cmd.command,
-      description: cmd.description,
-      handler: cmd.handler
-    });
-  }
-
-  console.log(`[TraeCNclaw] Registered ${toolDefinitions.length} tools and ${slashCommands.length} slash commands`);
+  // registerSlashCommand was removed in OpenClaw 2026.4
+  // Slash commands are handled via openclaw.plugin.json
+  console.log(`[TraeCNclaw] Registered ${toolDefinitions.length} tools`);
 }
 
 module.exports = {

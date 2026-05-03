@@ -4,5 +4,8 @@
   "private": true,
   "description": "OpenClaw plugin for TraeCNclaw integration",
   "main": "index.js",
+  "openclaw": {
+    "extensions": ["./index.js"]
+  },
   "keywords": ["openclaw", "traecn", "plugin"]
 }

@@ -134,7 +134,11 @@ async function discoverTarget(options = {}) {
       .map(t => ({ ...t, score: 0 }));
   }
 
-  // Try candidates in score order; pick the first one with composer + send button + response content
+  // Try candidates in score order; pick the first usable one
+  let bestCandidate = candidates[0];
+  let foundWithComposer = null;
+  let foundWithAny = null;
+
   for (const candidate of candidates) {
     let client = null;
     try {
@@ -145,21 +149,57 @@ async function discoverTarget(options = {}) {
       const driver = new DomDriver(client);
       const readiness = await driver.checkReadiness();
 
+      // Priority 1: composer + sendButton → best target (even without content)
       if (readiness.composer && readiness.sendButton) {
-        const hasContent = await validateTargetHasContent(client, readiness);
+        foundWithComposer = {
+          id: candidate.id,
+          title: candidate.title,
+          url: candidate.url,
+          webSocketDebuggerUrl: candidate.webSocketDebuggerUrl,
+          score: candidate.score
+        };
         await client.close();
-        if (hasContent) {
-          return {
+        break;  // Found the best, stop searching
+      }
+
+      // Priority 2: composer only → usable fallback
+      if (readiness.composer && !foundWithComposer) {
+        // Check if composer element is visible and has contenteditable/role=textbox
+        const composerVisible = await client.send('Runtime.evaluate', {
+          expression: `(() => {
+            const sel = '${(readiness.composer.matchedSelector || '').replace(/'/g, "\\'")}';
+            const el = sel ? document.querySelector(sel) : null;
+            if (!el) return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 20 && rect.height > 15 && el.offsetParent !== null;
+          })()`,
+          returnByValue: true
+        });
+
+        if (composerVisible?.result?.value) {
+          foundWithComposer = {
             id: candidate.id,
             title: candidate.title,
             url: candidate.url,
             webSocketDebuggerUrl: candidate.webSocketDebuggerUrl,
             score: candidate.score
           };
+          await client.close();
+          break;
         }
-      } else {
-        await client.close();
       }
+
+      if (!foundWithAny) {
+        foundWithAny = {
+          id: candidate.id,
+          title: candidate.title,
+          url: candidate.url,
+          webSocketDebuggerUrl: candidate.webSocketDebuggerUrl,
+          score: candidate.score
+        };
+      }
+
+      await client.close();
     } catch {
       if (client) {
         try { await client.close(); } catch { /* ignore */ }
@@ -167,15 +207,9 @@ async function discoverTarget(options = {}) {
     }
   }
 
-  // Fall back to highest-scored candidate
-  const best = candidates[0];
-  return {
-    id: best.id,
-    title: best.title,
-    url: best.url,
-    webSocketDebuggerUrl: best.webSocketDebuggerUrl,
-    score: best.score
-  };
+  // Return results in priority order: composer → first candidate
+  const result = foundWithComposer || foundWithAny || bestCandidate;
+  return result;
 }
 
 async function connectToTarget(targetInfo) {

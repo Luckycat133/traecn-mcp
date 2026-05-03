@@ -1,9 +1,35 @@
 {
   "id": "traecnclaw",
   "name": "TraeCNclaw",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Delegate IDE tasks from OpenClaw to a local TraeCNclaw instance that drives the TraeCN desktop app.",
   "baseUrl": "http://127.0.0.1:8788",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8788"
+      },
+      "token": {
+        "type": "string",
+        "default": ""
+      },
+      "autoStart": {
+        "type": "boolean",
+        "default": false
+      },
+      "checkForUpdates": {
+        "type": "boolean",
+        "default": true
+      },
+      "autoApplyUpdates": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  },
   "quickstart": {
     "macos": "start-traecnapi.command",
     "windows": "start-traecnapi.cmd"

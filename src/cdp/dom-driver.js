@@ -11,7 +11,9 @@ const DEFAULT_COMPOSER_SELECTORS = [
   '.chat-input-v2-input-box-editable',
   'textarea',
   "[contenteditable='true']",
-  "input[type='text']"
+  "input[type='text']",
+  "[class*='chat-input']",
+  "[class*='input-box']"
 ];
 
 const DEFAULT_SEND_BUTTON_SELECTORS = [
@@ -19,7 +21,9 @@ const DEFAULT_SEND_BUTTON_SELECTORS = [
   "button[data-testid*='send']",
   "button[aria-label*='Send']",
   "button[aria-label*='发送']",
-  "button[type='submit']"
+  "button[type='submit']",
+  "[class*='send-button']",
+  "[class*='send']"
 ];
 
 const DEFAULT_RESPONSE_SELECTORS = [
@@ -30,12 +34,15 @@ const DEFAULT_RESPONSE_SELECTORS = [
   "[data-testid*='assistant']",
   "[data-role='assistant']",
   "[data-author='assistant']",
-  '.assistant'
+  '.assistant',
+  "[class*='assistant-chat']"
 ];
 
 const DEFAULT_ACTIVITY_SELECTORS = [
   '.chat-content-container',
-  '.chat-list-wrapper'
+  '.chat-list-wrapper',
+  "[class*='activity']",
+  "[class*='chat-content']"
 ];
 
 const DEFAULT_NEW_CHAT_SELECTORS = [
@@ -43,13 +50,17 @@ const DEFAULT_NEW_CHAT_SELECTORS = [
   "a[data-testid*='new-chat']",
   "button[data-testid*='new-chat']",
   "[aria-label*='New Chat']",
-  "[aria-label*='新建对话']"
+  "[aria-label*='新建对话']",
+  "[class*='NewChat']",
+  "[class*='new-task-button']",
+  "[class*='new-task']"
 ];
 
 const DEFAULT_MODE_TAB_SELECTORS = [
   '.icube-mode-tab-item',
   "[class*='icube-mode-tab-item']",
-  "[data-testid*='mode-tab']"
+  "[data-testid*='mode-tab']",
+  "[class*='mode-tab']"
 ];
 
 function getConfig() {
@@ -120,6 +131,22 @@ class DomDriver {
   constructor(client, config) {
     this.client = client;
     this.config = config || getConfig();
+    this._lastTaskText = '';
+  }
+
+  async _captureSidebarText() {
+    try {
+      const result = await this.client.send('Runtime.evaluate', {
+        expression: `(() => {
+          var s = document.querySelector('.soloaisidebar');
+          return s ? s.textContent.trim() : '';
+        })()`,
+        returnByValue: true
+      });
+      return result.result?.value || '';
+    } catch(e) {
+      return '';
+    }
   }
 
   async findComposer() {
@@ -134,6 +161,77 @@ class DomDriver {
     const region = await dom.findFirstMatching(this.client, this.config.responseSelectors);
     if (region) return region;
     return dom.findFirstMatching(this.client, this.config.activitySelectors);
+  }
+
+  async findTaskResponse() {
+    const skipText = this._lastTaskText;
+    // Find the task panel container by looking for known text patterns.
+    // Uses size-based heuristics then text-based fallbacks.
+    const result = await this.client.send('Runtime.evaluate', {
+      expression: `
+        (() => {
+          let sidebar = document.querySelector('.soloaisidebar');
+          if (!sidebar) return null;
+
+          // Strategy 1: Find visible task items by dimensions
+          let items = Array.from(sidebar.querySelectorAll('div'))
+            .filter(el => {
+              let text = el.textContent.trim();
+              let w = el.getBoundingClientRect().width;
+              let h = el.getBoundingClientRect().height;
+              return w > 100 && w < 350 && h > 30 && h < 120 &&
+                     text.length > 5 &&
+                     !text.includes('新任务');
+            });
+
+          if (items.length > 0) {
+            let latest = items[items.length - 1];
+            let text = latest.textContent.trim();
+            // Skip stale text (same as previous response)
+            if (text === skipText) return null;
+            return {
+              text: text,
+              inProgress: text.includes('进行中'),
+              isComplete: text.includes('任务完成'),
+              hasResponse: text.length > 15 && !text.includes('进行中') && !text.includes('新任务')
+            };
+          }
+
+          // Strategy 2: Sidebar collapsed - scan all text content
+          let fullText = sidebar.textContent.trim();
+          let taskMatch = fullText.match(/任务\\d+[^]*?(?=实时|$)/);
+          if (taskMatch) {
+            let taskText = taskMatch[0].trim();
+            if (taskText.length > 5 && !taskText.includes('开始你的第一个任务') && taskText !== skipText) {
+              return {
+                text: taskText,
+                inProgress: fullText.includes('进行中'),
+                isComplete: fullText.includes('任务完成'),
+                hasResponse: !fullText.includes('进行中') && !fullText.includes('新任务') && taskText.length > 10
+              };
+            }
+          }
+
+          // Strategy 3: Just return the sidebar text if it looks like a task
+          // Strategy 3: Skip if same as previous
+          if (fullText === skipText) return null;
+          if (fullText.includes('任务') && fullText.length > 20) {
+            let isProcessing = fullText.includes('进行中') || fullText.includes('生成中');
+            return {
+              text: fullText.slice(0, 300),
+              inProgress: isProcessing,
+              isComplete: fullText.includes('任务完成'),
+              hasResponse: !isProcessing && fullText.length > 20 && !fullText.includes('新任务')
+            };
+          }
+
+          return null;
+        })()
+      `,
+      returnByValue: true
+    });
+
+    return result.result?.value || null;
   }
 
   async findNewChatButton() {
@@ -171,54 +269,60 @@ class DomDriver {
   }
 
   async sendMessage(text) {
-    await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 });
-    await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 });
-    await sleep(50);
-    await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace' });
-    await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace' });
-    await sleep(100);
+    const escapedText = escapeJsString(text);
 
-    for (const char of text) {
-      if (char === '\n') {
-        await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter' });
-        await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter' });
-      } else {
-        await this.client.send('Input.dispatchKeyEvent', {
-          type: 'keyDown', key: char, code: 'Key' + char.toUpperCase()
-        });
-        await this.client.send('Input.dispatchKeyEvent', {
-          type: 'keyUp', key: char, code: 'Key' + char.toUpperCase()
-        });
-      }
-      await sleep(30);
-    }
-    await sleep(this.config.postActionDelayMs);
-
-    const primaryComposer = escapeJsString(this.config.composerSelectors[0] || '.chat-input-v2-input-box-editable');
-    const verifyResult = await this.client.send('Runtime.evaluate', {
-      expression: `document.querySelector('${primaryComposer}')?.textContent || ''`,
+    // Focus composer and insert text via execCommand (works with Lexical editor)
+    await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var el = document.querySelector('.chat-input-v2-input-box-editable');
+          if (!el) return 'no composer';
+          el.focus();
+          // Select all and delete existing content
+          document.execCommand('selectAll');
+          document.execCommand('delete');
+          // Insert text via execCommand (triggers Lexical properly)
+          document.execCommand('insertText', false, '${escapedText}');
+          // Also dispatch InputEvent as safety net
+          el.dispatchEvent(new InputEvent('input', {bubbles: true, cancelable: true, composed: true}));
+          return 'inserted: ' + el.textContent.trim();
+        })()
+      `,
       returnByValue: true
     });
-    const currentText = (verifyResult.result?.value || '').trim();
+    await sleep(this.config.postActionDelayMs * 2);
 
-    if (currentText !== text.trim()) {
-      const escaped = escapeJsString(text);
-      await this.client.send('Runtime.evaluate', {
-        expression: `
-          (function() {
-            var el = document.querySelector('${primaryComposer}');
-            if (!el) return;
-            el.innerText = '${escaped}';
-            el.dispatchEvent(new InputEvent('input', {bubbles: true, cancelable: true}));
-          })()
-        `,
-        returnByValue: true
-      });
-      await sleep(this.config.postActionDelayMs * 2);
+    // Send via configured trigger
+    if (this.config.sendTrigger === 'button') {
+      const sendBtn = await this.findSendButton();
+      if (sendBtn && sendBtn.nodeId) {
+        await this.client.send('Runtime.evaluate', {
+          expression: `
+            (function() {
+              var btn = document.querySelector('button.chat-input-v2-send-button');
+              if (!btn) return 'no button';
+              if (btn.classList.contains('disabled')) return 'button disabled: ' + btn.className;
+              var rect = btn.getBoundingClientRect();
+              var cx = rect.x + rect.width/2;
+              var cy = rect.y + rect.height/2;
+              // Use mousedown+mouseup+click sequence (proven to work)
+              btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true,clientX:cx,clientY:cy}));
+              btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true,cancelable:true,clientX:cx,clientY:cy}));
+              btn.dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,clientX:cx,clientY:cy}));
+              return 'send via mouse events';
+            })()
+          `,
+          returnByValue: true
+        });
+      } else {
+        // Fallback: Shift+Enter
+        await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 2 });
+        await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
+      }
+    } else {
+      await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 2 });
+      await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
     }
-
-    await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 2 });
-    await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
     await sleep(this.config.postActionDelayMs);
   }
 
@@ -238,6 +342,19 @@ class DomDriver {
     const truncationTimeout = 20000;
 
     while (Date.now() - startTime < this.config.timeoutMs) {
+      // Try task-based response first (Trae CN task panel)
+      const taskResponse = await this.findTaskResponse();
+      if (taskResponse) {
+        if (taskResponse.isComplete || (taskResponse.hasResponse && !taskResponse.inProgress)) {
+          return { text: taskResponse.text, stable: true, elapsedMs: Date.now() - startTime };
+        }
+        if (taskResponse.inProgress) {
+          await sleep(pollInterval * 2);
+          continue;
+        }
+      }
+
+      // Fallback: original chat-based response collection
       let responseRegion;
       try {
         responseRegion = await this.findResponseRegion();
@@ -331,7 +448,28 @@ class DomDriver {
   }
 
   async delegate(task, options = {}) {
+    // Always create a new task for fresh context
     await this.newChat();
+
+    // Ensure task sidebar is visible (toggle with Ctrl+Cmd+T)
+    await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var sidebar = document.querySelector('.soloaisidebar');
+          if (!sidebar || sidebar.offsetHeight < 100) {
+            document.body.focus();
+            document.body.dispatchEvent(new KeyboardEvent('keydown', {
+              key: 't', code: 'KeyT',
+              ctrlKey: true, metaKey: true, bubbles: true
+            }));
+            return 'toggled sidebar';
+          }
+          return 'sidebar already visible';
+        })()
+      `,
+      returnByValue: true
+    });
+    await sleep(500);
 
     const responseSel1 = escapeJsString(this.config.responseSelectors[0] || "[data-role='assistant']");
     const responseSel2 = escapeJsString(this.config.responseSelectors[1] || '.agent-plan-items');
@@ -357,8 +495,17 @@ class DomDriver {
       await sleep(queuePollIntervalMs);
     }
 
+    // Capture current sidebar state before sending to avoid picking up stale text
+    const beforeSidebar = await this._captureSidebarText();
+    this._lastTaskText = beforeSidebar;
+
     await this.sendMessage(task);
     const response = await this.collectResponse();
+
+    // Update last task text so next call doesn't pick up stale content
+    if (response && response.text) {
+      this._lastTaskText = response.text;
+    }
 
     if (response.timedOut && !response.text) {
       throw TraeCNAutomationError.responseTimeout(this.config.timeoutMs);
@@ -368,11 +515,12 @@ class DomDriver {
   }
 
   async newChat() {
+    // Ctrl+Cmd+N (modifiers: 2=Ctrl + 4=Meta = 6)
     await this.client.send('Input.dispatchKeyEvent', {
-      type: 'keyDown', key: 'n', code: 'KeyN', modifiers: 256
+      type: 'keyDown', key: 'n', code: 'KeyN', modifiers: 6
     });
     await this.client.send('Input.dispatchKeyEvent', {
-      type: 'keyUp', key: 'n', code: 'KeyN', modifiers: 256
+      type: 'keyUp', key: 'n', code: 'KeyN', modifiers: 6
     });
     await sleep(2000);
     return true;
@@ -472,65 +620,193 @@ class DomDriver {
   }
 
   async switchModel(modelName) {
-    const MODEL_SELECTOR = '.icd-model-select-trigger';
+    const MODEL_TRIGGER = '.icd-model-select-trigger';
 
-    await this.client.send('Runtime.evaluate', {
-      expression: `document.querySelector('${MODEL_SELECTOR}')?.focus()`,
+    // Step 1: Check if AI is busy (prevents model switching)
+    const busyCheck = await this.client.send('Runtime.evaluate', {
+      expression: `(() => {
+        var body = document.body?.textContent || '';
+        if (body.includes('AI \u751f\u6210\u4e2d\uff0c\u65e0\u6cd5\u5207\u6362')) {
+          return { busy: true, reason: 'generating' };
+        }
+        var trigger = document.querySelector('.icd-model-select-trigger');
+        if (trigger) {
+          var triggerArea = trigger.closest('[class*=input]') || trigger.parentElement;
+          if (triggerArea && triggerArea.textContent.includes('\u751f\u6210\u4e2d')) {
+            return { busy: true, reason: 'generating' };
+          }
+        }
+        return { busy: false };
+      })()`,
       returnByValue: true
     });
-    await sleep(100);
-    await this.client.send('Input.dispatchKeyEvent', {
-      type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', modifiers: 0
-    });
-    await this.client.send('Input.dispatchKeyEvent', {
-      type: 'keyUp', key: 'ArrowDown', code: 'ArrowDown', modifiers: 0
-    });
-    await sleep(500);
+    const busyInfo = busyCheck.result?.value;
+    if (busyInfo && busyInfo.busy) {
+      return 'model_switch_blocked: ' + busyInfo.reason;
+    }
 
+    // Step 2: Check if portal is already open (avoid toggle-close on re-entry)
+    const portalState = await this.client.send('Runtime.evaluate', {
+      expression: `(() => {
+        var items = document.querySelectorAll('.icube-model-select-portal-model-item');
+        return { itemsFound: items.length, portalOpen: items.length > 0 };
+      })()`,
+      returnByValue: true
+    });
+    const ps = portalState.result?.value || { itemsFound: 0, portalOpen: false };
+
+    if (!ps.portalOpen) {
+      // Step 2a: Open model selector portal via pointerdown (Radix UI listens for pointerdown, not click)
+      await this.client.send('Runtime.evaluate', {
+        expression: `
+          (() => {
+            var trigger = document.querySelector('${MODEL_TRIGGER}');
+            if (!trigger) return 'no trigger found';
+            var rect = trigger.getBoundingClientRect();
+            trigger.dispatchEvent(new PointerEvent('pointerdown', {
+              bubbles: true, cancelable: true, composed: true,
+              clientX: rect.x + rect.width/2, clientY: rect.y + rect.height/2,
+              button: 0, buttons: 1, pointerType: 'mouse'
+            }));
+            // Also try click for non-Radix portals
+            trigger.click();
+            return 'portal opened via pointerdown+click';
+          })()
+        `,
+        returnByValue: true
+      });
+      await sleep(800);
+    }
+
+    // Step 3: Check if Auto Mode is enabled and toggle it off (via pointerdown)
+    await this.client.send('Runtime.evaluate', {
+      expression: `
+        (() => {
+          var modeItem = document.querySelector('.icd-mode-select-mode-item');
+          if (!modeItem) return 'no auto mode toggle (already manual mode)';
+          var checkbox = modeItem.querySelector('input[type=checkbox]');
+          if (!checkbox) return 'no checkbox';
+          if (checkbox.checked) {
+            var toggleEl = checkbox.parentElement;
+            if (toggleEl) {
+              var rect = toggleEl.getBoundingClientRect();
+              toggleEl.dispatchEvent(new PointerEvent('pointerdown', {
+                bubbles: true, cancelable: true, composed: true,
+                clientX: rect.x + rect.width/2, clientY: rect.y + rect.height/2,
+                button: 0, buttons: 1, pointerType: 'mouse'
+              }));
+              toggleEl.click();
+            }
+            return 'auto mode disabled';
+          }
+          return 'auto mode already off';
+        })()
+      `,
+      returnByValue: true
+    });
+    await sleep(1000);
+
+    // Helper: click an element via pointerdown (for Radix UI components)
+    const CLICK_WITH_POINTERDOWN = `(function(el) {
+      var rect = el.getBoundingClientRect();
+      el.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, composed: true,
+        clientX: rect.x + rect.width/2, clientY: rect.y + rect.height/2,
+        button: 0, buttons: 1, pointerType: 'mouse'
+      }));
+      el.click();
+    })`;
+
+    // Step 4: Wait for model items (async portal rendering) and click target
     const escaped = escapeJsString(modelName);
     const result = await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
-          var items = document.querySelectorAll('.icube-model-select-portal-model-item');
-          if (!items.length) return 'no model items found';
           var targetName = '${escaped}';
+
+          // Wait for model items via polling (up to 3s)
+          var pollStarted = Date.now();
+          var items = null;
+          while (Date.now() - pollStarted < 3000) {
+            items = document.querySelectorAll('.icube-model-select-portal-model-item');
+            if (items && items.length > 0) break;
+          }
+          items = document.querySelectorAll('.icube-model-select-portal-model-item');
+          if (!items || !items.length) return 'no model items found';
+
+          var clickEl = ${CLICK_WITH_POINTERDOWN};
+
+          // Strategy 1: Exact match (including with Beta suffix)
           for (var i = 0; i < items.length; i++) {
             var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
-            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
-            if (name === targetName || name.startsWith(targetName + 'Beta') || name.startsWith(targetName + ' ')) {
-              items[i].click();
+            var name = nameEl ? nameEl.textContent.replace(/\s+/g, ' ').trim() : '';
+            if (name === targetName || name === targetName + 'Beta' || name.startsWith(targetName + ' ') || name.startsWith(targetName + 'Beta') || name === targetName.replace(/Beta\\s*/i, '') + 'Beta') {
+              clickEl(items[i]);
               return 'clicked: ' + name + ' at index ' + i;
             }
           }
-          var normalizedTarget = targetName.replace(/\\s*Beta\\s*/i, '');
+
+          // Strategy 2: Strip Beta suffix then match
+          var normalizedTarget = targetName.replace(/\s*Beta\s*/i, '').trim();
           for (var i = 0; i < items.length; i++) {
             var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
-            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim().replace(/\\s*Beta\\s*/i, '') : '';
+            var name = nameEl ? nameEl.textContent.replace(/\s+/g, ' ').trim().replace(/\s*Beta\s*/i, '').trim() : '';
             if (name === normalizedTarget) {
-              items[i].click();
+              clickEl(items[i]);
               return 'clicked (normalized): ' + items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper').textContent.trim() + ' at index ' + i;
             }
           }
+
+          // Strategy 3: Remove Beta from name, compare with target
           for (var i = 0; i < items.length; i++) {
             var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
-            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
+            var name = nameEl ? nameEl.textContent.replace(/\s+/g, ' ').trim() : '';
             var cleanName = name.replace(/Beta/i, '').trim();
-            if (cleanName === targetName) {
-              items[i].click();
+            if (cleanName === targetName || cleanName === targetName.replace(/\\s*Beta/i, '').trim()) {
+              clickEl(items[i]);
               return 'clicked (partial): ' + name + ' at index ' + i;
             }
           }
+
+          // Strategy 4: Substring matching (for CSS-truncated names like "Qwen3.5-Plu" vs "Qwen3.5-Plus")
+          for (var i = 0; i < items.length; i++) {
+            var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var name = nameEl ? nameEl.textContent.replace(/\s+/g, ' ').trim() : '';
+            name = name.replace(/Beta/i, '').trim();
+            var cleanTarget = targetName.replace(/Beta/i, '').trim();
+            // Check if one starts with the other (handles truncation in either direction)
+            if (cleanTarget.startsWith(name) || name.startsWith(cleanTarget)) {
+              clickEl(items[i]);
+              return 'clicked (substring): ' + name + ' at index ' + i;
+            }
+          }
+
+          // Strategy 5: Try without non-alphanum chars (handles edge truncations)
+          for (var i = 0; i < items.length; i++) {
+            var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var name = nameEl ? nameEl.textContent.replace(/\s+/g, ' ').trim() : '';
+            name = name.replace(/Beta/i, '').trim();
+            var simpleName = name.replace(/[^a-zA-Z0-9]/g, '');
+            var simpleTarget = targetName.replace(/[^a-zA-Z0-9]/g, '');
+            if (simpleName === simpleTarget || simpleName.startsWith(simpleTarget) || simpleTarget.startsWith(simpleName)) {
+              clickEl(items[i]);
+              return 'clicked (simple): ' + name + ' at index ' + i;
+            }
+          }
+
           return 'model not found: ' + targetName + ', available: ' + [].map.call(items, function(el) {
             var n = el.querySelector('.icube-model-select-portal-model-item-inner-wrapper');
-            return n ? n.textContent.replace(/\\s+/g, ' ').trim() : '';
+            return n ? n.textContent.replace(/\s+/g, ' ').trim() : '';
           }).join(', ');
         })()
       `,
       returnByValue: true
     });
+
     await sleep(this.config.postActionDelayMs);
     return result.result?.value || 'unknown';
   }
+
 
   async checkReadiness() {
     const composer = await this.findComposer();
@@ -543,6 +819,76 @@ class DomDriver {
       sendButton: sendBtn ? { matchedSelector: sendBtn.matchedSelector } : null,
       responseRegion: response ? { matchedSelector: response.matchedSelector } : null
     };
+  }
+
+  async checkRestrictedMode() {
+    try {
+      const result = await this.client.send('Runtime.evaluate', {
+        expression: `
+          (() => {
+            const body = document.body ? document.body.textContent : '';
+
+            // Check for Chinese restricted mode keywords
+            const cnKeywords = ['受限模式', '信任此文件夹', '信任文件夹', '安全模式', '点击「信任」', '点击信任'];
+            const hasCnKeyword = cnKeywords.some(k => body.includes(k));
+
+            // Check for English restricted mode keywords
+            const enKeywords = ['restricted mode', 'trust this folder', 'trust folder', 'click trust'];
+            const hasEnKeyword = enKeywords.some(k => body.toLowerCase().includes(k));
+
+            if (hasCnKeyword || hasEnKeyword) {
+              // Try to find the dialog buttons
+              let trustButtonFound = false;
+              let manageButtonFound = false;
+              let trustButtonText = '';
+
+              // Check for common trust button patterns
+              const allButtons = document.querySelectorAll('button, a[role="button"], [class*="button"], [class*="btn"]');
+              for (const btn of allButtons) {
+                const t = btn.textContent.trim();
+                const lower = t.toLowerCase();
+                if (lower.includes('信任') || lower.includes('trust') || lower.includes('打开')) {
+                  trustButtonFound = true;
+                  trustButtonText = t;
+                }
+                if (lower.includes('管理') || lower.includes('manage')) {
+                  manageButtonFound = true;
+                }
+              }
+
+              // Check for modal/dialog overlay
+              const modals = document.querySelectorAll('[class*="modal"], [class*="dialog"], [class*="overlay"], [class*="mask"]');
+              const hasOverlay = Array.from(modals).some(m => {
+                const rect = m.getBoundingClientRect();
+                return rect.width > 100 && rect.height > 50;
+              });
+
+              // Determine the title
+              const titleMatch = body.match(/受限模式[^。\n]*/);
+              const title = titleMatch ? titleMatch[0].trim() : (hasCnKeyword ? '受限模式' : 'Restricted Mode');
+
+              return {
+                restricted: true,
+                title: title,
+                trustButtonFound: trustButtonFound,
+                trustButtonText: trustButtonText,
+                manageButtonFound: manageButtonFound,
+                hasOverlay: hasOverlay
+              };
+            }
+
+            return { restricted: false };
+          })()
+        `,
+        returnByValue: true,
+        timeout: 5000
+      });
+
+      return result.result?.value || { restricted: false };
+    } catch (err) {
+      // If CDP communication fails, return false (don't block)
+      return { restricted: false, error: err.message };
+    }
   }
 
   get settings() {

@@ -1,149 +1,110 @@
 {
   "target": {
-    "id": "D935205E74D96E0ED0E32E94708BFB99",
-    "title": "Trae CN",
+    "id": "545BC3FBFF905A937DDEADC45B36D6D2",
+    "title": ".openclaw",
     "url": "vscode-file://vscode-app/Applications/Trae%20CN.app/Contents/Resources/app/out/vs/code/electron-browser/workbench/workbench.html"
   },
   "scanResults": {
-    "composers": [
-      {
-        "selector": ".chat-input-v2-input-box-editable",
-        "nodeId": 723,
-        "preview": "<div class=\"chat-input-v2-input-box-editable\" contenteditable=\"true\" role=\"textbox\" spellcheck=\"true\" data-lexical-editor=\"true\" style=\"user-select: text; white-space: pre-wrap; word-break: break-word"
-      },
-      {
-        "selector": "[contenteditable='true']",
-        "nodeId": 3831,
-        "preview": "<div class=\"chat-input-v2-input-box-editable\" contenteditable=\"true\" role=\"textbox\" spellcheck=\"true\" data-lexical-editor=\"true\" style=\"user-select: text; white-space: pre-wrap; word-break: break-word"
-      },
-      {
-        "selector": "[class*=\"chat-input\"]",
-        "nodeId": 6904,
-        "preview": "<div class=\"chat-input-and-todolist-wrapper\"><div class=\"chat-input-hub-error-wrapper\"><div class=\"chat-input-hub-error-wrapper_inner\"></div></div><div class=\"chat-input-hub-wrapper\"><div></div><div><"
-      },
-      {
-        "selector": "[class*=\"input-box\"]",
-        "nodeId": 10044,
-        "preview": "<div class=\"chat-input-v2-input-box-wrapper chat-input-v2-input-box--modern-scroll\"><div class=\"chat-input-v2-placeholder\" id=\"chat-input-v2-placeholder-undefined\" style=\"display: block;\">您正在与 Builder"
-      },
-      {
-        "selector": "[role=\"textbox\"]",
-        "nodeId": 11601,
-        "preview": "<div class=\"chat-input-v2-input-box-editable\" contenteditable=\"true\" role=\"textbox\" spellcheck=\"true\" data-lexical-editor=\"true\" style=\"user-select: text; white-space: pre-wrap; word-break: break-word"
-      }
-    ],
-    "sendButtons": [
-      {
-        "selector": "button.chat-input-v2-send-button",
-        "nodeId": 13194,
-        "text": ""
-      },
-      {
-        "selector": "button[class*=\"send\"]",
-        "nodeId": 20964,
-        "text": ""
-      }
-    ],
+    "composers": [],
+    "sendButtons": [],
     "responseRegions": [],
     "newChatButtons": [
       {
         "selector": "a.codicon-icube-NewChat",
-        "nodeId": 37427,
+        "nodeId": 224,
         "text": ""
       },
       {
         "selector": "[class*=\"NewChat\"]",
-        "nodeId": 46751,
+        "nodeId": 224,
         "text": ""
       }
     ],
     "modeTabs": [
       {
         "selector": ".icube-mode-tab-item",
-        "nodeId": 48240,
+        "nodeId": 70,
         "text": "SOLO"
       },
       {
         "selector": ".icube-mode-tab-item",
-        "nodeId": 48246,
+        "nodeId": 76,
         "text": "IDE"
       },
       {
         "selector": "[class*='icube-mode-tab-item']",
-        "nodeId": 49794,
+        "nodeId": 70,
         "text": "SOLO"
       },
       {
         "selector": "[class*='icube-mode-tab-item']",
-        "nodeId": 49800,
+        "nodeId": 76,
         "text": "IDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 52897,
+        "nodeId": 65,
         "text": ""
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 52900,
+        "nodeId": 68,
         "text": "SOLO\nIDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 52901,
+        "nodeId": 69,
         "text": "SOLO\nIDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 52902,
+        "nodeId": 70,
         "text": "SOLO"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 52903,
+        "nodeId": 71,
         "text": "SOLO"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 52905,
+        "nodeId": 73,
         "text": ""
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 52908,
+        "nodeId": 76,
         "text": "IDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 52909,
+        "nodeId": 77,
         "text": "IDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 53120,
+        "nodeId": 409,
         "text": ""
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 53122,
+        "nodeId": 411,
         "text": ""
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 53123,
+        "nodeId": 412,
         "text": ""
       }
     ],
     "activityIndicators": [
       {
         "selector": "[class*=\"activity\"]",
-        "nodeId": 62491
+        "nodeId": 686
       }
     ]
   },
   "recommendedEnv": [
-    "TRAECN_COMPOSER_SELECTORS=.chat-input-v2-input-box-editable,[contenteditable='true'],[class*=\"chat-input\"],[class*=\"input-box\"],[role=\"textbox\"]",
-    "TRAECN_SEND_BUTTON_SELECTORS=button.chat-input-v2-send-button,button[class*=\"send\"]",
     "TRAECN_NEW_CHAT_SELECTORS=a.codicon-icube-NewChat,[class*=\"NewChat\"]",
     "TRAECN_MODE_TAB_SELECTORS=.icube-mode-tab-item,.icube-mode-tab-item,[class*='icube-mode-tab-item'],[class*='icube-mode-tab-item'],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"]",
     "TRAECN_ACTIVITY_SELECTORS=[class*=\"activity\"]"
