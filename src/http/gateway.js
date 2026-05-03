@@ -151,31 +151,18 @@ function htmlResponse(res, html, statusCode = 200, headers = {}) {
   res.end(html);
 }
 
-// Task queue for async scheduling: taskId → { chatId, task, status, createdAt, result }
-const taskQueue = new Map();
-
 // Notify OpenClaw (Telegram gateway) when async task completes
 async function notifyOpenClaw(chatId, message) {
   try {
     const body = JSON.stringify({ chatId, text: message });
-    const req = http.request({
-      hostname: '127.0.0.1',
-      port: 18789,
-      path: '/api/message/send',
+    const res = await fetch('http://127.0.0.1:18789/api/message/send', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body)
-      },
-      timeout: 5000
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal: AbortSignal.timeout(5000)
     });
-    req.write(body);
-    req.end();
-    await new Promise((resolve, reject) => {
-      req.on('response', resolve);
-      req.on('error', reject);
-      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    });
+    // Consume response body to free the connection
+    if (res.ok) await res.text();
   } catch (e) {
     console.error('[Queue] notify failed:', e.message);
   }
@@ -212,7 +199,7 @@ class Gateway {
     this.server = null;
     this.sessions = new Map();
     this.idempotencyKeys = new Map();
-    this.taskQueue = taskQueue;
+    this.taskQueue = new Map();
     this.pollingTimer = null;
   }
 
