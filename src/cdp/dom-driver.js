@@ -164,6 +164,41 @@ class DomDriver {
     }
   }
 
+  async _queryTaskSidebar(skipText) {
+    const safeSkipText = safeJsValue(skipText);
+    const result = await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var sidebar = document.querySelector('.soloaisidebar');
+          if (!sidebar) return null;
+
+          var items = Array.from(sidebar.querySelectorAll('div')).filter(function(el) {
+            var text = el.textContent.trim();
+            var w = el.getBoundingClientRect().width;
+            var h = el.getBoundingClientRect().height;
+            return w > 100 && w < 350 && h > 30 && h < 120 && text.length > 5 && !text.includes('新任务');
+          });
+          if (items.length > 0) {
+            var latest = items[items.length - 1];
+            var text = latest.textContent.trim();
+            if (text === ${safeSkipText}) return null;
+            return {
+              text: text,
+              inProgress: text.includes('进行中'),
+              isComplete: text.includes('任务完成'),
+              hasResponse: text.length > 15 && !text.includes('进行中') && !text.includes('新任务')
+            };
+          }
+
+          return null;
+        })()
+      `,
+      returnByValue: true
+    });
+
+    return result.result?.value || null;
+  }
+
   async findComposer() {
     return dom.findFirstMatching(this.client, this.config.composerSelectors);
   }
@@ -180,37 +215,17 @@ class DomDriver {
 
   async findTaskResponse() {
     const skipText = this._lastTaskText;
-    // Find the task panel container by looking for known text patterns.
-    // Uses size-based heuristics then text-based fallbacks.
+
+    // Shared sidebar query first
+    const sidebarResult = await this._queryTaskSidebar(skipText);
+    if (sidebarResult) return sidebarResult;
+
+    // Strategy 2 & 3 remain inline (different logic, not duplicated)
     const result = await this.client.send('Runtime.evaluate', {
       expression: `
         (() => {
           let sidebar = document.querySelector('.soloaisidebar');
           if (!sidebar) return null;
-
-          // Strategy 1: Find visible task items by dimensions
-          let items = Array.from(sidebar.querySelectorAll('div'))
-            .filter(el => {
-              let text = el.textContent.trim();
-              let w = el.getBoundingClientRect().width;
-              let h = el.getBoundingClientRect().height;
-              return w > 100 && w < 350 && h > 30 && h < 120 &&
-                     text.length > 5 &&
-                     !text.includes('新任务');
-            });
-
-          if (items.length > 0) {
-            let latest = items[items.length - 1];
-            let text = latest.textContent.trim();
-            // Skip stale text (same as previous response)
-            if (text === skipText) return null;
-            return {
-              text: text,
-              inProgress: text.includes('进行中'),
-              isComplete: text.includes('任务完成'),
-              hasResponse: text.length > 15 && !text.includes('进行中') && !text.includes('新任务')
-            };
-          }
 
           // Strategy 2: Sidebar collapsed - scan all text content
           let fullText = sidebar.textContent.trim();
@@ -228,7 +243,6 @@ class DomDriver {
           }
 
           // Strategy 3: Just return the sidebar text if it looks like a task
-          // Strategy 3: Skip if same as previous
           if (fullText === skipText) return null;
           if (fullText.includes('任务') && fullText.length > 20) {
             let isProcessing = fullText.includes('进行中') || fullText.includes('生成中');
@@ -347,30 +361,13 @@ class DomDriver {
     const safeResponseSelectors = this.config.responseSelectors.map(s => safeJsValue(s));
     const safeActivitySelectors = this.config.activitySelectors.map(s => safeJsValue(s));
 
+    // Shared sidebar query
+    const sidebarResult = await this._queryTaskSidebar(skipText);
+
     const result = await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
           var result = { taskComplete: false, taskText: '', taskInProgress: false, responseText: '' };
-
-          // Check task panel
-          var sidebar = document.querySelector('.soloaisidebar');
-          if (sidebar) {
-            var items = Array.from(sidebar.querySelectorAll('div')).filter(function(el) {
-              var text = el.textContent.trim();
-              var w = el.getBoundingClientRect().width;
-              var h = el.getBoundingClientRect().height;
-              return w > 100 && w < 350 && h > 30 && h < 120 && text.length > 5 && !text.includes('新任务');
-            });
-            if (items.length > 0) {
-              var latest = items[items.length - 1];
-              var taskText = latest.textContent.trim();
-              if (taskText !== ${safeSkipText}) {
-                result.taskText = taskText;
-                result.taskInProgress = taskText.includes('进行中') || taskText.includes('生成中') || taskText.includes('思考中');
-                result.taskComplete = taskText.includes('任务完成');
-              }
-            }
-          }
 
           // Check response region
           var selectors = [${safeResponseSelectors.join(', ')}];
@@ -398,7 +395,16 @@ class DomDriver {
       returnByValue: true
     });
 
-    return result.result?.value || { taskComplete: false, taskText: '', taskInProgress: false, responseText: '' };
+    const state = result.result?.value || { taskComplete: false, taskText: '', taskInProgress: false, responseText: '' };
+
+    // Apply shared sidebar result
+    if (sidebarResult && sidebarResult.text) {
+      state.taskText = sidebarResult.text;
+      state.taskInProgress = sidebarResult.inProgress;
+      state.taskComplete = sidebarResult.isComplete;
+    }
+
+    return state;
   }
 
   async collectResponse() {
