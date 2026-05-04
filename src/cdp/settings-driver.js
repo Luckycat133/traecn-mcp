@@ -1,7 +1,7 @@
 'use strict';
 
 const { TraeCNAutomationError } = require('./errors');
-const { sleep } = require('../shared/utils');
+const { sleep, safeJsValue } = require('../shared/utils');
 
 // Map human-readable section names to sidebar item text
 const SETTINGS_SECTIONS = [
@@ -39,20 +39,24 @@ async function _goToSettingsTab(client) {
  * Must be called while on the Settings tab.
  */
 async function _clickSidebarItem(client, sectionName) {
-  const escaped = sectionName.replace(/'/g, "\\'");
+  const safeName = safeJsValue(sectionName);
   const result = await client.send('Runtime.evaluate', {
     expression: `
       (function() {
         var items = document.querySelectorAll('.settings-sidebar-menu-item');
         for (var i = 0; i < items.length; i++) {
-          if ((items[i].innerText || '').trim() === '${escaped}') {
+          // Text lives in nested .text span; innerText of the menu-item itself is
+          // empty due to CSS overflow clipping.
+          var textEl = items[i].querySelector('.text');
+          var itemText = textEl ? (textEl.textContent || '').trim() : (items[i].textContent || '').trim();
+          if (itemText === ${safeName}) {
             items[i].dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0}));
             items[i].dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
             items[i].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
-            return 'clicked: ' + items[i].innerText.trim();
+            return 'clicked: ' + itemText;
           }
         }
-        return 'not found: ' + '${escaped}';
+        return 'not found: ' + ${safeName};
       })()
     `,
     returnByValue: true
@@ -120,38 +124,66 @@ async function _readSettingsContent(client) {
   const result = await client.send('Runtime.evaluate', {
     expression: `
       (function() {
-        // First check item count at document level
+        // Strategy 1: standard icb-setting-item-container rows (most settings sections)
         var allItems = document.querySelectorAll('.icb-setting-item-container');
-        if (allItems.length === 0) return JSON.stringify({count: 0});
-
-        // Build results array
-        var results = [];
-        for (var i = 0; i < allItems.length; i++) {
-          var el = allItems[i];
-          var labelEl = el.querySelector('.icb-setting-item-label');
-          var descEl = el.querySelector('.icb-setting-item-description');
-          var toggleEl = el.querySelector('input[type="checkbox"]');
-          var dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
-          var r = el.getBoundingClientRect();
-          results.push({
-            label: labelEl ? labelEl.innerText.trim() : '',
-            desc: descEl ? descEl.innerText.trim() : '',
-            currentValue: dropdownEl ? dropdownEl.innerText.trim() : '',
-            hasToggle: !!toggleEl,
-            hasDropdown: !!dropdownEl,
-            toggleChecked: toggleEl ? toggleEl.checked : null,
-            y: Math.round(r.y),
-            visible: r.width > 0 && r.height > 0
-          });
+        if (allItems.length > 0) {
+          var results = [];
+          for (var i = 0; i < allItems.length; i++) {
+            var el = allItems[i];
+            var labelEl = el.querySelector('.icb-setting-item-label');
+            var descEl = el.querySelector('.icb-setting-item-description');
+            var toggleEl = el.querySelector('input[type="checkbox"]');
+            var dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
+            var r = el.getBoundingClientRect();
+            results.push({
+              label: labelEl ? labelEl.innerText.trim() : '',
+              desc: descEl ? descEl.innerText.trim() : '',
+              currentValue: dropdownEl ? dropdownEl.innerText.trim() : '',
+              hasToggle: !!toggleEl,
+              hasDropdown: !!dropdownEl,
+              toggleChecked: toggleEl ? toggleEl.checked : null,
+              y: Math.round(r.y),
+              visible: r.width > 0 && r.height > 0
+            });
+          }
+          return JSON.stringify({count: results.length, items: results, type: 'standard'});
         }
-        return JSON.stringify({count: results.length, items: results});
+
+        // Strategy 2: table-based model list (the \u6a21\u578b section uses a <table>)
+        var tableRows = document.querySelectorAll('table tbody tr');
+        if (tableRows.length > 0) {
+          var results = [];
+          for (var i = 0; i < tableRows.length; i++) {
+            var cells = tableRows[i].querySelectorAll('td');
+            if (cells.length >= 2) {
+              var modelName = (cells[0].textContent || '').trim();
+              var provider = (cells[1].textContent || '').trim();
+              // Skip column-header rows
+              if (modelName && modelName !== '\u6a21\u578b' && modelName !== '\u670d\u52a1\u5546' && modelName !== '\u64cd\u4f5c') {
+                results.push({
+                  label: modelName,
+                  desc: provider,
+                  currentValue: '',
+                  hasToggle: false,
+                  hasDropdown: false,
+                  toggleChecked: null,
+                  y: Math.round(cells[0].getBoundingClientRect().y),
+                  visible: true
+                });
+              }
+            }
+          }
+          return JSON.stringify({count: results.length, items: results, type: 'model-table'});
+        }
+
+        return JSON.stringify({count: 0, type: 'none'});
       })()
     `,
     returnByValue: true
   });
 
   const rawValue = result.result?.value;
-  let parsed = {count: 0, items: []};
+  let parsed = {count: 0, items: [], type: 'none'};
   if (typeof rawValue === 'string') {
     try { parsed = JSON.parse(rawValue); } catch(e) {}
   }
@@ -160,9 +192,14 @@ async function _readSettingsContent(client) {
     return { sections: [], items: parsed.items };
   }
 
-  // Wait up to 8s for content
-  const waitedItems = await _waitForContent(client, 8000);
-  return { sections: [], items: waitedItems };
+  // For standard items, wait up to 8s for async content. Skip for model tables
+  // (which load synchronously from the DOM above).
+  if (parsed.type !== 'model-table') {
+    const waitedItems = await _waitForContent(client, 8000);
+    return { sections: [], items: waitedItems };
+  }
+
+  return { sections: [], items: [] };
 }
 
 /**
