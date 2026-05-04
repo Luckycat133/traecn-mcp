@@ -78,13 +78,26 @@ class TraeCNApiClient {
     if (options.sessionId) body.sessionId = options.sessionId;
     if (options.allowAutoStart) body.allowAutoStart = true;
     if (options.includeProcessText) body.includeProcessText = true;
-    return this._request('POST', '/api/delegate', body);
+    // gateway wraps result in { status: 'done', text, ... };
+    // unwrap the HTTP envelope for clean access by the caller
+    const response = await this._request('POST', '/api/delegate', body);
+    return response.data || response;
   }
 
   async delegateAsync(task, options = {}) {
     const body = { task };
     if (options.chatId) body.chatId = options.chatId;
+    if (options.includeProcessText) body.includeProcessText = true;
+    if (options.waitForQueue !== undefined) body.waitForQueue = options.waitForQueue;
     return this._request('POST', '/api/delegate-async', body);
+  }
+
+  async getTaskStatus(taskId) {
+    return this._request('GET', '/api/task/' + encodeURIComponent(taskId));
+  }
+
+  async cancelTask(taskId) {
+    return this._request('POST', '/api/task/' + encodeURIComponent(taskId) + '/cancel');
   }
 
   async switchMode(mode, allowAutoStart = false) {
@@ -114,6 +127,18 @@ class TraeCNApiClient {
 
   async updateSelf(force = false) {
     return this._request('POST', '/api/update-self', { force });
+  }
+
+  async approveDialog(action = 'auto') {
+    return this._request('POST', '/api/dialog/approve', { action });
+  }
+
+  async dismissDialog() {
+    return this._request('POST', '/api/dialog/dismiss', {});
+  }
+
+  async dialogStatus() {
+    return this._request('GET', '/api/dialog/status');
   }
 
   async healthCheck() {

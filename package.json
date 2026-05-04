@@ -37,6 +37,7 @@
     "lint": "node --check src/server.js && node --check src/cdp/discovery.js && node --check src/cdp/dom-driver.js && node --check src/http/gateway.js && node --check src/shared/utils.js && node --check src/cdp/browser-dom.js && node --check src/cdp/client.js && node --check src/cdp/errors.js && node --check src/cdp/settings-driver.js && node --check src/cdp/mock-driver.js && node --check src/http/openapi.js && node --check src/http/chat-ui.js && node --check src/config/env.js && node --check src/config/quickstart.js"
   },
   "dependencies": {
+    "playwright": "^1.59.1",
     "ws": "^8.20.0"
   }
 }

@@ -199,6 +199,34 @@
           }
         }
       }
+    },
+    {
+      "name": "traecn_approve",
+      "description": "Detect and approve/dismiss dialogs in TraeCN. Auto-detects dialog type and clicks the appropriate button.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["auto", "trust", "allow", "confirm", "approve", "deny", "cancel", "dismiss"],
+            "description": "\"auto\" (default) auto-detects best action. trust/allow/confirm for positive actions, deny/cancel/dismiss to reject.",
+            "default": "auto"
+          },
+          "waitForDialog": {
+            "type": "boolean",
+            "description": "If true, waits up to 30 seconds for a dialog to appear before approving.",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_dialog_status",
+      "description": "Check if there is a pending dialog (restricted mode, permission request, confirmation) in TraeCN.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ],
   "slashCommands": [

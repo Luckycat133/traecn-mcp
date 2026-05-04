@@ -1,176 +1,259 @@
 {
   "target": {
-    "id": "8A1E6870E74D90F35AA43B6DED7FF769",
-    "title": "minimax-studio",
+    "id": "FB5408DBF1E7E9D79BF46CAB8FFD982D",
+    "title": "Untitled-1 — TraeCNClaw",
     "url": "vscode-file://vscode-app/Applications/Trae%20CN.app/Contents/Resources/app/out/vs/code/electron-browser/workbench/workbench.html"
   },
   "scanResults": {
     "composers": [
       {
         "selector": ".chat-input-v2-input-box-editable",
-        "nodeId": 384,
+        "nodeId": 2796,
         "preview": "<div class=\"chat-input-v2-input-box-editable\" contenteditable=\"true\" role=\"textbox\" spellcheck=\"true\" data-lexical-editor=\"true\" style=\"user-select: text; white-space: pre-wrap; word-break: break-word"
+      },
+      {
+        "selector": "textarea",
+        "nodeId": 1116,
+        "preview": "<textarea data-mprt=\"7\" class=\"inputarea monaco-mouse-cursor-text\" wrap=\"off\" autocorrect=\"off\" autocapitalize=\"off\" autocomplete=\"off\" spellcheck=\"false\" aria-label=\"现在无法访问编辑器。 若要启用屏幕阅读器优化模式，请使用 Shif"
       },
       {
         "selector": "[contenteditable='true']",
-        "nodeId": 384,
+        "nodeId": 2796,
         "preview": "<div class=\"chat-input-v2-input-box-editable\" contenteditable=\"true\" role=\"textbox\" spellcheck=\"true\" data-lexical-editor=\"true\" style=\"user-select: text; white-space: pre-wrap; word-break: break-word"
       },
       {
+        "selector": "input[type='text']",
+        "nodeId": 1245,
+        "preview": "<input class=\"input empty icube-search\" autocorrect=\"off\" autocapitalize=\"off\" spellcheck=\"false\" type=\"text\" wrap=\"off\" aria-label=\"先按所需的组合键，再按 Enter 键。\" aria-live=\"off\" style=\"background-color: inhe"
+      },
+      {
         "selector": "[class*=\"chat-input\"]",
-        "nodeId": 349,
+        "nodeId": 2649,
         "preview": "<div class=\"chat-input-and-todolist-wrapper\"><div class=\"chat-input-hub-error-wrapper\"><div class=\"chat-input-hub-error-wrapper_inner\"></div></div><div class=\"chat-input-hub-wrapper\"><div></div><div><"
       },
       {
         "selector": "[class*=\"input-box\"]",
-        "nodeId": 381,
-        "preview": "<div class=\"chat-input-v2-input-box-wrapper chat-input-v2-input-box--modern-scroll\"><div class=\"chat-input-v2-placeholder\" id=\"chat-input-v2-placeholder-undefined\" style=\"display: block;\">您正在与 SOLO Co"
+        "nodeId": 2793,
+        "preview": "<div class=\"chat-input-v2-input-box-wrapper chat-input-v2-input-box--modern-scroll\"><div class=\"chat-input-v2-placeholder\" id=\"chat-input-v2-placeholder-undefined\" style=\"display: block;\">您正在与 Builder"
       },
       {
         "selector": "[role=\"textbox\"]",
-        "nodeId": 384,
-        "preview": "<div class=\"chat-input-v2-input-box-editable\" contenteditable=\"true\" role=\"textbox\" spellcheck=\"true\" data-lexical-editor=\"true\" style=\"user-select: text; white-space: pre-wrap; word-break: break-word"
+        "nodeId": 1116,
+        "preview": "<textarea data-mprt=\"7\" class=\"inputarea monaco-mouse-cursor-text\" wrap=\"off\" autocorrect=\"off\" autocapitalize=\"off\" autocomplete=\"off\" spellcheck=\"false\" aria-label=\"现在无法访问编辑器。 若要启用屏幕阅读器优化模式，请使用 Shif"
       }
     ],
     "sendButtons": [
       {
         "selector": "button.chat-input-v2-send-button",
-        "nodeId": 423,
+        "nodeId": 2835,
         "text": ""
       },
       {
         "selector": "button[class*=\"send\"]",
-        "nodeId": 423,
+        "nodeId": 2835,
         "text": ""
       }
     ],
-    "responseRegions": [],
+    "responseRegions": [
+      {
+        "selector": ".assistant-chat-turn-content",
+        "nodeId": 1437,
+        "textPreview": "0/3 已完成\nExamine project structure (server/ dir, package.json, Dockerfile, etc.)\nChoose simplest deployment method based on project structure\nDeploy the project and get public URL\n/Volumes/My Shared Fi"
+      },
+      {
+        "selector": ".agent-plan-items.assistant-chat-turn-element",
+        "nodeId": 1439,
+        "textPreview": "0/3 已完成\nExamine project structure (server/ dir, package.json, Dockerfile, etc.)\nChoose simplest deployment method based on project structure\nDeploy the project and get public URL\n/Volumes/My Shared Fi"
+      },
+      {
+        "selector": "[data-role='assistant']",
+        "nodeId": 1419,
+        "textPreview": "SOLO Coder\n思考过程\n0/3 已完成\nExamine project structure (server/ dir, package.json, Dockerfile, etc.)\nChoose simplest deployment method based on project structure\nDeploy the project and get public URL\n/Volu"
+      },
+      {
+        "selector": ".assistant",
+        "nodeId": 1419,
+        "textPreview": "SOLO Coder\n思考过程\n0/3 已完成\nExamine project structure (server/ dir, package.json, Dockerfile, etc.)\nChoose simplest deployment method based on project structure\nDeploy the project and get public URL\n/Volu"
+      },
+      {
+        "selector": ".assistant",
+        "nodeId": 1420,
+        "textPreview": "SOLO Coder"
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 1419,
+        "textPreview": "SOLO Coder\n思考过程\n0/3 已完成\nExamine project structure (server/ dir, package.json, Dockerfile, etc.)\nChoose simplest deployment method based on project structure\nDeploy the project and get public URL\n/Volu"
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 1420,
+        "textPreview": "SOLO Coder"
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 1437,
+        "textPreview": "0/3 已完成\nExamine project structure (server/ dir, package.json, Dockerfile, etc.)\nChoose simplest deployment method based on project structure\nDeploy the project and get public URL\n/Volumes/My Shared Fi"
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 1438,
+        "textPreview": "0/3 已完成\nExamine project structure (server/ dir, package.json, Dockerfile, etc.)\nChoose simplest deployment method based on project structure\nDeploy the project and get public URL\n/Volumes/My Shared Fi"
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 1439,
+        "textPreview": "0/3 已完成\nExamine project structure (server/ dir, package.json, Dockerfile, etc.)\nChoose simplest deployment method based on project structure\nDeploy the project and get public URL\n/Volumes/My Shared Fi"
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 2623,
+        "textPreview": "手动终止输出"
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 2624,
+        "textPreview": "手动终止输出"
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 2631,
+        "textPreview": ""
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 2632,
+        "textPreview": ""
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 2633,
+        "textPreview": ""
+      },
+      {
+        "selector": "[class*=\"assistant\"]",
+        "nodeId": 2634,
+        "textPreview": ""
+      }
+    ],
     "newChatButtons": [
       {
         "selector": "a.codicon-icube-NewChat",
-        "nodeId": 219,
+        "nodeId": 161,
         "text": ""
       },
       {
         "selector": "[class*=\"NewChat\"]",
-        "nodeId": 219,
+        "nodeId": 161,
         "text": ""
       }
     ],
     "modeTabs": [
       {
         "selector": ".icube-mode-tab-item",
-        "nodeId": 71,
+        "nodeId": 69,
         "text": "SOLO"
       },
       {
         "selector": ".icube-mode-tab-item",
-        "nodeId": 77,
+        "nodeId": 75,
         "text": "IDE"
       },
       {
         "selector": "[class*='icube-mode-tab-item']",
-        "nodeId": 71,
+        "nodeId": 69,
         "text": "SOLO"
       },
       {
         "selector": "[class*='icube-mode-tab-item']",
-        "nodeId": 77,
+        "nodeId": 75,
         "text": "IDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 66,
+        "nodeId": 64,
         "text": ""
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 69,
+        "nodeId": 67,
         "text": "SOLO\nIDE"
+      },
+      {
+        "selector": "[class*=\"mode-tab\"]",
+        "nodeId": 68,
+        "text": "SOLO\nIDE"
+      },
+      {
+        "selector": "[class*=\"mode-tab\"]",
+        "nodeId": 69,
+        "text": "SOLO"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
         "nodeId": 70,
-        "text": "SOLO\nIDE"
-      },
-      {
-        "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 71,
         "text": "SOLO"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
         "nodeId": 72,
-        "text": "SOLO"
-      },
-      {
-        "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 74,
         "text": ""
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 77,
+        "nodeId": 75,
         "text": "IDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 78,
+        "nodeId": 76,
         "text": "IDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 505,
-        "text": "编辑器"
-      },
-      {
-        "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 507,
-        "text": "编辑器"
-      },
-      {
-        "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 508,
-        "text": "编辑器"
-      },
-      {
-        "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 510,
-        "text": "编辑器"
-      },
-      {
-        "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 511,
-        "text": "编辑器"
-      },
-      {
-        "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 512,
+        "nodeId": 341,
         "text": ""
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 515,
-        "text": "编辑器"
+        "nodeId": 343,
+        "text": ""
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 517,
+        "nodeId": 344,
         "text": ""
       }
     ],
     "activityIndicators": [
       {
+        "selector": ".chat-content-container",
+        "nodeId": 1382
+      },
+      {
+        "selector": ".chat-list-wrapper",
+        "nodeId": 1374
+      },
+      {
+        "selector": "[class*=\"chat-content\"]",
+        "nodeId": 1382
+      },
+      {
+        "selector": "[class*=\"chat-list\"]",
+        "nodeId": 1374
+      },
+      {
         "selector": "[class*=\"activity\"]",
-        "nodeId": 1243
+        "nodeId": 388
       }
     ]
   },
   "recommendedEnv": [
-    "TRAECN_COMPOSER_SELECTORS=.chat-input-v2-input-box-editable,[contenteditable='true'],[class*=\"chat-input\"],[class*=\"input-box\"],[role=\"textbox\"]",
+    "TRAECN_COMPOSER_SELECTORS=.chat-input-v2-input-box-editable,textarea,[contenteditable='true'],input[type='text'],[class*=\"chat-input\"],[class*=\"input-box\"],[role=\"textbox\"]",
     "TRAECN_SEND_BUTTON_SELECTORS=button.chat-input-v2-send-button,button[class*=\"send\"]",
+    "TRAECN_RESPONSE_SELECTORS=.assistant-chat-turn-content,.agent-plan-items.assistant-chat-turn-element,[data-role='assistant'],.assistant,.assistant,[class*=\"assistant\"],[class*=\"assistant\"],[class*=\"assistant\"],[class*=\"assistant\"],[class*=\"assistant\"],[class*=\"assistant\"],[class*=\"assistant\"],[class*=\"assistant\"],[class*=\"assistant\"],[class*=\"assistant\"],[class*=\"assistant\"]",
     "TRAECN_NEW_CHAT_SELECTORS=a.codicon-icube-NewChat,[class*=\"NewChat\"]",
-    "TRAECN_MODE_TAB_SELECTORS=.icube-mode-tab-item,.icube-mode-tab-item,[class*='icube-mode-tab-item'],[class*='icube-mode-tab-item'],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"]",
-    "TRAECN_ACTIVITY_SELECTORS=[class*=\"activity\"]"
+    "TRAECN_MODE_TAB_SELECTORS=.icube-mode-tab-item,.icube-mode-tab-item,[class*='icube-mode-tab-item'],[class*='icube-mode-tab-item'],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"]",
+    "TRAECN_ACTIVITY_SELECTORS=.chat-content-container,.chat-list-wrapper,[class*=\"chat-content\"],[class*=\"chat-list\"],[class*=\"activity\"]"
   ]
 }

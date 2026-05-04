@@ -170,7 +170,7 @@ async function notifyOpenClaw(chatId, message) {
 
 function formatResult(result) {
   if (!result) return '✅ Trae 完成（无详情）';
-  if (result.needsConfirmation) {
+  if (result.needsConfirmation || result.needsApproval) {
     return `🤖 Trae 需要确认:\n${result.question}\n\n输入你的决定继续。`;
   }
   if (result.error) {
@@ -352,6 +352,9 @@ class Gateway {
       if (pathname === '/api/new-chat' && method === 'POST') {
         return await this._handleNewChat(req, res);
       }
+      if (pathname === '/api/detect-mode' && method === 'GET') {
+        return await this._handleDetectMode(req, res);
+      }
       if (pathname === '/api/switch-mode' && method === 'POST') {
         return await this._handleSwitchMode(req, res);
       }
@@ -363,6 +366,15 @@ class Gateway {
       }
       if (pathname === '/api/queue/status' && method === 'GET') {
         return this._handleQueueStatusList(req, res);
+      }
+      if (pathname.match(/^\/api\/task\/[^/]+$/) && method === 'GET') {
+        const taskId = pathname.split('/').pop();
+        return this._handleTaskStatus(req, res, taskId);
+      }
+      if (pathname.match(/^\/api\/task\/[^/]+\/cancel$/) && method === 'POST') {
+        const segments = pathname.split('/');
+        const taskId = segments[3];
+        return this._handleTaskCancel(req, res, taskId);
       }
       if (pathname === '/api/delegate' && method === 'POST') {
         return await this._handleDelegateAsync(req, res);
@@ -399,6 +411,15 @@ class Gateway {
       }
       if (pathname === '/api/settings/back-to-chat' && method === 'POST') {
         return await this._handleSettingsBackToChat(req, res);
+      }
+      if (pathname === '/api/dialog/approve' && method === 'POST') {
+        return await this._handleDialogApprove(req, res);
+      }
+      if (pathname === '/api/dialog/dismiss' && method === 'POST') {
+        return await this._handleDialogDismiss(req, res);
+      }
+      if (pathname === '/api/dialog/status' && method === 'GET') {
+        return await this._handleDialogStatus(req, res);
       }
       if (pathname === '/' && method === 'GET') {
         return this._html(req, res, renderChatUI());
@@ -521,6 +542,16 @@ class Gateway {
     this._json(req, res, { success });
   }
 
+  async _handleDetectMode(req, res) {
+    await this._ensureConnection();
+    const modeInfo = await this.driver.detectMode();
+    this._json(req, res, {
+      mode: modeInfo.mode,
+      confidence: modeInfo.confidence,
+      indicators: modeInfo.indicators
+    });
+  }
+
   async _handleSwitchMode(req, res) {
     const body = await parseBody(req);
     if (!body.mode) {
@@ -531,8 +562,13 @@ class Gateway {
     }
 
     await this._ensureConnection();
-    const success = await this.driver.switchMode(body.mode);
-    this._json(req, res, { success, mode: body.mode });
+    const result = await this.driver.switchMode(body.mode);
+    this._json(req, res, {
+      success: result.success,
+      mode: body.mode,
+      previousMode: result.previousMode || null,
+      alreadyInMode: result.alreadyInMode || false
+    });
   }
 
   async _handleSwitchModel(req, res) {
@@ -752,6 +788,68 @@ class Gateway {
     this._json(req, res, { result });
   }
 
+
+  // ── Dialog / Approval handlers ──────────────────────────────────────────
+
+  async _handleDialogApprove(req, res) {
+    const body = await parseBody(req);
+    const action = (body.action || 'auto').toLowerCase();
+
+    await this._ensureConnection();
+
+    if (action === 'auto') {
+      // Auto-detect the best action based on dialog type
+      const dialog = await this.driver.checkForApprovalDialog();
+      if (!dialog.needsApproval) {
+        return this._json(req, res, { success: false, error: 'No dialog found to approve' });
+      }
+      const autoAction = dialog.canAutoApprove ? 'trust' : 'allow';
+      const result = await this.driver.approveDialog(autoAction);
+      return this._json(req, res, {
+        success: result.success,
+        action: autoAction,
+        dialogType: dialog.dialogType,
+        buttonClicked: result.buttonClicked,
+        error: result.error
+      });
+    }
+
+    if (!['trust', 'allow', 'confirm', 'approve', 'deny', 'cancel', 'dismiss'].includes(action)) {
+      return this._json(req, res, { error: 'Invalid action: ' + action }, 400);
+    }
+
+    const result = await this.driver.approveDialog(action);
+    this._json(req, res, {
+      success: result.success,
+      action,
+      buttonClicked: result.buttonClicked,
+      error: result.error
+    });
+  }
+
+  async _handleDialogDismiss(req, res) {
+    await this._ensureConnection();
+    const result = await this.driver.approveDialog('dismiss');
+    this._json(req, res, {
+      success: result.success,
+      action: 'dismiss',
+      buttonClicked: result.buttonClicked,
+      error: result.error
+    });
+  }
+
+  async _handleDialogStatus(req, res) {
+    await this._ensureConnection();
+    const dialog = await this.driver.checkForApprovalDialog();
+    this._json(req, res, {
+      hasDialog: dialog.needsApproval,
+      dialogType: dialog.dialogType || null,
+      question: dialog.question || null,
+      buttons: dialog.buttons || [],
+      canAutoApprove: dialog.canAutoApprove || false
+    });
+  }
+
   async _handleDebugAutomation(req, res) {
     const config = getConfig();
     await this._ensureConnection();
@@ -765,13 +863,29 @@ class Gateway {
         activitySelectors: config.activitySelectors,
         newChatSelectors: config.newChatSelectors,
         modeTabSelectors: config.modeTabSelectors,
-        sendTrigger: config.sendTrigger
+        ideTaskPanelSelectors: config.ideTaskPanelSelectors,
+        ideResponseSelectors: config.ideResponseSelectors,
+        ideNewChatSelectors: config.ideNewChatSelectors,
+        sendTrigger: config.sendTrigger,
+        defaultMode: config.defaultMode,
+        modeSwitchWaitMs: config.modeSwitchWaitMs
       },
-      readiness
+      readiness,
+      mode: readiness.mode || null
     });
   }
 
   // ── Async delegate (Step 7 & 8) ─────────────────────────────────────────────
+
+  // ── Async delegate (queue-aware v2) ──────────────────────────────────────
+  //
+  // Returns clear status signals to the caller:
+  //   queued  → { status: 'queued', taskId, queueDetails }
+  //   running → { status: 'running', message }
+  //   done    → { status: 'done', text, ...result }
+  //
+  // Supports waitForQueue (default: true): if model is queued, enqueue the task
+  // for background processing; if false, return immediately with queue info.
 
   async _handleDelegateAsync(req, res) {
     const body = await parseBody(req);
@@ -783,51 +897,178 @@ class Gateway {
     }
 
     const chatId = body.chatId || null;
+    const includeProcessText = body.includeProcessText === true;
+    const waitForQueue = body.waitForQueue !== false;
     await this._ensureConnection();
 
-    // If model is queued, store task and return 202 immediately
+    // Get queue status with enhanced detection
     const queueStatus = await this.driver.checkQueueStatus();
+
+    // Build queue ETA message
+    let queueEtaMessage = '';
+    if (queueStatus.queueEstimatedWait) {
+      queueEtaMessage = `，预计等待 ${queueStatus.queueEstimatedWait}`;
+    } else if (queueStatus.queuePosition) {
+      queueEtaMessage = `，当前第 ${queueStatus.queuePosition} 位`;
+    }
+
     if (queueStatus.queued) {
+      if (!waitForQueue) {
+        // Caller doesn't want to wait — return queue info immediately
+        return this._json(req, res, {
+          status: 'queued',
+          queueDetails: {
+            state: 'queued',
+            currentModel: queueStatus.currentModel || '',
+            queuePosition: queueStatus.queuePosition,
+            queueEstimatedWait: queueStatus.queueEstimatedWait,
+            queueMessage: queueStatus.queueMessage || '模型排队中'
+          },
+          message: `模型排队中${queueEtaMessage}，请稍后重试或设置 waitForQueue=true 自动等待`,
+          model: queueStatus.currentModel
+        }, 202);
+      }
+
+      // Store task for background processing with per-task queue timeout
       const taskId = 'task_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      const perTaskTimeoutMs = this.driver.config.queuePerTaskTimeoutMs || 600000;
       this.taskQueue.set(taskId, {
         chatId,
         task: body.task,
         status: 'queued',
         createdAt: Date.now(),
-        attempts: 0
+        deadline: Date.now() + perTaskTimeoutMs,
+        attempts: 0,
+        includeProcessText
       });
+
+      this._ensureBackgroundPolling();
+
       return this._json(req, res, {
         taskId,
         status: 'queued',
-        message: `Trae 排队中（${queueStatus.message || '模型忙'}），完成后自动通知`
+        queueDetails: {
+          state: 'queued',
+          currentModel: queueStatus.currentModel || '',
+          queuePosition: queueStatus.queuePosition,
+          queueEstimatedWait: queueStatus.queueEstimatedWait,
+          queueMessage: queueStatus.queueMessage || '模型排队中'
+        },
+        message: `模型排队中${queueEtaMessage}，任务已加入后台。用 traecn_task_status 查询进度`,
+        model: queueStatus.currentModel
       }, 202);
     }
 
-    // Model ready — execute synchronously with timeout protection
+    if (queueStatus.running) {
+      // Model is currently generating — can't send new task yet
+      return this._json(req, res, {
+        status: 'running',
+        message: 'Trae 正在执行其他任务，请稍后重试',
+        model: queueStatus.currentModel
+      }, 202);
+    }
+
+    // Model is idle/ready — execute synchronously with timeout protection
     let result;
     let timeoutId;
     try {
+      const syncTimeout = 180000;
       const timeoutPromise = new Promise((_, reject) =>
-        { timeoutId = setTimeout(() => reject(new Error('delegate timeout (180s)')), 180000); }
+        { timeoutId = setTimeout(() => reject(new Error('delegate timeout (' + syncTimeout + 'ms)')), syncTimeout); }
       );
       result = await Promise.race([this.driver.delegate(body.task), timeoutPromise]);
-        } catch (e) {
+    } catch (e) {
       return this._json(req, res, { error: 'delegate failed: ' + e.message }, 504);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
     }
+
     if (chatId) {
       await notifyOpenClaw(chatId, formatResult(result));
     }
 
     const responseData = {
+      status: 'done',
       text: result.text,
       stable: result.stable,
       elapsedMs: result.elapsedMs,
-      timedOut: result.timedOut || false
+      timedOut: result.timedOut || false,
+      needsApproval: result.needsApproval || false,
+      question: result.question || ''
     };
+
+    if (includeProcessText && result.processText) {
+      responseData.processText = result.processText;
+    }
+
     this._storeIdempotency(req.headers['idempotency-key'], { data: responseData, statusCode: 200 });
     this._json(req, res, responseData);
+  }
+
+  // ── Task status & cancel ──────────────────────────────────────────────────
+
+  _handleTaskStatus(req, res, taskId) {
+    const task = this.taskQueue.get(taskId);
+    if (!task) {
+      return this._json(req, res, { error: 'Task not found' }, 404);
+    }
+
+    const response = {
+      taskId,
+      status: task.status,
+      createdAt: task.createdAt,
+      elapsed: Date.now() - task.createdAt
+    };
+
+    switch (task.status) {
+      case 'queued':
+        response.message = '队列等待中';
+        response.queueElapsed = Date.now() - task.createdAt;
+        response.deadline = task.deadline;
+        response.remaining = Math.max(0, task.deadline - Date.now());
+        break;
+      case 'executing':
+        response.message = 'Trae 正在执行';
+        break;
+      case 'done':
+        response.message = '执行完成';
+        response.result = {
+          text: task.result.text,
+          stable: task.result.stable,
+          elapsedMs: task.result.elapsedMs,
+          timedOut: task.result.timedOut || false,
+          needsApproval: task.result.needsApproval || false
+        };
+        break;
+      case 'error':
+        response.message = '执行出错';
+        response.error = task.error;
+        break;
+      case 'cancelled':
+        response.message = '已取消';
+        break;
+      case 'queue_timeout':
+        response.message = '排队超时，请稍后重试或切换模型';
+        response.error = 'Task exceeded queue wait timeout';
+        break;
+    }
+
+    this._json(req, res, response);
+  }
+
+  _handleTaskCancel(req, res, taskId) {
+    const task = this.taskQueue.get(taskId);
+    if (!task) {
+      return this._json(req, res, { error: 'Task not found' }, 404);
+    }
+    if (task.status !== 'queued') {
+      return this._json(req, res, {
+        error: 'Task is not in a cancellable state',
+        status: task.status
+      }, 400);
+    }
+    task.status = 'cancelled';
+    this._json(req, res, { taskId, status: 'cancelled' });
   }
 
   _handleQueueStatusList(req, res) {
@@ -841,41 +1082,67 @@ class Gateway {
     this._json(req, res, { tasks });
   }
 
-  _startBackgroundPolling() {
+  // ── Background polling (queue-aware) ──────────────────────────────────────
+  //
+  // Polls periodically: checks queue state, runs newChat when the queue clears,
+  // sends the task and waits for the response. Enforces per-task deadline.
+
+  _ensureBackgroundPolling() {
     if (this.pollingTimer) return;
     const pollInterval = 15000;
     this.pollingTimer = setInterval(async () => {
       for (const [taskId, task] of this.taskQueue) {
         if (task.status !== 'queued') continue;
+
+        // Check per-task queue timeout
+        if (Date.now() > task.deadline) {
+          task.status = 'queue_timeout';
+          console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
+          if (task.chatId) {
+            await notifyOpenClaw(task.chatId, '❌ Trae 排队超时（超过限制），请稍后重试或切换模型');
+          }
+          continue;
+        }
+
         try {
           await this._ensureConnection();
           const queueStatus = await this.driver.checkQueueStatus();
-          if (queueStatus.queued) continue;
+
+          // Still queued or actively running — skip this task for now
+          if (queueStatus.queued || queueStatus.running) continue;
+
           task.status = 'executing';
+
           try {
-            const result = await this.driver.delegate(task.task);
+            // Create a fresh chat before sending (background poller bypasses
+            // delegate() which would also call newChat)
+            await this.driver.newChat();
+            await this.driver.sendMessage(task.task);
+            const result = await this.driver.collectResponse();
+
             task.status = 'done';
             task.result = result;
+
             if (task.chatId) {
               await notifyOpenClaw(task.chatId, formatResult(result));
             }
           } catch (e) {
             task.status = 'error';
             task.error = e.message;
+            console.error('[Queue] Task', taskId, 'execution error:', e.message);
             if (task.chatId) {
               await notifyOpenClaw(task.chatId, '❌ Trae 出错: ' + e.message);
             }
           }
         } catch (e) {
           console.error('[Queue] polling error:', e.message);
-          // Continue to next task instead of crashing the loop
         }
       }
     }, pollInterval);
     if (typeof this.pollingTimer.unref === 'function') {
       this.pollingTimer.unref();
     }
-    console.log('[Gateway] Background polling started (interval=15s)');
+    console.log('[Gateway] Background polling started (interval=' + pollInterval + 'ms)');
   }
 
   _stopBackgroundPolling() {
@@ -907,7 +1174,7 @@ async function startGateway(options = {}) {
   return new Promise((resolve, reject) => {
     server.listen(gateway.port, gateway.host, () => {
       gateway.server = server;
-      gateway._startBackgroundPolling();
+      gateway._ensureBackgroundPolling();
       resolve(server);
     });
     server.on('error', reject);

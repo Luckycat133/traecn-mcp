@@ -6,6 +6,71 @@ const PLUGIN_ID = 'traecnclaw';
 
 const toolDefinitions = [
   {
+    name: 'traecn_task_status',
+    description: 'Query the status of an async TraeCN task by taskId. Use after traecn_delegate returns a taskId with status "queued". Returns: done/queued/executing/error/cancelled/queue_timeout.',
+    parameters: {
+      type: 'object',
+      required: ['taskId'],
+      properties: {
+        taskId: { type: 'string', description: 'The taskId returned from traecn_delegate when the model is queued' }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await client.getTaskStatus(params.taskId);
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_cancel_task',
+    description: 'Cancel a queued TraeCN task. Only works for tasks in "queued" state.',
+    parameters: {
+      type: 'object',
+      required: ['taskId'],
+      properties: {
+        taskId: { type: 'string', description: 'The taskId returned from traecn_delegate when the model is queued' }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await client.cancelTask(params.taskId);
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_settings_read',
+    description: 'Read settings from the TraeCN settings panel. Optionally specify a section (canonical names: general, account, agents, mcp, flow/models, context, rules, about). Returns the settings panel content as text.',
+    parameters: {
+      type: 'object',
+      properties: {
+        section: { type: 'string', description: 'Settings section to read. Leave empty for current section.' }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await client.settingsRead(params.section || null);
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_settings_set',
+    description: 'Change a setting in the TraeCN settings panel. Specify the label text and new value. Optionally specify a section to navigate to first.',
+    parameters: {
+      type: 'object',
+      required: ['label', 'value'],
+      properties: {
+        label: { type: 'string', description: 'The label text of the setting to change (e.g. "Agent 名", "知识库")' },
+        value: { type: 'string', description: 'The new value for the setting' },
+        section: { type: 'string', description: 'Optional: settings section to navigate to first (canonical names: general, account, agents, mcp, flow/models, context, rules, about)' }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await client.settingsWrite(params.section || null, { label: params.label, value: params.value });
+      return result.data || result;
+    }
+  },
+  {
     name: 'traecn_status',
     description: 'Check if TraeCNclaw gateway is reachable and TraeCN automation is ready.',
     parameters: {
@@ -35,7 +100,7 @@ const toolDefinitions = [
   },
   {
     name: 'traecn_delegate',
-    description: 'Delegate an IDE task to TraeCN desktop app and return the AI response.',
+    description: 'Delegate an IDE task to TraeCN desktop app and return the AI response. Queue-aware: if the model is busy/queued, returns { status: "queued", taskId, queueDetails } so you can use traecn_task_status to wait. If model is free, returns { status: "done", text, ... }. The taskId from a queued response lets you poll progress without burning tokens retrying.',
     parameters: {
       type: 'object',
       required: ['task'],
@@ -44,17 +109,53 @@ const toolDefinitions = [
         projectPath: { type: 'string', description: 'Path to the project to open in TraeCN' },
         sessionId: { type: 'string', description: 'Existing session ID to use instead of creating a new one' },
         allowAutoStart: { type: 'boolean', description: 'Allow automatically starting TraeCN if not running', default: false },
-        includeProcessText: { type: 'boolean', description: 'Include process/thinking information in the response', default: false }
+        includeProcessText: { type: 'boolean', description: 'Include process/thinking information in the response', default: false },
+        waitForQueue: { type: 'boolean', description: 'If true (default), queue the task when model is busy. If false, return queue info immediately without waiting.', default: true },
+        asyncPoll: { type: 'boolean', description: 'If true, always use async delegate path (returns taskId). Useful when you want to manage polling yourself.', default: false }
       }
     },
     handler: async (params, context) => {
       const client = new TraeCNApiClient(context);
-      return client.delegate(params.task, {
+
+      if (params.asyncPoll) {
+        const result = await client.delegateAsync(params.task, {
+          includeProcessText: params.includeProcessText,
+          waitForQueue: params.waitForQueue !== false
+        });
+        return result.data || result;
+      }
+
+      // Try sync first (fast path when model is ready)
+      let result = await client.delegate(params.task, {
         projectPath: params.projectPath,
         sessionId: params.sessionId,
         allowAutoStart: params.allowAutoStart,
         includeProcessText: params.includeProcessText
       });
+
+      // If queued and waitForQueue is enabled, the delegate already handles
+      // background waiting. If caller wants to manage it, return early.
+      if (result && result.status === 'queued' && params.waitForQueue !== false) {
+        const taskId = result.taskId;
+        // Poll for completion (with reasonable limits)
+        const maxPollAttempts = 40;
+        const pollIntervalMs = 5000;
+        for (let attempt = 0; attempt < maxPollAttempts; attempt++) {
+          await new Promise(r => setTimeout(r, pollIntervalMs));
+          const pollResult = await client.getTaskStatus(taskId);
+          const status = pollResult.data || pollResult;
+          if (status.status === 'done') {
+            return status.result || status;
+          }
+          if (status.status === 'error' || status.status === 'queue_timeout' || status.status === 'cancelled') {
+            return status;
+          }
+          // Still queued or executing — keep waiting
+        }
+        return { status: 'queued', taskId, message: 'Task still in queue after max polling time. Use traecn_task_status to check later.' };
+      }
+
+      return result;
     }
   },
   {
@@ -179,6 +280,44 @@ const toolDefinitions = [
     handler: async (params, context) => {
       const client = new TraeCNApiClient(context);
       return client.updateSelf(params.force);
+    }
+  },
+  {
+    name: 'traecn_approve',
+    description: 'Detect and approve/dismiss dialogs in TraeCN. Use when TraeCN shows a restricted mode, permission request, or confirmation dialog. Auto-detects the dialog type and clicks the appropriate button (trust, allow, confirm). Also supports deny/cancel actions.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['auto', 'trust', 'allow', 'confirm', 'approve', 'deny', 'cancel', 'dismiss'],
+          description: '"auto" (default) auto-detects best action. "trust" for restricted mode folder trust. "allow"/"approve" for permission requests. "confirm" for execution confirmations. "deny"/"cancel"/"dismiss" to reject or cancel.',
+          default: 'auto'
+        },
+        waitForDialog: {
+          type: 'boolean',
+          description: 'If true, waits up to 30 seconds for a dialog to appear before approving. Use when a dialog might appear with a delay.',
+          default: false
+        }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await client.approveDialog(params.action || 'auto');
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_dialog_status',
+    description: 'Check if there is a pending dialog (restricted mode, permission request, confirmation) in TraeCN. Returns hasDialog, dialogType (restricted_mode/approval/permission/command_execution/file_operation), question, and available buttons.',
+    parameters: {
+      type: 'object',
+      properties: {}
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await client.dialogStatus();
+      return result.data || result;
     }
   }
 ];

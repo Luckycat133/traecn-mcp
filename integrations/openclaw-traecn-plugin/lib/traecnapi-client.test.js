@@ -106,7 +106,7 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     });
     const client = new TraeCNApiClient({ port, timeout: 3000 });
     const result = await client.delegate('test task', { includeProcessText: true });
-    assert.strictEqual(result.data.text, 'response');
+    assert.strictEqual(result.text, 'response');
     assert.strictEqual(lastRequest.method, 'POST');
     assert.strictEqual(lastRequest.url, '/api/delegate');
     assert.strictEqual(lastRequest.body.task, 'test task');
