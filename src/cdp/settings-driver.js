@@ -372,7 +372,7 @@ class SettingsDriver {
    * @returns {{ sections: Array, items: Array, raw: Object }}
    */
   async getContent() {
-    await sleep(600); // Allow content to render after navigation
+    await sleep(2000); // Allow settings panel and table content to fully render after navigation
     const data = await _readSettingsContent(this.client);
 
     // Deduplicate items by label

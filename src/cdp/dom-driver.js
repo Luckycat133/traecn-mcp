@@ -633,15 +633,33 @@ class DomDriver {
     return response;
   }
 
+  async _waitForExpression(expression, timeoutMs = 5000, pollMs = 200) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const result = await this.client.send('Runtime.evaluate', {
+        expression,
+        returnByValue: true
+      });
+      if (result.result?.value) return true;
+      await sleep(pollMs);
+    }
+    return false;
+  }
+
   async newChat() {
-    // Ctrl+Cmd+N (modifiers: 2=Ctrl + 4=Meta = 6)
     await this.client.send('Input.dispatchKeyEvent', {
       type: 'keyDown', key: 'n', code: 'KeyN', modifiers: 6
     });
     await this.client.send('Input.dispatchKeyEvent', {
       type: 'keyUp', key: 'n', code: 'KeyN', modifiers: 6
     });
-    await sleep(2000);
+
+    const safeComposerSels = safeJsValue(this.config.composerSelectors);
+    const ready = await this._waitForExpression(
+      `(function(){var s=${safeComposerSels};for(var i=0;i<s.length;i++){var e=document.querySelector(s[i]);if(e&&e.getBoundingClientRect().width>20&&e.offsetParent!==null)return true;}return false;})()`,
+      4000, 200
+    );
+    if (!ready) await sleep(2000);
     return true;
   }
 
@@ -795,7 +813,10 @@ class DomDriver {
         `,
         returnByValue: true
       });
-      await sleep(800);
+      await this._waitForExpression(
+        'document.querySelectorAll(".icube-model-select-portal-model-item").length>0',
+        3000, 150
+      );
     }
 
     // Step 3: Check if Auto Mode is enabled and toggle it off (via pointerdown)
@@ -824,7 +845,7 @@ class DomDriver {
       `,
       returnByValue: true
     });
-    await sleep(1000);
+    await sleep(400);
 
     // Helper: click an element via pointerdown (for Radix UI components)
     const CLICK_WITH_POINTERDOWN = `(function(el) {

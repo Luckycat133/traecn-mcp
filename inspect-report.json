@@ -1,55 +1,87 @@
 {
   "target": {
-    "id": "545BC3FBFF905A937DDEADC45B36D6D2",
-    "title": ".openclaw",
+    "id": "8A1E6870E74D90F35AA43B6DED7FF769",
+    "title": "minimax-studio",
     "url": "vscode-file://vscode-app/Applications/Trae%20CN.app/Contents/Resources/app/out/vs/code/electron-browser/workbench/workbench.html"
   },
   "scanResults": {
-    "composers": [],
-    "sendButtons": [],
+    "composers": [
+      {
+        "selector": ".chat-input-v2-input-box-editable",
+        "nodeId": 384,
+        "preview": "<div class=\"chat-input-v2-input-box-editable\" contenteditable=\"true\" role=\"textbox\" spellcheck=\"true\" data-lexical-editor=\"true\" style=\"user-select: text; white-space: pre-wrap; word-break: break-word"
+      },
+      {
+        "selector": "[contenteditable='true']",
+        "nodeId": 384,
+        "preview": "<div class=\"chat-input-v2-input-box-editable\" contenteditable=\"true\" role=\"textbox\" spellcheck=\"true\" data-lexical-editor=\"true\" style=\"user-select: text; white-space: pre-wrap; word-break: break-word"
+      },
+      {
+        "selector": "[class*=\"chat-input\"]",
+        "nodeId": 349,
+        "preview": "<div class=\"chat-input-and-todolist-wrapper\"><div class=\"chat-input-hub-error-wrapper\"><div class=\"chat-input-hub-error-wrapper_inner\"></div></div><div class=\"chat-input-hub-wrapper\"><div></div><div><"
+      },
+      {
+        "selector": "[class*=\"input-box\"]",
+        "nodeId": 381,
+        "preview": "<div class=\"chat-input-v2-input-box-wrapper chat-input-v2-input-box--modern-scroll\"><div class=\"chat-input-v2-placeholder\" id=\"chat-input-v2-placeholder-undefined\" style=\"display: block;\">您正在与 SOLO Co"
+      },
+      {
+        "selector": "[role=\"textbox\"]",
+        "nodeId": 384,
+        "preview": "<div class=\"chat-input-v2-input-box-editable\" contenteditable=\"true\" role=\"textbox\" spellcheck=\"true\" data-lexical-editor=\"true\" style=\"user-select: text; white-space: pre-wrap; word-break: break-word"
+      }
+    ],
+    "sendButtons": [
+      {
+        "selector": "button.chat-input-v2-send-button",
+        "nodeId": 423,
+        "text": ""
+      },
+      {
+        "selector": "button[class*=\"send\"]",
+        "nodeId": 423,
+        "text": ""
+      }
+    ],
     "responseRegions": [],
     "newChatButtons": [
       {
         "selector": "a.codicon-icube-NewChat",
-        "nodeId": 224,
+        "nodeId": 219,
         "text": ""
       },
       {
         "selector": "[class*=\"NewChat\"]",
-        "nodeId": 224,
+        "nodeId": 219,
         "text": ""
       }
     ],
     "modeTabs": [
       {
         "selector": ".icube-mode-tab-item",
-        "nodeId": 70,
+        "nodeId": 71,
         "text": "SOLO"
       },
       {
         "selector": ".icube-mode-tab-item",
-        "nodeId": 76,
+        "nodeId": 77,
         "text": "IDE"
       },
       {
         "selector": "[class*='icube-mode-tab-item']",
-        "nodeId": 70,
+        "nodeId": 71,
         "text": "SOLO"
       },
       {
         "selector": "[class*='icube-mode-tab-item']",
-        "nodeId": 76,
+        "nodeId": 77,
         "text": "IDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 65,
+        "nodeId": 66,
         "text": ""
-      },
-      {
-        "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 68,
-        "text": "SOLO\nIDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
@@ -59,7 +91,7 @@
       {
         "selector": "[class*=\"mode-tab\"]",
         "nodeId": 70,
-        "text": "SOLO"
+        "text": "SOLO\nIDE"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
@@ -68,13 +100,13 @@
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 73,
-        "text": ""
+        "nodeId": 72,
+        "text": "SOLO"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 76,
-        "text": "IDE"
+        "nodeId": 74,
+        "text": ""
       },
       {
         "selector": "[class*=\"mode-tab\"]",
@@ -83,30 +115,62 @@
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 409,
+        "nodeId": 78,
+        "text": "IDE"
+      },
+      {
+        "selector": "[class*=\"mode-tab\"]",
+        "nodeId": 505,
+        "text": "编辑器"
+      },
+      {
+        "selector": "[class*=\"mode-tab\"]",
+        "nodeId": 507,
+        "text": "编辑器"
+      },
+      {
+        "selector": "[class*=\"mode-tab\"]",
+        "nodeId": 508,
+        "text": "编辑器"
+      },
+      {
+        "selector": "[class*=\"mode-tab\"]",
+        "nodeId": 510,
+        "text": "编辑器"
+      },
+      {
+        "selector": "[class*=\"mode-tab\"]",
+        "nodeId": 511,
+        "text": "编辑器"
+      },
+      {
+        "selector": "[class*=\"mode-tab\"]",
+        "nodeId": 512,
         "text": ""
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 411,
-        "text": ""
+        "nodeId": 515,
+        "text": "编辑器"
       },
       {
         "selector": "[class*=\"mode-tab\"]",
-        "nodeId": 412,
+        "nodeId": 517,
         "text": ""
       }
     ],
     "activityIndicators": [
       {
         "selector": "[class*=\"activity\"]",
-        "nodeId": 686
+        "nodeId": 1243
       }
     ]
   },
   "recommendedEnv": [
+    "TRAECN_COMPOSER_SELECTORS=.chat-input-v2-input-box-editable,[contenteditable='true'],[class*=\"chat-input\"],[class*=\"input-box\"],[role=\"textbox\"]",
+    "TRAECN_SEND_BUTTON_SELECTORS=button.chat-input-v2-send-button,button[class*=\"send\"]",
     "TRAECN_NEW_CHAT_SELECTORS=a.codicon-icube-NewChat,[class*=\"NewChat\"]",
-    "TRAECN_MODE_TAB_SELECTORS=.icube-mode-tab-item,.icube-mode-tab-item,[class*='icube-mode-tab-item'],[class*='icube-mode-tab-item'],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"]",
+    "TRAECN_MODE_TAB_SELECTORS=.icube-mode-tab-item,.icube-mode-tab-item,[class*='icube-mode-tab-item'],[class*='icube-mode-tab-item'],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"],[class*=\"mode-tab\"]",
     "TRAECN_ACTIVITY_SELECTORS=[class*=\"activity\"]"
   ]
 }
