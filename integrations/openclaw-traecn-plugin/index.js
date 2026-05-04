@@ -132,8 +132,14 @@ const toolDefinitions = [
     },
     handler: async (params, context) => {
       const { spawn } = require('child_process');
+      if (params.addFile && /[<>|&;$\r\n\t\0]/.test(params.addFile)) {
+        return { launched: false, error: 'addFile contains invalid characters' };
+      }
+      if (typeof params.prompt !== 'string' || params.prompt.length === 0) {
+        return { launched: false, error: 'prompt is required' };
+      }
       const args = ['chat'];
-      if (params.mode) args.push('--mode', params.mode);
+      if (params.mode && ['ask', 'edit', 'agent'].includes(params.mode)) args.push('--mode', params.mode);
       if (params.maximize) args.push('--maximize');
       if (params.reuseWindow) args.push('--reuse-window');
       if (params.newWindow) args.push('--new-window');
