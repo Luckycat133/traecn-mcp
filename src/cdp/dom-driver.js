@@ -127,6 +127,21 @@ function isTruncationSignal(text) {
   return truncatePatterns.some(p => text.includes(p));
 }
 
+function hasCompletionMarker(text) {
+  if (!text) return false;
+  const markers = [
+    '任务完成',
+    'Task completed',
+    '已完成',
+    '完成',
+    'Done.',
+    'All done',
+    'finished',
+    'finalized'
+  ];
+  return markers.some(m => text.includes(m));
+}
+
 class DomDriver {
   constructor(client, config) {
     this.client = client;
@@ -326,6 +341,66 @@ class DomDriver {
     await sleep(this.config.postActionDelayMs);
   }
 
+  async _pollResponseState() {
+    const skipText = this._lastTaskText;
+    const safeSkipText = safeJsValue(skipText);
+    const safeResponseSelectors = this.config.responseSelectors.map(s => safeJsValue(s));
+    const safeActivitySelectors = this.config.activitySelectors.map(s => safeJsValue(s));
+
+    const result = await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var result = { taskComplete: false, taskText: '', taskInProgress: false, responseText: '' };
+
+          // Check task panel
+          var sidebar = document.querySelector('.soloaisidebar');
+          if (sidebar) {
+            var items = Array.from(sidebar.querySelectorAll('div')).filter(function(el) {
+              var text = el.textContent.trim();
+              var w = el.getBoundingClientRect().width;
+              var h = el.getBoundingClientRect().height;
+              return w > 100 && w < 350 && h > 30 && h < 120 && text.length > 5 && !text.includes('新任务');
+            });
+            if (items.length > 0) {
+              var latest = items[items.length - 1];
+              var taskText = latest.textContent.trim();
+              if (taskText !== ${safeSkipText}) {
+                result.taskText = taskText;
+                result.taskInProgress = taskText.includes('进行中') || taskText.includes('生成中') || taskText.includes('思考中');
+                result.taskComplete = taskText.includes('任务完成');
+              }
+            }
+          }
+
+          // Check response region
+          var selectors = [${safeResponseSelectors.join(', ')}];
+          for (var i = 0; i < selectors.length; i++) {
+            var el = document.querySelector(selectors[i]);
+            if (el && el.textContent.trim()) {
+              result.responseText = el.textContent.trim();
+              break;
+            }
+          }
+          if (!result.responseText) {
+            var actSels = [${safeActivitySelectors.join(', ')}];
+            for (var j = 0; j < actSels.length; j++) {
+              var actEl = document.querySelector(actSels[j]);
+              if (actEl && actEl.textContent.trim()) {
+                result.responseText = actEl.textContent.trim();
+                break;
+              }
+            }
+          }
+
+          return result;
+        })()
+      `,
+      returnByValue: true
+    });
+
+    return result.result?.value || { taskComplete: false, taskText: '', taskInProgress: false, responseText: '' };
+  }
+
   async collectResponse() {
     const startTime = Date.now();
     const warmupMs = 3000;
@@ -341,110 +416,148 @@ class DomDriver {
     let truncationSince = null;
     const truncationTimeout = 20000;
 
-    while (Date.now() - startTime < this.config.timeoutMs) {
-      // Try task-based response first (Trae CN task panel)
-      const taskResponse = await this.findTaskResponse();
-      if (taskResponse) {
-        if (taskResponse.isComplete || (taskResponse.hasResponse && !taskResponse.inProgress)) {
-          return { text: taskResponse.text, stable: true, elapsedMs: Date.now() - startTime };
-        }
-        if (taskResponse.inProgress) {
-          await sleep(pollInterval * 2);
-          continue;
-        }
-      }
+    // Streaming capture: enable Log domain and accumulate streaming output
+    let streamingBuffer = [];
+    let streamingGrowthFrames = 0;
+    const STREAMING_GROWTH_THRESHOLD = 3; // Return after 3 consecutive growing polls
 
-      // Fallback: original chat-based response collection
-      let responseRegion;
+    try {
+      await this.client.send('Log.enable', {});
+      const logHandler = (params) => {
+        // Capture console.log/warn output from the page (AI streaming tokens often appear here)
+        if (params.entry && params.entry.type === 'log' && params.entry.text) {
+          const text = params.entry.text.trim();
+          if (text.length > 0 && text.length < 10000) {
+            streamingBuffer.push(text);
+          }
+        }
+      };
+      this.client.on('Log.entryAdded', logHandler);
+
+      // Also listen for Runtime.consoleAPICalled as fallback
+      const consoleHandler = (params) => {
+        if (params.type === 'log' || params.type === 'debug') {
+          const args = params.args || [];
+          for (const arg of args) {
+            if (arg.value && typeof arg.value === 'string') {
+              const text = arg.value.trim();
+              if (text.length > 0 && text.length < 10000) {
+                streamingBuffer.push(text);
+              }
+            }
+          }
+        }
+      };
+      this.client.on('Runtime.consoleAPICalled', consoleHandler);
+
+      // Give event listeners a moment to register
+      await sleep(50);
+    } catch (err) {
+      // Log enable failed — proceed without streaming capture
+    }
+
+    const cleanup = () => {
       try {
-        responseRegion = await this.findResponseRegion();
-      } catch(e) {
-        await sleep(pollInterval);
-        continue;
-      }
-      let currentText = '';
-      if (responseRegion) {
-        try {
-          currentText = await dom.getInnerText(this.client, responseRegion.nodeId);
-          currentText = sanitizeActivityText(currentText);
-          if (initialText === null) initialText = currentText;
-        } catch(e) {
+        this.client.off('Log.entryAdded', () => {});
+        this.client.off('Runtime.consoleAPICalled', () => {});
+      } catch (_) {}
+    };
+
+    try {
+      while (Date.now() - startTime < this.config.timeoutMs) {
+        const state = await this._pollResponseState();
+
+        if (state.taskComplete || (state.taskText && !state.taskInProgress)) {
+          const text = state.taskText || state.responseText;
+          if (text) { cleanup(); return { text, stable: true, elapsedMs: Date.now() - startTime }; }
+        }
+
+        let currentText = sanitizeActivityText(state.responseText || '');
+        if (initialText === null && currentText) initialText = currentText;
+
+        if (warmingUp) {
+          if (currentText !== initialText) { lastText = currentText; stableCount = 0; }
+          if (Date.now() - startTime >= warmupMs) { warmingUp = false; lastText = currentText; }
           await sleep(pollInterval);
           continue;
         }
-      }
 
-      if (warmingUp) {
-        if (currentText !== initialText) {
-          lastText = currentText;
+        const isQueued = currentText && (
+          currentText.includes('排队') ||
+          currentText.includes('等待') ||
+          currentText.includes('队列') ||
+          currentText.includes('等待中')
+        );
+
+        if (isQueued) {
+          if (!inQueueSince) inQueueSince = Date.now();
+          if (Date.now() - inQueueSince > queueWaitTimeout) {
+            cleanup();
+            return { text: currentText, stable: false, elapsedMs: Date.now() - startTime, queued: true, queueElapsedMs: Date.now() - inQueueSince, timedOut: true };
+          }
+          lastText = currentText; await sleep(queuePollInterval); continue;
+        }
+
+        inQueueSince = null;
+
+        if (isTruncationSignal(currentText)) {
+          if (!truncationSince) truncationSince = Date.now();
+          if (Date.now() - truncationSince > truncationTimeout) {
+            cleanup();
+            return { text: currentText, stable: false, elapsedMs: Date.now() - startTime, truncated: true, timedOut: false };
+          }
+          lastText = currentText; await sleep(pollInterval); continue;
+        }
+
+        truncationSince = null;
+
+        const endMarkerDetected = hasCompletionMarker(currentText);
+        const effectiveRequiredStable = endMarkerDetected ? 1 : requiredStable;
+
+        // Detect streaming: text is growing (current starts with last and is longer)
+        const isGrowing = currentText && lastText &&
+          currentText.startsWith(lastText) &&
+          currentText.length > lastText.length;
+
+        if (isGrowing) {
+          streamingGrowthFrames++;
+          // Return streaming content after a few consecutive growth frames
+          // but only if we have meaningful content
+          if (streamingGrowthFrames >= STREAMING_GROWTH_THRESHOLD && currentText.length >= 50) {
+            cleanup();
+            return {
+              text: currentText,
+              stable: false,
+              streaming: true,
+              elapsedMs: Date.now() - startTime
+            };
+          }
+        } else {
+          streamingGrowthFrames = 0;
+        }
+
+        const isStable = currentText && currentText === lastText && currentText.length >= 1;
+        if (isStable) {
+          stableCount++;
+          if (stableCount >= effectiveRequiredStable) {
+            cleanup();
+            return { text: currentText, stable: true, elapsedMs: Date.now() - startTime };
+          }
+        } else {
           stableCount = 0;
         }
-        if (Date.now() - startTime >= warmupMs) {
-          warmingUp = false;
-          lastText = currentText;
-        }
-        await sleep(pollInterval);
-        continue;
-      }
-
-      const isQueued = currentText && (
-        currentText.includes('排队') ||
-        currentText.includes('等待') ||
-        currentText.includes('队列') ||
-        currentText.includes('等待中')
-      );
-
-      if (isQueued) {
-        if (!inQueueSince) inQueueSince = Date.now();
-        if (Date.now() - inQueueSince > queueWaitTimeout) {
-          return {
-            text: currentText,
-            stable: false,
-            elapsedMs: Date.now() - startTime,
-            queued: true,
-            queueElapsedMs: Date.now() - inQueueSince,
-            timedOut: true
-          };
-        }
-        lastText = currentText;
-        await sleep(queuePollInterval);
-        continue;
-      }
-
-      inQueueSince = null;
-
-      const truncationSignal = isTruncationSignal(currentText);
-      if (truncationSignal) {
-        if (!truncationSince) truncationSince = Date.now();
-        if (Date.now() - truncationSince > truncationTimeout) {
-          return {
-            text: currentText,
-            stable: false,
-            elapsedMs: Date.now() - startTime,
-            truncated: true,
-            timedOut: false
-          };
-        }
         lastText = currentText;
         await sleep(pollInterval);
-        continue;
       }
 
-      truncationSince = null;
-
-      const isStable = currentText && currentText === lastText && currentText.length >= 4;
-      if (isStable) {
-        stableCount++;
-        if (stableCount >= requiredStable) {
-          return { text: currentText, stable: true, elapsedMs: Date.now() - startTime };
-        }
-      } else {
-        stableCount = 0;
-      }
-      lastText = currentText;
-      await sleep(pollInterval);
+      // Timeout — return whatever we have, including streaming buffer
+      const finalText = lastText || (streamingBuffer.length > 0 ? streamingBuffer.join(' ') : '');
+      cleanup();
+      return { text: finalText, stable: false, elapsedMs: Date.now() - startTime, timedOut: true };
+    } catch (err) {
+      cleanup();
+      throw err;
     }
-    return { text: lastText, stable: false, elapsedMs: Date.now() - startTime, timedOut: true };
   }
 
   async delegate(task, options = {}) {
@@ -621,6 +734,7 @@ class DomDriver {
 
   async switchModel(modelName) {
     const MODEL_TRIGGER = '.icd-model-select-trigger';
+    const safeModelTrigger = safeJsValue(MODEL_TRIGGER);
 
     // Step 1: Check if AI is busy (prevents model switching)
     const busyCheck = await this.client.send('Runtime.evaluate', {
@@ -660,7 +774,7 @@ class DomDriver {
       await this.client.send('Runtime.evaluate', {
         expression: `
           (() => {
-            var trigger = document.querySelector('${MODEL_TRIGGER}');
+            var trigger = document.querySelector(${safeModelTrigger});
             if (!trigger) return 'no trigger found';
             var rect = trigger.getBoundingClientRect();
             trigger.dispatchEvent(new PointerEvent('pointerdown', {
