@@ -28,21 +28,22 @@ class DomCache {
 const _globalCache = new DomCache();
 
 async function querySelector(client, selector) {
-  const root = await _globalCache.getDocument(client);
-  const { nodeId } = await client.send('DOM.querySelector', {
-    nodeId: root.nodeId,
-    selector
+  // Use Runtime.evaluate instead of DOM.querySelector for VS Code webview compatibility
+  const result = await client.send('Runtime.evaluate', {
+    expression: `document.querySelector('${selector.replace(/'/g, "\\'")}') !== null`,
+    returnByValue: true
   });
-  return nodeId || null;
+  return result.result?.value ? selector : null;
 }
 
 async function querySelectorAll(client, selector) {
-  const root = await _globalCache.getDocument(client);
-  const { nodeIds } = await client.send('DOM.querySelectorAll', {
-    nodeId: root.nodeId,
-    selector
+  // Use Runtime.evaluate instead of DOM.querySelectorAll
+  const result = await client.send('Runtime.evaluate', {
+    expression: `document.querySelectorAll('${selector.replace(/'/g, "\\'")}').length`,
+    returnByValue: true
   });
-  return nodeIds || [];
+  const count = result.result?.value || 0;
+  return count > 0 ? Array(count).fill(0).map((_, i) => i) : [];
 }
 
 async function getTextNodeContent(client, nodeId) {
@@ -180,11 +181,15 @@ async function pressEnter(client) {
 }
 
 async function findFirstMatching(client, selectors) {
-  for (const selector of selectors) {
-    const nodeId = await querySelector(client, selector);
-    if (nodeId) {
-      return { nodeId, matchedSelector: selector };
-    }
+  // Use Runtime.evaluate in batch to avoid multiple round-trips
+  const selList = selectors.map(s => `'${s.replace(/'/g, "\\'")}'`).join(', ');
+  const result = await client.send('Runtime.evaluate', {
+    expression: `(function() { var sels = [${selList}]; for (var i = 0; i < sels.length; i++) { var el = document.querySelector(sels[i]); if (el && el.offsetParent !== null) { return { found: true, selector: sels[i] }; } } return { found: false }; })()`,
+    returnByValue: true
+  });
+  const info = result.result?.value || {};
+  if (info.found) {
+    return { matchedSelector: info.selector };
   }
   return null;
 }

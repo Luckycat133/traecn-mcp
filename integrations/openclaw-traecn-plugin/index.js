@@ -38,6 +38,37 @@ const toolDefinitions = [
     }
   },
   {
+    name: 'traecn_settings_action',
+    description: 'Perform actions on the TraeCN settings panel. Actions: navigate, read, type (text into input by label), click (button/link by text), clickTab, toggle, dropdown, set, readTables (table content like MCP/model list), back. Section names: general(通用), account(账号), agents(智能体), mcp(MCP), flow(对话流), model(模型), context(上下文), rules(规则和技能), beta(Beta), about(关于 TRAE). Usage: {"action":"navigate","params":{"section":"MCP"}} then {"action":"read"} then {"action":"click","params":{"text":"添加 MCP Server"}} then {"action":"type","params":{"label":"名称","text":"my-server"}}.',
+    parameters: {
+      type: 'object',
+      required: ['action'],
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['navigate', 'read', 'type', 'click', 'clickTab', 'toggle', 'dropdown', 'set', 'readTables', 'back'],
+          description: 'Action to perform on settings'
+        },
+        params: {
+          type: 'object',
+          description: 'Parameters for the action (varies by action type)',
+          properties: {
+            section: { type: 'string', description: 'Section to navigate to (for navigate action)' },
+            label: { type: 'string', description: 'Label text of the setting item (for type/toggle/dropdown/set)' },
+            text: { type: 'string', description: 'Text to type (for type) or element text to click (for click)' },
+            value: { type: 'string', description: 'Value to set (for dropdown/set - selects option by text)' },
+            enabled: { type: 'boolean', description: 'Toggle state (for toggle: true=on, false=off)' }
+          }
+        }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await client.settingsAction(params.action, params.params || {});
+      return result.data || result;
+    }
+  },
+  {
     name: 'traecn_settings_read',
     description: 'Read settings from the TraeCN settings panel. Optionally specify a section (canonical names: general, account, agents, mcp, flow/models, context, rules, about). Returns the settings panel content as text.',
     parameters: {

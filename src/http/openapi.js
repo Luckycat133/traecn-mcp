@@ -617,6 +617,42 @@ function generateOpenAPISpec() {
             }
           }
         }
+      },
+      '/api/settings/action': {
+        post: {
+          tags: ['Settings'],
+          summary: 'Perform a generic action on the settings panel',
+          description: 'navigate/read/type/click/toggle/dropdown/back. Navigate to section, read content, type into inputs, click buttons, toggle switches, select dropdowns.',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: { type: 'string', enum: ['navigate', 'read', 'type', 'click', 'clickTab', 'toggle', 'dropdown', 'set', 'readTables', 'back'] },
+                    params: {
+                      type: 'object',
+                      properties: {
+                        section: { type: 'string' },
+                        label: { type: 'string' },
+                        text: { type: 'string' },
+                        value: { type: 'string' },
+                        enabled: { type: 'boolean' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Action result' },
+            '400': { description: 'Invalid action or params' }
+          }
+        }
       }
     },
     components: {

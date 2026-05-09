@@ -221,11 +221,11 @@ function getConfig() {
     sendTrigger: getEnvWithFallback('TRAECN_SEND_TRIGGER', 'TRAE_SEND_TRIGGER', 'button'),
     pollIntervalMs: parsePositiveInt(getEnvWithFallback('TRAECN_RESPONSE_POLL_INTERVAL_MS', 'TRAE_RESPONSE_POLL_INTERVAL_MS', '350'), 350),
     idleMs: parsePositiveInt(getEnvWithFallback('TRAECN_RESPONSE_IDLE_MS', 'TRAE_RESPONSE_IDLE_MS', '1200'), 1200),
-    timeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_RESPONSE_TIMEOUT_MS', 'TRAE_RESPONSE_TIMEOUT_MS', '120000'), 120000),
+    timeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_RESPONSE_TIMEOUT_MS', 'TRAE_RESPONSE_TIMEOUT_MS', '1800000'), 1800000),
     postActionDelayMs: parsePositiveInt(getEnvWithFallback('TRAECN_POST_ACTION_DELAY_MS', 'TRAE_POST_ACTION_DELAY_MS', '350'), 350),
     sessionPrepareTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_SESSION_PREPARE_TIMEOUT_MS', 'TRAE_SESSION_PREPARE_TIMEOUT_MS', '5000'), 5000),
     queuePollIntervalMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_POLL_INTERVAL_MS', 'TRAE_QUEUE_POLL_INTERVAL_MS', '15000'), 15000),
-    queueWaitTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_WAIT_TIMEOUT_MS', 'TRAE_QUEUE_WAIT_TIMEOUT_MS', '600000'), 600000),
+    queueWaitTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_WAIT_TIMEOUT_MS', 'TRAE_QUEUE_WAIT_TIMEOUT_MS', '60000'), 60000),
     // Approval / dialog handling
     approvalTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_APPROVAL_TIMEOUT_MS', 'TRAE_APPROVAL_TIMEOUT_MS', '120000'), 120000),
     approvalPollIntervalMs: parsePositiveInt(getEnvWithFallback('TRAECN_APPROVAL_POLL_INTERVAL_MS', 'TRAE_APPROVAL_POLL_INTERVAL_MS', '3000'), 3000)

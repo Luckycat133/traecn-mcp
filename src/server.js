@@ -27,9 +27,14 @@ async function main() {
   try {
     server = await startGateway({ host, port });
     const address = server.address();
+    const isCloud = host === '0.0.0.0' || (process.env.RENDER_EXTERNAL_HOSTNAME || process.env.RAILWAY_STATIC_URL);
     console.log(`[TRAECNclaw] Gateway started on ${address.address}:${address.port}`);
     console.log(`[TRAECNclaw] Mode: ${mockBridge ? 'mock-bridge' : 'live'}`);
     console.log(`[TRAECNclaw] Host: ${host}, Port: ${port}`);
+    if (isCloud) {
+      console.log(`[TRAECNclaw] Cloud deployment detected. CDP must connect to an external Trae instance.`);
+      console.log(`[TRAECNclaw] Set TRAECN_CDP_HOST to your local machine's public IP or tunnel endpoint.`);
+    }
   } catch (err) {
     console.error('[TRAECNclaw] Failed to start gateway:', err.message);
     process.exit(1);

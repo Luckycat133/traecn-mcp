@@ -291,25 +291,53 @@ class DomDriver {
           var sidebar = document.querySelector('.soloaisidebar');
           if (!sidebar) return null;
 
-          var items = Array.from(sidebar.querySelectorAll('div')).filter(function(el) {
-            var text = el.textContent.trim();
-            var w = el.getBoundingClientRect().width;
-            var h = el.getBoundingClientRect().height;
-            return w > 100 && w < 350 && h > 30 && h < 120 && text.length > 5 && !text.includes('\u65b0\u4efb\u52a1');
-          });
-          if (items.length > 0) {
-            var latest = items[items.length - 1];
-            var text = latest.textContent.trim();
-            if (text === ${safeSkipText}) return null;
-            return {
-              text: text,
-              inProgress: text.includes('\u8fdb\u884c\u4e2d'),
-              isComplete: text.includes('\u4efb\u52a1\u5b8c\u6210'),
-              hasResponse: text.length > 15 && !text.includes('\u8fdb\u884c\u4e2d') && !text.includes('\u65b0\u4efb\u52a1')
-            };
+          // Find task items using the actual task item class \u800c\u975e generic divs
+          var taskItems = sidebar.querySelectorAll('[class*="task-item"]');
+          if (!taskItems || !taskItems.length) return null;
+
+          // Filter: skip tasks that are interrupted/stopped
+          var activeItems = [];
+          for (var i = 0; i < taskItems.length; i++) {
+            var item = taskItems[i];
+            var fullText = item.textContent.trim();
+
+            // Skip interrupted tasks
+            if (fullText.includes('\u4efb\u52a1\u4e2d\u65ad')) continue;
+
+            // Skip if it\'s just the new-task button (has hotkey hint)
+            if (fullText.includes('\u65b0\u4efb\u52a1') && fullText.length < 15) continue;
+
+            // Check status: must be \"\u8fdb\u884c\u4e2d\" (in progress) or have meaningful response content
+            var hasContent = fullText.length > 10;
+            var isInProgress = fullText.includes('\u8fdb\u884c\u4e2d');
+
+            activeItems.push({
+              el: item,
+              text: fullText,
+              inProgress: isInProgress,
+              hasContent: hasContent
+            });
           }
 
-          return null;
+          if (activeItems.length === 0) return null;
+
+          // Take the LAST active item (most recent task)
+          var latest = activeItems[activeItems.length - 1];
+          var text = latest.text;
+
+          // Skip if text matches the baseline captured before sending
+          if (text === ${safeSkipText}) return null;
+
+          // Skip if text hasn\'t actually changed from whats in the skipText
+          // (handles case where skipText contains the old task text as substring)
+          if (${safeSkipText} && ${safeSkipText}.indexOf(text) >= 0 && text.length <= ${safeSkipText}.length) return null;
+
+          return {
+            text: text,
+            inProgress: latest.inProgress,
+            isComplete: text.includes('\u4efb\u52a1\u5b8c\u6210'),
+            hasResponse: latest.hasContent && !latest.inProgress
+          };
         })()
       `,
       returnByValue: true
@@ -718,11 +746,21 @@ class DomDriver {
                 var buttons = el.querySelectorAll('button');
                 var buttonTexts = [];
                 buttons.forEach(function(b) { buttonTexts.push(b.textContent.trim()); });
+                var fullText = (titleEl.textContent || '').trim().substring(0, 200);
+                // Detect if this is a command execution approval dialog
+                var cmdKeywords = ['执行', '运行', '命令', 'command'];
+                var isCmdExec = false;
+                for (var p = 0; p < cmdKeywords.length; p++) {
+                  if (fullText.toLowerCase().includes(cmdKeywords[p].toLowerCase())) {
+                    isCmdExec = true; break;
+                  }
+                }
                 return {
                   found: true,
-                  title: titleEl.textContent ? titleEl.textContent.trim().substring(0, 200) : 'Approval Required',
+                  title: fullText,
                   buttons: buttonTexts.slice(0, 5),
-                  type: el.className || 'modal'
+                  type: el.className || 'modal',
+                  isCommandExec: isCmdExec
                 };
               }
             }
@@ -731,7 +769,7 @@ class DomDriver {
             var approvalPatterns = ['\\u9700\\u8981\\u60a8\\u6388\\u6743', '\\u9700\\u8981\\u60a8\\u7684\\u6279\\u51c6', '\\u662f\\u5426\\u5141\\u8bb8', 'Do you want to proceed', 'requires your confirmation'];
             for (var j = 0; j < approvalPatterns.length; j++) {
               if (bodyText.includes(approvalPatterns[j])) {
-                return { found: true, title: approvalPatterns[j], buttons: [], type: 'text-pattern' };
+                return { found: true, title: approvalPatterns[j], buttons: [], type: 'text-pattern', isCommandExec: false };
               }
             }
             
@@ -747,7 +785,8 @@ class DomDriver {
           needsApproval: true,
           question: dialog.title || 'Trae\\u9700\\u8981\\u60a8\\u786e\\u8ba4',
           dialogType: dialog.type || 'approval',
-          buttons: dialog.buttons || []
+          buttons: dialog.buttons || [],
+          isCommandExec: dialog.isCommandExec || false,
         };
       }
       return { needsApproval: false };
@@ -775,7 +814,7 @@ class DomDriver {
     const requiredStable = 2;
     const pollInterval = this.config.pollIntervalMs || 350;
     const queuePollInterval = this.config.queuePollIntervalMs || 15000;
-    const queueWaitTimeout = this.config.queueWaitTimeoutMs || 600000;
+    const queueWaitTimeout = this.config.queueWaitTimeoutMs || 60000;
     let stableCount = 0;
     let warmingUp = true;
     let lastText = '';
@@ -837,6 +876,18 @@ class DomDriver {
           const approvalDialog = await this.checkForApprovalDialog();
           this._lastApprovalCheckAt = Date.now();
           if (approvalDialog.needsApproval) {
+            // Auto-approve command execution dialogs (e.g., "\u6279\u51c6\u6267\u884c\u547d\u4ee4")
+            // Questions (dialog without command keywords) still get forwarded to the caller.
+            if (approvalDialog.isCommandExec) {
+              this._approvalDialogFirstSeenAt = undefined;
+              this._lastApprovalCheckAt = undefined;
+              const approveResult = await this.approveDialog('trust');
+              if (approveResult.success) {
+                await sleep(500);
+                continue;
+              }
+            }
+
             const approvalDuration = Date.now() - (this._approvalDialogFirstSeenAt || Date.now());
             if (this._approvalDialogFirstSeenAt === undefined) {
               this._approvalDialogFirstSeenAt = Date.now();
@@ -910,7 +961,12 @@ class DomDriver {
           }
         }
 
+        var queuePosition = null;
+        var queueMatch = currentText && currentText.match(/\u6392\u5728\u7b2c\s*(\d+)\s*\u4f4d/);
+        if (queueMatch) queuePosition = parseInt(queueMatch[1], 10);
+
         const isQueued = currentText && (
+          queuePosition !== null ||
           currentText.includes('\u6392\u961f') ||
           currentText.includes('\u7b49\u5f85') ||
           currentText.includes('\u961f\u5217') ||
@@ -919,9 +975,11 @@ class DomDriver {
 
         if (isQueued) {
           if (!inQueueSince) inQueueSince = Date.now();
-          if (Date.now() - inQueueSince > queueWaitTimeout) {
+          // Wait indefinitely until queue clears - no timeout on queue
+          // The point is to persist until the request goes through
+          if (false && Date.now() - inQueueSince > queueWaitTimeout) {
             cleanup();
-            return { text: currentText, stable: false, elapsedMs: Date.now() - startTime, queued: true, queueElapsedMs: Date.now() - inQueueSince, timedOut: true };
+            return { text: currentText, stable: false, elapsedMs: Date.now() - startTime, queued: true, queuePosition: queuePosition, queueElapsedMs: Date.now() - inQueueSince, timedOut: true };
           }
           lastText = currentText; await sleep(queuePollInterval); continue;
         }
@@ -1164,6 +1222,52 @@ class DomDriver {
     }
   }
 
+  async switchAgent(agentName) {
+    const targetName = agentName.replace(/^@/, '').trim();
+
+    // Open the agent selector popup
+    await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var trigger = document.querySelector('.chat-input-selected-agent-title-inner');
+          if (!trigger) return 'no trigger';
+          var rect = trigger.getBoundingClientRect();
+          trigger.dispatchEvent(new PointerEvent('pointerdown', {
+            bubbles: true, cancelable: true, composed: true,
+            clientX: rect.x + rect.width/2, clientY: rect.y + rect.height/2
+          }));
+          trigger.click();
+          return 'opened agent popup';
+        })()
+      `,
+      returnByValue: true
+    });
+    await sleep(800);
+
+    // Wait for popup and click target agent
+    const found = await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var target = '${targetName}';
+          var items = document.querySelectorAll('.agent-popup-item');
+          for (var i = 0; i < items.length; i++) {
+            var text = items[i].textContent.trim();
+            // Match agent name (may have suffix like "SOLO Only")
+            if (text.includes(target) || text.includes(target.replace(/ /g, ''))) {
+              items[i].dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true}));
+              items[i].click();
+              return 'switched to: ' + text.substring(0, 30);
+            }
+          }
+          return 'agent not found: ' + target + ' (items: ' + items.length + ')';
+        })()
+      `,
+      returnByValue: true
+    });
+    await sleep(1500);
+    return found.result?.value || 'unknown';
+  }
+
   /**
    * Mode-aware delegation.
    * - Detects current UI mode.
@@ -1198,16 +1302,31 @@ class DomDriver {
       });
       await sleep(500);
 
-      // Clear SOLO response elements
-      const responseSel1 = escapeJsString(this.config.responseSelectors[0] || "[data-role='assistant']");
-      const responseSel2 = escapeJsString(this.config.responseSelectors[1] || '.agent-plan-items');
+      // Clear ALL potential response elements in the SOLO chat view
+      const ALL_RESPONSE_SELS = [
+        "[data-role='assistant']",
+        '.assistant',
+        '.chat-turn.assistant',
+        '.chat-turn',
+        '[class*=chat-turn]',
+        '.markdown-body',
+        '[class*=message-content]',
+        '.agent-plan-items',
+        '.solo-chat-turn',
+        '[class*=solo-chat]'
+      ];
+      const safeSelList = ALL_RESPONSE_SELS.map(s => escapeJsString(s)).join(', ');
       await this.client.send('Runtime.evaluate', {
         expression: `
           (function() {
-            var el = document.querySelector('${responseSel1}');
-            if (el) el.textContent = '';
-            var items = document.querySelectorAll('${responseSel2}');
-            for (var i = 0; i < items.length; i++) items[i].textContent = '';
+            var sels = [${safeSelList}];
+            for (var i = 0; i < sels.length; i++) {
+              var els = document.querySelectorAll(sels[i]);
+              for (var j = 0; j < els.length; j++) {
+                els[j].textContent = '';
+              }
+            }
+            return 'cleared ' + sels.length + ' selector types';
           })()
         `,
         returnByValue: true
@@ -1245,6 +1364,37 @@ class DomDriver {
       this._lastTaskText = beforePanel;
     }
 
+    // Switch agent if requested (e.g., "SOLO Coder", "Builder", "Chat")
+    if (options.agent) {
+      await this.switchAgent(options.agent);
+    }
+
+    // Mode-aware command prefix.
+    // SOLO mode: uses /slash commands (e.g., /plan, /spec, /review)
+    //            These are understood by the SOLO agent task system.
+    // IDE mode:  Trae CN IDE chat has no native /slash commands;
+    //            translate mode to a natural language directive instead.
+    var effectiveTask = task;
+    if (options.mode) {
+      var modeRaw = options.mode.startsWith('/') ? options.mode.slice(1) : options.mode;
+      if (isIdeMode) {
+        // IDE mode: use natural language prelude instead of /slash
+        var modeHints = {
+          plan: '请先制定详细的实施方案和计划，然后逐步执行：',
+          spec: '请编写详细的技术规格说明和设计方案：',
+          review: '请审查以下内容，指出问题、风险和改进建议：',
+          fix: '请修复以下问题，确保代码正确运行：',
+          test: '请编写全面的单元测试覆盖以下功能：',
+          explain: '请解释以下代码的工作原理和各部分作用：'
+        };
+        var hint = modeHints[modeRaw];
+        effectiveTask = hint ? (hint + ' ' + task) : task;
+      } else {
+        // SOLO mode: keep native /slash command
+        effectiveTask = '/' + modeRaw + ' ' + task;
+      }
+    }
+
     // Capture pre-send body text for diffing in collectResponse()
     const beforeBody = await this._captureBodyText();
     this._preSendSnapshot = beforeBody;
@@ -1254,7 +1404,7 @@ class DomDriver {
       return { text: '', stable: false, elapsedMs: 0, needsApproval: true, question: dialogBefore.question, dialogType: dialogBefore.dialogType };
     }
 
-    await this.sendMessage(task);
+    await this.sendMessage(effectiveTask);
     const response = await this.collectResponse();
 
     if (response && response.text) {
@@ -1424,7 +1574,9 @@ class DomDriver {
     'Doubao-Seed-2.0-Code', 'Doubao-Seed-1.8', 'Doubao-Seed-Code',
     'MiniMax-M2.7', 'MiniMax-M2.5',
     'GLM-5.1', 'GLM-5V-Turbo', 'GLM-5',
-    'DeepSeek-V3.1-Terminus', 'Kimi-K2.5', 'Qwen3.6-Plus', 'Qwen3.5-Plus'
+    'DeepSeek-V4-Pro', 'DeepSeek-V4-Flash',
+    'Kimi-K2.6', 'Kimi-K2.5',
+    'Qwen3.6-Plus', 'Qwen3.5-Plus'
   ];
 
   async checkQueueStatus(timeoutMs = 5000) {
@@ -1449,7 +1601,7 @@ class DomDriver {
     const triggerResult = await this.client.send('Runtime.evaluate', {
         expression: `
           (function() {
-            const trigger = document.querySelector('.icd-model-select-trigger');
+            const trigger = document.querySelector('.chat-model-label');
             if (!trigger) return { found: false };
             const isDisabled = trigger.disabled ||
                               trigger.getAttribute('aria-disabled') === 'true';
@@ -1487,7 +1639,7 @@ class DomDriver {
   }
 
   async switchModel(modelName) {
-    const MODEL_TRIGGER = '.icd-model-select-trigger';
+    const MODEL_TRIGGER = '.chat-model-label';
     const safeModelTrigger = safeJsValue(MODEL_TRIGGER);
 
     const busyCheck = await this.client.send('Runtime.evaluate', {
@@ -1496,7 +1648,7 @@ class DomDriver {
         if (body.includes('AI \\u751f\\u6210\\u4e2d\\uff0c\\u65e0\\u6cd5\\u5207\\u6362')) {
           return { busy: true, reason: 'generating' };
         }
-        var trigger = document.querySelector('.icd-model-select-trigger');
+        var trigger = document.querySelector('.chat-model-label');
         if (trigger) {
           var triggerArea = trigger.closest('[class*=input]') || trigger.parentElement;
           if (triggerArea && triggerArea.textContent.includes('\\u751f\\u6210\\u4e2d')) {
@@ -1514,34 +1666,46 @@ class DomDriver {
 
     const portalState = await this.client.send('Runtime.evaluate', {
       expression: `(() => {
-        var items = document.querySelectorAll('.icube-model-select-portal-model-item');
+        var items = document.querySelectorAll('.chat-modelPicker-item');
         return { itemsFound: items.length, portalOpen: items.length > 0 };
       })()`,
       returnByValue: true
     });
     const ps = portalState.result?.value || { itemsFound: 0, portalOpen: false };
 
-    if (!ps.portalOpen) {
+    // Open portal with retry for Radix toggle behavior
+    for (var retry = 0; retry < 2; retry++) {
+      var itemsNow = await this.client.send('Runtime.evaluate', {
+        expression: `
+          document.querySelectorAll('.chat-modelPicker-item').length
+        `,
+        returnByValue: true
+      });
+      var count = itemsNow.result?.value || 0;
+      if (count > 0) break;
+
       await this.client.send('Runtime.evaluate', {
         expression: `
           (() => {
             var trigger = document.querySelector(${safeModelTrigger});
             if (!trigger) return 'no trigger found';
             var rect = trigger.getBoundingClientRect();
-            trigger.dispatchEvent(new PointerEvent('pointerdown', {
+            var pointerEvt = new PointerEvent('pointerdown', {
               bubbles: true, cancelable: true, composed: true,
               clientX: rect.x + rect.width/2, clientY: rect.y + rect.height/2,
               button: 0, buttons: 1, pointerType: 'mouse'
             });
+            trigger.dispatchEvent(pointerEvt);
             trigger.click();
-            return 'portal opened via pointerdown+click';
+            return 'portal trigger clicked (attempt ' + (${retry + 1}) + ')';
           })()
         `,
         returnByValue: true
       });
+
       await this._waitForExpression(
-        'document.querySelectorAll(".icube-model-select-portal-model-item").length>0',
-        3000, 150
+        'document.querySelectorAll(".chat-modelPicker-item").length>0',
+        5000, 150
       );
     }
 
@@ -1556,11 +1720,12 @@ class DomDriver {
             var toggleEl = checkbox.parentElement;
             if (toggleEl) {
               var rect = toggleEl.getBoundingClientRect();
-              toggleEl.dispatchEvent(new PointerEvent('pointerdown', {
+              var toggleEvt = new PointerEvent('pointerdown', {
                 bubbles: true, cancelable: true, composed: true,
                 clientX: rect.x + rect.width/2, clientY: rect.y + rect.height/2,
                 button: 0, buttons: 1, pointerType: 'mouse'
               });
+              toggleEl.dispatchEvent(toggleEvt);
               toggleEl.click();
             }
             return 'auto mode disabled';
@@ -1591,16 +1756,16 @@ class DomDriver {
           var pollStarted = Date.now();
           var items = null;
           while (Date.now() - pollStarted < 3000) {
-            items = document.querySelectorAll('.icube-model-select-portal-model-item');
+            items = document.querySelectorAll('.chat-modelPicker-item');
             if (items && items.length > 0) break;
           }
-          items = document.querySelectorAll('.icube-model-select-portal-model-item');
+          items = document.querySelectorAll('.chat-modelPicker-item');
           if (!items || !items.length) return 'no model items found';
 
           var clickEl = ${CLICK_WITH_POINTERDOWN};
 
           for (var i = 0; i < items.length; i++) {
-            var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var nameEl = items[i].querySelector('.chat-model-label');
             var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
             if (name === targetName || name === targetName + 'Beta' || name.startsWith(targetName + ' ') || name.startsWith(targetName + 'Beta') || name === targetName.replace(/Beta\\s*/i, '') + 'Beta') {
               clickEl(items[i]);
@@ -1610,16 +1775,16 @@ class DomDriver {
 
           var normalizedTarget = targetName.replace(/\\s*Beta\\s*/i, '').trim();
           for (var i = 0; i < items.length; i++) {
-            var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var nameEl = items[i].querySelector('.chat-model-label');
             var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim().replace(/\\s*Beta\\s*/i, '').trim() : '';
             if (name === normalizedTarget) {
               clickEl(items[i]);
-              return 'clicked (normalized): ' + items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper').textContent.trim() + ' at index ' + i;
+              return 'clicked (normalized): ' + items[i].querySelector('.chat-model-label').textContent.trim() + ' at index ' + i;
             }
           }
 
           for (var i = 0; i < items.length; i++) {
-            var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var nameEl = items[i].querySelector('.chat-model-label');
             var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
             var cleanName = name.replace(/Beta/i, '').trim();
             if (cleanName === targetName || cleanName === targetName.replace(/Beta\\s*/i, '').trim()) {
@@ -1629,7 +1794,7 @@ class DomDriver {
           }
 
           for (var i = 0; i < items.length; i++) {
-            var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var nameEl = items[i].querySelector('.chat-model-label');
             var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
             name = name.replace(/Beta/i, '').trim();
             var cleanTarget = targetName.replace(/Beta/i, '').trim();
@@ -1640,7 +1805,7 @@ class DomDriver {
           }
 
           for (var i = 0; i < items.length; i++) {
-            var nameEl = items[i].querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var nameEl = items[i].querySelector('.chat-model-label');
             var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
             name = name.replace(/Beta/i, '').trim();
             var simpleName = name.replace(/[^a-zA-Z0-9]/g, '');
@@ -1652,7 +1817,7 @@ class DomDriver {
           }
 
           return 'model not found: ' + targetName + ', available: ' + [].map.call(items, function(el) {
-            var n = el.querySelector('.icube-model-select-portal-model-item-inner-wrapper');
+            var n = el.querySelector('.chat-model-label');
             return n ? n.textContent.replace(/\\s+/g, ' ').trim() : '';
           }).join(', ');
         })()

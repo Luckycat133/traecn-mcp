@@ -3,9 +3,7 @@
 const http = require('http');
 const { TraeCNAutomationError } = require('./errors');
 const { CDPClient } = require('./client');
-const dom = require('./browser-dom');
-const { DomDriver } = require('./dom-driver');
-const { getEnvWithFallback } = require('../shared/utils');
+const { getEnvWithFallback, safeClose } = require('../shared/utils');
 
 async function fetchCDPTargets(host, port) {
   return new Promise((resolve, reject) => {
@@ -134,82 +132,82 @@ async function discoverTarget(options = {}) {
       .map(t => ({ ...t, score: 0 }));
   }
 
-  // Try candidates in score order; pick the first usable one
-  let bestCandidate = candidates[0];
-  let foundWithComposer = null;
-  let foundWithAny = null;
+  const bestCandidate = candidates[0];
 
-  for (const candidate of candidates) {
-    let client = null;
-    try {
-      client = new CDPClient(candidate.webSocketDebuggerUrl);
+  const safeComposerSels = JSON.stringify([
+    '.chat-input-v2-input-box-editable', 'textarea', "[contenteditable='true']",
+    "input[type='text']", "[class*='chat-input']", "[class*='input-box']"
+  ]);
+  const safeSendSels = JSON.stringify([
+    'button.chat-input-v2-send-button', "button[data-testid*='send']",
+    "button[aria-label*='Send']", "button[aria-label*='发送']",
+    "button[type='submit']", "[class*='send-button']", "[class*='send']"
+  ]);
+
+  const probeResults = await Promise.allSettled(
+    candidates.map(async (candidate) => {
+      const client = new CDPClient(candidate.webSocketDebuggerUrl);
       await client.connect();
       await client.send('DOM.enable');
       await client.send('Runtime.enable');
-      const driver = new DomDriver(client);
-      const readiness = await driver.checkReadiness();
 
-      // Priority 1: composer + sendButton → best target (even without content)
-      if (readiness.composer && readiness.sendButton) {
-        foundWithComposer = {
-          id: candidate.id,
-          title: candidate.title,
-          url: candidate.url,
-          webSocketDebuggerUrl: candidate.webSocketDebuggerUrl,
-          score: candidate.score
-        };
-        await client.close();
-        break;  // Found the best, stop searching
-      }
+      const checkResult = await client.send('Runtime.evaluate', {
+        expression: `
+          (function() {
+            var composerSels = ${safeComposerSels};
+            var sendSels = ${safeSendSels};
+            var composer = null, sendBtn = null;
+            for (var i = 0; i < composerSels.length; i++) {
+              var el = document.querySelector(composerSels[i]);
+              if (el) { composer = { sel: composerSels[i], visible: el.getBoundingClientRect().width > 20 && el.getBoundingClientRect().height > 15 && el.offsetParent !== null }; break; }
+            }
+            for (var j = 0; j < sendSels.length; j++) {
+              var btn = document.querySelector(sendSels[j]);
+              if (btn) { sendBtn = { sel: sendSels[j] }; break; }
+            }
+            return { composer: composer, sendButton: sendBtn };
+          })()
+        `,
+        returnByValue: true
+      });
 
-      // Priority 2: composer only → usable fallback
-      if (readiness.composer && !foundWithComposer) {
-        // Check if composer element is visible and has contenteditable/role=textbox
-        const composerVisible = await client.send('Runtime.evaluate', {
-          expression: `(() => {
-            const sel = '${(readiness.composer.matchedSelector || '').replace(/'/g, "\\'")}';
-            const el = sel ? document.querySelector(sel) : null;
-            if (!el) return false;
-            const rect = el.getBoundingClientRect();
-            return rect.width > 20 && rect.height > 15 && el.offsetParent !== null;
-          })()`,
-          returnByValue: true
-        });
+      return { candidate, client, readiness: checkResult.result?.value || {} };
+    })
+  );
 
-        if (composerVisible?.result?.value) {
-          foundWithComposer = {
-            id: candidate.id,
-            title: candidate.title,
-            url: candidate.url,
-            webSocketDebuggerUrl: candidate.webSocketDebuggerUrl,
-            score: candidate.score
-          };
-          await client.close();
-          break;
-        }
-      }
-
-      if (!foundWithAny) {
-        foundWithAny = {
-          id: candidate.id,
-          title: candidate.title,
-          url: candidate.url,
-          webSocketDebuggerUrl: candidate.webSocketDebuggerUrl,
-          score: candidate.score
-        };
-      }
-
-      await client.close();
-    } catch {
-      if (client) {
-        try { await client.close(); } catch { /* ignore */ }
-      }
-    }
+  const live = [];
+  for (const r of probeResults) {
+    if (r.status === 'fulfilled') live.push(r.value);
   }
 
-  // Return results in priority order: composer → first candidate
-  const result = foundWithComposer || foundWithAny || bestCandidate;
-  return result;
+  function buildTarget(p) {
+    return {
+      id: p.candidate.id, title: p.candidate.title, url: p.candidate.url,
+      webSocketDebuggerUrl: p.candidate.webSocketDebuggerUrl, score: p.candidate.score
+    };
+  }
+
+  const p1 = live.find(p => p.readiness.composer && p.readiness.sendButton);
+  if (p1) {
+    const target = buildTarget(p1);
+    await Promise.all(live.map(p => safeClose(p.client)));
+    return target;
+  }
+
+  const p2 = live.find(p => p.readiness.composer && p.readiness.composer.visible);
+  if (p2) {
+    const target = buildTarget(p2);
+    await Promise.all(live.map(p => safeClose(p.client)));
+    return target;
+  }
+
+  if (live.length > 0) {
+    const target = buildTarget(live[0]);
+    await Promise.all(live.map(p => safeClose(p.client)));
+    return target;
+  }
+
+  return bestCandidate;
 }
 
 async function connectToTarget(targetInfo) {

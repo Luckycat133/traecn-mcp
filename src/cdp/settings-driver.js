@@ -5,8 +5,8 @@ const { sleep, safeJsValue } = require('../shared/utils');
 
 // Map human-readable section names to sidebar item text
 const SETTINGS_SECTIONS = [
-  '账号', '通用', '智能体', 'MCP', '对话流', 'CUE',
-  '模型', '上下文', '规则和技能', 'Beta', '关于 TRAE'
+  '账号', '通用', '开发环境', '智能体', 'MCP', 'CUE',
+  '模型', '对话流', '索引与文档', '技能与命令', '规则', 'Beta', '关于 TRAE'
 ];
 
 const SOLO_MODE_TABS = ['编辑器', '设置', '智能体', 'MCP'];
@@ -21,9 +21,7 @@ async function _goToSettingsTab(client) {
       var tabs = document.querySelectorAll('.icube-solo-mode-tab-item');
       for (var i = 0; i < tabs.length; i++) {
         if ((tabs[i].innerText || '').trim() === '设置') {
-          tabs[i].dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0}));
-          tabs[i].dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
-          tabs[i].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
+          window.__radixClick(tabs[i]);
           return 'clicked';
         }
       }
@@ -40,20 +38,33 @@ async function _goToSettingsTab(client) {
  */
 async function _clickSidebarItem(client, sectionName) {
   const safeName = safeJsValue(sectionName);
+  await _ensureClickHelper(client);
   const result = await client.send('Runtime.evaluate', {
     expression: `
       (function() {
         var items = document.querySelectorAll('.settings-sidebar-menu-item');
+        if (items.length === 0) {
+          // Try broader selector fallback
+          items = document.querySelectorAll('[class*="sidebar-item"], [class*="menu-item"]');
+        }
         for (var i = 0; i < items.length; i++) {
-          // Text lives in nested .text span; innerText of the menu-item itself is
-          // empty due to CSS overflow clipping.
+          // Text: try .text span first, then any text node, then aria-label
           var textEl = items[i].querySelector('.text');
-          var itemText = textEl ? (textEl.textContent || '').trim() : (items[i].textContent || '').trim();
+          var itemText = textEl ? (textEl.textContent || '').trim()
+                        : (items[i].textContent || '').trim()
+                        || (items[i].getAttribute('aria-label') || '').trim();
           if (itemText === ${safeName}) {
-            items[i].dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0}));
-            items[i].dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
-            items[i].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
+            window.__radixClick(items[i]);
             return 'clicked: ' + itemText;
+          }
+        }
+        // Last resort: partial match on any descendant text
+        var allItems = document.querySelectorAll('[class*="sidebar"], [class*="menu"]');
+        for (var i = 0; i < allItems.length; i++) {
+          var txt = (allItems[i].textContent || '').trim();
+          if (txt === ${safeName}) {
+            window.__radixClick(allItems[i]);
+            return 'clicked: ' + txt;
           }
         }
         return 'not found: ' + ${safeName};
@@ -61,7 +72,7 @@ async function _clickSidebarItem(client, sectionName) {
     `,
     returnByValue: true
   });
-  await sleep(600);
+  await _waitForContent(client, 5000);  // Wait up to 5s for new content to render
   return result.result?.value || 'unknown';
 }
 
@@ -125,17 +136,24 @@ async function _readSettingsContent(client) {
     expression: `
       (function() {
         // Strategy 1: standard icb-setting-item-container rows (most settings sections)
-        var allItems = document.querySelectorAll('.icb-setting-item-container');
-        if (allItems.length > 0) {
-          var results = [];
-          for (var i = 0; i < allItems.length; i++) {
-            var el = allItems[i];
+        var containerItems = document.querySelectorAll('.icb-setting-item-container');
+
+        // Strategy 2: table-based model list (the \u6a21\u578b section uses a <table>)
+        var tableRows = document.querySelectorAll('table tbody tr');
+
+        // Prefer whichever strategy returned more items
+        var containerResults = [];
+        var tableResults = [];
+
+        if (containerItems.length > 0) {
+          for (var i = 0; i < containerItems.length; i++) {
+            var el = containerItems[i];
             var labelEl = el.querySelector('.icb-setting-item-label');
             var descEl = el.querySelector('.icb-setting-item-description');
             var toggleEl = el.querySelector('input[type="checkbox"]');
             var dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
             var r = el.getBoundingClientRect();
-            results.push({
+            containerResults.push({
               label: labelEl ? labelEl.innerText.trim() : '',
               desc: descEl ? descEl.innerText.trim() : '',
               currentValue: dropdownEl ? dropdownEl.innerText.trim() : '',
@@ -146,13 +164,9 @@ async function _readSettingsContent(client) {
               visible: r.width > 0 && r.height > 0
             });
           }
-          return JSON.stringify({count: results.length, items: results, type: 'standard'});
         }
 
-        // Strategy 2: table-based model list (the \u6a21\u578b section uses a <table>)
-        var tableRows = document.querySelectorAll('table tbody tr');
         if (tableRows.length > 0) {
-          var results = [];
           for (var i = 0; i < tableRows.length; i++) {
             var cells = tableRows[i].querySelectorAll('td');
             if (cells.length >= 2) {
@@ -160,7 +174,7 @@ async function _readSettingsContent(client) {
               var provider = (cells[1].textContent || '').trim();
               // Skip column-header rows
               if (modelName && modelName !== '\u6a21\u578b' && modelName !== '\u670d\u52a1\u5546' && modelName !== '\u64cd\u4f5c') {
-                results.push({
+                tableResults.push({
                   label: modelName,
                   desc: provider,
                   currentValue: '',
@@ -173,10 +187,14 @@ async function _readSettingsContent(client) {
               }
             }
           }
-          return JSON.stringify({count: results.length, items: results, type: 'model-table'});
         }
 
-        return JSON.stringify({count: 0, type: 'none'});
+        // Use whichever strategy has more items (more content = the right section)
+        var chosen = containerResults.length >= tableResults.length ? containerResults : tableResults;
+        var strategy = containerResults.length >= tableResults.length ? 'standard' : 'model-table';
+
+        if (chosen.length === 0) return JSON.stringify({count: 0, type: 'none'});
+        return JSON.stringify({count: chosen.length, items: chosen, type: strategy});
       })()
     `,
     returnByValue: true
@@ -213,17 +231,16 @@ async function _setDropdown(client, labelText, value) {
   const result = await client.send('Runtime.evaluate', {
     expression: `
       (function() {
-        var settingsPart = document.querySelector('.part.solo_settings');
-        if (!settingsPart) return {error: 'no solo_settings'};
+        var root = document.querySelector('.icb-settings-container, .part.solo_settings, [class*="settings-content"]') || document.body;
 
-        var items = settingsPart.querySelectorAll('.icb-setting-item-container');
+        var items = root.querySelectorAll('.icb-setting-item-container');
         for (var i = 0; i < items.length; i++) {
           var labelEl = items[i].querySelector('.icb-setting-item-label');
           if (!labelEl) continue;
           if (labelEl.innerText.trim() !== '${escapedLabel}') continue;
 
           // Found the item — click it to open dropdown
-          items[i].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
+          window.__radixClick(items[i]);
           return 'clicked item: ' + labelEl.innerText.trim();
         }
         return 'item not found: ' + '${escapedLabel}';
@@ -241,7 +258,7 @@ async function _setDropdown(client, labelText, value) {
         for (var i = 0; i < options.length; i++) {
           var text = options[i].innerText.trim();
           if (text === '${escapedValue}' || text.startsWith('${escapedValue}')) {
-            options[i].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
+            window.__radixClick(options[i]);
             return 'selected: ' + text;
           }
         }
@@ -249,7 +266,7 @@ async function _setDropdown(client, labelText, value) {
         for (var i = 0; i < options.length; i++) {
           var text = options[i].innerText.trim();
           if (text.includes('${escapedValue}')) {
-            options[i].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
+            window.__radixClick(options[i]);
             return 'selected (partial): ' + text;
           }
         }
@@ -271,34 +288,68 @@ async function _setToggle(client, labelText, checked) {
   const result = await client.send('Runtime.evaluate', {
     expression: `
       (function() {
-        var settingsPart = document.querySelector('.part.solo_settings');
-        if (!settingsPart) return {error: 'no solo_settings'};
+        // Search ALL roots for the label text, then navigate to its container and toggle
+        var found = null;
+        var toggleEl = null;
 
-        var items = settingsPart.querySelectorAll('.icb-setting-item-container');
-        for (var i = 0; i < items.length; i++) {
-          var labelEl = items[i].querySelector('.icb-setting-item-label');
-          if (!labelEl) continue;
-          if (labelEl.innerText.trim() !== '${escapedLabel}') continue;
-
-          var toggleEl = items[i].querySelector('input[type="checkbox"]');
-          if (!toggleEl) return 'no toggle found for: ' + '${escapedLabel}';
-
-          var currentChecked = toggleEl.checked;
-          var targetChecked = ${checked};
-
-          if (currentChecked !== targetChecked) {
-            toggleEl.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-            return 'toggled to: ' + !currentChecked;
+        // Search every .icb-setting-item-label in the entire document
+        var allLabels = document.querySelectorAll('.icb-setting-item-label');
+        for (var i = 0; i < allLabels.length; i++) {
+          var el = allLabels[i];
+          var inner = (el.innerText || '').trim();
+          if (inner === '${escapedLabel}') {
+            found = el;
+            var container = el.closest('.icb-setting-item-container');
+            if (container) toggleEl = container.querySelector('input[type="checkbox"]');
+            break;
           }
-          return 'already in desired state: ' + currentChecked;
         }
-        return 'item not found: ' + '${escapedLabel}';
+
+        if (!found) {
+          var debug = { searched: '${escapedLabel}', foundLabels: [] };
+          var allLabelEls = document.querySelectorAll('.icb-setting-item-label');
+          for (var i = 0; i < Math.min(allLabelEls.length, 10); i++) {
+            debug.foundLabels.push((allLabelEls[i].innerText || '').trim());
+          }
+          return JSON.stringify({ error: 'label not found', debug: debug });
+        }
+
+        if (!toggleEl) return 'no toggle found';
+
+        var currentChecked = toggleEl.checked;
+        var targetChecked = ${checked};
+
+        if (currentChecked !== targetChecked) {
+          window.__radixClick(toggleEl);
+          return 'toggled to: ' + !currentChecked;
+        }
+        return 'already in desired state: ' + currentChecked;
       })()
     `,
     returnByValue: true
   });
   await sleep(400);
   return result.result?.value || 'unknown';
+}
+
+/**
+ * Inject __radixClick helper into the page if not already present.
+ * Radix UI components only respond to pointerdown, not synthetic MouseEvent('click').
+ */
+async function _ensureClickHelper(client) {
+  await client.send('Runtime.evaluate', {
+    expression: `(function() {
+      if (window.__radixClick) return;
+      window.__radixClick = function(el) {
+        if (!el) return;
+        el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, button: 0}));
+        el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0}));
+        el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
+        el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
+      };
+    })()`,
+    returnByValue: true
+  });
 }
 
 /**
@@ -323,45 +374,32 @@ class SettingsDriver {
    * @param {string} [section] - Optional sidebar section to click (e.g. '通用', '模型')
    */
   async switchTab(section) {
-    // Check which SOLO tab is currently active
-    const activeTab = await this.client.send('Runtime.evaluate', {
+    await _ensureClickHelper(this.client);
+
+    // Check if settings panel is already open by detecting settings editor elements
+    const settingsOpen = await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
-          var tabs = document.querySelectorAll('.icube-solo-mode-tab-item');
-          for (var i = 0; i < tabs.length; i++) {
-            if (tabs[i].classList.contains('active')) {
-              return (tabs[i].innerText || '').trim();
-            }
-          }
-          return 'none';
+          var s = document.querySelector('[class*="settings"], .icb-setting-item-container');
+          if (s && s.offsetParent !== null) return true;
+          return false;
         })()
       `,
       returnByValue: true
     });
-    const currentTab = activeTab.result?.value || 'none';
 
-    // If already on Settings tab, just switch sidebar section
-    if (currentTab === '设置') {
-      this._currentTab = 'settings';
-      if (section) {
-        await _clickSidebarItem(this.client, section);
-        await sleep(1000);
-      }
-      return { tab: 'settings', section: section || null };
+    if (!settingsOpen.result?.value) {
+      // Open settings first
+      await _goToSettingsTab(this.client);
+      await sleep(1500);
     }
 
-    // Otherwise click Settings tab (this works whether on Editor or 智能体)
-    await _goToSettingsTab(this.client);
-    await sleep(1000);
     this._currentTab = 'settings';
 
-    // Optionally click a sidebar section
+    // Navigate to section using sidebar item clicker (correct method)
     if (section) {
-      if (!SETTINGS_SECTIONS.includes(section)) {
-        throw new Error(`Unknown settings section: ${section}. Valid: ${SETTINGS_SECTIONS.join(', ')}`);
-      }
       await _clickSidebarItem(this.client, section);
-      await sleep(1000);
+      await sleep(1200);
     }
 
     return { tab: 'settings', section: section || null };
@@ -457,6 +495,110 @@ class SettingsDriver {
   }
 
   /**
+   * Type text into an input field identified by its label.
+   * @param {string} label - The label text near the input field
+   * @param {string} text - The text to type
+   */
+  async typeText(label, text) {
+    await _ensureClickHelper(this.client);
+    return _typeIntoInput(this.client, label, text);
+  }
+
+  /**
+   * Click any visible element by its text content.
+   * @param {string} text - The visible text of the element to click
+   */
+  async click(text) {
+    await _ensureClickHelper(this.client);
+    const safeName = safeJsValue(text);
+    return await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var items = document.querySelectorAll('.settings-sidebar-menu-item');
+          for (var i = 0; i < items.length; i++) {
+            var textEl = items[i].querySelector('.text');
+            var itemText = textEl ? (textEl.textContent || '').trim() : (items[i].textContent || '').trim();
+            if (itemText === ${safeName}) {
+              window.__radixClick(items[i]);
+              return 'clicked: ' + itemText;
+            }
+          }
+          return 'not found: ' + ${safeName};
+        })()
+      `,
+      returnByValue: true
+    }).then(r => r.result?.value || 'unknown');
+  }
+
+  /**
+   * Click a sub-tab within the current settings section.
+   * @param {string} tabText - Tab label text
+   */
+  async clickTab(tabText) {
+    await _ensureClickHelper(this.client);
+    const safeName = safeJsValue(tabText);
+    return await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var items = document.querySelectorAll('.settings-sidebar-menu-item');
+          for (var i = 0; i < items.length; i++) {
+            var textEl = items[i].querySelector('.text');
+            var itemText = textEl ? (textEl.textContent || '').trim() : (items[i].textContent || '').trim();
+            if (itemText === ${safeName}) {
+              window.__radixClick(items[i]);
+              return 'clicked: ' + itemText;
+            }
+          }
+          return 'not found: ' + ${safeName};
+        })()
+      `,
+      returnByValue: true
+    }).then(r => r.result?.value || 'unknown');
+  }
+
+  /**
+   * Read all tables visible on the current settings page.
+   */
+  async readTables() {
+    return _readTableContent(this.client);
+  }
+
+  /**
+   * Perform a generic action on the settings panel.
+   * @param {string} actionName - Action name (navigate, read, type, click, toggle, dropdown, set, back, readTables)
+   * @param {Object} params - Action parameters
+   */
+  async action(actionName, params = {}) {
+    const normalized = actionName.toLowerCase();
+
+    switch (normalized) {
+      case 'navigate':
+        return this.switchTab(params.section);
+      case 'read':
+        await sleep(1500);
+        return this.getContent();
+      case 'type':
+        return this.typeText(params.label, params.text);
+      case 'click':
+        return this.click(params.text);
+      case 'clicktab':
+        return this.clickTab(params.text);
+      case 'toggle':
+        return this.setToggle(params.label, params.enabled);
+      case 'dropdown':
+        return this.setDropdown(params.label, params.value);
+      case 'set':
+        return this.set(params.label, params.value);
+      case 'readtables':
+        return this.readTables();
+      case 'back':
+        return this.backToChat();
+      default:
+        throw new Error(`Unknown settings action: ${actionName}. Supported: navigate, read, type, click, clickTab, toggle, dropdown, set, readTables, back`);
+    }
+  }
+
+  /**
    * Navigate back to the Chat tab.
    */
   async backToChat() {
@@ -466,9 +608,7 @@ class SettingsDriver {
           var tabs = document.querySelectorAll('.icube-solo-mode-tab-item');
           for (var i = 0; i < tabs.length; i++) {
             if ((tabs[i].innerText || '').trim() === '编辑器') {
-              tabs[i].dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0}));
-              tabs[i].dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
-              tabs[i].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
+              window.__radixClick(tabs[i]);
               return 'clicked: 编辑器';
             }
           }

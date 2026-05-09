@@ -201,6 +201,8 @@ class Gateway {
     this.idempotencyKeys = new Map();
     this.taskQueue = new Map();
     this.pollingTimer = null;
+
+    this.isCloud = this.host === '0.0.0.0' || !!(process.env.RENDER_EXTERNAL_HOSTNAME || process.env.RAILWAY_STATIC_URL);
   }
 
   _corsHeaders(req) {
@@ -412,6 +414,9 @@ class Gateway {
       if (pathname === '/api/settings/back-to-chat' && method === 'POST') {
         return await this._handleSettingsBackToChat(req, res);
       }
+      if (pathname === '/api/settings/action' && method === 'POST') {
+        return await this._handleSettingsAction(req, res);
+      }
       if (pathname === '/api/dialog/approve' && method === 'POST') {
         return await this._handleDialogApprove(req, res);
       }
@@ -457,6 +462,7 @@ class Gateway {
       service: 'traecn-cdp-http-bridge',
       version: packageInfo.version,
       mockBridge: this.mockBridge,
+      cloud: this.isCloud,
       cdp: cdpVersion ? { browser: cdpVersion.Browser, protocolVersion: cdpVersion['Protocol-Version'] } : null,
       uptime: process.uptime()
     });
@@ -581,7 +587,7 @@ class Gateway {
     const switchResult = await this.driver.switchModel(body.model);
 
     // Wait for model to become available (up to 10 minutes)
-    const queueWaitTimeoutMs = this.driver.config.queueWaitTimeoutMs || 600000;
+    const queueWaitTimeoutMs = this.driver.config.queueWaitTimeoutMs || 60000;
     const queuePollIntervalMs = this.driver.config.queuePollIntervalMs || 15000;
     const maxRetries = Math.ceil(queueWaitTimeoutMs / queuePollIntervalMs);
 
@@ -788,6 +794,21 @@ class Gateway {
     this._json(req, res, { result });
   }
 
+  async _handleSettingsAction(req, res) {
+    const body = await parseBody(req);
+    if (!body.action) {
+      return this._json(req, res, { error: 'action is required. Supported: navigate, read, type, click, clickTab, toggle, dropdown, set, readTables, back' }, 400);
+    }
+
+    await this._ensureConnection();
+    try {
+      const result = await this.driver.settings.action(body.action, body.params || {});
+      this._json(req, res, { action: body.action, params: body.params, result });
+    } catch (e) {
+      this._json(req, res, { error: e.message, action: body.action }, 400);
+    }
+  }
+
 
   // ── Dialog / Approval handlers ──────────────────────────────────────────
 
@@ -898,85 +919,27 @@ class Gateway {
 
     const chatId = body.chatId || null;
     const includeProcessText = body.includeProcessText === true;
-    const waitForQueue = body.waitForQueue !== false;
+    const mode = body.mode || null;
+    const agent = body.agent || null;
     await this._ensureConnection();
 
-    // Get queue status with enhanced detection
-    const queueStatus = await this.driver.checkQueueStatus();
+    // Build delegate options with mode (slash command) and agent switching
+    const delegateOptions = {};
+    if (mode) delegateOptions.mode = mode;
+    if (agent) delegateOptions.agent = agent;
 
-    // Build queue ETA message
-    let queueEtaMessage = '';
-    if (queueStatus.queueEstimatedWait) {
-      queueEtaMessage = `，预计等待 ${queueStatus.queueEstimatedWait}`;
-    } else if (queueStatus.queuePosition) {
-      queueEtaMessage = `，当前第 ${queueStatus.queuePosition} 位`;
-    }
-
-    if (queueStatus.queued) {
-      if (!waitForQueue) {
-        // Caller doesn't want to wait — return queue info immediately
-        return this._json(req, res, {
-          status: 'queued',
-          queueDetails: {
-            state: 'queued',
-            currentModel: queueStatus.currentModel || '',
-            queuePosition: queueStatus.queuePosition,
-            queueEstimatedWait: queueStatus.queueEstimatedWait,
-            queueMessage: queueStatus.queueMessage || '模型排队中'
-          },
-          message: `模型排队中${queueEtaMessage}，请稍后重试或设置 waitForQueue=true 自动等待`,
-          model: queueStatus.currentModel
-        }, 202);
-      }
-
-      // Store task for background processing with per-task queue timeout
-      const taskId = 'task_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      const perTaskTimeoutMs = this.driver.config.queuePerTaskTimeoutMs || 600000;
-      this.taskQueue.set(taskId, {
-        chatId,
-        task: body.task,
-        status: 'queued',
-        createdAt: Date.now(),
-        deadline: Date.now() + perTaskTimeoutMs,
-        attempts: 0,
-        includeProcessText
-      });
-
-      this._ensureBackgroundPolling();
-
-      return this._json(req, res, {
-        taskId,
-        status: 'queued',
-        queueDetails: {
-          state: 'queued',
-          currentModel: queueStatus.currentModel || '',
-          queuePosition: queueStatus.queuePosition,
-          queueEstimatedWait: queueStatus.queueEstimatedWait,
-          queueMessage: queueStatus.queueMessage || '模型排队中'
-        },
-        message: `模型排队中${queueEtaMessage}，任务已加入后台。用 traecn_task_status 查询进度`,
-        model: queueStatus.currentModel
-      }, 202);
-    }
-
-    if (queueStatus.running) {
-      // Model is currently generating — can't send new task yet
-      return this._json(req, res, {
-        status: 'running',
-        message: 'Trae 正在执行其他任务，请稍后重试',
-        model: queueStatus.currentModel
-      }, 202);
-    }
-
-    // Model is idle/ready — execute synchronously with timeout protection
+    // Skip pre-send queue check — the driver handles queue detection internally
+    // via _pollResponseState scanning response text for "排队提醒...排在第X位".
+    // This approach works regardless of model selector disabled state.
+    // Execute synchronously with timeout protection (safety net for edge cases).
     let result;
     let timeoutId;
     try {
-      const syncTimeout = 180000;
+      const syncTimeout = 1800000;
       const timeoutPromise = new Promise((_, reject) =>
         { timeoutId = setTimeout(() => reject(new Error('delegate timeout (' + syncTimeout + 'ms)')), syncTimeout); }
       );
-      result = await Promise.race([this.driver.delegate(body.task), timeoutPromise]);
+      result = await Promise.race([this.driver.delegate(body.task, delegateOptions), timeoutPromise]);
     } catch (e) {
       return this._json(req, res, { error: 'delegate failed: ' + e.message }, 504);
     } finally {
@@ -994,7 +957,12 @@ class Gateway {
       elapsedMs: result.elapsedMs,
       timedOut: result.timedOut || false,
       needsApproval: result.needsApproval || false,
-      question: result.question || ''
+      question: result.question || '',
+      mode: mode,
+      agent: agent,
+      queued: result.queued || false,
+      queuePosition: result.queuePosition || null,
+      queueElapsedMs: result.queueElapsedMs || null
     };
 
     if (includeProcessText && result.processText) {

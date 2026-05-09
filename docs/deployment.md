@@ -71,3 +71,91 @@ Gateway errors are returned as JSON and sensitive log keys are redacted. Check t
 ## Rollback
 
 Stop the gateway, restore the previous repository revision, run `npm ci --omit=dev`, and restart with the previous `.env`. If selector changes caused the issue, remove selector overrides and rerun `npm run inspect:traecn`.
+
+---
+
+## Cloud Deployment (Render / Railway)
+
+TRAECNclaw can be deployed to cloud platforms like **Render** or **Railway**. Since the core function relies on CDP (Chrome DevTools Protocol) to control a local Trae instance, cloud deployment requires additional network configuration to bridge the CDP connection.
+
+### Architecture Overview
+
+```
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────┐
+│   Cloud Host    │  HTTP   │  Local Machine   │   CDP   │   Trae CN   │
+│  (Render/Railway)│◄───────►│  (Tunnel/Proxy)  │◄────────►│  (Desktop)  │
+│   traecnclaw    │         │  ngrok/localtunnel│        │             │
+└─────────────────┘         └──────────────────┘         └─────────────┘
+```
+
+**Key Point**: The gateway runs in the cloud, but CDP must connect back to your local machine where Trae is running.
+
+### Prerequisites
+
+1. A local Trae instance running with remote debugging enabled:
+   ```sh
+   trae-cn --remote-debugging-port=9222
+   ```
+2. A tunnel service exposing your local port to the internet:
+   ```sh
+   npx localtunnel --port 9222
+   # or
+   ngrok http 9222
+   ```
+
+### Render Deployment
+
+1. Fork or push this repository to GitHub.
+2. In Render Dashboard, click **New +** → **Blueprint**.
+3. Connect your GitHub repository.
+4. Render will auto-detect `render.yaml` and configure the service.
+5. Set the following environment variables in Render Dashboard:
+   - `TRAECN_CDP_HOST`: Your tunnel URL (e.g., `https://abc123.loca.lt`)
+   - `TRAECN_REMOTE_DEBUGGING_PORT`: `80` or `443` (depending on tunnel)
+   - `TRAECN_GATEWAY_TOKEN`: A secure random token (auto-generated if not set)
+6. Deploy and verify with `GET https://<your-service>.onrender.com/api/status`.
+
+**Configuration**: See [`render.yaml`](../render.yaml)
+
+### Railway Deployment
+
+1. Fork or push this repository to GitHub.
+2. In Railway Dashboard, click **New Project** → **Deploy from GitHub repo**.
+3. Select your repository. Railway auto-detects `railway.json`.
+4. Set environment variables in Railway Dashboard → Variables:
+   - `TRAECN_CDP_HOST`: Your tunnel URL
+   - `TRAECN_REMOTE_DEBUGGING_PORT`: Tunnel port
+   - `TRAECN_GATEWAY_TOKEN`: Secure random token
+5. Deploy and verify health checks pass.
+
+**Configuration**: See [`railway.json`](../railway.json)
+
+### Cloud Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `HOST` | Yes | Set to `0.0.0.0` to accept external connections |
+| `PORT` | Yes | Render/Railway provide this dynamically |
+| `TRAECN_GATEWAY_TOKEN` | Recommended | Authentication token. Leave empty to disable auth (not recommended for production) |
+| `TRAECN_ALLOWED_ORIGINS` | No | CORS origins. Use `*` for development only |
+| `TRAECN_CDP_HOST` | Yes (cloud) | Tunnel URL pointing to your local Trae CDP port |
+| `TRAECN_REMOTE_DEBUGGING_PORT` | Yes (cloud) | Port of the tunnel (usually 80 or 443) |
+| `TRAECN_ENABLE_MOCK_BRIDGE` | No | Set to `1` to run without a real Trae connection |
+
+### Security Notes for Cloud
+
+- **Never** expose your local Trae port directly to the internet. Always use a tunnel with authentication.
+- Always set `TRAECN_GATEWAY_TOKEN` in production.
+- Restrict `TRAECN_ALLOWED_ORIGINS` to your frontend domain.
+- The `/api/status` endpoint is public (no auth required) for health checks.
+- Enable HTTPS on your tunnel endpoint to encrypt CDP traffic.
+
+### Mock Bridge Mode (No Trae Required)
+
+For testing the gateway without a live Trae instance:
+
+```env
+TRAECN_ENABLE_MOCK_BRIDGE=1
+```
+
+This returns simulated responses for all CDP operations, useful for CI/CD or frontend development.

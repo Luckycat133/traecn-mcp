@@ -41,4 +41,18 @@ function safeJsValue(value) {
   }
 }
 
-module.exports = { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString, safeJsValue };
+function isValidPath(p) {
+  if (typeof p !== 'string' || p.length === 0 || p.length > 4096) return false;
+  if (/[<>|&;$\r\n\t\0]/.test(p)) return false;
+  if (p.includes('..')) return false;
+  const path = require('path');
+  return path.isAbsolute(p);
+}
+
+async function safeClose(resource) {
+  if (resource && typeof resource.close === 'function') {
+    try { await resource.close(); } catch { /* intentional noop */ }
+  }
+}
+
+module.exports = { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString, safeJsValue, isValidPath, safeClose };

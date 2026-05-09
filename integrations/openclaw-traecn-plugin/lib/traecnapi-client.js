@@ -125,6 +125,10 @@ class TraeCNApiClient {
     return this._request('POST', '/api/settings/set', { section, ...data });
   }
 
+  async settingsAction(action, params = {}) {
+    return this._request('POST', '/api/settings/action', { action, params });
+  }
+
   async updateSelf(force = false) {
     return this._request('POST', '/api/update-self', { force });
   }
