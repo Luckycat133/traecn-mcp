@@ -154,8 +154,9 @@ function htmlResponse(res, html, statusCode = 200, headers = {}) {
 // Notify OpenClaw (Telegram gateway) when async task completes
 async function notifyOpenClaw(chatId, message) {
   try {
+    const openclawUrl = getEnvWithFallback('TRAECN_OPENCLAW_URL', 'TRAE_OPENCLAW_URL', 'http://127.0.0.1:18789/api/message/send');
     const body = JSON.stringify({ chatId, text: message });
-    const res = await fetch('http://127.0.0.1:18789/api/message/send', {
+    const res = await fetch(openclawUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
@@ -201,6 +202,42 @@ class Gateway {
     this.idempotencyKeys = new Map();
     this.taskQueue = new Map();
     this.pollingTimer = null;
+    this.isPolling = false;
+    this.taskLocks = new Set();
+    this.activeTimers = new Set();
+  }
+
+  _setTimeout(callback, delay) {
+    const timer = setTimeout(() => {
+      this.activeTimers.delete(timer);
+      callback();
+    }, delay);
+    this.activeTimers.add(timer);
+    return timer;
+  }
+
+  _clearTimeout(timer) {
+    clearTimeout(timer);
+    this.activeTimers.delete(timer);
+  }
+
+  _setInterval(callback, interval) {
+    const timer = setInterval(callback, interval);
+    this.activeTimers.add(timer);
+    return timer;
+  }
+
+  _clearInterval(timer) {
+    clearInterval(timer);
+    this.activeTimers.delete(timer);
+  }
+
+  _clearAllTimers() {
+    for (const timer of this.activeTimers) {
+      clearTimeout(timer);
+      clearInterval(timer);
+    }
+    this.activeTimers.clear();
   }
 
   _corsHeaders(req) {
@@ -269,7 +306,7 @@ class Gateway {
   _storeIdempotency(key, response) {
     if (key) {
       this.idempotencyKeys.set(key, response);
-      setTimeout(() => this.idempotencyKeys.delete(key), 300000);
+      this._setTimeout(() => this.idempotencyKeys.delete(key), 300000);
     }
   }
 
@@ -974,13 +1011,13 @@ class Gateway {
     try {
       const syncTimeout = 180000;
       const timeoutPromise = new Promise((_, reject) =>
-        { timeoutId = setTimeout(() => reject(new Error('delegate timeout (' + syncTimeout + 'ms)')), syncTimeout); }
+        { timeoutId = this._setTimeout(() => reject(new Error('delegate timeout (' + syncTimeout + 'ms)')), syncTimeout); }
       );
       result = await Promise.race([this.driver.delegate(body.task), timeoutPromise]);
     } catch (e) {
       return this._json(req, res, { error: 'delegate failed: ' + e.message }, 504);
     } finally {
-      if (timeoutId) clearTimeout(timeoutId);
+      if (timeoutId) this._clearTimeout(timeoutId);
     }
 
     if (chatId) {
@@ -1067,7 +1104,10 @@ class Gateway {
         status: task.status
       }, 400);
     }
+    // Remove task from locks if it's there
+    this.taskLocks.delete(taskId);
     task.status = 'cancelled';
+    this.taskQueue.delete(taskId);
     this._json(req, res, { taskId, status: 'cancelled' });
   }
 
@@ -1090,53 +1130,82 @@ class Gateway {
   _ensureBackgroundPolling() {
     if (this.pollingTimer) return;
     const pollInterval = 15000;
-    this.pollingTimer = setInterval(async () => {
-      for (const [taskId, task] of this.taskQueue) {
-        if (task.status !== 'queued') continue;
+    this.pollingTimer = this._setInterval(async () => {
+      // Prevent concurrent polling
+      if (this.isPolling) return;
+      this.isPolling = true;
 
-        // Check per-task queue timeout
+      try {
+        // 定期清理机制：清理超过一定时间的非排队状态任务
+        const now = Date.now();
+        const maxTaskAge = 3600000; // 1小时
+        for (const [taskId, task] of this.taskQueue) {
+          if (task.status !== 'queued' && now - task.createdAt > maxTaskAge) {
+            console.log('[Queue] Cleaning up old task', taskId, 'with status', task.status);
+            this.taskQueue.delete(taskId);
+            this.taskLocks.delete(taskId);
+          }
+        }
+        
+        for (const [taskId, task] of this.taskQueue) {
+          // Skip if task is not queued or already locked
+          if (task.status !== 'queued' || this.taskLocks.has(taskId)) continue;
+
+          // Check per-task queue timeout
         if (Date.now() > task.deadline) {
           task.status = 'queue_timeout';
           console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
           if (task.chatId) {
             await notifyOpenClaw(task.chatId, '❌ Trae 排队超时（超过限制），请稍后重试或切换模型');
           }
+          this.taskQueue.delete(taskId);
           continue;
         }
 
-        try {
-          await this._ensureConnection();
-          const queueStatus = await this.driver.checkQueueStatus();
-
-          // Still queued or actively running — skip this task for now
-          if (queueStatus.queued || queueStatus.running) continue;
-
-          task.status = 'executing';
-
           try {
-            // Create a fresh chat before sending (background poller bypasses
-            // delegate() which would also call newChat)
-            await this.driver.newChat();
-            await this.driver.sendMessage(task.task);
-            const result = await this.driver.collectResponse();
+            await this._ensureConnection();
+            const queueStatus = await this.driver.checkQueueStatus();
 
-            task.status = 'done';
-            task.result = result;
+            // Still queued or actively running — skip this task for now
+            if (queueStatus.queued || queueStatus.running) continue;
 
-            if (task.chatId) {
-              await notifyOpenClaw(task.chatId, formatResult(result));
+            // Lock this task before execution
+            this.taskLocks.add(taskId);
+            task.status = 'executing';
+
+            try {
+              // Create a fresh chat before sending (background poller bypasses
+              // delegate() which would also call newChat)
+              await this.driver.newChat();
+              await this.driver.sendMessage(task.task);
+              const result = await this.driver.collectResponse();
+
+              task.status = 'done';
+              task.result = result;
+
+              if (task.chatId) {
+                await notifyOpenClaw(task.chatId, formatResult(result));
+              }
+              this.taskQueue.delete(taskId);
+            } catch (e) {
+              task.status = 'error';
+              task.error = e.message;
+              console.error('[Queue] Task', taskId, 'execution error:', e.message);
+              if (task.chatId) {
+                await notifyOpenClaw(task.chatId, '❌ Trae 出错: ' + e.message);
+              }
+              this.taskQueue.delete(taskId);
+            } finally {
+              // Unlock the task after execution completes (success or error)
+              this.taskLocks.delete(taskId);
             }
           } catch (e) {
-            task.status = 'error';
-            task.error = e.message;
-            console.error('[Queue] Task', taskId, 'execution error:', e.message);
-            if (task.chatId) {
-              await notifyOpenClaw(task.chatId, '❌ Trae 出错: ' + e.message);
-            }
+            console.error('[Queue] polling error:', e.message);
           }
-        } catch (e) {
-          console.error('[Queue] polling error:', e.message);
         }
+      } finally {
+        // Release the polling lock
+        this.isPolling = false;
       }
     }, pollInterval);
     if (typeof this.pollingTimer.unref === 'function') {
@@ -1147,8 +1216,49 @@ class Gateway {
 
   _stopBackgroundPolling() {
     if (!this.pollingTimer) return;
-    clearInterval(this.pollingTimer);
+    this._clearInterval(this.pollingTimer);
     this.pollingTimer = null;
+  }
+
+  async gracefulShutdown() {
+    console.log('[Gateway] Starting graceful shutdown...');
+    
+    // 1. Stop background polling first
+    this._stopBackgroundPolling();
+    
+    // 2. Clear all active timers
+    this._clearAllTimers();
+    
+    // 3. Clear task queue
+    const taskCount = this.taskQueue.size;
+    this.taskQueue.clear();
+    this.taskLocks.clear();
+    console.log(`[Gateway] Cleared ${taskCount} tasks from queue`);
+    
+    // 4. Close CDP client if connected
+    if (this.client) {
+      try {
+        await this.client.close();
+        console.log('[Gateway] CDP client closed');
+      } catch (e) {
+        console.error('[Gateway] Error closing CDP client:', e.message);
+      }
+      this.client = null;
+      this.driver = null;
+    }
+    
+    // 5. Close HTTP server if running
+    if (this.server) {
+      return new Promise((resolve) => {
+        this.server.close(() => {
+          console.log('[Gateway] HTTP server closed');
+          this.server = null;
+          resolve();
+        });
+      });
+    }
+    
+    console.log('[Gateway] Graceful shutdown completed');
   }
 }
 
@@ -1166,6 +1276,7 @@ async function startGateway(options = {}) {
 
   server.on('close', () => {
     gateway._stopBackgroundPolling();
+    gateway._clearAllTimers();
     if (gateway.client) {
       gateway.client.close().catch(() => {});
     }
@@ -1175,7 +1286,7 @@ async function startGateway(options = {}) {
     server.listen(gateway.port, gateway.host, () => {
       gateway.server = server;
       gateway._ensureBackgroundPolling();
-      resolve(server);
+      resolve({ server, gateway });
     });
     server.on('error', reject);
   });

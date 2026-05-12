@@ -21,11 +21,12 @@ const host = process.env.HOST || '127.0.0.1';
 const port = parsePositiveInt(process.env.PORT || '8788', 8788);
 const mockBridge = process.env.TRAECN_ENABLE_MOCK_BRIDGE === '1';
 
-let server = null;
+let gatewayInstance = null;
 
 async function main() {
   try {
-    server = await startGateway({ host, port });
+    const { server, gateway } = await startGateway({ host, port });
+    gatewayInstance = gateway;
     const address = server.address();
     console.log(`[TRAECNclaw] Gateway started on ${address.address}:${address.port}`);
     console.log(`[TRAECNclaw] Mode: ${mockBridge ? 'mock-bridge' : 'live'}`);
@@ -36,18 +37,27 @@ async function main() {
   }
 }
 
-function gracefulShutdown(signal) {
+async function gracefulShutdown(signal) {
   console.log(`[TRAECNclaw] Received ${signal}, shutting down gracefully...`);
-  if (server) {
-    server.close(() => {
-      console.log('[TRAECNclaw] Server closed');
+  
+  let forcedShutdownTimeout = setTimeout(() => {
+    console.error('[TRAECNclaw] Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+  
+  if (gatewayInstance) {
+    try {
+      await gatewayInstance.gracefulShutdown();
+      console.log('[TRAECNclaw] Gateway shutdown completed');
+      clearTimeout(forcedShutdownTimeout);
       process.exit(0);
-    });
-    setTimeout(() => {
-      console.error('[TRAECNclaw] Forced shutdown after timeout');
+    } catch (err) {
+      console.error('[TRAECNclaw] Error during graceful shutdown:', err.message);
+      clearTimeout(forcedShutdownTimeout);
       process.exit(1);
-    }, 10000);
+    }
   } else {
+    clearTimeout(forcedShutdownTimeout);
     process.exit(0);
   }
 }
