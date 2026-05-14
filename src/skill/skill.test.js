@@ -127,6 +127,25 @@ test('_normalizeModel should match known models', () => {
   expect(skill._normalizeModel(null)).toBe(null);
 });
 
+test('switchModel should throw error for unknown model', async () => {
+  const { TraeCNSkill, TraeCNSkillError } = require('./traecn-skill');
+  const skill = new TraeCNSkill();
+  
+  // 模拟 client 方法避免实际网络调用
+  skill.client.switchModel = () => Promise.resolve({});
+  
+  let threw = false;
+  let errorCode = null;
+  try {
+    await skill.switchModel('unknown-model');
+  } catch (e) {
+    threw = true;
+    errorCode = e.code;
+  }
+  expect(threw).toBe(true);
+  expect(errorCode).toBe('UNKNOWN_MODEL');
+});
+
 test('_normalizeSection should map aliases', () => {
   const { TraeCNSkill } = require('./traecn-skill');
   const skill = new TraeCNSkill();
