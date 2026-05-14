@@ -2,23 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-
-const SENSITIVE_KEYS = ['token', 'password', 'secret', 'credential', 'authorization'];
-
-function sanitizeLog(obj) {
-  if (!obj || typeof obj !== 'object') return obj;
-  const sanitized = Array.isArray(obj) ? [] : {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (SENSITIVE_KEYS.some(k => key.toLowerCase().includes(k))) {
-      sanitized[key] = '[REDACTED]';
-    } else if (typeof value === 'object' && value !== null) {
-      sanitized[key] = sanitizeLog(value);
-    } else {
-      sanitized[key] = value;
-    }
-  }
-  return sanitized;
-}
+const { sanitizeLog } = require('./logger');
 
 function validatePlugin(plugin, name) {
   const errors = [];
@@ -256,7 +240,7 @@ class PluginManager {
       }
 
       try {
-        delete require.cache[require.resolve.resolve('../../plugins/' + name)];
+        delete require.cache[require.resolve('../../plugins/' + name)];
       } catch {
       }
 
