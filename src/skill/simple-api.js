@@ -11,7 +11,7 @@ function getSkill(context = {}) {
   return _instance;
 }
 
-async function t(task, opts = {}) {
+async function runTask(task, opts = {}) {
   const skill = getSkill();
   const result = await skill.run(task, opts);
   if (result.error) {
@@ -20,35 +20,35 @@ async function t(task, opts = {}) {
   return result.text;
 }
 
-async function q(task, opts = {}) {
+async function queueTask(task, opts = {}) {
   const skill = getSkill();
   const result = await skill.queue(task, opts);
   return result.taskId;
 }
 
-async function p(taskId = null) {
+async function pollTask(taskId = null) {
   const skill = getSkill();
   const result = await skill.poll(taskId);
   return result;
 }
 
-async function cancel(taskId = null) {
+async function cancelTask(taskId = null) {
   const skill = getSkill();
   return await skill.cancel(taskId);
 }
 
-async function s() {
+async function checkStatus() {
   const skill = getSkill();
   const status = await skill.status();
   return status.connected;
 }
 
-async function model(name) {
+async function switchModel(name) {
   const skill = getSkill();
   return await skill.switchModel(name);
 }
 
-async function mode(m) {
+async function switchMode(m) {
   const skill = getSkill();
   return await skill.switchMode(m);
 }
@@ -58,32 +58,32 @@ async function newChat() {
   return await skill.newChat();
 }
 
-async function settings(section = null) {
+async function getSettings(section = null) {
   const skill = getSkill();
   return await skill.getSettings(section);
 }
 
-async function set(label, value, section = null) {
+async function setSetting(label, value, section = null) {
   const skill = getSkill();
   return await skill.setSetting(label, value, section);
 }
 
-async function approve(action = 'auto', wait = false) {
+async function approveDialog(action = 'auto', wait = false) {
   const skill = getSkill();
   return await skill.approveDialog(action, wait);
 }
 
-async function dialog() {
+async function checkDialog() {
   const skill = getSkill();
   return await skill.checkDialog();
 }
 
-async function queueCheck() {
+async function checkQueue() {
   const skill = getSkill();
   return await skill.queueStatus();
 }
 
-async function open(path) {
+async function openProject(path) {
   const skill = getSkill();
   return await skill.openProject(path);
 }
@@ -92,22 +92,49 @@ function reset() {
   _instance = null;
 }
 
+const t = runTask;
+const q = queueTask;
+const p = pollTask;
+const s = checkStatus;
+const model = switchModel;
+const mode = switchMode;
+const settings = getSettings;
+const set = setSetting;
+const approve = approveDialog;
+const dialog = checkDialog;
+const queueCheck = checkQueue;
+const open = openProject;
+const cancel = cancelTask;
+
 module.exports = {
+  runTask,
+  queueTask,
+  pollTask,
+  cancelTask,
+  checkStatus,
+  switchModel,
+  switchMode,
+  newChat,
+  getSettings,
+  setSetting,
+  approveDialog,
+  checkDialog,
+  checkQueue,
+  openProject,
+  reset,
+  getSkill,
+  TraeCNSkill,
   t,
   q,
   p,
-  cancel,
   s,
   model,
   mode,
-  newChat,
   settings,
   set,
   approve,
   dialog,
   queueCheck,
   open,
-  reset,
-  getSkill,
-  TraeCNSkill
+  cancel
 };

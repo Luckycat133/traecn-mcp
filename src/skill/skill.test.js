@@ -81,22 +81,38 @@ test('SETTINGS_SECTIONS should contain expected aliases', () => {
 
 test('Simple API should export all functions', () => {
   const api = require('./simple-api');
+  // 描述性函数名
+  expect(typeof api.runTask).toBe('function');
+  expect(typeof api.queueTask).toBe('function');
+  expect(typeof api.pollTask).toBe('function');
+  expect(typeof api.cancelTask).toBe('function');
+  expect(typeof api.checkStatus).toBe('function');
+  expect(typeof api.switchModel).toBe('function');
+  expect(typeof api.switchMode).toBe('function');
+  expect(typeof api.newChat).toBe('function');
+  expect(typeof api.getSettings).toBe('function');
+  expect(typeof api.setSetting).toBe('function');
+  expect(typeof api.approveDialog).toBe('function');
+  expect(typeof api.checkDialog).toBe('function');
+  expect(typeof api.checkQueue).toBe('function');
+  expect(typeof api.openProject).toBe('function');
+  expect(typeof api.reset).toBe('function');
+  expect(typeof api.getSkill).toBe('function');
+  expect(typeof api.TraeCNSkill).toBe('function');
+  // 单字母别名 (兼容旧代码)
   expect(typeof api.t).toBe('function');
   expect(typeof api.q).toBe('function');
   expect(typeof api.p).toBe('function');
   expect(typeof api.s).toBe('function');
   expect(typeof api.model).toBe('function');
   expect(typeof api.mode).toBe('function');
-  expect(typeof api.newChat).toBe('function');
   expect(typeof api.settings).toBe('function');
   expect(typeof api.set).toBe('function');
   expect(typeof api.approve).toBe('function');
   expect(typeof api.dialog).toBe('function');
   expect(typeof api.queueCheck).toBe('function');
   expect(typeof api.open).toBe('function');
-  expect(typeof api.reset).toBe('function');
-  expect(typeof api.getSkill).toBe('function');
-  expect(typeof api.TraeCNSkill).toBe('function');
+  expect(typeof api.cancel).toBe('function');
 });
 
 test('_normalizeModel should match known models', () => {
