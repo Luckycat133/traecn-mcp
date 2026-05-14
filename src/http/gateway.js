@@ -12,6 +12,8 @@ const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
 const { getEnvWithFallback, parsePositiveInt } = require('../shared/utils');
+const { ConfigManager } = require('../shared/config-manager');
+const { getGlobalStore } = require('../shared/task-history');
 
 function normalizeUrl(rawUrl) {
   return rawUrl.replace(/[\x80-\xff]/g, ch => {
@@ -195,16 +197,39 @@ class Gateway {
     const rateMaxRequests = parsePositiveInt(getEnvWithFallback('TRAECN_RATE_LIMIT_MAX_REQUESTS', 'TRAE_RATE_LIMIT_MAX_REQUESTS', '60'), 60);
     this.rateLimiter = new RateLimiter(rateWindowMs, rateMaxRequests);
 
+    this.configManager = options.configManager || new ConfigManager({
+      configFile: process.env.TRAECN_CONFIG_FILE,
+      watchEnabled: process.env.TRAECN_CONFIG_WATCH === '1'
+    });
+
+    this.taskHistoryStore = getGlobalStore();
+
     this.client = null;
     this.driver = null;
     this.server = null;
     this.sessions = new Map();
     this.idempotencyKeys = new Map();
     this.taskQueue = new Map();
+    this.batchTasks = new Map();
     this.pollingTimer = null;
     this.isPolling = false;
     this.taskLocks = new Set();
     this.activeTimers = new Set();
+
+    this.configManager.on('configChanged', (data) => {
+      this._applyConfigChanges(data.changes);
+    });
+  }
+
+  _applyConfigChanges(changes) {
+    if (changes.rateLimit) {
+      const newWindowMs = this.configManager.getConfig().rateLimit.windowMs;
+      const newMaxRequests = this.configManager.getConfig().rateLimit.maxRequests;
+      this.rateLimiter = new RateLimiter(newWindowMs, newMaxRequests);
+    }
+    if (changes.cors) {
+      this.allowedOrigins = this.configManager.getConfig().cors.allowedOrigins;
+    }
   }
 
   _setTimeout(callback, delay) {
@@ -358,6 +383,22 @@ class Gateway {
       return this._handleStatus(req, res);
     }
 
+    if (pathname === '/api/config' && method === 'GET') {
+      return this._handleGetConfig(req, res);
+    }
+    if (pathname === '/api/config/schema' && method === 'GET') {
+      return this._handleGetConfigSchema(req, res);
+    }
+    if (pathname === '/api/config/update' && method === 'POST') {
+      return await this._handleUpdateConfig(req, res);
+    }
+    if (pathname === '/api/config/reset' && method === 'POST') {
+      return await this._handleResetConfig(req, res);
+    }
+    if (pathname === '/api/config/diff' && method === 'GET') {
+      return this._handleConfigDiff(req, res);
+    }
+
     if (!this._authenticate(req)) {
       return this._json(req, res, { error: 'Unauthorized' }, 401);
     }
@@ -372,6 +413,20 @@ class Gateway {
     }
 
     try {
+      if (pathname === '/api/tasks/history' && method === 'GET') {
+        return this._handleTasksHistory(req, res);
+      }
+      if (pathname === '/api/tasks/history' && method === 'DELETE') {
+        return this._handleTasksHistoryClear(req, res);
+      }
+      if (pathname.match(/^\/api\/tasks\/[^/]+\/replay$/) && method === 'GET') {
+        const taskId = pathname.split('/')[3];
+        return this._handleTaskReplay(req, res, taskId);
+      }
+      if (pathname.match(/^\/api\/tasks\/[^/]+$/) && method === 'GET') {
+        const taskId = pathname.split('/')[3];
+        return this._handleGetTask(req, res, taskId);
+      }
       if (pathname === '/api/sessions' && method === 'POST') {
         return await this._handleCreateSession(req, res);
       }
@@ -412,6 +467,17 @@ class Gateway {
         const segments = pathname.split('/');
         const taskId = segments[3];
         return this._handleTaskCancel(req, res, taskId);
+      }
+      if (pathname === '/api/tasks/batch' && method === 'POST') {
+        return this._handleBatchSubmit(req, res);
+      }
+      if (pathname.match(/^\/api\/tasks\/batch\/[^/]+$/) && method === 'GET') {
+        const batchId = pathname.split('/').pop();
+        return this._handleBatchStatus(req, res, batchId);
+      }
+      if (pathname.match(/^\/api\/tasks\/batch\/[^/]+$/) && method === 'DELETE') {
+        const batchId = pathname.split('/').pop();
+        return this._handleBatchCancel(req, res, batchId);
       }
       if (pathname === '/api/delegate' && method === 'POST') {
         return await this._handleDelegateAsync(req, res);
@@ -476,6 +542,50 @@ class Gateway {
     }
   }
 
+  _handleTasksHistory(req, res) {
+    const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
+    const page = parsePositiveInt(parsedUrl.searchParams.get('page'), 1);
+    const limit = Math.min(parsePositiveInt(parsedUrl.searchParams.get('limit'), 20), 100);
+    const status = parsedUrl.searchParams.get('status') || null;
+    const keyword = parsedUrl.searchParams.get('keyword') || null;
+    const startDate = parsedUrl.searchParams.get('startDate') || null;
+    const endDate = parsedUrl.searchParams.get('endDate') || null;
+    const sessionId = parsedUrl.searchParams.get('sessionId') || null;
+
+    const result = this.taskHistoryStore.getHistory({
+      page, limit, status, keyword, startDate, endDate, sessionId
+    });
+    this._json(req, res, result);
+  }
+
+  _handleTasksHistoryClear(req, res) {
+    const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
+    const olderThanHours = parsedUrl.searchParams.has('olderThanHours')
+      ? parsePositiveInt(parsedUrl.searchParams.get('olderThanHours'), null)
+      : null;
+    const status = parsedUrl.searchParams.get('status') || null;
+    const beforeDate = parsedUrl.searchParams.get('beforeDate') || null;
+
+    const result = this.taskHistoryStore.clearHistory({ olderThanHours, status, beforeDate });
+    this._json(req, res, { success: true, ...result });
+  }
+
+  _handleGetTask(req, res, taskId) {
+    const task = this.taskHistoryStore.getTask(taskId);
+    if (!task) {
+      return this._json(req, res, { error: 'Task not found' }, 404);
+    }
+    this._json(req, res, task);
+  }
+
+  _handleTaskReplay(req, res, taskId) {
+    const replay = this.taskHistoryStore.getReplay(taskId);
+    if (!replay) {
+      return this._json(req, res, { error: 'Task not found' }, 404);
+    }
+    this._json(req, res, replay);
+  }
+
   async _handleStatus(req, res) {
     let cdpVersion = null;
     let connected = false;
@@ -496,6 +606,107 @@ class Gateway {
       mockBridge: this.mockBridge,
       cdp: cdpVersion ? { browser: cdpVersion.Browser, protocolVersion: cdpVersion['Protocol-Version'] } : null,
       uptime: process.uptime()
+    });
+  }
+
+  _handleGetConfig(req, res) {
+    const config = this.configManager.getConfig();
+    const auditLog = this.configManager.getAuditLog();
+    this._json(req, res, {
+      config,
+      auditLog: auditLog.slice(-10)
+    });
+  }
+
+  _handleGetConfigSchema(req, res) {
+    const schema = this.configManager.getSchema();
+    const diff = (prev, curr) => {
+      const result = {};
+      for (const key of Object.keys(schema)) {
+        if (JSON.stringify(prev[key]) !== JSON.stringify(curr[key])) {
+          result[key] = { previous: prev[key], current: curr[key] };
+        }
+      }
+      return result;
+    };
+    this._json(req, res, {
+      schema,
+      defaults: {
+        logLevel: schema.logLevel.default,
+        rateLimit: {
+          windowMs: schema.rateLimit.windowMs.default,
+          maxRequests: schema.rateLimit.maxRequests.default
+        },
+        timeout: {
+          request: schema.timeout.request.default,
+          response: schema.timeout.response.default
+        },
+        cors: {
+          allowedOrigins: schema.cors.allowedOrigins.default,
+          enabled: schema.cors.enabled.default
+        },
+        plugins: schema.plugins.default
+      }
+    });
+  }
+
+  async _handleUpdateConfig(req, res) {
+    const body = await parseBody(req);
+    try {
+      const result = this.configManager.update(body);
+      this._json(req, res, result);
+    } catch (err) {
+      if (err.name === 'ConfigValidationError') {
+        this._json(req, res, {
+          success: false,
+          error: err.message,
+          validationErrors: err.errors
+        }, 400);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  async _handleResetConfig(req, res) {
+    const result = this.configManager.reset();
+    this._json(req, res, result);
+  }
+
+  _handleConfigDiff(req, res) {
+    const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
+    const previousTimestamp = parsedUrl.searchParams.get('previous');
+
+    let previousConfig;
+    if (previousTimestamp) {
+      const history = this.configManager.getHistory();
+      const record = history.find(h => h.timestamp === previousTimestamp);
+      previousConfig = record ? record.newConfig : null;
+    } else {
+      previousConfig = this.configManager.getSchema();
+      previousConfig = {
+        logLevel: previousConfig.logLevel.default,
+        rateLimit: {
+          windowMs: previousConfig.rateLimit.windowMs.default,
+          maxRequests: previousConfig.rateLimit.maxRequests.default
+        },
+        timeout: {
+          request: previousConfig.timeout.request.default,
+          response: previousConfig.timeout.response.default
+        },
+        cors: {
+          allowedOrigins: previousConfig.cors.allowedOrigins.default,
+          enabled: previousConfig.cors.enabled.default
+        },
+        plugins: previousConfig.plugins.default
+      };
+    }
+
+    const diff = this.configManager.getDiff(previousConfig);
+    const history = this.configManager.getHistory();
+    this._json(req, res, {
+      diff,
+      history: history.slice(-20)
     });
   }
 
@@ -1111,6 +1322,265 @@ class Gateway {
     this._json(req, res, { taskId, status: 'cancelled' });
   }
 
+  async _handleBatchSubmit(req, res) {
+    const body = await parseBody(req);
+    if (!body.tasks || !Array.isArray(body.tasks) || body.tasks.length === 0) {
+      return this._json(req, res, { error: 'tasks array is required and must not be empty' }, 400);
+    }
+    if (body.tasks.length > 100) {
+      return this._json(req, res, { error: 'Maximum 100 tasks per batch' }, 400);
+    }
+    for (const item of body.tasks) {
+      if (!item.task || typeof item.task !== 'string') {
+        return this._json(req, res, { error: 'Each task must have a task string' }, 400);
+      }
+      if (item.task.length > 100000) {
+        return this._json(req, res, { error: 'Each task must be at most 100000 characters' }, 400);
+      }
+    }
+
+    const strategy = body.strategy || 'parallel';
+    if (!['parallel', 'sequential', 'priority'].includes(strategy)) {
+      return this._json(req, res, { error: 'strategy must be "parallel", "sequential", or "priority"' }, 400);
+    }
+
+    const maxConcurrency = Math.min(Math.max(body.maxConcurrency || 5, 1), 20);
+    const onComplete = body.onComplete || null;
+
+    const batchId = 'batch_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const tasks = body.tasks.map((item, index) => ({
+      taskId: `${batchId}_${index}`,
+      task: item.task,
+      priority: item.priority || 5,
+      status: 'pending',
+      result: null,
+      error: null
+    }));
+
+    if (strategy === 'priority') {
+      tasks.sort((a, b) => b.priority - a.priority);
+    }
+
+    const batch = {
+      batchId,
+      tasks,
+      strategy,
+      maxConcurrency,
+      onComplete,
+      status: 'running',
+      createdAt: Date.now(),
+      completedCount: 0,
+      failedCount: 0,
+      totalCount: tasks.length,
+      results: []
+    };
+
+    this.batchTasks.set(batchId, batch);
+    this._startBatchExecution(batchId);
+
+    return this._json(req, res, {
+      batchId,
+      status: 'running',
+      totalTasks: tasks.length,
+      strategy,
+      maxConcurrency,
+      message: `Batch submitted with ${tasks.length} tasks using ${strategy} strategy`
+    }, 202);
+  }
+
+  _startBatchExecution(batchId) {
+    const batch = this.batchTasks.get(batchId);
+    if (!batch) return;
+
+    if (batch.strategy === 'parallel') {
+      this._executeBatchParallel(batchId);
+    } else if (batch.strategy === 'sequential') {
+      this._executeBatchSequential(batchId);
+    } else {
+      this._executeBatchPriority(batchId);
+    }
+  }
+
+  async _executeBatchParallel(batchId) {
+    const batch = this.batchTasks.get(batchId);
+    if (!batch) return;
+
+    const pendingTasks = batch.tasks.filter(t => t.status === 'pending');
+    const runningTasks = batch.tasks.filter(t => t.status === 'executing');
+    const availableSlots = batch.maxConcurrency - runningTasks.length;
+
+    if (availableSlots > 0 && pendingTasks.length > 0) {
+      const tasksToStart = pendingTasks.slice(0, availableSlots);
+      for (const task of tasksToStart) {
+        task.status = 'executing';
+        this._executeSingleBatchTask(batchId, task.taskId).catch(() => {});
+      }
+    }
+  }
+
+  async _executeBatchSequential(batchId) {
+    const batch = this.batchTasks.get(batchId);
+    if (!batch) return;
+
+    const nextTask = batch.tasks.find(t => t.status === 'pending');
+    if (nextTask) {
+      nextTask.status = 'executing';
+      await this._executeSingleBatchTask(batchId, nextTask.taskId);
+    }
+  }
+
+  async _executeBatchPriority(batchId) {
+    const batch = this.batchTasks.get(batchId);
+    if (!batch) return;
+
+    const runningCount = batch.tasks.filter(t => t.status === 'executing').length;
+    if (runningCount >= batch.maxConcurrency) return;
+
+    const pendingTasks = batch.tasks
+      .filter(t => t.status === 'pending')
+      .sort((a, b) => b.priority - a.priority);
+
+    const slotsAvailable = batch.maxConcurrency - runningCount;
+    const tasksToStart = pendingTasks.slice(0, slotsAvailable);
+
+    for (const task of tasksToStart) {
+      task.status = 'executing';
+      this._executeSingleBatchTask(batchId, task.taskId).catch(() => {});
+    }
+  }
+
+  async _executeSingleBatchTask(batchId, taskId) {
+    const batch = this.batchTasks.get(batchId);
+    if (!batch) return;
+
+    const task = batch.tasks.find(t => t.taskId === taskId);
+    if (!task || task.status !== 'executing') return;
+
+    try {
+      await this._ensureConnection();
+      const result = await this.driver.delegate(task.task);
+
+      task.status = 'done';
+      task.result = {
+        text: result.text,
+        stable: result.stable,
+        elapsedMs: result.elapsedMs,
+        timedOut: result.timedOut || false
+      };
+      batch.completedCount++;
+      batch.results.push({ taskId, status: 'done', result: task.result });
+
+      if (result.needsApproval) {
+        task.result.needsApproval = true;
+        task.result.question = result.question || '';
+      }
+    } catch (e) {
+      task.status = 'error';
+      task.error = e.message;
+      batch.failedCount++;
+      batch.results.push({ taskId, status: 'error', error: e.message });
+    }
+
+    this._checkBatchCompletion(batchId);
+  }
+
+  _checkBatchCompletion(batchId) {
+    const batch = this.batchTasks.get(batchId);
+    if (!batch) return;
+
+    const allDone = batch.tasks.every(t => t.status !== 'pending' && t.status !== 'executing');
+
+    if (allDone) {
+      batch.status = 'completed';
+      this._notifyBatchComplete(batch);
+    } else {
+      this._startBatchExecution(batchId);
+    }
+  }
+
+  async _notifyBatchComplete(batch) {
+    if (!batch.onComplete) return;
+
+    try {
+      const payload = {
+        batchId: batch.batchId,
+        status: batch.status,
+        totalCount: batch.totalCount,
+        completedCount: batch.completedCount,
+        failedCount: batch.failedCount,
+        completedAt: new Date().toISOString(),
+        results: batch.results
+      };
+
+      await fetch(batch.onComplete, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10000)
+      });
+    } catch (e) {
+      console.error('[Batch] Notification failed:', e.message);
+    }
+  }
+
+  _handleBatchStatus(req, res, batchId) {
+    const batch = this.batchTasks.get(batchId);
+    if (!batch) {
+      return this._json(req, res, { error: 'Batch not found' }, 404);
+    }
+
+    const response = {
+      batchId: batch.batchId,
+      status: batch.status,
+      strategy: batch.strategy,
+      maxConcurrency: batch.maxConcurrency,
+      totalCount: batch.totalCount,
+      completedCount: batch.completedCount,
+      failedCount: batch.failedCount,
+      pendingCount: batch.tasks.filter(t => t.status === 'pending').length,
+      executingCount: batch.tasks.filter(t => t.status === 'executing').length,
+      createdAt: batch.createdAt,
+      tasks: batch.tasks.map(t => ({
+        taskId: t.taskId,
+        priority: t.priority,
+        status: t.status,
+        result: t.result,
+        error: t.error
+      }))
+    };
+
+    this._json(req, res, response);
+  }
+
+  _handleBatchCancel(req, res, batchId) {
+    const batch = this.batchTasks.get(batchId);
+    if (!batch) {
+      return this._json(req, res, { error: 'Batch not found' }, 404);
+    }
+
+    if (batch.status === 'completed' || batch.status === 'cancelled') {
+      return this._json(req, res, {
+        error: 'Batch is already ' + batch.status,
+        status: batch.status
+      }, 400);
+    }
+
+    batch.status = 'cancelled';
+    for (const task of batch.tasks) {
+      if (task.status === 'pending') {
+        task.status = 'cancelled';
+      }
+    }
+
+    this.batchTasks.delete(batchId);
+
+    this._json(req, res, {
+      batchId,
+      status: 'cancelled',
+      message: 'Batch cancelled'
+    });
+  }
+
   _handleQueueStatusList(req, res) {
     const tasks = Array.from(this.taskQueue.entries()).map(([id, t]) => ({
       taskId: id,
@@ -1154,6 +1624,11 @@ class Gateway {
           // Check per-task queue timeout
         if (Date.now() > task.deadline) {
           task.status = 'queue_timeout';
+
+          if (this.wsHandler) {
+            this.wsHandler.notifyTaskStatusChange(taskId, task);
+          }
+
           console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
           if (task.chatId) {
             await notifyOpenClaw(task.chatId, '❌ Trae 排队超时（超过限制），请稍后重试或切换模型');
@@ -1172,6 +1647,10 @@ class Gateway {
             // Lock this task before execution
             this.taskLocks.add(taskId);
             task.status = 'executing';
+
+            if (this.wsHandler) {
+              this.wsHandler.notifyTaskStatusChange(taskId, task);
+            }
 
             try {
               // Create a fresh chat before sending (background poller bypasses
@@ -1223,19 +1702,23 @@ class Gateway {
   async gracefulShutdown() {
     console.log('[Gateway] Starting graceful shutdown...');
     
-    // 1. Stop background polling first
     this._stopBackgroundPolling();
-    
-    // 2. Clear all active timers
     this._clearAllTimers();
     
-    // 3. Clear task queue
     const taskCount = this.taskQueue.size;
     this.taskQueue.clear();
     this.taskLocks.clear();
     console.log(`[Gateway] Cleared ${taskCount} tasks from queue`);
     
-    // 4. Close CDP client if connected
+    const batchCount = this.batchTasks.size;
+    this.batchTasks.clear();
+    console.log(`[Gateway] Cleared ${batchCount} batch tasks`);
+
+    if (this.taskHistoryStore) {
+      this.taskHistoryStore.shutdown();
+      console.log('[Gateway] Task history store shut down');
+    }
+
     if (this.client) {
       try {
         await this.client.close();
@@ -1247,7 +1730,6 @@ class Gateway {
       this.driver = null;
     }
     
-    // 5. Close HTTP server if running
     if (this.server) {
       return new Promise((resolve) => {
         this.server.close(() => {
