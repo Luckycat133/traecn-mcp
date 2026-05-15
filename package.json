@@ -18,16 +18,19 @@
     "openclaw",
     "api",
     "skill",
-    "ai"
+    "ai",
+    "mcp"
   ],
   "engines": {
     "node": ">=22"
   },
-  "main": "src/skill/simple-api.js",
+  "main": "src/skill/index.js",
   "exports": {
-    ".": "./src/skill/simple-api.js",
+    ".": "./src/skill/index.js",
     "./skill": "./src/skill/traecn-skill.js",
-    "./simple": "./src/skill/simple-api.js"
+    "./simple": "./src/skill/simple-api.js",
+    "./advanced": "./src/skill/index.js",
+    "./errors": "./src/skill/ai-errors.js"
   },
   "scripts": {
     "start": "node src/server.js",
@@ -43,7 +46,7 @@
     "test:uat": "node scripts/uat-checklist.js",
     "test:all": "npm run lint && npm test && npm run test:system && npm run test:uat",
     "audit:prod": "npm audit --omit=dev",
-    "lint": "node --check src/server.js && node --check src/cdp/discovery.js && node --check src/cdp/dom-driver.js && node --check src/http/gateway.js && node --check src/http/websocket-handler.js && node --check src/shared/utils.js && node --check src/shared/plugin-manager.js && node --check src/shared/logger.js && node --check src/shared/metrics.js && node --check src/shared/config-manager.js && node --check src/shared/api-key-manager.js && node --check src/shared/audit-logger.js && node --check src/cdp/browser-dom.js && node --check src/cdp/client.js && node --check src/cdp/errors.js && node --check src/cdp/settings-driver.js && node --check src/cdp/mock-driver.js && node --check src/http/openapi.js && node --check src/http/chat-ui.js && node --check src/config/env.js && node --check src/config/quickstart.js && node --check src/plugins/logging-plugin.js && node --check src/plugins/metrics-plugin.js && node --check src/plugins/webhook-plugin.js && node --check scripts/traecn-cli.js && node --check src/skill/traecn-skill.js && node --check src/skill/simple-api.js",
+    "lint": "node --check src/server.js && node --check src/cdp/discovery.js && node --check src/cdp/dom-driver.js && node --check src/http/gateway.js && node --check src/http/websocket-handler.js && node --check src/shared/utils.js && node --check src/shared/plugin-manager.js && node --check src/shared/logger.js && node --check src/shared/metrics.js && node --check src/shared/config-manager.js && node --check src/shared/api-key-manager.js && node --check src/shared/audit-logger.js && node --check src/cdp/browser-dom.js && node --check src/cdp/client.js && node --check src/cdp/errors.js && node --check src/cdp/settings-driver.js && node --check src/cdp/mock-driver.js && node --check src/http/openapi.js && node --check src/http/chat-ui.js && node --check src/config/env.js && node --check src/config/quickstart.js && node --check src/plugins/logging-plugin.js && node --check src/plugins/metrics-plugin.js && node --check src/plugins/webhook-plugin.js && node --check scripts/traecn-cli.js && node --check src/skill/traecn-skill.js && node --check src/skill/simple-api.js && node --check src/skill/index.js && node --check src/skill/ai-errors.js",
     "test:cli": "node scripts/traecn-cli.test.js"
   },
   "dependencies": {
