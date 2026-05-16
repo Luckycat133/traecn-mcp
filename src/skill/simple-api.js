@@ -1,0 +1,140 @@
+'use strict';
+
+const { TraeCNSkill } = require('./traecn-skill');
+
+let _instance = null;
+
+function getSkill(context = {}) {
+  if (!_instance) {
+    _instance = new TraeCNSkill(context);
+  }
+  return _instance;
+}
+
+async function runTask(task, opts = {}) {
+  const skill = getSkill();
+  const result = await skill.run(task, opts);
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  return result.text;
+}
+
+async function queueTask(task, opts = {}) {
+  const skill = getSkill();
+  const result = await skill.queue(task, opts);
+  return result.taskId;
+}
+
+async function pollTask(taskId = null) {
+  const skill = getSkill();
+  const result = await skill.poll(taskId);
+  return result;
+}
+
+async function cancelTask(taskId = null) {
+  const skill = getSkill();
+  return await skill.cancel(taskId);
+}
+
+async function checkStatus() {
+  const skill = getSkill();
+  const status = await skill.status();
+  return status.connected;
+}
+
+async function switchModel(name) {
+  const skill = getSkill();
+  return await skill.switchModel(name);
+}
+
+async function switchMode(m) {
+  const skill = getSkill();
+  return await skill.switchMode(m);
+}
+
+async function newChat() {
+  const skill = getSkill();
+  return await skill.newChat();
+}
+
+async function getSettings(section = null) {
+  const skill = getSkill();
+  return await skill.getSettings(section);
+}
+
+async function setSetting(label, value, section = null) {
+  const skill = getSkill();
+  return await skill.setSetting(label, value, section);
+}
+
+async function approveDialog(action = 'auto', wait = false) {
+  const skill = getSkill();
+  return await skill.approveDialog(action, wait);
+}
+
+async function checkDialog() {
+  const skill = getSkill();
+  return await skill.checkDialog();
+}
+
+async function checkQueue() {
+  const skill = getSkill();
+  return await skill.queueStatus();
+}
+
+async function openProject(path) {
+  const skill = getSkill();
+  return await skill.openProject(path);
+}
+
+function reset() {
+  _instance = null;
+}
+
+const t = runTask;
+const q = queueTask;
+const p = pollTask;
+const s = checkStatus;
+const model = switchModel;
+const mode = switchMode;
+const settings = getSettings;
+const set = setSetting;
+const approve = approveDialog;
+const dialog = checkDialog;
+const queueCheck = checkQueue;
+const open = openProject;
+const cancel = cancelTask;
+
+module.exports = {
+  runTask,
+  queueTask,
+  pollTask,
+  cancelTask,
+  checkStatus,
+  switchModel,
+  switchMode,
+  newChat,
+  getSettings,
+  setSetting,
+  approveDialog,
+  checkDialog,
+  checkQueue,
+  openProject,
+  reset,
+  getSkill,
+  TraeCNSkill,
+  t,
+  q,
+  p,
+  s,
+  model,
+  mode,
+  settings,
+  set,
+  approve,
+  dialog,
+  queueCheck,
+  open,
+  cancel
+};

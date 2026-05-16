@@ -1,39 +1,71 @@
 'use strict';
 
+/**
+ * 从环境变量获取值，支持降级查找
+ * @param {string} traecnKey TraeCN 环境变量名
+ * @param {string} traeKey 降级环境变量名
+ * @param {*} defaultValue 默认值
+ * @returns {*}
+ */
 function getEnvWithFallback(traecnKey, traeKey, defaultValue) {
-  return process.env[traecnKey] || process.env[traeKey] || defaultValue;
+  return process.env[traecnKey] ?? process.env[traeKey] ?? defaultValue;
 }
 
+/**
+ * 解析 CSS 选择器列表
+ * @param {string} envValue 逗号分隔的选择器字符串
+ * @param {string[]} defaults 默认值
+ * @returns {string[]}
+ */
 function parseSelectors(envValue, defaults) {
-  if (envValue) {
-    return envValue.split(',').map(s => s.trim()).filter(Boolean);
-  }
-  return defaults;
+  if (!envValue) return defaults;
+  return envValue.split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
 }
 
+/**
+ * 解析正整数
+ * @param {string} value 输入字符串
+ * @param {number} defaultValue 默认值
+ * @returns {number}
+ */
 function parsePositiveInt(value, defaultValue) {
   const parsed = parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return defaultValue;
-  }
-  return parsed;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
 }
 
+/**
+ * 延迟函数
+ * @param {number} ms 毫秒数
+ * @returns {Promise<void>}
+ */
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * 转义 JavaScript 字符串
+ * @param {string} str 输入字符串
+ * @returns {string}
+ */
 function escapeJsString(str) {
-  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n');
 }
 
-// Safe JSON-stringify wrapper for injecting values into browser JS strings.
-// Returns a JS-literal string (including quotes). Returns empty string for unsafe input.
+/**
+ * 安全的 JavaScript 值序列化
+ * @param {*} value 输入值
+ * @returns {string}
+ */
 function safeJsValue(value) {
   if (typeof value !== 'string') return String(value);
   try {
     const encoded = JSON.stringify(value);
-    // Block strings containing characters that could break out of the JS string context
     if (/[<>\x00-\x1f]/.test(value)) return '';
     return encoded;
   } catch {
@@ -41,18 +73,11 @@ function safeJsValue(value) {
   }
 }
 
-function isValidPath(p) {
-  if (typeof p !== 'string' || p.length === 0 || p.length > 4096) return false;
-  if (/[<>|&;$\r\n\t\0]/.test(p)) return false;
-  if (p.includes('..')) return false;
-  const path = require('path');
-  return path.isAbsolute(p);
-}
-
-async function safeClose(resource) {
-  if (resource && typeof resource.close === 'function') {
-    try { await resource.close(); } catch { /* intentional noop */ }
-  }
-}
-
-module.exports = { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString, safeJsValue, isValidPath, safeClose };
+module.exports = {
+  getEnvWithFallback,
+  parseSelectors,
+  parsePositiveInt,
+  sleep,
+  escapeJsString,
+  safeJsValue
+};

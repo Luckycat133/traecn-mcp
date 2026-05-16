@@ -1,6 +1,6 @@
 # TRAECNclaw
 
-Local HTTP bridge and OpenClaw tool integration for TraeCN desktop automation. TRAECNclaw connects OpenClaw to TraeCN through a local REST gateway, Chrome DevTools Protocol (CDP), and DOM automation so tools can create chats, delegate tasks, switch modes, inspect readiness, and read TraeCN responses.
+Local HTTP bridge, OpenClaw tool integration, and AI Skill module for TraeCN desktop automation. TRAECNclaw connects OpenClaw to TraeCN through a local REST gateway, Chrome DevTools Protocol (CDP), and DOM automation so tools can create chats, delegate tasks, switch modes, inspect readiness, and read TraeCN responses.
 
 ## Table of Contents
 
@@ -8,6 +8,7 @@ Local HTTP bridge and OpenClaw tool integration for TraeCN desktop automation. T
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Usage](#usage)
+- [Skill Module](#skill-module)
 - [API](#api)
 - [Testing](#testing)
 - [Security](#security)
@@ -68,6 +69,36 @@ Export the OpenAPI document:
 node scripts/export-openapi.js
 ```
 
+## Skill Module
+
+### Quick Start
+
+```javascript
+const { runTask, switchModel } = require('traecnclaw');
+
+await switchModel('glm');
+const result = await runTask('分析项目代码');
+```
+
+### Layered Architecture
+
+TraeCNSkill uses a 5-layer architecture for selective loading and minimal context:
+
+- **Basic Layer** (90% scenarios): 5 core functions
+- **Advanced Layer**: Project management, mode switching
+- **Config Layer**: Settings management
+- **Dialog Layer**: Dialog handling
+- **Batch Layer**: Batch operations
+
+### Documentation
+
+Complete skill documentation:
+
+- [Layered Architecture Guide](docs/LAYERED-ARCHITECTURE.md)
+- [AI Usage Guide](docs/AI-USAGE-GUIDE.md)
+- [MCP Server Guide](docs/MCP-SERVER-GUIDE.md)
+- [Quick Reference](docs/QUICK-REFERENCE.md)
+
 ## API
 
 The OpenAPI schema is served at `/openapi.json`. Primary endpoints:
@@ -105,7 +136,10 @@ Bind the gateway to `127.0.0.1`, set `TRAECN_GATEWAY_TOKEN` before exposing prot
 - [User Manual](docs/user-manual.md)
 - [Development Guide](docs/development.md)
 - [Deployment Guide](docs/deployment.md)
-- [Development Plan](.trae/documents/traecnclaw-development-plan.md)
+- [Layered Architecture Guide](docs/LAYERED-ARCHITECTURE.md)
+- [AI Usage Guide](docs/AI-USAGE-GUIDE.md)
+- [MCP Server Guide](docs/MCP-SERVER-GUIDE.md)
+- [Quick Reference](docs/QUICK-REFERENCE.md)
 
 ## Maintainers
 

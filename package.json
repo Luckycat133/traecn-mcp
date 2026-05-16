@@ -1,6 +1,6 @@
 {
   "name": "traecnclaw",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Local HTTP bridge and OpenClaw tool integration for TraeCN powered by CDP and DOM automation.",
   "homepage": "https://github.com/firerlAGI/TRAECNclaw",
@@ -16,10 +16,21 @@
     "cdp",
     "automation",
     "openclaw",
-    "api"
+    "api",
+    "skill",
+    "ai",
+    "mcp"
   ],
   "engines": {
     "node": ">=22"
+  },
+  "main": "src/skill/index.js",
+  "exports": {
+    ".": "./src/skill/index.js",
+    "./skill": "./src/skill/traecn-skill.js",
+    "./simple": "./src/skill/simple-api.js",
+    "./advanced": "./src/skill/index.js",
+    "./errors": "./src/skill/ai-errors.js"
   },
   "scripts": {
     "start": "node src/server.js",
@@ -27,14 +38,16 @@
     "start:traecn": "node scripts/start-traecn.js",
     "start:gateway": "node scripts/start-gateway.js",
     "inspect:traecn": "node scripts/inspect-traecn.js",
-    "test": "node src/shared/utils.test.js && node src/config/env.test.js && node src/config/quickstart.test.js && node src/cdp/errors.test.js && node src/cdp/client.test.js && node src/cdp/discovery.test.js && node src/cdp/dom-driver.test.js && node src/cdp/mock-driver.test.js && node src/http/gateway.test.js && node integrations/openclaw-traecn-plugin/lib/traecnapi-client.test.js && node integrations/openclaw-traecn-plugin/index.test.js",
-    "test:unit": "node src/shared/utils.test.js && node src/config/env.test.js && node src/cdp/errors.test.js && node src/cdp/client.test.js && node src/cdp/mock-driver.test.js",
+    "test": "node src/shared/utils.test.js && node src/shared/plugin-manager.test.js && node src/shared/config-manager.test.js && node src/config/env.test.js && node src/config/quickstart.test.js && node src/cdp/errors.test.js && node src/cdp/client.test.js && node src/cdp/discovery.test.js && node src/cdp/dom-driver.test.js && node src/cdp/mock-driver.test.js && node src/http/gateway.test.js && node src/http/websocket-handler.test.js && node src/shared/api-key-manager.test.js && node src/shared/audit-logger.test.js && node src/skill/skill.test.js && node integrations/openclaw-traecn-plugin/lib/traecnapi-client.test.js && node integrations/openclaw-traecn-plugin/index.test.js",
+    "test:unit": "node src/shared/utils.test.js && node src/shared/plugin-manager.test.js && node src/shared/config-manager.test.js && node src/config/env.test.js && node src/cdp/errors.test.js && node src/cdp/client.test.js && node src/cdp/mock-driver.test.js && node src/shared/api-key-manager.test.js && node src/shared/audit-logger.test.js && node src/skill/skill.test.js",
     "test:integration": "node src/cdp/discovery.test.js && node src/cdp/dom-driver.test.js && node src/http/gateway.test.js && node integrations/openclaw-traecn-plugin/lib/traecnapi-client.test.js && node integrations/openclaw-traecn-plugin/index.test.js",
+    "test:skill": "node src/skill/skill.test.js",
     "test:system": "node scripts/system-test.js",
     "test:uat": "node scripts/uat-checklist.js",
     "test:all": "npm run lint && npm test && npm run test:system && npm run test:uat",
     "audit:prod": "npm audit --omit=dev",
-    "lint": "node --check src/server.js && node --check src/cdp/discovery.js && node --check src/cdp/dom-driver.js && node --check src/http/gateway.js && node --check src/shared/utils.js && node --check src/cdp/browser-dom.js && node --check src/cdp/client.js && node --check src/cdp/errors.js && node --check src/cdp/settings-driver.js && node --check src/cdp/mock-driver.js && node --check src/http/openapi.js && node --check src/http/chat-ui.js && node --check src/config/env.js && node --check src/config/quickstart.js"
+    "lint": "node --check src/server.js && node --check src/cdp/discovery.js && node --check src/cdp/dom-driver.js && node --check src/http/gateway.js && node --check src/http/websocket-handler.js && node --check src/shared/utils.js && node --check src/shared/plugin-manager.js && node --check src/shared/logger.js && node --check src/shared/metrics.js && node --check src/shared/config-manager.js && node --check src/shared/api-key-manager.js && node --check src/shared/audit-logger.js && node --check src/cdp/browser-dom.js && node --check src/cdp/client.js && node --check src/cdp/errors.js && node --check src/cdp/settings-driver.js && node --check src/cdp/mock-driver.js && node --check src/http/openapi.js && node --check src/http/chat-ui.js && node --check src/config/env.js && node --check src/config/quickstart.js && node --check src/plugins/logging-plugin.js && node --check src/plugins/metrics-plugin.js && node --check src/plugins/webhook-plugin.js && node --check scripts/traecn-cli.js && node --check src/skill/traecn-skill.js && node --check src/skill/simple-api.js && node --check src/skill/index.js && node --check src/skill/ai-errors.js",
+    "test:cli": "node scripts/traecn-cli.test.js"
   },
   "dependencies": {
     "playwright": "^1.59.1",
