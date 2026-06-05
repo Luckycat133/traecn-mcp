@@ -1,6 +1,68 @@
 'use strict';
 
 const { DomDriver, getConfig } = require('./dom-driver');
+const { SETTINGS_SECTIONS } = require('./settings-driver');
+
+class MockSettingsDriver {
+  constructor() {
+    this.currentSection = 'general';
+    this.values = new Map();
+  }
+
+  async switchTab(section = null) {
+    this.currentSection = section || this.currentSection;
+    return { tab: 'settings', section: section || null };
+  }
+
+  async getContent() {
+    const section = this.currentSection || 'general';
+    return {
+      sections: SETTINGS_SECTIONS,
+      items: [
+        {
+          label: 'Mock setting',
+          desc: `Mock value for ${section}`,
+          currentValue: this.values.get('Mock setting') || 'enabled',
+          hasToggle: true,
+          hasDropdown: false,
+          toggleChecked: this.values.get('Mock setting') !== false,
+          visible: true
+        }
+      ],
+      raw: { count: 1, type: 'mock' }
+    };
+  }
+
+  async readAll() {
+    const result = {};
+    for (const section of SETTINGS_SECTIONS) {
+      result[section] = {
+        sections: [],
+        items: [
+          {
+            label: `${section} mock setting`,
+            desc: 'Mock settings data',
+            currentValue: 'enabled',
+            hasToggle: true,
+            hasDropdown: false,
+            toggleChecked: true,
+            visible: true
+          }
+        ]
+      };
+    }
+    return result;
+  }
+
+  async set(label, value) {
+    this.values.set(label, value);
+    return { success: true, label, value, mode: 'mock' };
+  }
+
+  async backToChat() {
+    return 'mock: back to chat';
+  }
+}
 
 class MockDriver extends DomDriver {
   constructor(options = {}) {
@@ -10,6 +72,8 @@ class MockDriver extends DomDriver {
     this.sentMessages = [];
     this.mode = options.mode || 'solo';
     this.ready = true;
+    this.model = options.model || 'mock-model';
+    this._settingsDriver = new MockSettingsDriver();
   }
 
   async findComposer() {
@@ -70,9 +134,57 @@ class MockDriver extends DomDriver {
     return true;
   }
 
+  async detectMode() {
+    return {
+      mode: this.mode,
+      confidence: 1,
+      indicators: ['mock-driver']
+    };
+  }
+
   async switchMode(mode) {
-    this.mode = mode;
-    return true;
+    const previousMode = this.mode;
+    const normalizedMode = String(mode).toLowerCase();
+    const alreadyInMode = previousMode === normalizedMode;
+    this.mode = normalizedMode;
+    return {
+      success: true,
+      previousMode,
+      currentMode: this.mode,
+      alreadyInMode
+    };
+  }
+
+  async switchModel(model) {
+    this.model = model;
+    return {
+      success: true,
+      model,
+      previousModel: null,
+      mode: 'mock'
+    };
+  }
+
+  async checkForApprovalDialog() {
+    return {
+      needsApproval: false,
+      dialogType: null,
+      question: null,
+      buttons: [],
+      canAutoApprove: false
+    };
+  }
+
+  async approveDialog(action) {
+    return {
+      success: false,
+      action,
+      error: 'No dialog found to approve'
+    };
+  }
+
+  get settings() {
+    return this._settingsDriver;
   }
 
   async checkReadiness() {

@@ -6,6 +6,8 @@
  */
 
 const { TraeCNSkill, TraeCNSkillError } = require('./traecn-skill');
+const promptLayers = require('./prompt-layers');
+const { buildCodeReviewTask } = require('./review');
 
 // ============ 核心层 (Core Layer) ============
 // 最基础的功能，所有AI都应该使用
@@ -81,6 +83,25 @@ async function pollTask(taskId = null) {
       throw error; // 保留原始错误
     }
     throw TraeCNSkillError.taskFailed(`轮询失败: ${error.message}`, { taskId });
+  }
+}
+
+async function reviewCode(input, opts = {}) {
+  const skill = getSkill();
+  try {
+    const result = await skill.reviewCode(input, opts);
+    return opts.queue === true ? result.taskId : result.text;
+  } catch (error) {
+    throw TraeCNSkillError.taskFailed(`代码审查失败: ${error.message}`, { input });
+  }
+}
+
+async function preflight(options = {}) {
+  const skill = getSkill();
+  try {
+    return await skill.preflight(options);
+  } catch (error) {
+    throw TraeCNSkillError.taskFailed(`预检失败: ${error.message}`, options);
   }
 }
 
@@ -244,6 +265,7 @@ const aliases = {
   q: queueTask,
   p: pollTask,
   s: checkStatus,
+  pf: preflight,
   model: switchModel,
   mode: advanced.switchMode,
   settings: config.getSettings,
@@ -270,6 +292,8 @@ module.exports = {
   checkStatus,
   queueTask,
   pollTask,
+  reviewCode,
+  preflight,
 
   // 进阶层 (按需导入)
   advanced,
@@ -284,5 +308,8 @@ module.exports = {
   batch,
 
   // 别名
-  ...aliases
+  ...aliases,
+
+  // 分层提示词与 MCP 描述
+  promptLayers
 };

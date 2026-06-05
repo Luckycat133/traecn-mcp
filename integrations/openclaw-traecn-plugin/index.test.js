@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const { toolDefinitions, slashCommands, formatResult, PLUGIN_ID } = require('./index');
+const { listCommands, mapSettingsAction } = require('./lib/command-set');
 
 let passed = 0;
 let failed = 0;
@@ -40,6 +41,11 @@ test('all tools have name, description, parameters, and handler', () => {
 
 test('required tools are present', () => {
   const names = toolDefinitions.map(t => t.name);
+  assert.ok(names.includes('traecn_capabilities'), 'Missing traecn_capabilities');
+  assert.ok(names.includes('traecn_preflight'), 'Missing traecn_preflight');
+  assert.ok(names.includes('traecn_plan_operation'), 'Missing traecn_plan_operation');
+  assert.ok(names.includes('traecn_command_set'), 'Missing traecn_command_set');
+  assert.ok(names.includes('traecn_command'), 'Missing traecn_command');
   assert.ok(names.includes('traecn_status'), 'Missing traecn_status');
   assert.ok(names.includes('traecn_delegate'), 'Missing traecn_delegate');
   assert.ok(names.includes('traecn_new_chat'), 'Missing traecn_new_chat');
@@ -48,6 +54,36 @@ test('required tools are present', () => {
   assert.ok(names.includes('traecn_queue_status'), 'Missing traecn_queue_status');
   assert.ok(names.includes('traecn_chat'), 'Missing traecn_chat');
   assert.ok(names.includes('traecn_open_project'), 'Missing traecn_open_project');
+});
+
+test('preset command set includes core control commands', () => {
+  const commands = listCommands().map(definition => definition.command);
+  assert.ok(commands.includes('capabilities'));
+  assert.ok(commands.includes('preflight'));
+  assert.ok(commands.includes('confirm_plan'));
+  assert.ok(commands.includes('delegate'));
+  assert.ok(commands.includes('switch_model'));
+  assert.ok(commands.includes('settings_set'));
+  assert.ok(commands.includes('approve_dialog'));
+  assert.ok(commands.includes('batch_submit'));
+  assert.ok(commands.includes('review_code'));
+});
+
+test('traecn_command enum stays aligned with preset command set', () => {
+  const commandTool = toolDefinitions.find(t => t.name === 'traecn_command');
+  const commandEnum = commandTool.parameters.properties.command.enum;
+  assert.deepStrictEqual(commandEnum, listCommands().map(definition => definition.command));
+});
+
+test('mapSettingsAction routes to implemented settings commands', () => {
+  assert.deepStrictEqual(mapSettingsAction('navigate', { section: 'MCP' }), {
+    command: 'settings_navigate',
+    params: { section: 'MCP' }
+  });
+  assert.deepStrictEqual(mapSettingsAction('readTables'), {
+    command: 'settings_read_all',
+    params: {}
+  });
 });
 
 test('traecn_delegate has required task parameter', () => {

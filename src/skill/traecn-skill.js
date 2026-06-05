@@ -2,6 +2,7 @@
 
 const { TraeCNApiClient } = require('../../integrations/openclaw-traecn-plugin/lib/traecnapi-client');
 const { TraeCNSkillError } = require('./errors');
+const { buildCodeReviewTask } = require('./review');
 
 /** 已知支持的模型列表 */
 const KNOWN_MODELS = [
@@ -70,6 +71,37 @@ class TraeCNSkill {
     } catch (cause) {
       throw TraeCNSkillError.connectionError(cause);
     }
+  }
+
+  /**
+   * 获取面向 agent 的紧凑能力目录。
+   * @returns {Promise<object>} capabilities 结果
+   */
+  async getCapabilities() {
+    const result = await this.client.getCapabilities();
+    return result.data || result;
+  }
+
+  /**
+   * 为即将执行的操作生成确认/预检计划，不操作 TraeCN。
+   * @param {string} command - 命令名
+   * @param {object} [params={}] - 命令参数
+   * @param {object} [opts={}] - 选项
+   * @returns {Promise<object>} 确认计划
+   */
+  async planOperation(command, params = {}, opts = {}) {
+    const result = await this.client.createConfirmationPlan(command, params, opts);
+    return result.data || result;
+  }
+
+  /**
+   * 一次性获取低 token 预检摘要：连接、就绪、队列、弹窗和可选操作确认计划。
+   * @param {object} [options={}] - 可选 { command, params, forceConfirm }
+   * @returns {Promise<object>} 预检摘要
+   */
+  async preflight(options = {}) {
+    const result = await this.client.preflight(options);
+    return result.data || result;
   }
 
   /**
@@ -286,6 +318,20 @@ class TraeCNSkill {
    */
   async openProject(projectPath) {
     return await this.client.openProject(projectPath);
+  }
+
+  /**
+   * 代码审查辅助：将代码、diff 或审查说明包装成稳定审查提示并委派给 TraeCN。
+   * @param {string|object} input - 审查说明，或 { instruction, files, focus, code, diff }
+   * @param {object} [opts={}] - run/queue 选项；opts.queue=true 时异步排队
+   * @returns {Promise<object>} 审查结果
+   */
+  async reviewCode(input, opts = {}) {
+    const task = buildCodeReviewTask(input, opts);
+    if (opts.queue === true) {
+      return this.queue(task, opts);
+    }
+    return this.run(task, opts);
   }
 
   /**

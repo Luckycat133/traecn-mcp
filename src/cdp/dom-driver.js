@@ -528,23 +528,44 @@ class DomDriver {
   }
 
   async sendMessage(text) {
-    const escapedText = escapeJsString(text);
-
-    await this.client.send('Runtime.evaluate', {
+    const focusResult = await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
           var el = document.querySelector('.chat-input-v2-input-box-editable');
-          if (!el) return 'no composer';
+          if (!el) return { ok: false, reason: 'no composer' };
           el.focus();
-          document.execCommand('selectAll');
-          document.execCommand('delete');
-          document.execCommand('insertText', false, '${escapedText}');
-          el.dispatchEvent(new InputEvent('input', {bubbles: true, cancelable: true, composed: true}));
-          return 'inserted: ' + el.textContent.trim();
+          return { ok: true };
         })()
       `,
       returnByValue: true
     });
+    const focusInfo = focusResult.result?.value || {};
+    if (!focusInfo.ok) {
+      throw new Error(`Failed to focus composer: ${focusInfo.reason || 'unknown'}`);
+    }
+
+    await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 4 });
+    await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 4 });
+    await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+    await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+    await sleep(100);
+    await this.client.send('Input.insertText', { text });
+    await sleep(100);
+
+    const inputResult = await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var el = document.querySelector('.chat-input-v2-input-box-editable');
+          var value = el ? (el.innerText || el.textContent || '').trim() : '';
+          return { ok: value === ${safeJsValue(String(text).trim())}, text: value };
+        })()
+      `,
+      returnByValue: true
+    });
+    const inputInfo = inputResult.result?.value || {};
+    if (!inputInfo.ok) {
+      throw new Error(`Failed to set composer text: ${inputInfo.text || 'unknown'}`);
+    }
     await sleep(this.config.postActionDelayMs * 2);
 
     if (this.config.sendTrigger === 'button') {
@@ -1302,63 +1323,10 @@ class DomDriver {
       });
       await sleep(500);
 
-      // Clear ALL potential response elements in the SOLO chat view
-      const ALL_RESPONSE_SELS = [
-        "[data-role='assistant']",
-        '.assistant',
-        '.chat-turn.assistant',
-        '.chat-turn',
-        '[class*=chat-turn]',
-        '.markdown-body',
-        '[class*=message-content]',
-        '.agent-plan-items',
-        '.solo-chat-turn',
-        '[class*=solo-chat]'
-      ];
-      const safeSelList = ALL_RESPONSE_SELS.map(s => escapeJsString(s)).join(', ');
-      await this.client.send('Runtime.evaluate', {
-        expression: `
-          (function() {
-            var sels = [${safeSelList}];
-            for (var i = 0; i < sels.length; i++) {
-              var els = document.querySelectorAll(sels[i]);
-              for (var j = 0; j < els.length; j++) {
-                els[j].textContent = '';
-              }
-            }
-            return 'cleared ' + sels.length + ' selector types';
-          })()
-        `,
-        returnByValue: true
-      });
-      await sleep(200);
-
       // Capture sidebar baseline
       const beforeSidebar = await this._captureSidebarText();
       this._lastTaskText = beforeSidebar;
     } else {
-      // IDE mode: no sidebar toggle needed.
-      // Clear IDE chat panel response elements
-      const ideSels = this.config.ideResponseSelectors.map(s => escapeJsString(s));
-      if (ideSels.length > 0) {
-        await this.client.send('Runtime.evaluate', {
-          expression: `
-            (function() {
-              var sels = [${ideSels.map(s => "'" + s + "'").join(', ')}];
-              for (var i = 0; i < sels.length; i++) {
-                var els = document.querySelectorAll(sels[i]);
-                for (var j = 0; j < els.length; j++) {
-                  els[j].textContent = '';
-                }
-              }
-              return 'cleared ' + ideSels.length + ' selectors';
-            })()
-          `,
-          returnByValue: true
-        });
-        await sleep(200);
-      }
-
       // Capture IDE chat panel baseline
       const beforePanel = await this._captureIdePanelText();
       this._lastTaskText = beforePanel;
@@ -1601,8 +1569,20 @@ class DomDriver {
     const triggerResult = await this.client.send('Runtime.evaluate', {
         expression: `
           (function() {
-            const trigger = document.querySelector('.chat-model-label');
-            if (!trigger) return { found: false };
+            const bodyText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+            const queueMatch = bodyText.match(/排在第\\s*(\\d+)\\s*位/);
+            const queueNotice = bodyText.includes('排队提醒') || bodyText.includes('请求量较高') || bodyText.toLowerCase().includes('queue');
+            if (queueMatch || queueNotice) {
+              return {
+                found: true,
+                queued: true,
+                position: queueMatch ? Number(queueMatch[1]) : null,
+                message: queueMatch ? ('排在第 ' + queueMatch[1] + ' 位') : 'Queue notice is visible'
+              };
+            }
+
+            const trigger = document.querySelector('.chat-model-label,[role="combobox"],[class*="model-select"],[class*="ai-model-select"]');
+            if (!trigger) return { found: false, queued: false };
             const isDisabled = trigger.disabled ||
                               trigger.getAttribute('aria-disabled') === 'true';
             const wrapper = trigger.closest('.ai-model-select') ||
@@ -1615,6 +1595,7 @@ class DomDriver {
             const currentModel = trigger.textContent?.replace(/\\s+/g, ' ').trim() || '';
             return {
               found: true,
+              queued: false,
               isDisabled,
               hasDisabledClass,
               sendDisabled,
@@ -1627,6 +1608,14 @@ class DomDriver {
 
       const info = triggerResult.result?.value || {};
 
+      if (info.queued) {
+        return {
+          queued: true,
+          position: info.position || null,
+          message: info.message || 'Queue notice is visible'
+        };
+      }
+
       if (info.found && (info.isDisabled || info.hasDisabledClass)) {
         return {
           queued: true,
@@ -1638,9 +1627,57 @@ class DomDriver {
       return { queued: false };
   }
 
+  async getCurrentModel() {
+    const result = await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var selectors = [
+            '.chat-model-label',
+            '[role="combobox"]',
+            '[class*="model-select"]',
+            '[class*="ai-model-select"]'
+          ];
+          for (var i = 0; i < selectors.length; i++) {
+            var els = document.querySelectorAll(selectors[i]);
+            for (var j = 0; j < els.length; j++) {
+              var el = els[j];
+              var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+              if (rect && (rect.width < 10 || rect.height < 10)) continue;
+              var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+              if (text && /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text)) {
+                return text.replace(/\\s*Beta\\s*/i, '').trim();
+              }
+            }
+          }
+          return '';
+        })()
+      `,
+      returnByValue: true
+    });
+    return result.result?.value || '';
+  }
+
+  _normalizeModelName(name) {
+    return String(name || '')
+      .replace(/\s*Beta\s*/ig, '')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toLowerCase();
+  }
+
   async switchModel(modelName) {
-    const MODEL_TRIGGER = '.chat-model-label';
-    const safeModelTrigger = safeJsValue(MODEL_TRIGGER);
+    const requestedModel = String(modelName || '').trim();
+    const normalizedRequested = this._normalizeModelName(requestedModel);
+    const beforeModel = await this.getCurrentModel();
+    if (this._normalizeModelName(beforeModel) === normalizedRequested) {
+      return {
+        success: true,
+        model: beforeModel,
+        requestedModel,
+        previousModel: beforeModel,
+        alreadySelected: true,
+        switchResult: 'already selected'
+      };
+    }
 
     const busyCheck = await this.client.send('Runtime.evaluate', {
       expression: `(() => {
@@ -1661,34 +1698,42 @@ class DomDriver {
     });
     const busyInfo = busyCheck.result?.value;
     if (busyInfo && busyInfo.busy) {
-      return 'model_switch_blocked: ' + busyInfo.reason;
+      return {
+        success: false,
+        requestedModel,
+        previousModel: beforeModel,
+        switchResult: 'model_switch_blocked: ' + busyInfo.reason,
+        error: busyInfo.reason
+      };
     }
 
-    const portalState = await this.client.send('Runtime.evaluate', {
-      expression: `(() => {
-        var items = document.querySelectorAll('.chat-modelPicker-item');
-        return { itemsFound: items.length, portalOpen: items.length > 0 };
-      })()`,
-      returnByValue: true
-    });
-    const ps = portalState.result?.value || { itemsFound: 0, portalOpen: false };
-
-    // Open portal with retry for Radix toggle behavior
-    for (var retry = 0; retry < 2; retry++) {
+    let openResult = 'not attempted';
+    for (let retry = 0; retry < 3; retry++) {
       var itemsNow = await this.client.send('Runtime.evaluate', {
         expression: `
-          document.querySelectorAll('.chat-modelPicker-item').length
+          (function() {
+            var all = Array.from(document.querySelectorAll('.chat-modelPicker-item,.icube-model-select-portal-model-item,[role="option"],[class*="modelPicker"],[class*="model-picker"],[class*="model-item"],[class*="model"][class*="item"]'));
+            return all.filter(function(el) {
+              var text = (el.innerText || el.textContent || '').trim();
+              return /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
+            }).length;
+          })()
         `,
         returnByValue: true
       });
       var count = itemsNow.result?.value || 0;
       if (count > 0) break;
 
-      await this.client.send('Runtime.evaluate', {
+      const clicked = await this.client.send('Runtime.evaluate', {
         expression: `
           (() => {
-            var trigger = document.querySelector(${safeModelTrigger});
-            if (!trigger) return 'no trigger found';
+            var triggers = Array.from(document.querySelectorAll('.chat-model-label,[role="combobox"],[class*="model-select"],[class*="ai-model-select"]'));
+            var trigger = triggers.find(function(el) {
+              var text = (el.innerText || el.textContent || '').trim();
+              var rect = el.getBoundingClientRect();
+              return rect.width > 10 && rect.height > 10 && /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
+            }) || triggers[0];
+            if (!trigger) return 'no model trigger found';
             var rect = trigger.getBoundingClientRect();
             var pointerEvt = new PointerEvent('pointerdown', {
               bubbles: true, cancelable: true, composed: true,
@@ -1696,15 +1741,40 @@ class DomDriver {
               button: 0, buttons: 1, pointerType: 'mouse'
             });
             trigger.dispatchEvent(pointerEvt);
+            trigger.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true,clientX:rect.x + rect.width/2,clientY:rect.y + rect.height/2}));
+            trigger.dispatchEvent(new MouseEvent('mouseup', {bubbles:true,cancelable:true,clientX:rect.x + rect.width/2,clientY:rect.y + rect.height/2}));
             trigger.click();
             return 'portal trigger clicked (attempt ' + (${retry + 1}) + ')';
           })()
         `,
         returnByValue: true
       });
+      openResult = clicked.result?.value || openResult;
+
+      const triggerRect = await this.client.send('Runtime.evaluate', {
+        expression: `
+          (() => {
+            var triggers = Array.from(document.querySelectorAll('.chat-model-label,[role="combobox"],[class*="model-select"],[class*="ai-model-select"]'));
+            var trigger = triggers.find(function(el) {
+              var text = (el.innerText || el.textContent || '').trim();
+              var rect = el.getBoundingClientRect();
+              return rect.width > 10 && rect.height > 10 && /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
+            }) || triggers[0];
+            if (!trigger) return null;
+            var rect = trigger.getBoundingClientRect();
+            return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+          })()
+        `,
+        returnByValue: true
+      });
+      const point = triggerRect.result?.value;
+      if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) {
+        await this.client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+        await this.client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+      }
 
       await this._waitForExpression(
-        'document.querySelectorAll(".chat-modelPicker-item").length>0',
+        '(function(){return Array.from(document.querySelectorAll(".chat-modelPicker-item,.icube-model-select-portal-model-item,[role=option],[class*=modelPicker],[class*=model-picker],[class*=model-item],[class*=model][class*=item]")).some(function(el){return /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(el.innerText || el.textContent || "");});})()',
         5000, 150
       );
     }
@@ -1737,88 +1807,62 @@ class DomDriver {
     });
     await sleep(400);
 
-    const CLICK_WITH_POINTERDOWN = `(function(el) {
-      var rect = el.getBoundingClientRect();
-      el.dispatchEvent(new PointerEvent('pointerdown', {
-        bubbles: true, cancelable: true, composed: true,
-        clientX: rect.x + rect.width/2, clientY: rect.y + rect.height/2,
-        button: 0, buttons: 1, pointerType: 'mouse'
-      }));
-      el.click();
-    })`;
-
-    const escaped = escapeJsString(modelName);
     const result = await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
-          var targetName = '${escaped}';
+          var targetName = ${safeJsValue(requestedModel)};
+          var normalizedTarget = targetName.replace(/\\s*Beta\\s*/ig, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
-          var pollStarted = Date.now();
-          var items = null;
-          while (Date.now() - pollStarted < 3000) {
-            items = document.querySelectorAll('.chat-modelPicker-item');
-            if (items && items.length > 0) break;
+          function normalize(value) {
+            return String(value || '').replace(/\\s*Beta\\s*/ig, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
           }
-          items = document.querySelectorAll('.chat-modelPicker-item');
+
+          function textOf(el) {
+            return (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+          }
+
+          function clickEl(el) {
+            var rect = el.getBoundingClientRect();
+            var x = rect.x + rect.width / 2;
+            var y = rect.y + rect.height / 2;
+            el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0, buttons: 1, pointerType: 'mouse' }));
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+            if (typeof el.click === 'function') el.click();
+          }
+
+          var raw = Array.from(document.querySelectorAll(
+            '.chat-modelPicker-item,.icube-model-select-portal-model-item,[role="option"],[class*="modelPicker"],[class*="model-picker"],[class*="model-item"],[class*="model"][class*="item"],[class*="select"] [class*="item"]'
+          ));
+          var items = raw
+            .map(function(el) {
+              var label = el.querySelector('.chat-model-label,[class*="label"],[class*="name"]');
+              var text = textOf(label || el);
+              return { el: el, text: text, norm: normalize(text) };
+            })
+            .filter(function(item) {
+              return item.text && /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(item.text);
+            });
+
           if (!items || !items.length) return 'no model items found';
 
-          var clickEl = ${CLICK_WITH_POINTERDOWN};
-
           for (var i = 0; i < items.length; i++) {
-            var nameEl = items[i].querySelector('.chat-model-label');
-            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
-            if (name === targetName || name === targetName + 'Beta' || name.startsWith(targetName + ' ') || name.startsWith(targetName + 'Beta') || name === targetName.replace(/Beta\\s*/i, '') + 'Beta') {
-              clickEl(items[i]);
-              return 'clicked: ' + name + ' at index ' + i;
-            }
-          }
-
-          var normalizedTarget = targetName.replace(/\\s*Beta\\s*/i, '').trim();
-          for (var i = 0; i < items.length; i++) {
-            var nameEl = items[i].querySelector('.chat-model-label');
-            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim().replace(/\\s*Beta\\s*/i, '').trim() : '';
-            if (name === normalizedTarget) {
-              clickEl(items[i]);
-              return 'clicked (normalized): ' + items[i].querySelector('.chat-model-label').textContent.trim() + ' at index ' + i;
+            if (items[i].norm === normalizedTarget) {
+              clickEl(items[i].el);
+              return 'clicked: ' + items[i].text + ' at index ' + i;
             }
           }
 
           for (var i = 0; i < items.length; i++) {
-            var nameEl = items[i].querySelector('.chat-model-label');
-            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
-            var cleanName = name.replace(/Beta/i, '').trim();
-            if (cleanName === targetName || cleanName === targetName.replace(/Beta\\s*/i, '').trim()) {
-              clickEl(items[i]);
-              return 'clicked (partial): ' + name + ' at index ' + i;
-            }
-          }
-
-          for (var i = 0; i < items.length; i++) {
-            var nameEl = items[i].querySelector('.chat-model-label');
-            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
-            name = name.replace(/Beta/i, '').trim();
-            var cleanTarget = targetName.replace(/Beta/i, '').trim();
-            if (cleanTarget.startsWith(name) || name.startsWith(cleanTarget)) {
-              clickEl(items[i]);
-              return 'clicked (substring): ' + name + ' at index ' + i;
-            }
-          }
-
-          for (var i = 0; i < items.length; i++) {
-            var nameEl = items[i].querySelector('.chat-model-label');
-            var name = nameEl ? nameEl.textContent.replace(/\\s+/g, ' ').trim() : '';
-            name = name.replace(/Beta/i, '').trim();
-            var simpleName = name.replace(/[^a-zA-Z0-9]/g, '');
-            var simpleTarget = targetName.replace(/[^a-zA-Z0-9]/g, '');
-            if (simpleName === simpleTarget || simpleName.startsWith(simpleTarget) || simpleTarget.startsWith(simpleName)) {
-              clickEl(items[i]);
-              return 'clicked (simple): ' + name + ' at index ' + i;
+            if (items[i].norm.includes(normalizedTarget) || normalizedTarget.includes(items[i].norm)) {
+              clickEl(items[i].el);
+              return 'clicked (partial): ' + items[i].text + ' at index ' + i;
             }
           }
 
           return 'model not found: ' + targetName + ', available: ' + [].map.call(items, function(el) {
-            var n = el.querySelector('.chat-model-label');
-            return n ? n.textContent.replace(/\\s+/g, ' ').trim() : '';
+            return el.text;
           }).join(', ');
         })()
       `,
@@ -1826,7 +1870,31 @@ class DomDriver {
     });
 
     await sleep(this.config.postActionDelayMs);
-    return result.result?.value || 'unknown';
+    const switchResult = result.result?.value || 'unknown';
+    let currentModel = '';
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await sleep(150);
+      currentModel = await this.getCurrentModel();
+      if (this._normalizeModelName(currentModel) === normalizedRequested) {
+        return {
+          success: true,
+          model: currentModel,
+          requestedModel,
+          previousModel: beforeModel,
+          switchResult
+        };
+      }
+    }
+
+    return {
+      success: false,
+      model: currentModel,
+      requestedModel,
+      previousModel: beforeModel,
+      switchResult,
+      openResult,
+      error: `Model did not change to ${requestedModel}`
+    };
   }
 
 

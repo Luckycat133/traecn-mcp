@@ -4,10 +4,13 @@ const { findTraeCNBinary, isTraeCNRunning, startTraeCN } = require('../src/confi
 const { getEnvWithFallback } = require('../src/shared/utils');
 
 async function main() {
-  const projectPath = process.argv[2] || getEnvWithFallback('TRAECN_PROJECT_PATH', 'TRAE_PROJECT_PATH', '');
+  const args = process.argv.slice(2);
+  const forceNew = args.includes('--force-new');
+  const projectPath = args.find(arg => arg !== '--force-new') || getEnvWithFallback('TRAECN_PROJECT_PATH', 'TRAE_PROJECT_PATH', '');
 
-  if (isTraeCNRunning()) {
+  if (isTraeCNRunning() && !forceNew) {
     console.log('[TRAECNclaw] TraeCN is already running.');
+    console.log('[TRAECNclaw] If CDP is unavailable, run: npm run start:traecn -- --force-new');
     return;
   }
 
@@ -18,8 +21,11 @@ async function main() {
   }
 
   try {
-    const result = startTraeCN({ binPath, projectPath });
+    const result = startTraeCN({ binPath, projectPath, newInstance: forceNew });
     console.log(`[TRAECNclaw] TraeCN started (PID: ${result.pid})`);
+    if (forceNew) {
+      console.log('[TRAECNclaw] Started a new TraeCN instance for remote debugging.');
+    }
     if (projectPath) {
       console.log(`[TRAECNclaw] Project: ${projectPath}`);
     }

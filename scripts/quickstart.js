@@ -1,7 +1,11 @@
 'use strict';
 
+const path = require('path');
 const { findTraeCNBinary, isTraeCNRunning, startTraeCN } = require('../src/config/quickstart');
+const { loadEnv } = require('../src/config/env');
 const { getEnvWithFallback } = require('../src/shared/utils');
+
+loadEnv(path.resolve(__dirname, '..', '.env'));
 
 async function main() {
   console.log('[TRAECNclaw] Checking TraeCN status...');
@@ -58,7 +62,7 @@ async function main() {
 
   console.log('[TRAECNclaw] Starting gateway...');
   const { startGateway } = require('../src/http/gateway');
-  const server = await startGateway();
+  const { server } = await startGateway();
   const address = server.address();
   console.log(`[TRAECNclaw] Gateway running at http://${address.address}:${address.port}`);
 }

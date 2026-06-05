@@ -1,5 +1,7 @@
 # MCP 服务器配置
 
+TRAECNclaw 自带零依赖 stdio MCP 服务器：`mcp-server.js`。MCP 客户端连接 MCP 服务器，MCP 服务器再调用本地 TraeCNclaw HTTP 网关（默认 `http://127.0.0.1:8788`）。TraeCN 桌面的 CDP 端口仍由网关配置管理，通常不需要暴露给 MCP 客户端。
+
 ## 快速开始
 
 ### 1. Cursor 配置
@@ -11,9 +13,11 @@
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/traecnclaw/mcp-server.js"],
+      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
       "env": {
-        "TRAECN_URL": "http://localhost:9222"
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_TOKEN": ""
       }
     }
   }
@@ -29,9 +33,11 @@
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/traecnclaw/mcp-server.js"],
+      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
       "env": {
-        "TRAECN_URL": "http://localhost:9222"
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_TOKEN": ""
       }
     }
   }
@@ -47,7 +53,7 @@
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/traecnclaw/mcp-server.js"]
+      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"]
     }
   }
 }
@@ -62,7 +68,7 @@
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/traecnclaw/mcp-server.js"]
+      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"]
     }
   }
 }
@@ -70,120 +76,36 @@
 
 ## MCP 工具定义
 
-```javascript
-// 完整 MCP 工具列表
-const MCP_TOOLS = [
-  {
-    name: 'run_task',
-    description: 'Execute a task in TraeCN IDE',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task: { type: 'string', description: 'Task description' },
-        model: { type: 'string', description: 'Model name (optional)' }
-      }
-    }
-  },
-  {
-    name: 'switch_model',
-    description: 'Switch the AI model',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Model name (fuzzy matching supported)' }
-      }
-    }
-  },
-  {
-    name: 'check_status',
-    description: 'Check TraeCN connection status'
-  },
-  {
-    name: 'poll_task',
-    description: 'Poll task status',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        taskId: { type: 'string', description: 'Task ID (optional)' }
-      }
-    }
-  },
-  {
-    name: 'get_settings',
-    description: 'Get TraeCN settings',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        section: { type: 'string', description: 'Settings section (optional)' }
-      }
-    }
-  },
-  {
-    name: 'set_setting',
-    description: 'Update a setting',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        label: { type: 'string', description: 'Setting label' },
-        value: { type: 'string', description: 'New value' },
-        section: { type: 'string', description: 'Section (optional)' }
-      }
-    }
-  },
-  {
-    name: 'new_chat',
-    description: 'Start a new conversation'
-  },
-  {
-    name: 'approve_dialog',
-    description: 'Approve a dialog',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', description: 'Action: trust, deny, auto' },
-        wait: { type: 'boolean', description: 'Wait before approving' }
-      }
-    }
-  },
-  {
-    name: 'open_project',
-    description: 'Open a project in TraeCN',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Project path' }
-      }
-    }
-  },
-  {
-    name: 'switch_mode',
-    description: 'Switch mode (solo/ide)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        mode: { type: 'string', enum: ['solo', 'ide'], description: 'Mode' }
-      }
-    }
-  }
-];
-```
+运行 `node -e "console.log(require('./mcp-server').MCP_TOOLS.map(t => t.name))"` 可查看当前工具列表。核心工具包括：
+
+- `run_task`: 委派任务并尽量等待最终结果
+- `queue_task`: 提交后台队列任务并返回 `taskId`
+- `poll_task`: 查询队列任务状态
+- `review_code`: 对代码、diff 或指定文件范围生成 findings-first 审查
+- `check_status`, `check_queue`, `check_dialog`: 状态、队列、确认弹窗检查
+- `switch_model`, `switch_mode`, `new_chat`, `open_project`: TraeCN 控制
+- `get_settings`, `set_setting`, `approve_dialog`: 设置与确认操作
+- `traecn_capabilities`: 返回低 token 能力目录，包括命令、端点、模型、设置分区和建议调用顺序
+- `preflight`: 一次调用返回状态、就绪度、队列、弹窗和可选命令确认计划
+- `plan_operation`: 在执行有副作用命令前生成风险、确认和预检计划，不操作 TraeCN
+- `traecn_command_set`, `traecn_command`: 枚举并调用完整稳定命令集
 
 ## 环境变量
 
 ```bash
-# TraeCN 连接
-export TRAECN_URL=http://localhost:9222
-export TRAECN_BRIDGE_PORT=9333
+# TraeCNclaw 网关连接
+export TRAECN_HOST=127.0.0.1
+export TRAECN_PORT=8788
 
 # 认证（可选）
-export TRAECN_API_KEY=your_api_key
+export TRAECN_GATEWAY_TOKEN=your_gateway_token
 
 # 日志
 export TRAECN_LOG_LEVEL=info
 export TRAECN_LOG_FORMAT=json
 
 # 超时设置（毫秒）
-export TRAECN_TIMEOUT=60000
+export TRAECN_TIMEOUT=120000
 ```
 
 ## 故障排除
@@ -202,10 +124,8 @@ netstat -an | grep 9222
 ### MCP 服务器不工作
 
 ```bash
-# 测试 API 直接连接
-curl -X POST http://localhost:9222/jsonrpc \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"TraeAPI.status","params":{},"id":1}'
+# 测试网关直接连接
+curl http://127.0.0.1:8788/api/status
 
 # 检查日志
 tail -f logs/app-*.log

@@ -87,6 +87,9 @@ test('Simple API should export all functions', () => {
   expect(typeof api.pollTask).toBe('function');
   expect(typeof api.cancelTask).toBe('function');
   expect(typeof api.checkStatus).toBe('function');
+  expect(typeof api.getCapabilities).toBe('function');
+  expect(typeof api.planOperation).toBe('function');
+  expect(typeof api.preflight).toBe('function');
   expect(typeof api.switchModel).toBe('function');
   expect(typeof api.switchMode).toBe('function');
   expect(typeof api.newChat).toBe('function');
@@ -96,9 +99,11 @@ test('Simple API should export all functions', () => {
   expect(typeof api.checkDialog).toBe('function');
   expect(typeof api.checkQueue).toBe('function');
   expect(typeof api.openProject).toBe('function');
+  expect(typeof api.reviewCode).toBe('function');
   expect(typeof api.reset).toBe('function');
   expect(typeof api.getSkill).toBe('function');
   expect(typeof api.TraeCNSkill).toBe('function');
+  expect(typeof api.buildCodeReviewTask).toBe('function');
   // 单字母别名 (兼容旧代码)
   expect(typeof api.t).toBe('function');
   expect(typeof api.q).toBe('function');
@@ -113,6 +118,70 @@ test('Simple API should export all functions', () => {
   expect(typeof api.queueCheck).toBe('function');
   expect(typeof api.open).toBe('function');
   expect(typeof api.cancel).toBe('function');
+  expect(typeof api.review).toBe('function');
+  expect(typeof api.capabilities).toBe('function');
+  expect(typeof api.plan).toBe('function');
+  expect(typeof api.pf).toBe('function');
+  expect(typeof api.promptLayers.composeTraeCNPrompt).toBe('function');
+});
+
+test('buildCodeReviewTask creates findings-first review prompt', () => {
+  const { buildCodeReviewTask } = require('./review');
+  const prompt = buildCodeReviewTask({
+    instruction: '检查登录改动',
+    files: ['src/auth.js'],
+    focus: ['security'],
+    diff: '+ const token = password;'
+  });
+
+  expect(prompt.includes('检查登录改动')).toBeTruthy();
+  expect(prompt.includes('src/auth.js')).toBeTruthy();
+  expect(prompt.includes('security')).toBeTruthy();
+  expect(prompt.includes('Findings first')).toBeTruthy();
+});
+
+test('prompt layers compose commands in deterministic order', () => {
+  const { composeTraeCNPrompt, PROMPT_LAYER_ORDER } = require('./prompt-layers');
+  const result = composeTraeCNPrompt('delegate', {
+    task: '分析项目',
+    projectPath: '/tmp/project',
+    waitForQueue: false
+  });
+
+  expect(result.command).toBe('delegate');
+  expect(result.layerOrder).toEqual(PROMPT_LAYER_ORDER);
+  expect(result.prompt.includes('## Role and Objective')).toBeTruthy();
+  expect(result.prompt.includes('## User Command Payload')).toBeTruthy();
+  expect(result.prompt.includes('分析项目')).toBeTruthy();
+  expect(result.prompt.includes('return-queue-state-without-waiting')).toBeTruthy();
+});
+
+test('prompt layers expose MCP-compatible prompts and resources', () => {
+  const {
+    getMcpCapabilities,
+    getMcpPrompt,
+    listMcpPrompts,
+    listMcpResources,
+    readMcpResource
+  } = require('./prompt-layers');
+
+  const capabilities = getMcpCapabilities();
+  expect(capabilities.prompts.listChanged).toBe(true);
+  expect(capabilities.resources.listChanged).toBe(true);
+  expect(capabilities.tools.listChanged).toBe(true);
+
+  const prompts = listMcpPrompts();
+  expect(prompts.map(prompt => prompt.name)).toContain('traecn_layered_command');
+
+  const prompt = getMcpPrompt('traecn_layered_command', { command: 'delegate', task: '写测试' });
+  expect(Array.isArray(prompt.messages)).toBeTruthy();
+  expect(prompt.messages[0].content.type).toBe('text');
+
+  const resources = listMcpResources();
+  expect(resources.map(resource => resource.uri)).toContain('traecn://commands/catalog');
+  const catalog = readMcpResource('traecn://commands/catalog');
+  expect(catalog.mimeType).toBe('application/json');
+  expect(catalog.text.includes('delegate')).toBeTruthy();
 });
 
 test('_normalizeModel should match known models', () => {

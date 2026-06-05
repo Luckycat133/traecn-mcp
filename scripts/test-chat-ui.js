@@ -1,11 +1,14 @@
 'use strict';
 
 async function main() {
+  const path = require('path');
+  const { loadEnv } = require('../src/config/env');
   const { startGateway } = require('../src/http/gateway');
 
+  loadEnv(path.resolve(__dirname, '..', '.env'));
   process.env.TRAECN_ENABLE_MOCK_BRIDGE = '1';
 
-  const server = await startGateway();
+  const { server } = await startGateway();
   const address = server.address();
 
   console.log(`[test-chat-ui] Mock gateway running at http://${address.address}:${address.port}`);

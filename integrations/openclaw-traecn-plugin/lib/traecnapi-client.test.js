@@ -99,18 +99,61 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('getCapabilities sends GET to /api/capabilities', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ name: 'traecnclaw', commands: [] }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.getCapabilities();
+    assert.strictEqual(result.data.name, 'traecnclaw');
+    assert.strictEqual(lastRequest.method, 'GET');
+    assert.strictEqual(lastRequest.url, '/api/capabilities');
+    server.close();
+  });
+
+  await asyncTest('createConfirmationPlan sends POST to /api/confirm/plan', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ command: 'settings_set', risk: 'high' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.createConfirmationPlan('settings_set', { label: 'Auto Save', value: true });
+    assert.strictEqual(result.data.risk, 'high');
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/confirm/plan');
+    assert.strictEqual(lastRequest.body.command, 'settings_set');
+    server.close();
+  });
+
+  await asyncTest('preflight sends POST to /api/preflight', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ connected: true, nextAction: 'delegate_async' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.preflight({ command: 'delegate_async', params: { task: 'test' } });
+    assert.strictEqual(result.data.nextAction, 'delegate_async');
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/preflight');
+    assert.strictEqual(lastRequest.body.command, 'delegate_async');
+    assert.strictEqual(lastRequest.body.params.task, 'test');
+    server.close();
+  });
+
   await asyncTest('delegate sends POST to /api/delegate', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ text: 'response', stable: true }));
     });
     const client = new TraeCNApiClient({ port, timeout: 3000 });
-    const result = await client.delegate('test task', { includeProcessText: true });
+    const result = await client.delegate('test task', { includeProcessText: true, waitForQueue: false });
     assert.strictEqual(result.text, 'response');
     assert.strictEqual(lastRequest.method, 'POST');
     assert.strictEqual(lastRequest.url, '/api/delegate');
     assert.strictEqual(lastRequest.body.task, 'test task');
     assert.strictEqual(lastRequest.body.includeProcessText, true);
+    assert.strictEqual(lastRequest.body.waitForQueue, false);
     server.close();
   });
 
@@ -161,6 +204,71 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     assert.strictEqual(lastRequest.method, 'POST');
     assert.strictEqual(lastRequest.url, '/api/settings/set');
     assert.strictEqual(lastRequest.body.section, '通用');
+    server.close();
+  });
+
+  await asyncTest('settingsWrite can send confirmation metadata', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    await client.settingsWrite('通用', { label: 'Auto Save', value: true }, {
+      confirmationId: 'confirm_1',
+      requireConfirmation: true
+    });
+    assert.strictEqual(lastRequest.body.confirmationId, 'confirm_1');
+    assert.strictEqual(lastRequest.body.requireConfirmation, true);
+    server.close();
+  });
+
+  await asyncTest('settingsAction maps navigate to implemented settings switch-tab endpoint', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ section: 'MCP' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.settingsAction('navigate', { section: 'MCP' });
+    assert.strictEqual(result.data.section, 'MCP');
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/settings/switch-tab');
+    assert.strictEqual(lastRequest.body.section, 'MCP');
+    server.close();
+  });
+
+  await asyncTest('settingsAction maps readTables to implemented read-all endpoint', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ sections: ['通用'] }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.settingsAction('readTables');
+    assert.deepStrictEqual(result.data.sections, ['通用']);
+    assert.strictEqual(lastRequest.method, 'GET');
+    assert.strictEqual(lastRequest.url, '/api/settings/read-all');
+    server.close();
+  });
+
+  await asyncTest('batch helpers use implemented batch endpoints', async () => {
+    const port = await createMockServer((req, res, body) => {
+      if (req.method === 'POST') {
+        assert.deepStrictEqual(body.tasks, [{ task: 'one' }]);
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ batchId: 'batch_1' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ batchId: 'batch_1', status: 'completed' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const submit = await client.submitBatch([{ task: 'one' }], { strategy: 'sequential', maxConcurrency: 1 });
+    assert.strictEqual(submit.data.batchId, 'batch_1');
+    assert.strictEqual(lastRequest.url, '/api/tasks/batch');
+    assert.strictEqual(lastRequest.body.strategy, 'sequential');
+
+    const status = await client.getBatchStatus('batch_1');
+    assert.strictEqual(status.data.status, 'completed');
+    assert.strictEqual(lastRequest.url, '/api/tasks/batch/batch_1');
     server.close();
   });
 

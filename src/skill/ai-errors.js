@@ -60,9 +60,9 @@ const Errors = {
     'CONNECTION_FAILED',
     [
       '1. 检查 TraeCN IDE 是否已启动',
-      '2. 检查端口 9222 是否被占用',
+      '2. 检查 TraeCNclaw 网关端口 8788 和 TraeCN CDP 端口是否可用',
       '3. 尝试重启 TraeCN IDE',
-      '4. 检查环境变量 TRAECN_URL 是否正确'
+      '4. 检查环境变量 TRAECN_HOST、TRAECN_PORT 和 TRAECN_GATEWAY_TOKEN 是否正确'
     ],
     async () => {
       // 自动修复：尝试重新连接

@@ -38,6 +38,33 @@ await pollTask(taskId);  // → {ok, status, text}
 
 ## 📚 完整 API
 
+### Agent 能力发现
+```javascript
+getCapabilities()        // npm simple API
+// HTTP: GET /api/capabilities
+// MCP: traecn_capabilities
+// CLI: traecn capabilities
+// OpenClaw command: capabilities
+```
+
+### 低 token 运行预检
+```javascript
+preflight({ command, params }) // npm simple API
+// HTTP: POST /api/preflight
+// MCP: preflight
+// CLI: traecn preflight delegate_async '{"task":"..."}'
+// OpenClaw command/tool: preflight / traecn_preflight
+```
+
+### 操作确认预检
+```javascript
+planOperation(command, params?)  // npm simple API
+// HTTP: POST /api/confirm/plan
+// MCP: plan_operation
+// CLI: traecn plan settings_set '{"label":"Auto Save","value":true}'
+// OpenClaw command: confirm_plan
+```
+
 ### 任务管理
 ```javascript
 runTask(task, opts)      // 运行任务 → text
@@ -121,6 +148,7 @@ runTask      ← t
 queueTask    ← q
 pollTask     ← p
 checkStatus  ← s
+preflight    ← pf
 switchModel  ← model
 switchMode   ← mode
 getSettings  ← settings
@@ -174,7 +202,8 @@ const result = await runTask('任务');  // 可能失败
 # 环境变量
 TRAECN_LOG_LEVEL=debug
 TRAECN_LOG_FORMAT=json
-TRAECN_URL=http://localhost:9222
+TRAECN_HOST=127.0.0.1
+TRAECN_PORT=8788
 ```
 
 ```javascript

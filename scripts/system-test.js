@@ -48,7 +48,7 @@ function request(port, method, path, body = null, headers = {}) {
 (async () => {
   let server;
   try {
-    server = await startGateway({ host: '127.0.0.1', port: 0 });
+    ({ server } = await startGateway({ host: '127.0.0.1', port: 0 }));
     const port = server.address().port;
     const auth = { Authorization: 'Bearer system-test-token' };
 
@@ -57,8 +57,47 @@ function request(port, method, path, body = null, headers = {}) {
     assert.strictEqual(status.data.mockBridge, true);
     assert.strictEqual(status.headers['x-content-type-options'], 'nosniff');
 
+    const capabilities = await request(port, 'GET', '/api/capabilities');
+    assert.strictEqual(capabilities.status, 200);
+    assert.strictEqual(capabilities.data.name, 'traecnclaw');
+    assert.ok(capabilities.data.commands.some(command => command.command === 'delegate_async'));
+
     const unauthorized = await request(port, 'POST', '/api/sessions', {});
     assert.strictEqual(unauthorized.status, 401);
+
+    const confirmPlan = await request(port, 'POST', '/api/confirm/plan', {
+      command: 'settings_set',
+      params: { label: 'Auto Save', value: true }
+    }, auth);
+    assert.strictEqual(confirmPlan.status, 200);
+    assert.strictEqual(confirmPlan.data.risk, 'high');
+    assert.strictEqual(confirmPlan.data.requiresConfirmation, true);
+
+    const preflight = await request(port, 'POST', '/api/preflight', {
+      command: 'delegate_async',
+      params: { task: 'system test task' }
+    }, auth);
+    assert.strictEqual(preflight.status, 200);
+    assert.strictEqual(preflight.data.connected, true);
+    assert.strictEqual(preflight.data.commandPlan.command, 'delegate_async');
+    assert.ok(preflight.data.nextAction);
+
+    const blockedSetting = await request(port, 'POST', '/api/settings/set', {
+      label: 'Auto Save',
+      value: true,
+      requireConfirmation: true
+    }, auth);
+    assert.strictEqual(blockedSetting.status, 409);
+    assert.strictEqual(blockedSetting.data.code, 'OPERATION_CONFIRMATION_REQUIRED');
+
+    const confirmedSetting = await request(port, 'POST', '/api/settings/set', {
+      label: 'Auto Save',
+      value: true,
+      requireConfirmation: true,
+      confirmationId: confirmPlan.data.confirmationId
+    }, auth);
+    assert.strictEqual(confirmedSetting.status, 200);
+    assert.strictEqual(confirmedSetting.data.label, 'Auto Save');
 
     const session = await request(port, 'POST', '/api/sessions', {}, auth);
     assert.strictEqual(session.status, 201);
@@ -81,6 +120,26 @@ function request(port, method, path, body = null, headers = {}) {
     const queueStatus = await request(port, 'GET', '/api/queue-status', null, auth);
     assert.strictEqual(queueStatus.status, 200);
     assert.strictEqual(queueStatus.data.queued, false);
+
+    const mode = await request(port, 'GET', '/api/detect-mode', null, auth);
+    assert.strictEqual(mode.status, 200);
+    assert.strictEqual(mode.data.mode, 'solo');
+
+    const switchMode = await request(port, 'POST', '/api/switch-mode', { mode: 'ide' }, auth);
+    assert.strictEqual(switchMode.status, 200);
+    assert.strictEqual(switchMode.data.success, true);
+
+    const switchModel = await request(port, 'POST', '/api/switch-model', { model: 'glm' }, auth);
+    assert.strictEqual(switchModel.status, 200);
+    assert.strictEqual(switchModel.data.success, true);
+
+    const settings = await request(port, 'GET', '/api/settings/read?section=general', null, auth);
+    assert.strictEqual(settings.status, 200);
+    assert.ok(Array.isArray(settings.data.items));
+
+    const dialog = await request(port, 'GET', '/api/dialog/status', null, auth);
+    assert.strictEqual(dialog.status, 200);
+    assert.strictEqual(dialog.data.hasDialog, false);
 
     console.log('[system-test] PASS');
   } catch (err) {

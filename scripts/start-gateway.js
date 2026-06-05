@@ -3,12 +3,16 @@
 async function main() {
   console.log('[TRAECNclaw] Starting HTTP gateway...');
 
+  const path = require('path');
+  const { loadEnv } = require('../src/config/env');
+  loadEnv(path.resolve(__dirname, '..', '.env'));
+
   const { startGateway } = require('../src/http/gateway');
-  const server = await startGateway();
+  const { server } = await startGateway();
   const address = server.address();
 
   console.log(`[TRAECNclaw] Gateway running at http://${address.address}:${address.port}`);
-  console.log('[TRAECNclaw] Chat UI available at http://127.0.0.1:8788/');
+  console.log(`[TRAECNclaw] Chat UI available at http://${address.address}:${address.port}/`);
   console.log('[TRAECNclaw] Press Ctrl+C to stop');
 }
 

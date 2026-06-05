@@ -26,17 +26,44 @@ Use mock mode for gateway work that should not require TraeCN:
 TRAECN_ENABLE_MOCK_BRIDGE=1 npm run start:gateway
 ```
 
+Run the doctor before debugging local setup issues:
+
+```sh
+npm run doctor
+```
+
+The doctor reports PASS/WARN/FAIL checks for Node.js, npm, `.env`, gateway host and port, mock bridge mode, CDP remote debugging, `/api/status`, and the `/Applications/Trae CN.app` install path. Only critical setup failures, such as an unsupported Node.js version or invalid port configuration, return a non-zero exit code; missing live TraeCN/CDP state is a warning so mock-mode development can continue.
+
+Verify live TraeCN selectors when TraeCN is running with a remote debugging port:
+
+```sh
+npm run inspect:verify
+```
+
+The verify mode loads `.env`, refuses CDP endpoints that do not look like TraeCN, checks composer/send/response/new-chat/mode selectors, and exits non-zero when the current TraeCN UI no longer matches the configured selector set.
+
+If Trae CN is already open without remote debugging, start a separate debug-enabled instance:
+
+```sh
+npm run start:traecn -- --force-new
+```
+
+`--force-new` uses an isolated user-data directory by default (`TRAECN_QUICKSTART_USE_ISOLATED_PROFILE=1`) so live tests do not mutate the normal Trae CN profile. Set `TRAECN_USER_DATA_DIR` when you need a specific automation profile.
+
 ## Testing Strategy
 
 - Unit tests cover small utilities, environment parsing, error classes, CDP client behavior, and mock driver behavior.
 - Integration tests cover CDP discovery scoring, DOM driver configuration, gateway utility behavior, and plugin client requests.
 - System tests start a real local gateway in mock mode and verify authentication, session creation, delegation, response headers, and route compatibility.
 - UAT checks verify release documentation and OpenAPI endpoint coverage.
+- Live UAT checks a real Trae CN CDP endpoint with safe read-only gateway calls when available. It reports `SKIP` by default if CDP is not reachable; use `node scripts/live-uat.js --strict` when a real desktop instance is required. Add `--require-ready` to fail unless the logged-in Trae CN UI is automation-ready, and add `--delegate` only when sending a real prompt is acceptable.
 
 Recommended release gate:
 
 ```sh
 npm run test:all
+npm run test:live
+node scripts/live-uat.js --strict --require-ready
 npm run audit:prod
 ```
 

@@ -134,6 +134,9 @@ ${color('bold', 'COMMANDS:')}
   ${color('green', 'delegate')} <task>      Execute a task
   ${color('green', 'delegate')} -f <file>    Execute task from file
   ${color('green', 'status')}                Show gateway status
+  ${color('green', 'capabilities')}          Show compact agent capability catalog
+  ${color('green', 'preflight')} [cmd] [json] One-call readiness/queue/dialog preflight
+  ${color('green', 'plan')} <command> [json] Create operation confirmation plan
   ${color('green', 'models')}                List available models
   ${color('green', 'config')} get <key>      Get config value
   ${color('green', 'config')} set <key> <value>  Set config value
@@ -157,6 +160,9 @@ ${color('bold', 'EXAMPLES:')}
   traecn delegate "Write a hello world program"
   traecn delegate -f task.txt
   traecn status
+  traecn capabilities
+  traecn preflight delegate_async '{"task":"..."}'
+  traecn plan settings_set '{"label":"Auto Save","value":true}'
   traecn models
   traecn config get host
   traecn config set host 192.168.1.100
@@ -171,6 +177,16 @@ ${color('bold', 'CONFIG FILE:')}
 ${color('bold', 'ENVIRONMENT:')}
   TRAECN_HOST, TRAECN_PORT, TRAECN_GATEWAY_TOKEN
 `);
+}
+
+function parseJsonArg(raw, label) {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    console.error(color('red', `Error: ${label} must be valid JSON`));
+    process.exit(1);
+  }
 }
 
 async function cmdDelegate(args) {
@@ -251,6 +267,123 @@ async function cmdDelegate(args) {
       }
       process.exit(1);
     }
+  } catch (err) {
+    console.error(color('red', `Request failed: ${err.message}`));
+    process.exit(1);
+  }
+}
+
+async function cmdCapabilities(args) {
+  const outputFormat = args.includes('--json') || args.includes('-o') && args[args.indexOf('-o') + 1] === 'json'
+    ? 'json'
+    : 'text';
+  try {
+    const result = await apiRequest('GET', '/api/capabilities');
+    if (result.status !== 200) {
+      console.error(color('red', `Error: ${result.data.error || 'Unable to read capabilities'}`));
+      process.exit(1);
+    }
+    if (outputFormat === 'json') {
+      console.log(JSON.stringify(result.data, null, 2));
+      return;
+    }
+
+    console.log(`\n${color('bold', '═══ TraeCN Capabilities ═══')}\n`);
+    console.log(`  ${color('cyan', 'Version:')} ${result.data.version}`);
+    console.log(`  ${color('cyan', 'Commands:')} ${result.data.commands.length}`);
+    console.log(`  ${color('cyan', 'HTTP ops:')} ${result.data.http.length}`);
+    console.log(`  ${color('cyan', 'Token flow:')} ${result.data.tokenStrategy.prefer.join(' → ')}`);
+    console.log(`  ${color('cyan', 'Coverage:')} ${Object.entries(result.data.coverage).filter(([, value]) => value === true).map(([key]) => key).join(', ')}`);
+    console.log('');
+  } catch (err) {
+    console.error(color('red', `Request failed: ${err.message}`));
+    process.exit(1);
+  }
+}
+
+async function cmdPlan(args) {
+  const command = args[0];
+  if (!command) {
+    console.error(color('red', 'Error: command is required'));
+    console.error(color('gray', 'Usage: traecn plan <command> [params-json] [--force-confirm]'));
+    process.exit(1);
+  }
+  const params = args[1] && !args[1].startsWith('-') ? parseJsonArg(args[1], 'params') : {};
+  const forceConfirm = args.includes('--force-confirm');
+
+  try {
+    const result = await apiRequest('POST', '/api/confirm/plan', {
+      command,
+      params,
+      forceConfirm
+    });
+    if (result.status !== 200) {
+      console.error(color('red', `Error: ${result.data.error || 'Unable to create plan'}`));
+      process.exit(1);
+    }
+
+    const plan = result.data;
+    console.log(`\n${color('bold', '═══ Operation Plan ═══')}\n`);
+    console.log(`  ${color('cyan', 'Command:')} ${plan.command}`);
+    console.log(`  ${color('cyan', 'Risk:')}    ${plan.risk === 'high' ? color('red', plan.risk) : plan.risk === 'medium' ? color('yellow', plan.risk) : color('green', plan.risk)}`);
+    console.log(`  ${color('cyan', 'Confirm:')} ${plan.requiresConfirmation ? color('yellow', 'required') : color('dim', 'not required')}`);
+    console.log(`  ${color('cyan', 'ID:')}      ${plan.confirmationId}`);
+    if (plan.sideEffects && plan.sideEffects.length) {
+      console.log(`\n${color('bold', 'Side effects:')}`);
+      plan.sideEffects.forEach(item => console.log(`  - ${item}`));
+    }
+    if (plan.preflight && plan.preflight.length) {
+      console.log(`\n${color('bold', 'Preflight:')}`);
+      plan.preflight.forEach(item => console.log(`  - ${item}`));
+    }
+    console.log(`\n${color('dim', plan.tokenHint || '')}\n`);
+  } catch (err) {
+    console.error(color('red', `Request failed: ${err.message}`));
+    process.exit(1);
+  }
+}
+
+async function cmdPreflight(args) {
+  const command = args[0] && !args[0].startsWith('-') ? args[0] : null;
+  const paramsArg = command && args[1] && !args[1].startsWith('-') ? args[1] : null;
+  const params = paramsArg ? parseJsonArg(paramsArg, 'params') : {};
+  const forceConfirm = args.includes('--force-confirm');
+  const outputFormat = args.includes('--json') || args.includes('-o') && args[args.indexOf('-o') + 1] === 'json'
+    ? 'json'
+    : 'text';
+
+  try {
+    const result = await apiRequest('POST', '/api/preflight', {
+      ...(command ? { command } : {}),
+      ...(Object.keys(params).length ? { params } : {}),
+      forceConfirm
+    });
+    if (result.status !== 200) {
+      console.error(color('red', `Error: ${result.data.error || 'Unable to run preflight'}`));
+      process.exit(1);
+    }
+    if (outputFormat === 'json') {
+      console.log(JSON.stringify(result.data, null, 2));
+      return;
+    }
+
+    const data = result.data;
+    console.log(`\n${color('bold', '═══ TraeCN Preflight ═══')}\n`);
+    console.log(`  ${color('cyan', 'Connected:')} ${data.connected ? color('green', 'yes') : color('yellow', 'no')}`);
+    console.log(`  ${color('cyan', 'Ready:')}     ${data.ready ? color('green', 'yes') : color('yellow', 'no')}`);
+    console.log(`  ${color('cyan', 'Delegate:')}  ${data.canDelegate ? color('green', 'ready') : color('yellow', 'not yet')}`);
+    console.log(`  ${color('cyan', 'Next:')}      ${data.nextAction}`);
+    if (data.queue) {
+      console.log(`  ${color('cyan', 'Queue:')}     ${data.queue.queued ? 'queued' : data.queue.running ? 'running' : 'idle'}`);
+    }
+    if (data.dialog) {
+      console.log(`  ${color('cyan', 'Dialog:')}    ${data.dialog.hasDialog ? data.dialog.dialogType || 'present' : 'clear'}`);
+    }
+    if (data.commandPlan) {
+      console.log(`  ${color('cyan', 'Command:')}   ${data.commandPlan.command} (${data.commandPlan.risk}, confirm=${data.commandPlan.requiresConfirmation})`);
+      console.log(`  ${color('cyan', 'Plan ID:')}   ${data.commandPlan.confirmationId}`);
+    }
+    console.log(`\n${color('dim', data.tokenHint || '')}\n`);
   } catch (err) {
     console.error(color('red', `Request failed: ${err.message}`));
     process.exit(1);
@@ -612,6 +745,15 @@ async function main() {
         break;
       case 'status':
         await cmdStatus();
+        break;
+      case 'capabilities':
+        await cmdCapabilities(args.slice(1));
+        break;
+      case 'preflight':
+        await cmdPreflight(args.slice(1));
+        break;
+      case 'plan':
+        await cmdPlan(args.slice(1));
         break;
       case 'models':
         await cmdModels();

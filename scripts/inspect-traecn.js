@@ -1,12 +1,32 @@
 'use strict';
 
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { CDPClient } = require('../src/cdp/client');
+const { isTraeCNVersion, resolveCDPEndpoint } = require('../src/cdp/discovery');
 const dom = require('../src/cdp/browser-dom');
+const { loadEnv } = require('../src/config/env');
 const { getEnvWithFallback } = require('../src/shared/utils');
+const { getConfig } = require('../src/cdp/driver-config');
 
-const CDP_HOST = getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
-const CDP_PORT = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+loadEnv(path.resolve(__dirname, '..', '.env'));
+
+const args = new Set(process.argv.slice(2));
+const VERIFY_MODE = args.has('--verify');
+const WRITE_REPORT = !VERIFY_MODE && !args.has('--no-write');
+
+function argValue(name, fallback) {
+  const prefix = `${name}=`;
+  const inline = process.argv.slice(2).find(arg => arg.startsWith(prefix));
+  if (inline) return inline.slice(prefix.length);
+  const index = process.argv.indexOf(name);
+  if (index !== -1 && process.argv[index + 1]) return process.argv[index + 1];
+  return fallback;
+}
+
+let CDP_HOST = argValue('--host', getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1'));
+let CDP_PORT = argValue('--port', getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222'));
 
 async function fetchJSON(url) {
   return new Promise((resolve, reject) => {
@@ -21,7 +41,87 @@ async function fetchJSON(url) {
   });
 }
 
-async function scanDOM(client) {
+function looksLikeTraeTarget(target) {
+  const title = String(target.title || '').toLowerCase();
+  const url = String(target.url || '').toLowerCase();
+  return title.includes('trae') || url.includes('vscode-app') || url.includes('vscode-file');
+}
+
+function verifyResults(target, version, results) {
+  const checks = [
+    {
+      name: 'CDP endpoint belongs to TraeCN',
+      ok: isTraeCNVersion(version),
+      detail: version['User-Agent'] || version.Browser || 'unknown'
+    },
+    {
+      name: 'Selected target looks like TraeCN',
+      ok: looksLikeTraeTarget(target),
+      detail: `${target.title || 'No title'} (${target.url || 'no url'})`
+    },
+    {
+      name: 'Composer selector',
+      ok: results.composers.length > 0,
+      detail: results.composers[0]?.selector || 'not found'
+    },
+    {
+      name: 'Send button selector',
+      ok: results.sendButtons.length > 0,
+      detail: results.sendButtons[0]?.selector || 'not found'
+    },
+    {
+      name: 'Response/activity selector',
+      ok: results.responseRegions.length > 0 || results.activityIndicators.length > 0,
+      detail: results.responseRegions[0]?.selector || results.activityIndicators[0]?.selector || 'not found'
+    },
+    {
+      name: 'New chat selector',
+      ok: results.newChatButtons.length > 0,
+      detail: results.newChatButtons[0]?.selector || 'not found'
+    },
+    {
+      name: 'Mode tab selector',
+      ok: results.modeTabs.length > 0,
+      detail: results.modeTabs[0]?.selector || 'not found'
+    }
+  ];
+
+  console.log('');
+  console.log('  === Verify Summary ===');
+  for (const check of checks) {
+    console.log(`  ${check.ok ? 'PASS' : 'FAIL'} ${check.name}: ${check.detail}`);
+  }
+
+  return checks.every(check => check.ok);
+}
+
+function uniqueSelectors(selectors) {
+  return Array.from(new Set(selectors.filter(Boolean)));
+}
+
+function getScanConfig() {
+  const config = getConfig();
+  return {
+    composerSelectors: uniqueSelectors(config.composerSelectors),
+    sendButtonSelectors: uniqueSelectors(config.sendButtonSelectors),
+    responseSelectors: uniqueSelectors([
+      ...config.responseSelectors,
+      ...config.ideResponseSelectors,
+      ...config.activitySelectors
+    ]),
+    newChatSelectors: uniqueSelectors([
+      ...config.newChatSelectors,
+      ...config.ideNewChatSelectors
+    ]),
+    modeTabSelectors: uniqueSelectors(config.modeTabSelectors),
+    activitySelectors: uniqueSelectors([
+      ...config.activitySelectors,
+      ...config.ideTaskPanelSelectors
+    ])
+  };
+}
+
+async function scanDOM(client, scanConfig = getScanConfig()) {
   const scanResults = {
     composers: [],
     sendButtons: [],
@@ -31,65 +131,12 @@ async function scanDOM(client) {
     activityIndicators: []
   };
 
-  const composerSelectors = [
-    '.chat-input-v2-input-box-editable',
-    'textarea',
-    "[contenteditable='true']",
-    "input[type='text']",
-    '[class*="chat-input"]',
-    '[class*="composer"]',
-    '[class*="input-box"]',
-    '[role="textbox"]'
-  ];
-
-  const sendButtonSelectors = [
-    'button.chat-input-v2-send-button',
-    "button[data-testid*='send']",
-    "button[aria-label*='Send']",
-    "button[aria-label*='发送']",
-    "button[type='submit']",
-    'button[class*="send"]',
-    'button[class*="submit"]'
-  ];
-
-  const responseSelectors = [
-    '.assistant-chat-turn-content',
-    '.agent-plan-items.assistant-chat-turn-element',
-    "[data-message-author-role='assistant']",
-    "[data-role='assistant']",
-    "[data-author='assistant']",
-    '.assistant',
-    '[class*="assistant"]',
-    '[class*="response"]',
-    '[class*="reply"]'
-  ];
-
-  const newChatSelectors = [
-    'a.codicon-icube-NewChat',
-    "a[data-testid*='new-chat']",
-    "button[data-testid*='new-chat']",
-    "[aria-label*='New Chat']",
-    "[aria-label*='新建对话']",
-    '[class*="new-chat"]',
-    '[class*="NewChat"]'
-  ];
-
-  const modeTabSelectors = [
-    '.icube-mode-tab-item',
-    "[class*='icube-mode-tab-item']",
-    "[data-testid*='mode-tab']",
-    '[class*="mode-tab"]',
-    '[class*="mode-switch"]'
-  ];
-
-  const activitySelectors = [
-    '.chat-content-container',
-    '.chat-list-wrapper',
-    '[class*="chat-content"]',
-    '[class*="chat-list"]',
-    '[class*="activity"]',
-    '[class*="loading"]'
-  ];
+  const composerSelectors = scanConfig.composerSelectors;
+  const sendButtonSelectors = scanConfig.sendButtonSelectors;
+  const responseSelectors = scanConfig.responseSelectors;
+  const newChatSelectors = scanConfig.newChatSelectors;
+  const modeTabSelectors = scanConfig.modeTabSelectors;
+  const activitySelectors = scanConfig.activitySelectors;
 
   for (const selector of composerSelectors) {
     const nodeId = await dom.querySelector(client, selector);
@@ -147,6 +194,18 @@ async function scanDOM(client) {
 
 async function main() {
   console.log('[inspect-traecn] TraeCN CDP + DOM Inspector');
+
+  try {
+    const endpoint = await resolveCDPEndpoint({ host: CDP_HOST, port: CDP_PORT });
+    if (endpoint.port !== CDP_PORT || endpoint.host !== CDP_HOST) {
+      console.log(`[inspect-traecn] Auto-selected TraeCN CDP endpoint: ${endpoint.host}:${endpoint.port}`);
+    }
+    CDP_HOST = endpoint.host;
+    CDP_PORT = endpoint.port;
+  } catch {
+    // Keep the original endpoint so the existing troubleshooting message remains specific.
+  }
+
   console.log(`[inspect-traecn] CDP target: ${CDP_HOST}:${CDP_PORT}`);
   console.log('');
 
@@ -156,7 +215,14 @@ async function main() {
     console.log('[inspect-traecn] CDP Version:');
     console.log(`  Browser: ${version.Browser || 'Unknown'}`);
     console.log(`  Protocol: ${version['Protocol-Version'] || 'Unknown'}`);
+    console.log(`  Owner: ${isTraeCNVersion(version) ? 'TraeCN' : 'not TraeCN'}`);
     console.log('');
+    if (VERIFY_MODE && !isTraeCNVersion(version)) {
+      console.error('[inspect-traecn] Verify failed: CDP endpoint is reachable, but it does not look like TraeCN.');
+      console.error(`  User-Agent: ${version['User-Agent'] || 'Unknown'}`);
+      console.error('  Check TRAECN_REMOTE_DEBUGGING_PORT; another browser may be using this port.');
+      process.exit(1);
+    }
   } catch (err) {
     console.error(`[inspect-traecn] Cannot connect to CDP at ${CDP_HOST}:${CDP_PORT}`);
     console.error(`[inspect-traecn] Error: ${err.message}`);
@@ -184,7 +250,9 @@ async function main() {
   }
   console.log('');
 
-  const pageTargets = targets.filter(t => t.type === 'page' && !t.title?.includes('DevTools'));
+  const pageTargets = targets
+    .filter(t => t.type === 'page' && !t.title?.includes('DevTools'))
+    .sort((a, b) => Number(looksLikeTraeTarget(b)) - Number(looksLikeTraeTarget(a)));
 
   if (pageTargets.length === 0) {
     console.error('[inspect-traecn] No page targets found. Is TraeCN Chat panel open?');
@@ -303,14 +371,22 @@ async function main() {
         recommendedEnv: envLines
       };
 
-      const fs = require('fs');
-      const path = require('path');
-      const reportPath = path.resolve(__dirname, '..', 'inspect-report.json');
-      fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
-      console.log(`\n  Report saved to: ${reportPath}`);
+      if (VERIFY_MODE) {
+        const passed = verifyResults(target, version, results);
+        if (!passed) {
+          process.exitCode = 1;
+        }
+      } else if (WRITE_REPORT) {
+        const reportPath = path.resolve(__dirname, '..', 'inspect-report.json');
+        fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
+        console.log(`\n  Report saved to: ${reportPath}`);
+      }
 
     } catch (err) {
       console.error(`  Error scanning target: ${err.message}`);
+      if (VERIFY_MODE) {
+        process.exitCode = 1;
+      }
     } finally {
       if (client) {
         await client.close();
@@ -321,7 +397,9 @@ async function main() {
   console.log('\n[inspect-traecn] Inspection complete.');
 }
 
-main().catch(err => {
+main().then(() => {
+  process.exit(process.exitCode || 0);
+}).catch(err => {
   console.error('[inspect-traecn] Fatal error:', err.message);
   process.exit(1);
 });

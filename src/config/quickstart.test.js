@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { findTraeCNBinary, isTraeCNRunning, getQuickstartConfig } = require('./quickstart');
+const { buildStartCommand, findTraeCNBinary, isTraeCNRunning, getQuickstartConfig } = require('./quickstart');
 
 let passed = 0;
 let failed = 0;
@@ -67,6 +67,40 @@ test('findTraeCNBinary falls back to TRAE_BIN env var', () => {
   const result = findTraeCNBinary();
   assert.strictEqual(result, '/custom/trae/path');
   delete process.env.TRAE_BIN;
+});
+
+test('buildStartCommand uses macOS open for normal app bundle launches', () => {
+  const result = buildStartCommand('/Applications/Trae CN.app', ['--remote-debugging-port=9222'], {
+    platform: 'darwin',
+    newInstance: false
+  });
+  assert.strictEqual(result.command, 'open');
+  assert.deepStrictEqual(result.commandArgs, ['-a', '/Applications/Trae CN.app', '--args', '--remote-debugging-port=9222']);
+});
+
+test('buildStartCommand uses direct Electron executable for debug new instances when present', () => {
+  const result = buildStartCommand('/Applications/Trae CN.app', ['--remote-debugging-port=9222'], {
+    platform: 'darwin',
+    newInstance: true
+  });
+  if (result.command === 'open') {
+    assert.deepStrictEqual(result.commandArgs, ['-na', '/Applications/Trae CN.app', '--args', '--remote-debugging-port=9222']);
+  } else {
+    assert.ok(result.command.endsWith('/Applications/Trae CN.app/Contents/MacOS/Electron'));
+    assert.deepStrictEqual(result.commandArgs, ['--remote-debugging-port=9222']);
+  }
+});
+
+test('startTraeCN command can include isolated profile args through dry-run helper', () => {
+  const result = buildStartCommand('/Applications/Trae CN.app', [
+    '--remote-debugging-port=9222',
+    '--user-data-dir=/tmp/traecnclaw-profile-9222'
+  ], {
+    platform: 'darwin',
+    newInstance: true
+  });
+  assert.ok(result.command === 'open' || result.command.includes('Electron'));
+  assert.ok(result.commandArgs.includes('--user-data-dir=/tmp/traecnclaw-profile-9222'));
 });
 
 console.log(`\n[quickstart.test.js] Results: ${passed} passed, ${failed} failed\n`);

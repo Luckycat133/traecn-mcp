@@ -1,12 +1,14 @@
 'use strict';
 
+const packageInfo = require('../../package.json');
+
 function generateOpenAPISpec() {
-  return {
+  const spec = {
     openapi: '3.0.3',
     info: {
       title: 'TraeCN CDP HTTP Bridge',
       description: 'Local HTTP bridge for TraeCN desktop automation via CDP and DOM',
-      version: '0.2.0'
+      version: packageInfo.version
     },
     servers: [
       { url: 'http://127.0.0.1:8788', description: 'Local TraeCNclaw gateway' }
@@ -35,6 +37,92 @@ function generateOpenAPISpec() {
                 }
               }
             }
+          }
+        }
+      },
+      '/api/capabilities': {
+        get: {
+          summary: 'Return compact agent-facing capability catalog',
+          operationId: 'getCapabilities',
+          responses: {
+            '200': {
+              description: 'Compact command, endpoint, MCP, and token strategy metadata',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string' },
+                      version: { type: 'string' },
+                      contractVersion: { type: 'number' },
+                      tokenStrategy: { type: 'object' },
+                      coverage: { type: 'object' },
+                      apiFamilies: { type: 'object' },
+                      http: { type: 'array', items: { type: 'object' } },
+                      commands: { type: 'array', items: { type: 'object' } },
+                      mcp: { type: 'object' },
+                      traeCN: { type: 'object' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/config': {
+        get: {
+          summary: 'Read runtime gateway configuration',
+          operationId: 'getConfig',
+          responses: {
+            '200': { description: 'Current config and recent audit log' }
+          }
+        }
+      },
+      '/api/config/schema': {
+        get: {
+          summary: 'Read runtime configuration schema and defaults',
+          operationId: 'getConfigSchema',
+          responses: {
+            '200': { description: 'Config schema and default values' }
+          }
+        }
+      },
+      '/api/config/update': {
+        post: {
+          summary: 'Update runtime gateway configuration',
+          operationId: 'updateConfig',
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: { type: 'object' }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Config update result' },
+            '400': { description: 'Validation error' }
+          }
+        }
+      },
+      '/api/config/reset': {
+        post: {
+          summary: 'Reset runtime configuration to defaults',
+          operationId: 'resetConfig',
+          responses: {
+            '200': { description: 'Config reset result' }
+          }
+        }
+      },
+      '/api/config/diff': {
+        get: {
+          summary: 'Compare current config with defaults or a previous audit entry',
+          operationId: 'getConfigDiff',
+          parameters: [
+            { name: 'previous', in: 'query', required: false, schema: { type: 'string' } }
+          ],
+          responses: {
+            '200': { description: 'Config diff and history' }
           }
         }
       },
@@ -262,6 +350,30 @@ function generateOpenAPISpec() {
           }
         }
       },
+      '/api/detect-mode': {
+        get: {
+          summary: 'Detect the current TraeCN UI mode',
+          operationId: 'detectMode',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': {
+              description: 'Mode detection result',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      mode: { type: 'string', enum: ['solo', 'ide'] },
+                      confidence: { type: 'number' },
+                      indicators: { type: 'array', items: { type: 'string' } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       '/api/switch-mode': {
         post: {
           summary: 'Switch TraeCN mode (SOLO/IDE)',
@@ -355,6 +467,244 @@ function generateOpenAPISpec() {
                 }
               }
             }
+          }
+        }
+      },
+      '/api/queue/status': {
+        get: {
+          summary: 'List queued background tasks',
+          operationId: 'listQueueTasks',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': { description: 'Queued task list' }
+          }
+        }
+      },
+      '/api/task/{taskId}': {
+        get: {
+          summary: 'Get background task status',
+          operationId: 'getTaskStatus',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }
+          ],
+          responses: {
+            '200': { description: 'Task status' },
+            '404': { description: 'Task not found' }
+          }
+        }
+      },
+      '/api/task/{taskId}/cancel': {
+        post: {
+          summary: 'Cancel a queued background task',
+          operationId: 'cancelTask',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }
+          ],
+          responses: {
+            '200': { description: 'Task cancelled' },
+            '400': { description: 'Task cannot be cancelled' },
+            '404': { description: 'Task not found' }
+          }
+        }
+      },
+      '/api/confirm/plan': {
+        post: {
+          summary: 'Create a side-effect and confirmation plan before executing a command',
+          operationId: 'createConfirmationPlan',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['command'],
+                  properties: {
+                    command: { type: 'string' },
+                    params: { type: 'object' },
+                    forceConfirm: { type: 'boolean' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Confirmation and preflight plan' },
+            '400': { description: 'Invalid command plan request' }
+          }
+        }
+      },
+      '/api/preflight': {
+        post: {
+          summary: 'Return compact live preflight state before operating TraeCN',
+          operationId: 'preflight',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    command: { type: 'string', description: 'Optional command to assess' },
+                    params: { type: 'object', description: 'Optional command parameters for confirmation planning' },
+                    forceConfirm: { type: 'boolean' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Compact status/readiness/queue/dialog summary and optional command plan',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      connected: { type: 'boolean' },
+                      ready: { type: 'boolean' },
+                      canDelegate: { type: 'boolean' },
+                      nextAction: { type: 'string' },
+                      tokenHint: { type: 'string' },
+                      status: { type: 'object' },
+                      readiness: { type: 'object' },
+                      queue: { type: 'object' },
+                      dialog: { type: 'object' },
+                      localQueue: { type: 'object' },
+                      commandPlan: { type: 'object', nullable: true },
+                      capabilities: { type: 'object' }
+                    }
+                  }
+                }
+              }
+            },
+            '400': { description: 'Invalid preflight request' }
+          }
+        }
+      },
+      '/api/tasks/history': {
+        get: {
+          summary: 'Search task history',
+          operationId: 'getTasksHistory',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'page', in: 'query', required: false, schema: { type: 'integer' } },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer' } },
+            { name: 'status', in: 'query', required: false, schema: { type: 'string' } },
+            { name: 'keyword', in: 'query', required: false, schema: { type: 'string' } },
+            { name: 'sessionId', in: 'query', required: false, schema: { type: 'string' } }
+          ],
+          responses: {
+            '200': { description: 'Paginated task history' }
+          }
+        },
+        delete: {
+          summary: 'Clear task history',
+          operationId: 'clearTasksHistory',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'olderThanHours', in: 'query', required: false, schema: { type: 'integer' } },
+            { name: 'status', in: 'query', required: false, schema: { type: 'string' } },
+            { name: 'beforeDate', in: 'query', required: false, schema: { type: 'string' } }
+          ],
+          responses: {
+            '200': { description: 'Clear result' }
+          }
+        }
+      },
+      '/api/tasks/{taskId}': {
+        get: {
+          summary: 'Get a task history entry',
+          operationId: 'getHistoryTask',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }
+          ],
+          responses: {
+            '200': { description: 'Task history entry' },
+            '404': { description: 'Task not found' }
+          }
+        }
+      },
+      '/api/tasks/{taskId}/replay': {
+        get: {
+          summary: 'Get replay information for a task history entry',
+          operationId: 'getTaskReplay',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }
+          ],
+          responses: {
+            '200': { description: 'Task replay data' },
+            '404': { description: 'Task not found' }
+          }
+        }
+      },
+      '/api/tasks/batch': {
+        post: {
+          summary: 'Submit a batch of tasks',
+          operationId: 'submitTaskBatch',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['tasks'],
+                  properties: {
+                    tasks: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        required: ['task'],
+                        properties: {
+                          task: { type: 'string' },
+                          priority: { type: 'number' }
+                        }
+                      }
+                    },
+                    strategy: { type: 'string', enum: ['parallel', 'sequential', 'priority'] },
+                    maxConcurrency: { type: 'integer' },
+                    onComplete: { type: 'string' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '202': { description: 'Batch accepted' },
+            '400': { description: 'Invalid batch request' }
+          }
+        }
+      },
+      '/api/tasks/batch/{batchId}': {
+        get: {
+          summary: 'Get batch task status',
+          operationId: 'getBatchStatus',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'batchId', in: 'path', required: true, schema: { type: 'string' } }
+          ],
+          responses: {
+            '200': { description: 'Batch status' },
+            '404': { description: 'Batch not found' }
+          }
+        },
+        delete: {
+          summary: 'Cancel a running batch',
+          operationId: 'cancelBatch',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'batchId', in: 'path', required: true, schema: { type: 'string' } }
+          ],
+          responses: {
+            '200': { description: 'Batch cancelled' },
+            '400': { description: 'Batch cannot be cancelled' },
+            '404': { description: 'Batch not found' }
           }
         }
       },
@@ -618,39 +968,62 @@ function generateOpenAPISpec() {
           }
         }
       },
-      '/api/settings/action': {
+      '/api/dialog/status': {
+        get: {
+          summary: 'Check whether TraeCN is showing an approval dialog',
+          operationId: 'getDialogStatus',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': {
+              description: 'Dialog status',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      hasDialog: { type: 'boolean' },
+                      dialogType: { type: 'string', nullable: true },
+                      question: { type: 'string', nullable: true },
+                      buttons: { type: 'array', items: { type: 'string' } },
+                      canAutoApprove: { type: 'boolean' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/dialog/approve': {
         post: {
-          tags: ['Settings'],
-          summary: 'Perform a generic action on the settings panel',
-          description: 'navigate/read/type/click/toggle/dropdown/back. Navigate to section, read content, type into inputs, click buttons, toggle switches, select dropdowns.',
+          summary: 'Approve or deny the current TraeCN dialog',
+          operationId: 'approveDialog',
           security: [{ bearerAuth: [] }],
           requestBody: {
-            required: true,
             content: {
               'application/json': {
                 schema: {
                   type: 'object',
-                  required: ['action'],
                   properties: {
-                    action: { type: 'string', enum: ['navigate', 'read', 'type', 'click', 'clickTab', 'toggle', 'dropdown', 'set', 'readTables', 'back'] },
-                    params: {
-                      type: 'object',
-                      properties: {
-                        section: { type: 'string' },
-                        label: { type: 'string' },
-                        text: { type: 'string' },
-                        value: { type: 'string' },
-                        enabled: { type: 'boolean' }
-                      }
-                    }
+                    action: { type: 'string', enum: ['auto', 'trust', 'allow', 'confirm', 'approve', 'deny', 'cancel', 'dismiss'] }
                   }
                 }
               }
             }
           },
           responses: {
-            '200': { description: 'Action result' },
-            '400': { description: 'Invalid action or params' }
+            '200': { description: 'Dialog action result' },
+            '400': { description: 'Invalid action' }
+          }
+        }
+      },
+      '/api/dialog/dismiss': {
+        post: {
+          summary: 'Dismiss the current TraeCN dialog',
+          operationId: 'dismissDialog',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': { description: 'Dismiss result' }
           }
         }
       }
@@ -665,6 +1038,33 @@ function generateOpenAPISpec() {
       }
     }
   };
+
+  spec.paths['/api/settings'] = {
+    get: spec.paths['/api/settings/read'].get,
+    post: spec.paths['/api/settings/set'].post
+  };
+
+  spec.paths['/openapi.json'] = {
+    get: {
+      summary: 'Read the OpenAPI document',
+      operationId: 'getOpenAPI',
+      responses: {
+        '200': { description: 'OpenAPI document' }
+      }
+    }
+  };
+
+  spec.paths['/'] = {
+    get: {
+      summary: 'Open the built-in chat UI',
+      operationId: 'getChatUI',
+      responses: {
+        '200': { description: 'HTML chat UI' }
+      }
+    }
+  };
+
+  return spec;
 }
 
 module.exports = { generateOpenAPISpec };

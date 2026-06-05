@@ -16,7 +16,10 @@ import {
   DialogStatus,
   QueueStatus,
   SkillOptions,
-  RunTaskOptions
+  RunTaskOptions,
+  ReviewInput,
+  OperationPlan,
+  PreflightResult
 } from './traecn-skill';
 
 // 导出 TraeCNSkill
@@ -65,6 +68,25 @@ export declare function cancelTask(taskId?: string | null): Promise<CancelResult
  * 检查连接状态
  */
 export declare function checkStatus(): Promise<boolean>;
+
+/**
+ * 获取面向 agent 的紧凑能力目录
+ */
+export declare function getCapabilities(): Promise<any>;
+
+/**
+ * 生成操作确认/预检计划
+ * @param command - 命令名
+ * @param params - 命令参数
+ * @param opts - 选项
+ */
+export declare function planOperation(command: string, params?: object, opts?: { forceConfirm?: boolean }): Promise<OperationPlan>;
+
+/**
+ * 获取低 token 预检摘要
+ * @param options - 可选 command/params/forceConfirm
+ */
+export declare function preflight(options?: { command?: string; params?: object; forceConfirm?: boolean }): Promise<PreflightResult>;
 
 /**
  * 切换模型
@@ -120,6 +142,13 @@ export declare function checkQueue(): Promise<QueueStatus>;
  */
 export declare function openProject(path: string): Promise<any>;
 
+/**
+ * 代码审查辅助
+ * @param input - 审查说明或结构化审查输入
+ * @param opts - 运行选项；queue=true 时返回 taskId
+ */
+export declare function reviewCode(input: string | ReviewInput, opts?: RunTaskOptions): Promise<string>;
+
 // ==================== 单字母函数别名（向后兼容）====================
 
 /**
@@ -146,6 +175,21 @@ export declare const cancel: typeof cancelTask;
  * 检查状态（s = checkStatus）
  */
 export declare const s: typeof checkStatus;
+
+/**
+ * 能力目录
+ */
+export declare const capabilities: typeof getCapabilities;
+
+/**
+ * 操作确认计划
+ */
+export declare const plan: typeof planOperation;
+
+/**
+ * 低 token 预检（pf = preflight）
+ */
+export declare const pf: typeof preflight;
 
 /**
  * 切换模型
@@ -186,3 +230,8 @@ export declare const queueCheck: typeof checkQueue;
  * 打开项目
  */
 export declare const open: typeof openProject;
+
+/**
+ * 代码审查辅助
+ */
+export declare const review: typeof reviewCode;

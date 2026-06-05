@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString } = require('../shared/utils');
+const { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString, safeClose } = require('../shared/utils');
 
 let passed = 0;
 let failed = 0;
@@ -112,6 +112,18 @@ test('escapeJsString handles string with no special chars', () => {
     await sleep(50);
     const elapsed = Date.now() - start;
     assert.ok(elapsed >= 40, `Expected >= 40ms, got ${elapsed}ms`);
+  });
+
+  await asyncTest('safeClose calls close when available', async () => {
+    let closed = false;
+    await safeClose({ close: async () => { closed = true; } });
+    assert.strictEqual(closed, true);
+  });
+
+  await asyncTest('safeClose ignores close errors and missing close', async () => {
+    await safeClose(null);
+    await safeClose({});
+    await safeClose({ close: async () => { throw new Error('boom'); } });
   });
 
   console.log(`\n[utils.test.js] Results: ${passed} passed, ${failed} failed\n`);

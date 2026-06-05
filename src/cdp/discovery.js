@@ -5,6 +5,8 @@ const { TraeCNAutomationError } = require('./errors');
 const { CDPClient } = require('./client');
 const { getEnvWithFallback, safeClose } = require('../shared/utils');
 
+const DEFAULT_DISCOVERY_PORTS = ['9222', '9223', '9224', '9225', '9226', '9230'];
+
 async function fetchCDPTargets(host, port) {
   return new Promise((resolve, reject) => {
     const url = `http://${host}:${port}/json/list`;
@@ -37,6 +39,52 @@ async function fetchCDPVersion(host, port) {
       });
     }).on('error', reject);
   });
+}
+
+function isTraeCNVersion(version) {
+  const browser = String(version?.Browser || '').toLowerCase();
+  const userAgent = String(version?.['User-Agent'] || '').toLowerCase();
+  return browser.includes('trae') || userAgent.includes('traecn') || userAgent.includes('trae cn');
+}
+
+function uniquePorts(...groups) {
+  const ports = [];
+  for (const group of groups) {
+    for (const raw of group || []) {
+      const port = String(raw || '').trim();
+      if (port && !ports.includes(port)) ports.push(port);
+    }
+  }
+  return ports;
+}
+
+async function resolveCDPEndpoint(options = {}) {
+  const host = options.host || getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
+  const configuredPort = options.port || getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const quickstartPort = getEnvWithFallback('TRAECN_QUICKSTART_REMOTE_DEBUGGING_PORT', 'TRAE_QUICKSTART_REMOTE_DEBUGGING_PORT', '');
+  const extraPorts = String(getEnvWithFallback('TRAECN_DISCOVERY_PORTS', 'TRAE_DISCOVERY_PORTS', '') || '')
+    .split(',')
+    .map(p => p.trim())
+    .filter(Boolean);
+
+  const ports = uniquePorts([configuredPort], [quickstartPort], extraPorts, DEFAULT_DISCOVERY_PORTS);
+  let lastError = null;
+  let firstReachable = null;
+
+  for (const port of ports) {
+    try {
+      const version = await fetchCDPVersion(host, port);
+      const endpoint = { host, port, version, isTraeCN: isTraeCNVersion(version) };
+      if (!firstReachable) firstReachable = endpoint;
+      if (endpoint.isTraeCN) return endpoint;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  if (firstReachable) return firstReachable;
+
+  throw TraeCNAutomationError.connectionFailed(host, configuredPort, lastError ? lastError.message : 'No CDP endpoint found');
 }
 
 function scoreTarget(target, titleKeywords) {
@@ -86,8 +134,9 @@ async function discoverTarget(options = {}) {
   const titleContains = getEnvWithFallback('TRAECN_CDP_TARGET_TITLE_CONTAINS', 'TRAE_CDP_TARGET_TITLE_CONTAINS', 'Trae');
   const urlContains = getEnvWithFallback('TRAECN_CDP_TARGET_URL_CONTAINS', 'TRAE_CDP_TARGET_URL_CONTAINS', '');
 
-  const effectiveHost = options.host || host;
-  const effectivePort = options.port || port;
+  const endpoint = await resolveCDPEndpoint({ host: options.host || host, port: options.port || port });
+  const effectiveHost = endpoint.host;
+  const effectivePort = endpoint.port;
   const effectiveTitleContains = options.titleContains || titleContains;
   const effectiveUrlContains = options.urlContains || urlContains;
 
@@ -227,6 +276,8 @@ async function connectToTarget(targetInfo) {
 module.exports = {
   fetchCDPTargets,
   fetchCDPVersion,
+  isTraeCNVersion,
+  resolveCDPEndpoint,
   scoreTarget,
   discoverTarget,
   connectToTarget

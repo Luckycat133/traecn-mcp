@@ -73,11 +73,21 @@ function safeJsValue(value) {
   }
 }
 
+async function safeClose(resource) {
+  if (!resource || typeof resource.close !== 'function') return;
+  try {
+    await resource.close();
+  } catch {
+    // Best effort cleanup only.
+  }
+}
+
 module.exports = {
   getEnvWithFallback,
   parseSelectors,
   parsePositiveInt,
   sleep,
   escapeJsString,
-  safeJsValue
+  safeJsValue,
+  safeClose
 };

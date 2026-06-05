@@ -11,6 +11,7 @@
 ```javascript
 // 清晰的任务执行
 const result = await runTask('分析项目代码结构');
+const review = await reviewCode({ instruction: '审查安全风险', diff });
 
 // 模型切换 - 模糊匹配支持
 await switchModel('glm');  // 自动匹配 GLM-5.1
@@ -18,6 +19,7 @@ await switchModel('deepseek');  // 自动匹配 DeepSeek-V3.1-Terminus
 
 // 状态检查
 const connected = await checkStatus();
+const pf = await preflight({ command: 'delegate_async', params: { task: '分析项目代码结构' } });
 ```
 
 **优势**：
@@ -65,15 +67,16 @@ AI 只需要检查 `ok` 字段即可判断成功/失败。
 
 ```javascript
 // 最常用的5个函数，覆盖90%场景
-const { runTask, switchModel, checkStatus, pollTask, queueTask } = require('traecnclaw');
+const { runTask, reviewCode, switchModel, checkStatus, pollTask, queueTask } = require('traecnclaw');
 
 // 示例：AI 的典型工作流程
 await switchModel('glm');
 const result = await runTask('优化这个函数');
+const review = await reviewCode({ instruction: '检查优化后的回归风险', code: result });
 console.log(result);
 ```
 
-#### 完整函数列表（21个函数）
+#### 完整函数列表（24个函数）
 
 ```javascript
 // 任务管理
@@ -81,9 +84,13 @@ runTask(task, opts)      // 运行任务
 queueTask(task, opts)    // 队列任务
 pollTask(taskId)         // 轮询状态
 cancelTask(taskId)        // 取消任务
+reviewCode(input, opts)   // 代码审查辅助
 
 // 状态检查
 checkStatus()            // 检查连接状态
+getCapabilities()        // 获取低 token 能力目录
+preflight({command, params}) // 一次性获取状态/就绪/队列/弹窗/确认摘要
+planOperation(command, params) // 生成操作确认/预检计划
 checkDialog()             // 检查对话框
 checkQueue()              // 检查队列
 
@@ -110,35 +117,21 @@ getSkill()                // 获取实例
 ### MCP Server 模式
 
 ```javascript
-// mcp-server.js
-const { TraeCNSkill } = require('traecnclaw/skill');
-
-const skill = new TraeCNSkill();
-
-// MCP 工具定义
-const mcpTools = [
-  {
-    name: 'run_task',
-    description: 'Execute a task in TraeCN IDE',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task: { type: 'string', description: 'Task description' },
-        model: { type: 'string', description: 'Model name (optional)' }
+{
+  "mcpServers": {
+    "traecn": {
+      "command": "node",
+      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
+      "env": {
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788"
       }
     }
   }
-];
-
-// 处理工具调用
-async function handleToolCall(toolName, args) {
-  switch (toolName) {
-    case 'run_task':
-      if (args.model) await skill.switchModel(args.model);
-      return await skill.run(args.task);
-  }
 }
 ```
+
+MCP 工具中优先使用 `traecn_capabilities` 做一次低 token 能力发现，再用 `preflight` 合并状态、就绪度、队列、弹窗和可选确认计划。常见工作用 `run_task`、`queue_task`、`poll_task`、`review_code` 执行。执行 `settings_set`、`approve_dialog`、`open_project`、`delegate`、批量取消等有副作用操作前，优先用 `preflight` 或 `plan_operation` 获取风险等级、确认要求和预检步骤。需要覆盖完整命令面时，先调用 `traecn_command_set` 获取命令目录，再用 `traecn_command` 传入命令名和参数。
 
 ### Skills 模式
 
@@ -284,7 +277,11 @@ TraeCNSkill API（按功能分组）：
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/path/to/traecnclaw/mcp-server.js"]
+      "args": ["/path/to/TRAECNclaw/mcp-server.js"],
+      "env": {
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788"
+      }
     }
   }
 }
@@ -298,7 +295,11 @@ TraeCNSkill API（按功能分组）：
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/path/to/traecnclaw/mcp-server.js"]
+      "args": ["/path/to/TRAECNclaw/mcp-server.js"],
+      "env": {
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788"
+      }
     }
   }
 }

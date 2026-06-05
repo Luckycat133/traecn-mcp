@@ -119,8 +119,38 @@ test('MockDriver constructor accepts custom responses', () => {
   await asyncTest('switchMode updates mode', async () => {
     const driver = new MockDriver();
     const result = await driver.switchMode('ide');
-    assert.strictEqual(result, true);
+    assert.deepStrictEqual(result, {
+      success: true,
+      previousMode: 'solo',
+      currentMode: 'ide',
+      alreadyInMode: false
+    });
     assert.strictEqual(driver.mode, 'ide');
+  });
+
+  await asyncTest('detectMode returns current mock mode', async () => {
+    const driver = new MockDriver({ mode: 'ide' });
+    const result = await driver.detectMode();
+    assert.strictEqual(result.mode, 'ide');
+    assert.strictEqual(result.confidence, 1);
+  });
+
+  await asyncTest('switchModel updates current model', async () => {
+    const driver = new MockDriver();
+    const result = await driver.switchModel('glm');
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.model, 'glm');
+    assert.strictEqual(driver.model, 'glm');
+  });
+
+  await asyncTest('settings mock supports read and set', async () => {
+    const driver = new MockDriver();
+    const tab = await driver.settings.switchTab('general');
+    const content = await driver.settings.getContent();
+    const setResult = await driver.settings.set('Mock setting', false);
+    assert.deepStrictEqual(tab, { tab: 'settings', section: 'general' });
+    assert.strictEqual(content.items.length, 1);
+    assert.strictEqual(setResult.success, true);
   });
 
   await asyncTest('checkReadiness returns ready state', async () => {

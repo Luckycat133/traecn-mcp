@@ -21,6 +21,20 @@ export interface RunTaskOptions {
   includeProcess?: boolean;
   autoWait?: boolean;
   mode?: string;
+  queue?: boolean;
+  files?: string[];
+  focus?: string[];
+  code?: string;
+  diff?: string;
+}
+
+// 代码审查输入
+export interface ReviewInput {
+  instruction: string;
+  files?: string[];
+  focus?: string[];
+  code?: string;
+  diff?: string;
 }
 
 // 状态结果
@@ -106,6 +120,35 @@ export interface QueueStatus {
   message: string | null;
 }
 
+// 操作确认计划
+export interface OperationPlan {
+  command: string;
+  risk: 'low' | 'medium' | 'high' | 'unknown';
+  requiresConfirmation: boolean;
+  confirmationId: string;
+  sideEffects: string[];
+  preflight: string[];
+  recommendedFlow: string[];
+  tokenHint: string;
+}
+
+// 低 token 预检摘要
+export interface PreflightResult {
+  ok: boolean;
+  connected: boolean;
+  ready: boolean;
+  canDelegate: boolean;
+  nextAction: string;
+  tokenHint: string;
+  status: any;
+  readiness: any;
+  queue: any;
+  dialog: any;
+  localQueue: any;
+  commandPlan: OperationPlan | null;
+  capabilities: any;
+}
+
 /**
  * TraeCN Skill 主类
  * 提供 TraeCN 自动化功能的简化接口
@@ -127,6 +170,21 @@ export declare class TraeCNSkill {
    * @param allowAutoStart - 是否允许自动启动
    */
   status(allowAutoStart?: boolean): Promise<StatusResult>;
+
+  /**
+   * 获取面向 agent 的紧凑能力目录
+   */
+  getCapabilities(): Promise<any>;
+
+  /**
+   * 生成操作确认/预检计划
+   */
+  planOperation(command: string, params?: object, opts?: { forceConfirm?: boolean }): Promise<OperationPlan>;
+
+  /**
+   * 获取低 token 预检摘要
+   */
+  preflight(options?: { command?: string; params?: object; forceConfirm?: boolean }): Promise<PreflightResult>;
 
   /**
    * 运行任务
@@ -207,4 +265,11 @@ export declare class TraeCNSkill {
    * @param projectPath - 项目路径
    */
   openProject(projectPath: string): Promise<any>;
+
+  /**
+   * 代码审查辅助
+   * @param input - 审查说明或结构化审查输入
+   * @param opts - 运行或队列选项
+   */
+  reviewCode(input: string | ReviewInput, opts?: RunTaskOptions): Promise<RunResult | QueueResult>;
 }

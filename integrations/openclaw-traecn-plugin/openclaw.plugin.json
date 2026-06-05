@@ -36,6 +36,111 @@
   },
   "tools": [
     {
+      "name": "traecn_capabilities",
+      "description": "Return a compact agent-facing catalog of commands, endpoints, models, settings sections, and token-saving call order.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "traecn_command_set",
+      "description": "List the production command set OpenClaw can use to control TraeCN.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "traecn_preflight",
+      "description": "Return compact status, readiness, queue, dialog, and optional command confirmation state before operating TraeCN.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Optional command to assess"
+          },
+          "params": {
+            "type": "object",
+            "description": "Optional command parameters"
+          },
+          "forceConfirm": {
+            "type": "boolean",
+            "description": "Force confirmation planning"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_command",
+      "description": "Execute a preset TraeCN command through the local TraeCNclaw gateway.",
+      "parameters": {
+        "type": "object",
+        "required": ["command"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "capabilities",
+              "preflight",
+              "confirm_plan",
+              "status",
+              "readiness",
+              "new_chat",
+              "delegate",
+              "delegate_async",
+              "task_status",
+              "cancel_task",
+              "switch_mode",
+              "switch_model",
+              "queue_status",
+              "open_project",
+              "settings_read",
+              "settings_read_all",
+              "settings_set",
+              "settings_navigate",
+              "settings_back",
+              "dialog_status",
+              "approve_dialog",
+              "dismiss_dialog",
+              "batch_submit",
+              "batch_status",
+              "batch_cancel",
+              "review_code"
+            ],
+            "description": "Preset command name from traecn_command_set."
+          },
+          "params": {
+            "type": "object",
+            "description": "Command parameters. See traecn_command_set for required and optional keys."
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_plan_operation",
+      "description": "Create a dry side-effect, risk, and preflight plan before executing a TraeCN command.",
+      "parameters": {
+        "type": "object",
+        "required": ["command"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Command you intend to execute, e.g. settings_set or approve_dialog"
+          },
+          "params": {
+            "type": "object",
+            "description": "Command-specific parameters to assess"
+          },
+          "forceConfirm": {
+            "type": "boolean",
+            "description": "Force user confirmation even for lower-risk commands"
+          }
+        }
+      }
+    },
+    {
       "name": "traecn_status",
       "description": "Check if TraeCNclaw gateway is reachable and TraeCN automation is ready.",
       "parameters": {

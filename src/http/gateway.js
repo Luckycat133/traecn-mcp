@@ -4,7 +4,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
 const packageInfo = require('../../package.json');
-const { discoverTarget, connectToTarget, fetchCDPVersion } = require('../cdp/discovery');
+const { discoverTarget, connectToTarget, resolveCDPEndpoint } = require('../cdp/discovery');
 const { DomDriver, getConfig } = require('../cdp/dom-driver');
 const { SETTINGS_SECTIONS } = require('../cdp/settings-driver');
 const { MockDriver } = require('../cdp/mock-driver');
@@ -14,6 +14,9 @@ const { generateOpenAPISpec } = require('./openapi');
 const { getEnvWithFallback, parsePositiveInt } = require('../shared/utils');
 const { ConfigManager } = require('../shared/config-manager');
 const { getGlobalStore } = require('../shared/task-history');
+const { buildCapabilities } = require('../shared/capabilities');
+const { buildConfirmationPlan } = require('../shared/operation-confirmation');
+const { listCommands } = require('../../integrations/openclaw-traecn-plugin/lib/command-set');
 
 function normalizeUrl(rawUrl) {
   return rawUrl.replace(/[\x80-\xff]/g, ch => {
@@ -185,13 +188,16 @@ function formatResult(result) {
 
 class Gateway {
   constructor(options = {}) {
-    this.host = options.host || getEnvWithFallback('TRAECN_HOST', 'TRAE_HOST', '127.0.0.1');
-    this.port = options.port !== undefined ? options.port : parsePositiveInt(getEnvWithFallback('TRAECN_PORT', 'TRAE_PORT', '8788'), 8788);
+    const host = process.env.TRAECN_HOST ?? process.env.HOST ?? process.env.TRAE_HOST ?? '127.0.0.1';
+    const port = process.env.TRAECN_PORT ?? process.env.PORT ?? process.env.TRAE_PORT ?? '8788';
+    this.host = options.host || host;
+    this.port = options.port !== undefined ? options.port : parsePositiveInt(port, 8788);
     this.token = getEnvWithFallback('TRAECN_GATEWAY_TOKEN', 'TRAE_GATEWAY_TOKEN', '');
     this.authHeader = getEnvWithFallback('TRAECN_AUTH_HEADER', 'TRAE_AUTH_HEADER', 'Authorization');
     this.allowedOrigins = getEnvWithFallback('TRAECN_ALLOWED_ORIGINS', 'TRAE_ALLOWED_ORIGINS', '');
     this.debugEndpoints = getEnvWithFallback('TRAECN_ENABLE_DEBUG_ENDPOINTS', 'TRAE_ENABLE_DEBUG_ENDPOINTS', '0') === '1';
     this.mockBridge = getEnvWithFallback('TRAECN_ENABLE_MOCK_BRIDGE', 'TRAE_ENABLE_MOCK_BRIDGE', '0') === '1';
+    this.enforceOperationConfirmation = getEnvWithFallback('TRAECN_ENFORCE_OPERATION_CONFIRMATION', 'TRAE_ENFORCE_OPERATION_CONFIRMATION', '0') === '1';
 
     const rateWindowMs = parsePositiveInt(getEnvWithFallback('TRAECN_RATE_LIMIT_WINDOW_MS', 'TRAE_RATE_LIMIT_WINDOW_MS', '60000'), 60000);
     const rateMaxRequests = parsePositiveInt(getEnvWithFallback('TRAECN_RATE_LIMIT_MAX_REQUESTS', 'TRAE_RATE_LIMIT_MAX_REQUESTS', '60'), 60);
@@ -382,6 +388,9 @@ class Gateway {
     if (pathname === '/api/status' && method === 'GET') {
       return this._handleStatus(req, res);
     }
+    if (pathname === '/api/capabilities' && method === 'GET') {
+      return this._json(req, res, buildCapabilities({ commands: listCommands() }));
+    }
 
     if (pathname === '/api/config' && method === 'GET') {
       return this._handleGetConfig(req, res);
@@ -397,6 +406,12 @@ class Gateway {
     }
     if (pathname === '/api/config/diff' && method === 'GET') {
       return this._handleConfigDiff(req, res);
+    }
+    if (pathname === '/' && method === 'GET') {
+      return this._html(req, res, renderChatUI());
+    }
+    if (pathname === '/openapi.json' && method === 'GET') {
+      return this._json(req, res, generateOpenAPISpec());
     }
 
     if (!this._authenticate(req)) {
@@ -415,6 +430,12 @@ class Gateway {
     try {
       if (pathname === '/api/tasks/history' && method === 'GET') {
         return this._handleTasksHistory(req, res);
+      }
+      if (pathname === '/api/confirm/plan' && method === 'POST') {
+        return await this._handleConfirmPlan(req, res);
+      }
+      if (pathname === '/api/preflight' && method === 'POST') {
+        return await this._handlePreflight(req, res);
       }
       if (pathname === '/api/tasks/history' && method === 'DELETE') {
         return this._handleTasksHistoryClear(req, res);
@@ -524,12 +545,6 @@ class Gateway {
       if (pathname === '/api/dialog/status' && method === 'GET') {
         return await this._handleDialogStatus(req, res);
       }
-      if (pathname === '/' && method === 'GET') {
-        return this._html(req, res, renderChatUI());
-      }
-      if (pathname === '/openapi.json' && method === 'GET') {
-        return this._json(req, res, generateOpenAPISpec());
-      }
       if (pathname === '/debug/automation' && method === 'GET' && this.debugEndpoints) {
         return await this._handleDebugAutomation(req, res);
       }
@@ -586,27 +601,200 @@ class Gateway {
     this._json(req, res, replay);
   }
 
-  async _handleStatus(req, res) {
+  async _handleConfirmPlan(req, res) {
+    const body = await parseBody(req);
+    if (!body.command || typeof body.command !== 'string') {
+      return this._json(req, res, { error: 'command is required' }, 400);
+    }
+    this._json(req, res, buildConfirmationPlan(body));
+  }
+
+  async _statusSnapshot() {
     let cdpVersion = null;
-    let connected = false;
+    let cdpReachable = false;
 
     try {
-      const host = getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
-      const port = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
-      cdpVersion = await fetchCDPVersion(host, port);
-      connected = !!(this.client && this.client.isConnected);
-    } catch {
-      connected = false;
-    }
+      const endpoint = await resolveCDPEndpoint();
+      cdpVersion = endpoint.version;
+      cdpReachable = true;
+    } catch {}
 
-    this._json(req, res, {
-      status: connected ? 'connected' : 'disconnected',
+    return {
+      status: (this.mockBridge || (this.client && this.client.isConnected)) ? 'connected' : 'disconnected',
       service: 'traecn-cdp-http-bridge',
       version: packageInfo.version,
       mockBridge: this.mockBridge,
+      cdpReachable,
       cdp: cdpVersion ? { browser: cdpVersion.Browser, protocolVersion: cdpVersion['Protocol-Version'] } : null,
       uptime: process.uptime()
+    };
+  }
+
+  async _probe(name, fn) {
+    try {
+      return { name, ok: true, value: await fn() };
+    } catch (error) {
+      return { name, ok: false, error: error.message, code: error.code || 'PROBE_FAILED' };
+    }
+  }
+
+  _compactReadiness(readiness = {}) {
+    return {
+      ready: readiness.ready === true,
+      mode: readiness.mode || null,
+      currentModel: readiness.currentModel || null,
+      composer: readiness.composer ? {
+        selector: readiness.composer.matchedSelector || null,
+        visible: readiness.composer.visible !== false
+      } : null,
+      sendButton: readiness.sendButton ? {
+        selector: readiness.sendButton.matchedSelector || null,
+        visible: readiness.sendButton.visible !== false,
+        disabled: readiness.sendButton.disabled === true
+      } : null,
+      responseRegion: readiness.responseRegion ? {
+        selector: readiness.responseRegion.matchedSelector || null,
+        visible: readiness.responseRegion.visible !== false
+      } : null
+    };
+  }
+
+  _compactQueue(queue = {}) {
+    return {
+      queued: queue.queued === true,
+      running: queue.running === true,
+      currentModel: queue.currentModel || null,
+      queuePosition: queue.queuePosition || queue.position || null,
+      queueEstimatedWait: queue.queueEstimatedWait || null,
+      message: queue.queueMessage || queue.message || null
+    };
+  }
+
+  _compactDialog(dialog = {}) {
+    return {
+      hasDialog: dialog.hasDialog === true,
+      dialogType: dialog.dialogType || null,
+      question: dialog.question || null,
+      buttonCount: Array.isArray(dialog.buttons) ? dialog.buttons.length : 0,
+      buttons: Array.isArray(dialog.buttons) ? dialog.buttons.slice(0, 6) : [],
+      canAutoApprove: dialog.canAutoApprove === true
+    };
+  }
+
+  _queueRuntimeSummary() {
+    const tasks = Array.from(this.taskQueue.values());
+    const batches = Array.from(this.batchTasks.values());
+    const countByStatus = (items, getStatus) => items.reduce((acc, item) => {
+      const status = getStatus(item) || 'unknown';
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {});
+    return {
+      tasks: {
+        total: tasks.length,
+        byStatus: countByStatus(tasks, task => task.status)
+      },
+      batches: {
+        total: batches.length,
+        byStatus: countByStatus(batches, batch => batch.status)
+      }
+    };
+  }
+
+  _preflightNextAction({ connected, readiness, queue, dialog }) {
+    if (!connected) return 'connect_traecn';
+    if (dialog?.hasDialog) return dialog.canAutoApprove ? 'approve_dialog' : 'inspect_dialog';
+    if (queue?.queued) return 'wait_queue_or_switch_model';
+    if (queue?.running) return 'poll_or_wait';
+    if (!readiness?.ready) return 'focus_or_login_traecn';
+    return 'delegate_async';
+  }
+
+  async _handlePreflight(req, res) {
+    const body = await parseBody(req);
+    if (body.command !== undefined && typeof body.command !== 'string') {
+      return this._json(req, res, { error: 'command must be a string' }, 400);
+    }
+
+    const status = await this._statusSnapshot();
+    const connectionProbe = await this._probe('connection', async () => {
+      await this._ensureConnection();
+      return true;
     });
+
+    const connected = connectionProbe.ok;
+    const readinessProbe = connected
+      ? await this._probe('readiness', () => this.driver.checkReadiness())
+      : { name: 'readiness', ok: false, error: connectionProbe.error, code: connectionProbe.code };
+    const queueProbe = connected
+      ? await this._probe('queue', () => this.driver.checkQueueStatus())
+      : { name: 'queue', ok: false, error: connectionProbe.error, code: connectionProbe.code };
+    const dialogProbe = connected
+      ? await this._probe('dialog', () => this.driver.checkForApprovalDialog())
+      : { name: 'dialog', ok: false, error: connectionProbe.error, code: connectionProbe.code };
+
+    const readiness = readinessProbe.ok ? this._compactReadiness(readinessProbe.value) : null;
+    const queue = queueProbe.ok ? this._compactQueue(queueProbe.value) : null;
+    const dialog = dialogProbe.ok ? this._compactDialog({
+      hasDialog: dialogProbe.value.needsApproval,
+      dialogType: dialogProbe.value.dialogType,
+      question: dialogProbe.value.question,
+      buttons: dialogProbe.value.buttons,
+      canAutoApprove: dialogProbe.value.canAutoApprove
+    }) : null;
+    const commandPlan = body.command
+      ? buildConfirmationPlan({ command: body.command, params: body.params || {}, forceConfirm: body.forceConfirm === true })
+      : null;
+    const canDelegate = connected && readiness?.ready === true && !queue?.queued && !queue?.running && !dialog?.hasDialog;
+    const nextAction = this._preflightNextAction({ connected, readiness, queue, dialog });
+    const commands = listCommands();
+
+    this._json(req, res, {
+      ok: connected,
+      service: status.service,
+      version: status.version,
+      mockBridge: status.mockBridge,
+      connected,
+      cdpReachable: status.cdpReachable,
+      ready: readiness?.ready === true,
+      canDelegate,
+      nextAction,
+      tokenHint: commandPlan
+        ? 'Use this single preflight result before executing the command; pass confirmationId only when commandPlan.requiresConfirmation is true.'
+        : 'Use preflight before delegation to avoid separate status/readiness/queue/dialog calls.',
+      status,
+      readiness: readiness || { ok: false, error: readinessProbe.error, code: readinessProbe.code },
+      queue: queue || { ok: false, error: queueProbe.error, code: queueProbe.code },
+      dialog: dialog || { ok: false, error: dialogProbe.error, code: dialogProbe.code },
+      localQueue: this._queueRuntimeSummary(),
+      commandPlan,
+      capabilities: {
+        commandCount: commands.length,
+        preferredFlow: ['preflight', 'delegate_async', 'task_status'],
+        fullCatalog: '/api/capabilities',
+        fullSchema: '/openapi.json'
+      }
+    });
+  }
+
+  _confirmationIdFrom(req, body = {}) {
+    return body.confirmationId || req.headers['x-traecn-confirmation-id'] || '';
+  }
+
+  _confirmationFailure(req, body, command, params) {
+    if (!this.enforceOperationConfirmation && body.requireConfirmation !== true) return null;
+    const plan = buildConfirmationPlan({ command, params, forceConfirm: body.forceConfirm === true });
+    if (!plan.requiresConfirmation) return null;
+    if (this._confirmationIdFrom(req, body) === plan.confirmationId) return null;
+    return {
+      error: 'Operation confirmation required',
+      code: 'OPERATION_CONFIRMATION_REQUIRED',
+      plan
+    };
+  }
+
+  async _handleStatus(req, res) {
+    this._json(req, res, await this._statusSnapshot());
   }
 
   _handleGetConfig(req, res) {
@@ -827,6 +1015,19 @@ class Gateway {
 
     await this._ensureConnection();
     const switchResult = await this.driver.switchModel(body.model);
+    const normalizedSwitch = typeof switchResult === 'object' && switchResult !== null
+      ? switchResult
+      : { success: !String(switchResult || '').startsWith('model_switch_blocked') && !String(switchResult || '').startsWith('no model items') && !String(switchResult || '').startsWith('model not found'), switchResult };
+
+    if (!normalizedSwitch.success) {
+      return this._json(req, res, {
+        success: false,
+        model: normalizedSwitch.model || null,
+        requestedModel: body.model,
+        switchResult: normalizedSwitch.switchResult || switchResult,
+        error: normalizedSwitch.error || 'Model switch failed'
+      }, 502);
+    }
 
     // Wait for model to become available (up to 10 minutes)
     const queueWaitTimeoutMs = this.driver.config.queueWaitTimeoutMs || 600000;
@@ -840,8 +1041,11 @@ class Gateway {
         // Model is ready
         return this._json(req, res, {
           success: true,
-          model: body.model,
-          switchResult,
+          model: normalizedSwitch.model || body.model,
+          requestedModel: body.model,
+          switchResult: normalizedSwitch.switchResult || switchResult,
+          previousModel: normalizedSwitch.previousModel || null,
+          alreadySelected: normalizedSwitch.alreadySelected || false,
           queueWaitMs: waitedMs,
           queueWaitAttempts: attempt
         });
@@ -855,8 +1059,9 @@ class Gateway {
     // Timed out waiting for model to become available
     return this._json(req, res, {
       success: false,
-      model: body.model,
-      switchResult,
+      model: normalizedSwitch.model || body.model,
+      requestedModel: body.model,
+      switchResult: normalizedSwitch.switchResult || switchResult,
       error: 'Model queue wait timeout',
       queueWaitMs: waitedMs,
       queueWaitAttempts: maxRetries
@@ -1007,6 +1212,12 @@ class Gateway {
     if (body.value === undefined || body.value === null) {
       return this._json(req, res, { error: 'value is required' }, 400);
     }
+    const confirmationFailure = this._confirmationFailure(req, body, 'settings_set', {
+      label: body.label,
+      value: body.value,
+      ...(body.section ? { section: body.section } : {})
+    });
+    if (confirmationFailure) return this._json(req, res, confirmationFailure, 409);
 
     await this._ensureConnection();
 
@@ -1043,6 +1254,9 @@ class Gateway {
     const body = await parseBody(req);
     const action = (body.action || 'auto').toLowerCase();
 
+    const confirmationFailure = this._confirmationFailure(req, body, 'approve_dialog', { action });
+    if (confirmationFailure) return this._json(req, res, confirmationFailure, 409);
+
     await this._ensureConnection();
 
     if (action === 'auto') {
@@ -1076,6 +1290,10 @@ class Gateway {
   }
 
   async _handleDialogDismiss(req, res) {
+    const body = await parseBody(req);
+    const confirmationFailure = this._confirmationFailure(req, body, 'dismiss_dialog', {});
+    if (confirmationFailure) return this._json(req, res, confirmationFailure, 409);
+
     await this._ensureConnection();
     const result = await this.driver.approveDialog('dismiss');
     this._json(req, res, {

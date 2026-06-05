@@ -1,6 +1,8 @@
 'use strict';
 
 const { TraeCNSkill } = require('./traecn-skill');
+const promptLayers = require('./prompt-layers');
+const { buildCodeReviewTask } = require('./review');
 
 let _instance = null;
 
@@ -41,6 +43,21 @@ async function checkStatus() {
   const skill = getSkill();
   const status = await skill.status();
   return status.connected;
+}
+
+async function getCapabilities() {
+  const skill = getSkill();
+  return await skill.getCapabilities();
+}
+
+async function planOperation(command, params = {}, opts = {}) {
+  const skill = getSkill();
+  return await skill.planOperation(command, params, opts);
+}
+
+async function preflight(options = {}) {
+  const skill = getSkill();
+  return await skill.preflight(options);
 }
 
 async function switchModel(name) {
@@ -88,6 +105,12 @@ async function openProject(path) {
   return await skill.openProject(path);
 }
 
+async function reviewCode(input, opts = {}) {
+  const skill = getSkill();
+  const result = await skill.reviewCode(input, opts);
+  return opts.queue === true ? result.taskId : result.text;
+}
+
 function reset() {
   _instance = null;
 }
@@ -96,6 +119,9 @@ const t = runTask;
 const q = queueTask;
 const p = pollTask;
 const s = checkStatus;
+const capabilities = getCapabilities;
+const plan = planOperation;
+const pf = preflight;
 const model = switchModel;
 const mode = switchMode;
 const settings = getSettings;
@@ -105,6 +131,7 @@ const dialog = checkDialog;
 const queueCheck = checkQueue;
 const open = openProject;
 const cancel = cancelTask;
+const review = reviewCode;
 
 module.exports = {
   runTask,
@@ -112,6 +139,9 @@ module.exports = {
   pollTask,
   cancelTask,
   checkStatus,
+  getCapabilities,
+  planOperation,
+  preflight,
   switchModel,
   switchMode,
   newChat,
@@ -121,13 +151,18 @@ module.exports = {
   checkDialog,
   checkQueue,
   openProject,
+  reviewCode,
   reset,
   getSkill,
   TraeCNSkill,
+  buildCodeReviewTask,
   t,
   q,
   p,
   s,
+  capabilities,
+  plan,
+  pf,
   model,
   mode,
   settings,
@@ -136,5 +171,7 @@ module.exports = {
   dialog,
   queueCheck,
   open,
-  cancel
+  cancel,
+  review,
+  promptLayers
 };

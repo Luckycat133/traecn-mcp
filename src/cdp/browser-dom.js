@@ -28,22 +28,15 @@ class DomCache {
 const _globalCache = new DomCache();
 
 async function querySelector(client, selector) {
-  // Use Runtime.evaluate instead of DOM.querySelector for VS Code webview compatibility
-  const result = await client.send('Runtime.evaluate', {
-    expression: `document.querySelector('${selector.replace(/'/g, "\\'")}') !== null`,
-    returnByValue: true
-  });
-  return result.result?.value ? selector : null;
+  const root = await _globalCache.getDocument(client);
+  const { nodeId } = await client.send('DOM.querySelector', { nodeId: root.nodeId, selector });
+  return nodeId || null;
 }
 
 async function querySelectorAll(client, selector) {
-  // Use Runtime.evaluate instead of DOM.querySelectorAll
-  const result = await client.send('Runtime.evaluate', {
-    expression: `document.querySelectorAll('${selector.replace(/'/g, "\\'")}').length`,
-    returnByValue: true
-  });
-  const count = result.result?.value || 0;
-  return count > 0 ? Array(count).fill(0).map((_, i) => i) : [];
+  const root = await _globalCache.getDocument(client);
+  const { nodeIds } = await client.send('DOM.querySelectorAll', { nodeId: root.nodeId, selector });
+  return nodeIds || [];
 }
 
 async function getTextNodeContent(client, nodeId) {
@@ -148,20 +141,32 @@ async function setInputValue(client, nodeId, value) {
 }
 
 async function setContentEditableText(client, nodeId, text) {
-  const objectId = await _getNodeObjectId(client, nodeId);
-  await client.send('Runtime.callFunctionOn', {
-    functionDeclaration: `function() {
-      this.focus();
-      var sel = window.getSelection();
-      var range = document.createRange();
-      range.selectNodeContents(this);
-      sel.removeAllRanges();
-      sel.addRange(range);
-      document.execCommand('delete', false, null);
-      document.execCommand('insertText', false, ${JSON.stringify(text)});
-    }`,
-    objectId
+  await focusNode(client, nodeId);
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'a',
+    code: 'KeyA',
+    modifiers: 4
   });
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'a',
+    code: 'KeyA',
+    modifiers: 4
+  });
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'Backspace',
+    code: 'Backspace',
+    windowsVirtualKeyCode: 8
+  });
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Backspace',
+    code: 'Backspace',
+    windowsVirtualKeyCode: 8
+  });
+  await client.send('Input.insertText', { text });
   _globalCache.invalidate();
 }
 
@@ -181,17 +186,35 @@ async function pressEnter(client) {
 }
 
 async function findFirstMatching(client, selectors) {
-  // Use Runtime.evaluate in batch to avoid multiple round-trips
-  const selList = selectors.map(s => `'${s.replace(/'/g, "\\'")}'`).join(', ');
-  const result = await client.send('Runtime.evaluate', {
-    expression: `(function() { var sels = [${selList}]; for (var i = 0; i < sels.length; i++) { var el = document.querySelector(sels[i]); if (el && el.offsetParent !== null) { return { found: true, selector: sels[i] }; } } return { found: false }; })()`,
-    returnByValue: true
-  });
-  const info = result.result?.value || {};
-  if (info.found) {
-    return { matchedSelector: info.selector };
+  for (const selector of selectors) {
+    const nodeId = await querySelector(client, selector);
+    if (!nodeId) continue;
+
+    const visible = await isVisible(client, nodeId);
+    if (visible) {
+      return { nodeId, matchedSelector: selector };
+    }
   }
   return null;
+}
+
+async function isVisible(client, nodeId) {
+  try {
+    const objectId = await _getNodeObjectId(client, nodeId);
+    const { result } = await client.send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function() {
+        var rect = this.getBoundingClientRect();
+        var style = window.getComputedStyle(this);
+        return !!(rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none');
+      }`,
+      returnByValue: true
+    });
+    return !!result.value;
+  } catch {
+    _globalCache.invalidate();
+    return false;
+  }
 }
 
 module.exports = {

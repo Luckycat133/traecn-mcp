@@ -1,10 +1,92 @@
 'use strict';
 
 const { TraeCNApiClient } = require('./lib/traecnapi-client');
+const { COMMAND_DEFINITIONS, executeCommand, listCommands, mapSettingsAction } = require('./lib/command-set');
 
 const PLUGIN_ID = 'traecnclaw';
 
 const toolDefinitions = [
+  {
+    name: 'traecn_capabilities',
+    description: 'Return a compact agent-facing catalog of TraeCNclaw commands, HTTP endpoints, MCP surfaces, models, settings sections, and token-saving call order.',
+    parameters: {
+      type: 'object',
+      properties: {}
+    },
+    handler: async (_params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'capabilities', {});
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_command_set',
+    description: 'List the production command set OpenClaw can use to control TraeCN. Returns command names, summaries, and required/optional parameters.',
+    parameters: {
+      type: 'object',
+      properties: {}
+    },
+    handler: async () => ({ commands: listCommands() })
+  },
+  {
+    name: 'traecn_preflight',
+    description: 'Return a compact one-call status/readiness/queue/dialog summary plus an optional command confirmation plan before side-effecting TraeCN work.',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Optional command to assess, e.g. delegate_async or settings_set' },
+        params: { type: 'object', description: 'Optional command parameters for confirmation planning' },
+        forceConfirm: { type: 'boolean', description: 'Force confirmation planning even for lower-risk commands' }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'preflight', params || {});
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_command',
+    description: 'Execute a preset TraeCN command through the local TraeCNclaw gateway. Use traecn_command_set to discover available commands. Core commands include status, readiness, new_chat, delegate, delegate_async, task_status, cancel_task, switch_mode, switch_model, queue_status, open_project, settings_read, settings_read_all, settings_set, settings_navigate, settings_back, dialog_status, approve_dialog, dismiss_dialog, batch_submit, batch_status, batch_cancel, and review_code.',
+    parameters: {
+      type: 'object',
+      required: ['command'],
+      properties: {
+        command: {
+          type: 'string',
+          enum: COMMAND_DEFINITIONS.map(definition => definition.command),
+          description: 'Preset command name from traecn_command_set'
+        },
+        params: {
+          type: 'object',
+          description: 'Command parameters. See traecn_command_set for required and optional keys.'
+        }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, params.command, params.params || {});
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_plan_operation',
+    description: 'Create a compact side-effect and confirmation plan before executing a TraeCN command. This is a dry preflight and does not operate TraeCN.',
+    parameters: {
+      type: 'object',
+      required: ['command'],
+      properties: {
+        command: { type: 'string', description: 'Command you intend to execute, e.g. settings_set or approve_dialog' },
+        params: { type: 'object', description: 'Command-specific parameters to assess' },
+        forceConfirm: { type: 'boolean', description: 'Force user confirmation even for lower-risk commands' }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'confirm_plan', params);
+      return result.data || result;
+    }
+  },
   {
     name: 'traecn_task_status',
     description: 'Query the status of an async TraeCN task by taskId. Use after traecn_delegate returns a taskId with status "queued". Returns: done/queued/executing/error/cancelled/queue_timeout.',
@@ -39,14 +121,14 @@ const toolDefinitions = [
   },
   {
     name: 'traecn_settings_action',
-    description: 'Perform actions on the TraeCN settings panel. Actions: navigate, read, type (text into input by label), click (button/link by text), clickTab, toggle, dropdown, set, readTables (table content like MCP/model list), back. Section names: general(通用), account(账号), agents(智能体), mcp(MCP), flow(对话流), model(模型), context(上下文), rules(规则和技能), beta(Beta), about(关于 TRAE). Usage: {"action":"navigate","params":{"section":"MCP"}} then {"action":"read"} then {"action":"click","params":{"text":"添加 MCP Server"}} then {"action":"type","params":{"label":"名称","text":"my-server"}}.',
+    description: 'Perform supported actions on the TraeCN settings panel through implemented gateway routes. Actions: navigate/clickTab, read, readAll/readTables, type/toggle/dropdown/set, back. Section names: general(通用), account(账号), agents(智能体), mcp(MCP), flow(对话流), model(模型), context(上下文), rules(规则和技能), beta(Beta), about(关于 TRAE). Usage: {"action":"navigate","params":{"section":"MCP"}} then {"action":"read"} then {"action":"set","params":{"label":"Agent 名","value":"my-agent"}}.',
     parameters: {
       type: 'object',
       required: ['action'],
       properties: {
         action: {
           type: 'string',
-          enum: ['navigate', 'read', 'type', 'click', 'clickTab', 'toggle', 'dropdown', 'set', 'readTables', 'back'],
+          enum: ['navigate', 'read', 'readAll', 'type', 'clickTab', 'toggle', 'dropdown', 'set', 'readTables', 'back'],
           description: 'Action to perform on settings'
         },
         params: {
@@ -64,7 +146,8 @@ const toolDefinitions = [
     },
     handler: async (params, context) => {
       const client = new TraeCNApiClient(context);
-      const result = await client.settingsAction(params.action, params.params || {});
+      const mapped = mapSettingsAction(params.action, params.params || {});
+      const result = await executeCommand(client, mapped.command, mapped.params);
       return result.data || result;
     }
   },

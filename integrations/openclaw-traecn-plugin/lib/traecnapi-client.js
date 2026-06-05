@@ -68,6 +68,30 @@ class TraeCNApiClient {
     return this._request('GET', `/api/status?allowAutoStart=${allowAutoStart}`);
   }
 
+  async getCapabilities() {
+    return this._request('GET', '/api/capabilities');
+  }
+
+  async createConfirmationPlan(command, params = {}, options = {}) {
+    return this._request('POST', '/api/confirm/plan', {
+      command,
+      params,
+      forceConfirm: options.forceConfirm === true
+    });
+  }
+
+  async preflight(options = {}) {
+    const body = {};
+    if (options.command) body.command = options.command;
+    if (options.params) body.params = options.params;
+    if (options.forceConfirm === true) body.forceConfirm = true;
+    return this._request('POST', '/api/preflight', body);
+  }
+
+  async getReadiness() {
+    return this._request('GET', '/api/readiness');
+  }
+
   async newChat(allowAutoStart = false) {
     return this._request('POST', '/api/new-chat', { allowAutoStart });
   }
@@ -78,6 +102,7 @@ class TraeCNApiClient {
     if (options.sessionId) body.sessionId = options.sessionId;
     if (options.allowAutoStart) body.allowAutoStart = true;
     if (options.includeProcessText) body.includeProcessText = true;
+    if (options.waitForQueue !== undefined) body.waitForQueue = options.waitForQueue;
     // gateway wraps result in { status: 'done', text, ... };
     // unwrap the HTTP envelope for clean access by the caller
     const response = await this._request('POST', '/api/delegate', body);
@@ -121,24 +146,84 @@ class TraeCNApiClient {
     return this._request('GET', path);
   }
 
-  async settingsWrite(section, data) {
-    return this._request('POST', '/api/settings/set', { section, ...data });
+  async settingsReadAll() {
+    return this._request('GET', '/api/settings/read-all');
+  }
+
+  async settingsWrite(section, data, options = {}) {
+    return this._request('POST', '/api/settings/set', {
+      section,
+      ...data,
+      confirmationId: options.confirmationId,
+      requireConfirmation: options.requireConfirmation === true
+    });
   }
 
   async settingsAction(action, params = {}) {
-    return this._request('POST', '/api/settings/action', { action, params });
+    switch (action) {
+      case 'navigate':
+      case 'clickTab':
+        return this.settingsSwitchTab(params.section || params.text);
+      case 'read':
+        return this.settingsRead(params.section || null);
+      case 'readAll':
+      case 'readTables':
+        return this.settingsReadAll();
+      case 'type':
+      case 'toggle':
+      case 'dropdown':
+      case 'set': {
+        const value = params.value !== undefined ? params.value : (params.enabled !== undefined ? params.enabled : params.text);
+        return this.settingsWrite(params.section || null, { label: params.label, value });
+      }
+      case 'back':
+        return this.settingsBackToChat();
+      default:
+        return { status: 400, data: { error: `Unsupported settings action: ${action}` } };
+    }
+  }
+
+  async settingsSwitchTab(section) {
+    return this._request('POST', '/api/settings/switch-tab', { section });
+  }
+
+  async settingsBackToChat() {
+    return this._request('POST', '/api/settings/back-to-chat', {});
+  }
+
+  async submitBatch(tasks, options = {}) {
+    const body = { tasks };
+    if (options.strategy) body.strategy = options.strategy;
+    if (options.maxConcurrency !== undefined) body.maxConcurrency = options.maxConcurrency;
+    if (options.onComplete) body.onComplete = options.onComplete;
+    return this._request('POST', '/api/tasks/batch', body);
+  }
+
+  async getBatchStatus(batchId) {
+    return this._request('GET', '/api/tasks/batch/' + encodeURIComponent(batchId));
+  }
+
+  async cancelBatch(batchId) {
+    return this._request('DELETE', '/api/tasks/batch/' + encodeURIComponent(batchId));
   }
 
   async updateSelf(force = false) {
     return this._request('POST', '/api/update-self', { force });
   }
 
-  async approveDialog(action = 'auto') {
-    return this._request('POST', '/api/dialog/approve', { action });
+  async approveDialog(action = 'auto', options = {}) {
+    return this._request('POST', '/api/dialog/approve', {
+      action,
+      confirmationId: options.confirmationId,
+      requireConfirmation: options.requireConfirmation === true
+    });
   }
 
-  async dismissDialog() {
-    return this._request('POST', '/api/dialog/dismiss', {});
+  async dismissDialog(options = {}) {
+    return this._request('POST', '/api/dialog/dismiss', {
+      confirmationId: options.confirmationId,
+      requireConfirmation: options.requireConfirmation === true
+    });
   }
 
   async dialogStatus() {
