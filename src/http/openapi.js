@@ -31,6 +31,7 @@ function generateOpenAPISpec() {
                       version: { type: 'string' },
                       mockBridge: { type: 'boolean' },
                       cdp: { type: 'object' },
+                      surface: { type: 'object' },
                       uptime: { type: 'number' }
                     }
                   }
@@ -570,6 +571,7 @@ function generateOpenAPISpec() {
                       nextAction: { type: 'string' },
                       tokenHint: { type: 'string' },
                       status: { type: 'object' },
+                      surface: { type: 'object' },
                       readiness: { type: 'object' },
                       queue: { type: 'object' },
                       dialog: { type: 'object' },

@@ -7,6 +7,64 @@ const { getEnvWithFallback, safeClose } = require('../shared/utils');
 
 const DEFAULT_DISCOVERY_PORTS = ['9222', '9223', '9224', '9225', '9226', '9230'];
 
+function classifyTargetSurface(target = {}) {
+  const title = String(target.title || '').toLowerCase();
+  const url = String(target.url || '').toLowerCase();
+
+  if (
+    url.includes('/setup/setup.html') ||
+    title.includes('欢迎使用') ||
+    title.includes('选择您的主题') ||
+    title.includes('快捷键') ||
+    title.includes('添加命令行') ||
+    title.includes('登录即可') ||
+    title.includes('welcome')
+  ) {
+    return 'setup';
+  }
+
+  if (
+    url.includes('/workbench/workbench.html') ||
+    url.includes('/electron-sandbox/workbench/workbench.html') ||
+    url.includes('/workbench.html') ||
+    title.includes('trae cn') ||
+    title.includes('solo')
+  ) {
+    return 'workspace';
+  }
+
+  return 'unknown';
+}
+
+function describeCDPSurface(targets = []) {
+  const pages = targets.filter(target => target && target.type === 'page');
+  if (pages.length === 0) {
+    return {
+      kind: 'none',
+      title: null,
+      url: null,
+      targetId: null,
+      totalPageTargets: 0
+    };
+  }
+
+  const scored = pages
+    .map(target => {
+      const kind = classifyTargetSurface(target);
+      const rank = kind === 'workspace' ? 3 : kind === 'setup' ? 2 : 1;
+      return { target, kind, rank };
+    })
+    .sort((left, right) => right.rank - left.rank);
+
+  return {
+    kind: scored[0].kind,
+    title: scored[0].target.title || null,
+    url: scored[0].target.url || null,
+    targetId: scored[0].target.id || null,
+    totalPageTargets: pages.length
+  };
+}
+
 async function fetchCDPTargets(host, port) {
   return new Promise((resolve, reject) => {
     const url = `http://${host}:${port}/json/list`;
@@ -274,6 +332,8 @@ async function connectToTarget(targetInfo) {
 }
 
 module.exports = {
+  classifyTargetSurface,
+  describeCDPSurface,
   fetchCDPTargets,
   fetchCDPVersion,
   isTraeCNVersion,

@@ -4,7 +4,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
 const packageInfo = require('../../package.json');
-const { discoverTarget, connectToTarget, resolveCDPEndpoint } = require('../cdp/discovery');
+const { discoverTarget, connectToTarget, resolveCDPEndpoint, fetchCDPTargets, describeCDPSurface } = require('../cdp/discovery');
 const { DomDriver, getConfig } = require('../cdp/dom-driver');
 const { SETTINGS_SECTIONS } = require('../cdp/settings-driver');
 const { MockDriver } = require('../cdp/mock-driver');
@@ -612,11 +612,15 @@ class Gateway {
   async _statusSnapshot() {
     let cdpVersion = null;
     let cdpReachable = false;
+    let surface = null;
 
     try {
       const endpoint = await resolveCDPEndpoint();
       cdpVersion = endpoint.version;
       cdpReachable = true;
+      try {
+        surface = describeCDPSurface(await fetchCDPTargets(endpoint.host, endpoint.port));
+      } catch {}
     } catch {}
 
     return {
@@ -626,6 +630,7 @@ class Gateway {
       mockBridge: this.mockBridge,
       cdpReachable,
       cdp: cdpVersion ? { browser: cdpVersion.Browser, protocolVersion: cdpVersion['Protocol-Version'] } : null,
+      surface,
       uptime: process.uptime()
     };
   }
@@ -701,8 +706,9 @@ class Gateway {
     };
   }
 
-  _preflightNextAction({ connected, readiness, queue, dialog }) {
+  _preflightNextAction({ connected, surface, readiness, queue, dialog }) {
     if (!connected) return 'connect_traecn';
+    if (surface?.kind === 'setup') return 'complete_setup_or_login';
     if (dialog?.hasDialog) return dialog.canAutoApprove ? 'approve_dialog' : 'inspect_dialog';
     if (queue?.queued) return 'wait_queue_or_switch_model';
     if (queue?.running) return 'poll_or_wait';
@@ -746,7 +752,7 @@ class Gateway {
       ? buildConfirmationPlan({ command: body.command, params: body.params || {}, forceConfirm: body.forceConfirm === true })
       : null;
     const canDelegate = connected && readiness?.ready === true && !queue?.queued && !queue?.running && !dialog?.hasDialog;
-    const nextAction = this._preflightNextAction({ connected, readiness, queue, dialog });
+    const nextAction = this._preflightNextAction({ connected, surface: status.surface, readiness, queue, dialog });
     const commands = listCommands();
 
     this._json(req, res, {
@@ -756,6 +762,7 @@ class Gateway {
       mockBridge: status.mockBridge,
       connected,
       cdpReachable: status.cdpReachable,
+      surface: status.surface,
       ready: readiness?.ready === true,
       canDelegate,
       nextAction,

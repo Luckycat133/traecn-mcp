@@ -86,6 +86,7 @@ function summarizeReadiness(data) {
 
 function buildDiagnostics(endpoint, statusData, readinessData) {
   const readiness = summarizeReadiness(readinessData);
+  const surface = statusData?.surface || null;
   return {
     cdp: {
       host: endpoint.host,
@@ -97,9 +98,12 @@ function buildDiagnostics(endpoint, statusData, readinessData) {
       connected: statusData?.status || 'unknown',
       mockBridge: statusData?.mockBridge === true
     },
+    surface,
     readiness,
     nextSteps: readiness.ready ? [] : [
-      'Open Trae CN in the debug-enabled instance and complete login/onboarding.',
+      surface?.kind === 'setup'
+        ? 'Finish the current Trae CN setup or login flow until the main workspace appears.'
+        : 'Open Trae CN in the debug-enabled instance and complete login/onboarding.',
       'Open or focus a chat/project window with the message composer visible.',
       'Run npm run inspect:verify if readiness stays false after the UI is visible.',
       'Use node scripts/live-uat.js --require-ready for a strict readiness gate, and add --delegate only when sending a real prompt is acceptable.'

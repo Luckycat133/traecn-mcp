@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
@@ -259,6 +260,13 @@ test('config file path uses home directory', () => {
   assert.ok(COLORS !== undefined);
   const expectedPath = path.join(os.homedir(), '.traecnrc');
   assert.ok(expectedPath.endsWith('.traecnrc'));
+});
+
+test('CLI exposes preflight command in help and dispatcher', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'traecn-cli.js'), 'utf8');
+  assert.ok(source.includes("'preflight'") || source.includes('"preflight"'));
+  assert.ok(source.includes('cmdPreflight'));
+  assert.ok(source.includes('/api/preflight'));
 });
 
 test('task string length validation', () => {

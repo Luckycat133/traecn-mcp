@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { scoreTarget, discoverTarget, fetchCDPTargets, fetchCDPVersion } = require('./discovery');
+const { scoreTarget, discoverTarget, fetchCDPTargets, fetchCDPVersion, classifyTargetSurface, describeCDPSurface } = require('./discovery');
 
 let passed = 0;
 let failed = 0;
@@ -54,6 +54,32 @@ test('scoreTarget handles case insensitivity', () => {
   const target = { type: 'page', title: 'TRAE CN', url: '' };
   const score = scoreTarget(target, ['trae']);
   assert.ok(score > 10, 'Score should match case-insensitively');
+});
+
+test('classifyTargetSurface detects setup pages', () => {
+  assert.strictEqual(classifyTargetSurface({
+    type: 'page',
+    title: '欢迎使用 TRAE',
+    url: 'vscode-file://vscode-app/.../setup/setup.html'
+  }), 'setup');
+});
+
+test('classifyTargetSurface detects workspace pages', () => {
+  assert.strictEqual(classifyTargetSurface({
+    type: 'page',
+    title: 'Trae CN',
+    url: 'vscode-file://vscode-app/.../workbench/workbench.html'
+  }), 'workspace');
+});
+
+test('describeCDPSurface prefers workspace over setup when both exist', () => {
+  const surface = describeCDPSurface([
+    { id: 'setup', type: 'page', title: '欢迎使用 TRAE', url: 'vscode-file://.../setup/setup.html' },
+    { id: 'workspace', type: 'page', title: 'Trae CN', url: 'vscode-file://.../workbench/workbench.html' }
+  ]);
+  assert.strictEqual(surface.kind, 'workspace');
+  assert.strictEqual(surface.targetId, 'workspace');
+  assert.strictEqual(surface.totalPageTargets, 2);
 });
 
 test('fetchCDPTargets rejects on connection failure', async () => {

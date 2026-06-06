@@ -54,6 +54,7 @@ preflight({ command, params }) // npm simple API
 // MCP: preflight
 // CLI: traecn preflight delegate_async '{"task":"..."}'
 // OpenClaw command/tool: preflight / traecn_preflight
+// 返回 surface，可区分当前处于 setup 还是 workspace
 ```
 
 ### 操作确认预检

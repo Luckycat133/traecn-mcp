@@ -169,7 +169,7 @@ The OpenAPI schema is served at `/openapi.json`. Primary endpoints:
 - `GET /openapi.json`
 - MCP stdio tools through `mcp-server.js`
 
-Agents should call `GET /api/capabilities` or MCP `traecn_capabilities` first for a compact command, endpoint, token strategy, model, settings, and confirmation catalog. Before side-effecting operations, call `POST /api/preflight` or MCP `preflight` once to combine status, readiness, queue, dialog, and optional command-plan state. For a dry confirmation-only check, call `POST /api/confirm/plan` or MCP `plan_operation`. Fetch `/openapi.json` only when full request/response schemas are needed.
+Agents should call `GET /api/capabilities` or MCP `traecn_capabilities` first for a compact command, endpoint, token strategy, model, settings, and confirmation catalog. Before side-effecting operations, call `POST /api/preflight` or MCP `preflight` once to combine status, current `surface` (`setup` vs `workspace`), readiness, queue, dialog, and optional command-plan state. For a dry confirmation-only check, call `POST /api/confirm/plan` or MCP `plan_operation`. Fetch `/openapi.json` only when full request/response schemas are needed.
 
 ## Testing
 

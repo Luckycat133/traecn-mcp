@@ -26,6 +26,7 @@ for (const docPath of requiredDocs) {
 
 const doctorPath = path.join(root, 'scripts/doctor.js');
 assert.ok(fs.existsSync(doctorPath), 'scripts/doctor.js is missing');
+assert.ok(fs.existsSync(path.join(root, 'scripts/coverage-audit.js')), 'scripts/coverage-audit.js is missing');
 const liveUatSource = fs.readFileSync(path.join(root, 'scripts/live-uat.js'), 'utf8');
 const cliSource = fs.readFileSync(path.join(root, 'scripts/traecn-cli.js'), 'utf8');
 assert.ok(liveUatSource.includes('--require-ready'), 'scripts/live-uat.js must support --require-ready');
@@ -34,6 +35,8 @@ assert.ok(cliSource.includes("case 'capabilities'"), 'CLI must expose capabiliti
 assert.ok(cliSource.includes("case 'preflight'"), 'CLI must expose preflight command');
 assert.ok(cliSource.includes("case 'plan'"), 'CLI must expose operation plan command');
 assert.strictEqual(packageJson.scripts.doctor, 'node scripts/doctor.js');
+assert.strictEqual(packageJson.scripts['test:coverage'], 'node scripts/coverage-audit.js');
+assert.ok(packageJson.scripts['test:uat'].includes('coverage-audit'), 'test:uat must include coverage audit');
 assert.strictEqual(packageJson.scripts['inspect:verify'], 'node scripts/inspect-traecn.js --verify');
 assert.strictEqual(packageJson.scripts['test:live'], 'node scripts/live-uat.js');
 assert.strictEqual(packageJson.bin['traecnclaw-mcp'], './mcp-server.js');
@@ -97,6 +100,7 @@ const packInfo = JSON.parse(packOutput)[0];
 const packedFiles = packInfo.files.map(file => file.path);
 for (const requiredFile of [
   'mcp-server.js',
+  'scripts/coverage-audit.js',
   'scripts/live-uat.js',
   'src/shared/operation-confirmation.js',
   'src/skill/review.js',
