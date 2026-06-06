@@ -7,7 +7,7 @@ const { KNOWN_MODELS, SETTINGS_SECTIONS } = require('../skill/traecn-skill');
 
 const API_FAMILIES = Object.freeze({
   discovery: ['/api/capabilities', '/api/preflight', '/api/status', '/openapi.json'],
-  delegation: ['/api/delegate', '/api/delegate-async', '/api/task/{taskId}', '/api/task/{taskId}/cancel'],
+  delegation: ['/api/delegate', '/api/delegate-async', '/api/task/{taskId}', '/api/task/{taskId}/review', '/api/task/{taskId}/cancel'],
   sessions: ['/api/sessions', '/api/sessions/{sessionId}', '/api/sessions/{sessionId}/delegate'],
   queue: ['/api/queue-status', '/api/queue/status', '/api/tasks/batch', '/api/tasks/batch/{batchId}'],
   review: ['/api/delegate', '/api/delegate-async'],
@@ -25,6 +25,7 @@ const OPERATION_HINTS = Object.freeze({
   delegate: 'Best for one-off work where the caller can wait.',
   delegate_async: 'Best for token-efficient background delegation.',
   task_status: 'Poll async work without re-sending task context.',
+  review_task: 'Approve or reject a completed background result before continuing follow-up work.',
   queue_status: 'Check model busy/queue state before sending expensive work.',
   review_code: 'Ask Trae CN for findings-first code review of code or diff.',
   approve_dialog: 'Handle permission, restricted-mode, or confirmation prompts explicitly.'

@@ -307,7 +307,28 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string', description: 'The task to delegate', maxLength: 100000 },
-                    chatId: { type: 'string', description: 'Optional chat ID for notification callback' }
+                    chatId: { type: 'string', description: 'Optional chat ID for notification callback' },
+                    waitForQueue: { type: 'boolean', default: true },
+                    includeProcessText: { type: 'boolean', default: false },
+                    reviewRequired: { type: 'boolean', default: false },
+                    notifyUrl: { type: 'string', description: 'Optional webhook URL for task lifecycle notifications' },
+                    followupTasks: {
+                      type: 'array',
+                      items: {
+                        oneOf: [
+                          { type: 'string' },
+                          {
+                            type: 'object',
+                            required: ['task'],
+                            properties: {
+                              task: { type: 'string' },
+                              reviewRequired: { type: 'boolean' },
+                              includeProcessText: { type: 'boolean' }
+                            }
+                          }
+                        ]
+                      }
+                    }
                   }
                 }
               }
@@ -491,6 +512,36 @@ function generateOpenAPISpec() {
           ],
           responses: {
             '200': { description: 'Task status' },
+            '404': { description: 'Task not found' }
+          }
+        }
+      },
+      '/api/task/{taskId}/review': {
+        post: {
+          summary: 'Approve or reject a background result before continuing follow-up work',
+          operationId: 'reviewTaskResult',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['decision'],
+                  properties: {
+                    decision: { type: 'string', enum: ['approve', 'continue', 'reject'] },
+                    notes: { type: 'string' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Review decision applied' },
+            '400': { description: 'Invalid review request' },
             '404': { description: 'Task not found' }
           }
         }

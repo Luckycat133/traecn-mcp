@@ -17,6 +17,7 @@ const { getGlobalStore } = require('../shared/task-history');
 const { buildCapabilities } = require('../shared/capabilities');
 const { buildConfirmationPlan } = require('../shared/operation-confirmation');
 const { listCommands } = require('../../integrations/openclaw-traecn-plugin/lib/command-set');
+const { WebSocketHandler } = require('./websocket-handler');
 
 function normalizeUrl(rawUrl) {
   return rawUrl.replace(/[\x80-\xff]/g, ch => {
@@ -186,6 +187,33 @@ function formatResult(result) {
   return `✅ Trae 完成: ${msg.substring(0, 200)}`;
 }
 
+function formatReviewRequiredMessage(taskId, result, remainingFollowups = 0) {
+  const preview = String(result?.text || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+  const suffix = remainingFollowups > 0 ? `\n后续待续任务: ${remainingFollowups}` : '';
+  return `📝 Trae 已完成并等待审查:\nTask ID: ${taskId}\n预览: ${preview || '（无文本预览）'}${suffix}\n\n审查通过后再继续后续排队任务。`;
+}
+
+async function sendTaskWebhook(url, payload) {
+  if (!url) return;
+  const body = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    ...payload
+  });
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'TraeCNclaw-TaskWebhook/1.0'
+    },
+    body,
+    signal: AbortSignal.timeout(5000)
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+  await response.text().catch(() => {});
+}
+
 class Gateway {
   constructor(options = {}) {
     const host = process.env.TRAECN_HOST ?? process.env.HOST ?? process.env.TRAE_HOST ?? '127.0.0.1';
@@ -213,6 +241,7 @@ class Gateway {
     this.client = null;
     this.driver = null;
     this.server = null;
+    this.wsHandler = null;
     this.sessions = new Map();
     this.idempotencyKeys = new Map();
     this.taskQueue = new Map();
@@ -256,6 +285,214 @@ class Gateway {
     const timer = setInterval(callback, interval);
     this.activeTimers.add(timer);
     return timer;
+  }
+
+  _clearInterval(timer) {
+    clearInterval(timer);
+    this.activeTimers.delete(timer);
+  }
+
+  _normalizeFollowupTasks(items) {
+    if (!Array.isArray(items)) return [];
+    return items
+      .map(item => {
+        if (typeof item === 'string') {
+          return { task: item, reviewRequired: true };
+        }
+        if (!item || typeof item !== 'object' || typeof item.task !== 'string') return null;
+        return {
+          task: item.task,
+          reviewRequired: item.reviewRequired !== false,
+          includeProcessText: item.includeProcessText === true
+        };
+      })
+      .filter(item => item && item.task && item.task.length <= 100000);
+  }
+
+  _createQueuedTask(body, queueStatus = {}) {
+    const reviewRequired = body.reviewRequired === true;
+    const followupTasks = this._normalizeFollowupTasks(body.followupTasks);
+    const historyTaskId = this.taskHistoryStore.createTask(null, body.task, {
+      metadata: {
+        source: 'delegate_async',
+        reviewRequired,
+        followupCount: followupTasks.length,
+        notifyUrl: body.notifyUrl || null
+      }
+    });
+    const perTaskTimeoutMs = this.driver.config.queuePerTaskTimeoutMs || 600000;
+    const task = {
+      taskId: historyTaskId,
+      chatId: body.chatId || null,
+      task: body.task,
+      status: 'queued',
+      createdAt: Date.now(),
+      deadline: Date.now() + perTaskTimeoutMs,
+      attempts: 0,
+      includeProcessText: body.includeProcessText === true,
+      reviewRequired,
+      followupTasks,
+      notifyUrl: typeof body.notifyUrl === 'string' ? body.notifyUrl : null,
+      queueState: queueStatus.running ? 'running' : 'queued',
+      queueMessage: queueStatus.queueMessage || queueStatus.message || null,
+      result: null,
+      error: null,
+      reviewDecision: null,
+      reviewNotes: null,
+      nextTaskId: null
+    };
+    this.taskHistoryStore.recordStep(historyTaskId, 'queued', {
+      details: {
+        queueState: task.queueState,
+        queuePosition: queueStatus.queuePosition || queueStatus.position || null,
+        queueMessage: task.queueMessage,
+        reviewRequired,
+        followupCount: followupTasks.length
+      }
+    });
+    this.taskQueue.set(historyTaskId, task);
+    return task;
+  }
+
+  async _emitTaskNotification(taskId, task, eventType, extra = {}) {
+    if (this.wsHandler) {
+      this.wsHandler.broadcastEvent(eventType, { taskId, status: task.status, ...extra });
+    }
+
+    if (task.chatId) {
+      if (eventType === 'task.review_required') {
+        await notifyOpenClaw(task.chatId, formatReviewRequiredMessage(taskId, task.result, task.followupTasks?.length || 0));
+      } else if (eventType === 'task.approval_required') {
+        await notifyOpenClaw(task.chatId, `🤖 Trae 需要处理受限模式或确认弹窗:\nTask ID: ${taskId}\n${task.result?.question || ''}`);
+      } else if (eventType === 'task.completed') {
+        await notifyOpenClaw(task.chatId, formatResult(task.result));
+      } else if (eventType === 'task.error') {
+        await notifyOpenClaw(task.chatId, '❌ Trae 出错: ' + (task.error || 'unknown error'));
+      } else if (eventType === 'task.queue_timeout') {
+        await notifyOpenClaw(task.chatId, '❌ Trae 排队超时（超过限制），请稍后重试或切换模型');
+      }
+    }
+
+    if (task.notifyUrl) {
+      try {
+        await sendTaskWebhook(task.notifyUrl, {
+          event: eventType,
+          data: {
+            taskId,
+            status: task.status,
+            reviewDecision: task.reviewDecision || null,
+            nextTaskId: task.nextTaskId || null,
+            result: task.result ? {
+              text: task.result.text || '',
+              stable: task.result.stable || false,
+              elapsedMs: task.result.elapsedMs || 0,
+              timedOut: task.result.timedOut || false,
+              needsApproval: task.result.needsApproval || false,
+              question: task.result.question || ''
+            } : null,
+            error: task.error || null,
+            followupCount: task.followupTasks?.length || 0,
+            ...extra
+          }
+        });
+      } catch (err) {
+        console.error('[TaskNotify] webhook failed:', err.message);
+      }
+    }
+  }
+
+  async _finalizeBackgroundTask(taskId, task, status, payload = {}) {
+    task.status = status;
+    if (payload.result !== undefined) task.result = payload.result;
+    if (payload.error !== undefined) task.error = payload.error;
+    if (payload.reviewDecision !== undefined) task.reviewDecision = payload.reviewDecision;
+    if (payload.reviewNotes !== undefined) task.reviewNotes = payload.reviewNotes;
+    if (payload.nextTaskId !== undefined) task.nextTaskId = payload.nextTaskId;
+
+    this.taskHistoryStore.recordStep(taskId, status, {
+      success: status !== 'error' && status !== 'queue_timeout',
+      error: task.error || null,
+      details: {
+        reviewDecision: task.reviewDecision || null,
+        nextTaskId: task.nextTaskId || null
+      }
+    });
+
+    if (status === 'done') {
+      this.taskHistoryStore.completeTask(taskId, task.result, {
+        elapsedMs: task.result?.elapsedMs || Date.now() - task.createdAt
+      });
+      await this._emitTaskNotification(taskId, task, 'task.completed');
+    } else if (status === 'awaiting_review') {
+      await this._emitTaskNotification(taskId, task, 'task.review_required', {
+        remainingFollowups: task.followupTasks?.length || 0
+      });
+    } else if (status === 'approval_required') {
+      await this._emitTaskNotification(taskId, task, 'task.approval_required');
+    } else if (status === 'review_rejected') {
+      this.taskHistoryStore.cancelTask(taskId);
+      await this._emitTaskNotification(taskId, task, 'task.review_rejected');
+    } else if (status === 'queue_timeout') {
+      this.taskHistoryStore.failTask(taskId, task.error || 'Task exceeded queue wait timeout');
+      await this._emitTaskNotification(taskId, task, 'task.queue_timeout');
+    } else if (status === 'error') {
+      this.taskHistoryStore.failTask(taskId, task.error || payload.error || 'Unknown error');
+      await this._emitTaskNotification(taskId, task, 'task.error');
+    } else if (status === 'cancelled') {
+      this.taskHistoryStore.cancelTask(taskId);
+    }
+
+    if (this.wsHandler) {
+      this.wsHandler.notifyTaskStatusChange(taskId, task);
+    }
+  }
+
+  async _continueReviewedTask(taskId, task, decision, notes = '') {
+    task.reviewDecision = decision;
+    task.reviewNotes = notes;
+
+    if (decision === 'reject') {
+      await this._finalizeBackgroundTask(taskId, task, 'review_rejected', {
+        reviewDecision: decision,
+        reviewNotes: notes
+      });
+      return { taskId, status: task.status, reviewDecision: decision };
+    }
+
+    if (!task.followupTasks || task.followupTasks.length === 0) {
+      await this._finalizeBackgroundTask(taskId, task, 'done', {
+        result: task.result,
+        reviewDecision: decision,
+        reviewNotes: notes
+      });
+      return { taskId, status: task.status, reviewDecision: decision };
+    }
+
+    const nextSpec = task.followupTasks.shift();
+    const nextTask = this._createQueuedTask({
+      task: nextSpec.task,
+      includeProcessText: nextSpec.includeProcessText === true,
+      reviewRequired: nextSpec.reviewRequired !== false,
+      followupTasks: task.followupTasks,
+      notifyUrl: task.notifyUrl,
+      chatId: task.chatId
+    }, { queued: true, queueMessage: '等待上一审查通过后继续执行' });
+    nextTask.queueState = 'workflow';
+
+    await this._finalizeBackgroundTask(taskId, task, 'done', {
+      result: task.result,
+      reviewDecision: decision,
+      reviewNotes: notes,
+      nextTaskId: nextTask.taskId
+    });
+    this._ensureBackgroundPolling();
+    return {
+      taskId,
+      status: 'continued',
+      reviewDecision: decision,
+      nextTaskId: nextTask.taskId,
+      remainingFollowups: nextTask.followupTasks.length
+    };
   }
 
   _clearInterval(timer) {
@@ -484,6 +721,11 @@ class Gateway {
         const taskId = pathname.split('/').pop();
         return this._handleTaskStatus(req, res, taskId);
       }
+      if (pathname.match(/^\/api\/task\/[^/]+\/review$/) && method === 'POST') {
+        const segments = pathname.split('/');
+        const taskId = segments[3];
+        return await this._handleTaskReview(req, res, taskId);
+      }
       if (pathname.match(/^\/api\/task\/[^/]+\/cancel$/) && method === 'POST') {
         const segments = pathname.split('/');
         const taskId = segments[3];
@@ -668,6 +910,7 @@ class Gateway {
     return {
       queued: queue.queued === true,
       running: queue.running === true,
+      canSubmit: queue.canSubmit === true,
       currentModel: queue.currentModel || null,
       queuePosition: queue.queuePosition || queue.position || null,
       queueEstimatedWait: queue.queueEstimatedWait || null,
@@ -686,8 +929,12 @@ class Gateway {
     };
   }
 
+  _isTerminalTaskStatus(status) {
+    return ['done', 'error', 'cancelled', 'queue_timeout', 'review_rejected'].includes(status);
+  }
+
   _queueRuntimeSummary() {
-    const tasks = Array.from(this.taskQueue.values());
+    const tasks = Array.from(this.taskQueue.values()).filter(task => !this._isTerminalTaskStatus(task.status));
     const batches = Array.from(this.batchTasks.values());
     const countByStatus = (items, getStatus) => items.reduce((acc, item) => {
       const status = getStatus(item) || 'unknown';
@@ -710,6 +957,7 @@ class Gateway {
     if (!connected) return 'connect_traecn';
     if (surface?.kind === 'setup') return 'complete_setup_or_login';
     if (dialog?.hasDialog) return dialog.canAutoApprove ? 'approve_dialog' : 'inspect_dialog';
+    if (queue?.queued && queue?.canSubmit) return 'delegate_async';
     if (queue?.queued) return 'wait_queue_or_switch_model';
     if (queue?.running) return 'poll_or_wait';
     if (!readiness?.ready) return 'focus_or_login_traecn';
@@ -751,7 +999,8 @@ class Gateway {
     const commandPlan = body.command
       ? buildConfirmationPlan({ command: body.command, params: body.params || {}, forceConfirm: body.forceConfirm === true })
       : null;
-    const canDelegate = connected && readiness?.ready === true && !queue?.queued && !queue?.running && !dialog?.hasDialog;
+    const queueAllowsSubmit = !queue?.queued || queue?.canSubmit === true;
+    const canDelegate = connected && readiness?.ready === true && queueAllowsSubmit && !queue?.running && !dialog?.hasDialog;
     const nextAction = this._preflightNextAction({ connected, surface: status.surface, readiness, queue, dialog });
     const commands = listCommands();
 
@@ -1093,18 +1342,26 @@ class Gateway {
     let result;
 
     try {
+      const SPAWN_TIMEOUT_MS = 10000;
       const child = spawn('trae-cn', ['--reuse-window', projectPath], {
-        stdio: 'pipe',
-        timeout: 10000
+        stdio: 'pipe'
       });
+
+      const spawnTimeout = setTimeout(() => {
+        child.kill('SIGTERM');
+      }, SPAWN_TIMEOUT_MS);
 
       result = await new Promise((resolve) => {
         let stdout = '';
         let stderr = '';
         child.stdout.on('data', d => stdout += d);
         child.stderr.on('data', d => stderr += d);
-        child.on('error', (err) => resolve({ success: false, error: err.message }));
+        child.on('error', (err) => {
+          clearTimeout(spawnTimeout);
+          resolve({ success: false, error: err.message });
+        });
         child.on('close', (code) => {
+          clearTimeout(spawnTimeout);
           resolve({
             success: code === 0,
             projectPath,
@@ -1265,11 +1522,34 @@ class Gateway {
     if (confirmationFailure) return this._json(req, res, confirmationFailure, 409);
 
     await this._ensureConnection();
+    const currentDialog = await this.driver.checkForApprovalDialog();
+    const currentRestricted = currentDialog.needsApproval ? null : await this.driver.checkRestrictedMode();
+
+    if (action === 'trust' && currentRestricted?.restricted) {
+      const restrictedResult = await this.driver.clickRestrictedModeTrust();
+      return this._json(req, res, {
+        success: restrictedResult.success,
+        action,
+        dialogType: 'restricted_mode_banner',
+        buttonClicked: restrictedResult.buttonText || restrictedResult.manageButtonText,
+        error: restrictedResult.error || restrictedResult.reason
+      });
+    }
 
     if (action === 'auto') {
       // Auto-detect the best action based on dialog type
-      const dialog = await this.driver.checkForApprovalDialog();
+      const dialog = currentDialog;
       if (!dialog.needsApproval) {
+        if (currentRestricted?.restricted) {
+          const restrictedResult = await this.driver.clickRestrictedModeTrust();
+          return this._json(req, res, {
+            success: restrictedResult.success,
+            action: 'trust',
+            dialogType: 'restricted_mode_banner',
+            buttonClicked: restrictedResult.buttonText || restrictedResult.manageButtonText,
+            error: restrictedResult.error || restrictedResult.reason
+          });
+        }
         return this._json(req, res, { success: false, error: 'No dialog found to approve' });
       }
       const autoAction = dialog.canAutoApprove ? 'trust' : 'allow';
@@ -1287,7 +1567,17 @@ class Gateway {
       return this._json(req, res, { error: 'Invalid action: ' + action }, 400);
     }
 
-    const result = await this.driver.approveDialog(action);
+    let result = await this.driver.approveDialog(action);
+    if (!result.success && action === 'trust') {
+      const restrictedResult = await this.driver.clickRestrictedModeTrust();
+      if (restrictedResult.success) {
+        result = {
+          success: true,
+          action,
+          buttonClicked: restrictedResult.buttonText || 'Manage -> Trust'
+        };
+      }
+    }
     this._json(req, res, {
       success: result.success,
       action,
@@ -1313,7 +1603,19 @@ class Gateway {
 
   async _handleDialogStatus(req, res) {
     await this._ensureConnection();
-    const dialog = await this.driver.checkForApprovalDialog();
+    let dialog = await this.driver.checkForApprovalDialog();
+    if (!dialog.needsApproval) {
+      const restricted = await this.driver.checkRestrictedMode();
+      if (restricted?.restricted) {
+        dialog = {
+          needsApproval: true,
+          dialogType: 'restricted_mode_banner',
+          question: restricted.title || '受限模式已启用',
+          buttons: restricted.manageButtonFound ? ['管理'] : [],
+          canAutoApprove: restricted.trustButtonFound === true || restricted.manageButtonFound === true
+        };
+      }
+    }
     this._json(req, res, {
       hasDialog: dialog.needsApproval,
       dialogType: dialog.dialogType || null,
@@ -1376,6 +1678,7 @@ class Gateway {
 
     // Get queue status with enhanced detection
     const queueStatus = await this.driver.checkQueueStatus();
+    const queueBlocked = queueStatus.running || (queueStatus.queued && queueStatus.canSubmit !== true);
 
     // Build queue ETA message
     let queueEtaMessage = '';
@@ -1385,58 +1688,41 @@ class Gateway {
       queueEtaMessage = `，当前第 ${queueStatus.queuePosition} 位`;
     }
 
-    if (queueStatus.queued) {
+    if (queueBlocked) {
       if (!waitForQueue) {
         // Caller doesn't want to wait — return queue info immediately
         return this._json(req, res, {
-          status: 'queued',
+          status: queueStatus.queued ? 'queued' : 'running',
           queueDetails: {
-            state: 'queued',
+            state: queueStatus.queued ? 'queued' : 'running',
             currentModel: queueStatus.currentModel || '',
             queuePosition: queueStatus.queuePosition,
             queueEstimatedWait: queueStatus.queueEstimatedWait,
-            queueMessage: queueStatus.queueMessage || '模型排队中'
+            queueMessage: queueStatus.queueMessage || (queueStatus.running ? '模型正在执行其他任务' : '模型排队中')
           },
-          message: `模型排队中${queueEtaMessage}，请稍后重试或设置 waitForQueue=true 自动等待`,
+          message: `${queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'}${queueEtaMessage}，请稍后重试或设置 waitForQueue=true 自动等待`,
           model: queueStatus.currentModel
         }, 202);
       }
 
-      // Store task for background processing with per-task queue timeout
-      const taskId = 'task_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      const perTaskTimeoutMs = this.driver.config.queuePerTaskTimeoutMs || 600000;
-      this.taskQueue.set(taskId, {
-        chatId,
-        task: body.task,
-        status: 'queued',
-        createdAt: Date.now(),
-        deadline: Date.now() + perTaskTimeoutMs,
-        attempts: 0,
-        includeProcessText
-      });
-
+      body.chatId = chatId;
+      body.includeProcessText = includeProcessText;
+      const task = this._createQueuedTask(body, queueStatus);
       this._ensureBackgroundPolling();
 
       return this._json(req, res, {
-        taskId,
+        taskId: task.taskId,
         status: 'queued',
         queueDetails: {
-          state: 'queued',
+          state: queueStatus.queued ? 'queued' : 'running',
           currentModel: queueStatus.currentModel || '',
           queuePosition: queueStatus.queuePosition,
           queueEstimatedWait: queueStatus.queueEstimatedWait,
-          queueMessage: queueStatus.queueMessage || '模型排队中'
+          queueMessage: queueStatus.queueMessage || (queueStatus.running ? '模型正在执行其他任务' : '模型排队中')
         },
-        message: `模型排队中${queueEtaMessage}，任务已加入后台。用 traecn_task_status 查询进度`,
-        model: queueStatus.currentModel
-      }, 202);
-    }
-
-    if (queueStatus.running) {
-      // Model is currently generating — can't send new task yet
-      return this._json(req, res, {
-        status: 'running',
-        message: 'Trae 正在执行其他任务，请稍后重试',
+        reviewRequired: task.reviewRequired,
+        followupCount: task.followupTasks.length,
+        message: `${queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'}${queueEtaMessage}，任务已加入后台。用 traecn_task_status 查询进度`,
         model: queueStatus.currentModel
       }, 202);
     }
@@ -1469,6 +1755,25 @@ class Gateway {
       needsApproval: result.needsApproval || false,
       question: result.question || ''
     };
+
+    if (body.reviewRequired === true || this._normalizeFollowupTasks(body.followupTasks).length > 0) {
+      const task = this._createQueuedTask({
+        ...body,
+        chatId,
+        includeProcessText
+      }, { queued: false, running: false, queueMessage: 'immediate execution' });
+      await this._finalizeBackgroundTask(task.taskId, task, result.needsApproval ? 'approval_required' : 'awaiting_review', {
+        result
+      });
+      return this._json(req, res, {
+        taskId: task.taskId,
+        status: task.status,
+        reviewRequired: task.reviewRequired,
+        followupCount: task.followupTasks.length,
+        message: task.status === 'approval_required' ? 'Trae 结果需要先处理确认弹窗' : 'Trae 已完成，等待人工审查',
+        resultPreview: (result.text || '').slice(0, 500)
+      }, 202);
+    }
 
     if (includeProcessText && result.processText) {
       responseData.processText = result.processText;
@@ -1503,6 +1808,26 @@ class Gateway {
       case 'executing':
         response.message = 'Trae 正在执行';
         break;
+      case 'approval_required':
+        response.message = 'Trae 需要先处理确认弹窗';
+        response.result = {
+          text: task.result?.text || '',
+          needsApproval: true,
+          question: task.result?.question || ''
+        };
+        break;
+      case 'awaiting_review':
+        response.message = '等待人工审查';
+        response.reviewRequired = true;
+        response.followupCount = task.followupTasks?.length || 0;
+        response.result = {
+          text: task.result?.text || '',
+          stable: task.result?.stable || false,
+          elapsedMs: task.result?.elapsedMs || null,
+          timedOut: task.result?.timedOut || false,
+          needsApproval: false
+        };
+        break;
       case 'done':
         response.message = '执行完成';
         response.result = {
@@ -1524,9 +1849,37 @@ class Gateway {
         response.message = '排队超时，请稍后重试或切换模型';
         response.error = 'Task exceeded queue wait timeout';
         break;
+      case 'review_rejected':
+        response.message = '审查未通过，任务已停止';
+        response.reviewDecision = task.reviewDecision || 'reject';
+        response.reviewNotes = task.reviewNotes || '';
+        break;
     }
 
     this._json(req, res, response);
+  }
+
+  async _handleTaskReview(req, res, taskId) {
+    const task = this.taskQueue.get(taskId);
+    if (!task) {
+      return this._json(req, res, { error: 'Task not found' }, 404);
+    }
+    if (task.status !== 'awaiting_review') {
+      return this._json(req, res, {
+        error: 'Task is not awaiting review',
+        status: task.status
+      }, 400);
+    }
+
+    const body = await parseBody(req);
+    const decision = String(body.decision || '').toLowerCase();
+    const notes = typeof body.notes === 'string' ? body.notes : '';
+    if (!['approve', 'continue', 'reject'].includes(decision)) {
+      return this._json(req, res, { error: 'decision must be approve, continue, or reject' }, 400);
+    }
+
+    const result = await this._continueReviewedTask(taskId, task, decision === 'continue' ? 'approve' : decision, notes);
+    this._json(req, res, result);
   }
 
   _handleTaskCancel(req, res, taskId) {
@@ -1534,7 +1887,7 @@ class Gateway {
     if (!task) {
       return this._json(req, res, { error: 'Task not found' }, 404);
     }
-    if (task.status !== 'queued') {
+    if (!['queued', 'awaiting_review', 'approval_required'].includes(task.status)) {
       return this._json(req, res, {
         error: 'Task is not in a cancellable state',
         status: task.status
@@ -1543,7 +1896,10 @@ class Gateway {
     // Remove task from locks if it's there
     this.taskLocks.delete(taskId);
     task.status = 'cancelled';
-    this.taskQueue.delete(taskId);
+    this.taskHistoryStore.cancelTask(taskId);
+    if (this.wsHandler) {
+      this.wsHandler.notifyTaskStatusChange(taskId, task);
+    }
     this._json(req, res, { taskId, status: 'cancelled' });
   }
 
@@ -1807,13 +2163,15 @@ class Gateway {
   }
 
   _handleQueueStatusList(req, res) {
-    const tasks = Array.from(this.taskQueue.entries()).map(([id, t]) => ({
+    const tasks = Array.from(this.taskQueue.entries())
+      .filter(([, t]) => !this._isTerminalTaskStatus(t.status))
+      .map(([id, t]) => ({
       taskId: id,
       status: t.status,
       createdAt: t.createdAt,
       result: t.status === 'done' ? t.result : undefined,
       error: t.status === 'error' ? t.error : undefined
-    }));
+      }));
     this._json(req, res, { tasks });
   }
 
@@ -1847,20 +2205,13 @@ class Gateway {
           if (task.status !== 'queued' || this.taskLocks.has(taskId)) continue;
 
           // Check per-task queue timeout
-        if (Date.now() > task.deadline) {
-          task.status = 'queue_timeout';
-
-          if (this.wsHandler) {
-            this.wsHandler.notifyTaskStatusChange(taskId, task);
+          if (Date.now() > task.deadline) {
+            console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
+            await this._finalizeBackgroundTask(taskId, task, 'queue_timeout', {
+              error: 'Task exceeded queue wait timeout'
+            });
+            continue;
           }
-
-          console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
-          if (task.chatId) {
-            await notifyOpenClaw(task.chatId, '❌ Trae 排队超时（超过限制），请稍后重试或切换模型');
-          }
-          this.taskQueue.delete(taskId);
-          continue;
-        }
 
           try {
             await this._ensureConnection();
@@ -1883,22 +2234,26 @@ class Gateway {
               await this.driver.newChat();
               await this.driver.sendMessage(task.task);
               const result = await this.driver.collectResponse();
-
-              task.status = 'done';
               task.result = result;
 
-              if (task.chatId) {
-                await notifyOpenClaw(task.chatId, formatResult(result));
+              if (result.needsApproval) {
+                await this._finalizeBackgroundTask(taskId, task, 'approval_required', {
+                  result
+                });
+              } else if (task.reviewRequired || (task.followupTasks && task.followupTasks.length > 0)) {
+                await this._finalizeBackgroundTask(taskId, task, 'awaiting_review', {
+                  result
+                });
+              } else {
+                await this._finalizeBackgroundTask(taskId, task, 'done', {
+                  result
+                });
               }
-              this.taskQueue.delete(taskId);
             } catch (e) {
-              task.status = 'error';
-              task.error = e.message;
               console.error('[Queue] Task', taskId, 'execution error:', e.message);
-              if (task.chatId) {
-                await notifyOpenClaw(task.chatId, '❌ Trae 出错: ' + e.message);
-              }
-              this.taskQueue.delete(taskId);
+              await this._finalizeBackgroundTask(taskId, task, 'error', {
+                error: e.message
+              });
             } finally {
               // Unlock the task after execution completes (success or error)
               this.taskLocks.delete(taskId);
@@ -1992,6 +2347,8 @@ async function startGateway(options = {}) {
   return new Promise((resolve, reject) => {
     server.listen(gateway.port, gateway.host, () => {
       gateway.server = server;
+      gateway.wsHandler = new WebSocketHandler(gateway);
+      gateway.wsHandler.initialize(server);
       gateway._ensureBackgroundPolling();
       resolve({ server, gateway });
     });

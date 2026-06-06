@@ -13,8 +13,13 @@ loadEnv(path.resolve(__dirname, '..', '.env'));
 const strict = process.argv.includes('--strict');
 const requireReady = process.argv.includes('--require-ready');
 const allowDelegate = process.argv.includes('--delegate');
+const exerciseBackgroundWorkflow = process.argv.includes('--exercise-background-workflow');
+const autoReviewDecision = readArg('--auto-review-decision') || 'approve';
 const delegateTask = readArg('--delegate-task') || '请用一句话回复 TRAECNclaw live UAT ready';
 const delegateTimeoutMs = Number(readArg('--delegate-timeout-ms') || 120000);
+const taskPollIntervalMs = Number(readArg('--task-poll-interval-ms') || 5000);
+const taskPollTimeoutMs = Number(readArg('--task-poll-timeout-ms') || 240000);
+const followupTask = readArg('--followup-task') || '请只回复 FOLLOWUP_REVIEW_OK';
 
 function readArg(name) {
   const index = process.argv.indexOf(name);
@@ -115,6 +120,23 @@ function assertReady(readinessData, diagnostics, gateName) {
   if (readinessData && readinessData.ready === true) return;
   const err = new Error(`${gateName} requires Trae CN UI readiness; ${diagnostics.readiness.reason}`);
   err.diagnostics = diagnostics;
+  throw err;
+}
+
+async function waitForTaskTerminalState(port, taskId, token, timeoutMs) {
+  const startedAt = Date.now();
+  let lastSnapshot = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = await request(port, 'GET', `/api/task/${encodeURIComponent(taskId)}`, null, token);
+    assert.strictEqual(status.status, 200, 'task status endpoint should return 200 during workflow polling');
+    lastSnapshot = status.data;
+    if (['awaiting_review', 'done', 'error', 'queue_timeout', 'cancelled', 'review_rejected', 'approval_required'].includes(status.data.status)) {
+      return lastSnapshot;
+    }
+    await new Promise(resolve => setTimeout(resolve, taskPollIntervalMs));
+  }
+  const err = new Error(`Task ${taskId} did not reach terminal state within ${timeoutMs}ms`);
+  err.lastSnapshot = lastSnapshot;
   throw err;
 }
 
@@ -222,6 +244,64 @@ async function main() {
       }, token, delegateTimeoutMs);
       assert.ok([200, 202].includes(delegate.status), 'delegate should return 200 or 202');
       checks.push({ name: 'delegate-async', ok: true, status: delegate.data.status || delegate.status });
+    }
+
+    if (exerciseBackgroundWorkflow) {
+      assertReady(readiness.data, diagnostics, '--exercise-background-workflow');
+      const workflowDelegate = await request(port, 'POST', '/api/delegate-async', {
+        task: delegateTask,
+        waitForQueue: true,
+        reviewRequired: true,
+        includeProcessText: false,
+        followupTasks: [followupTask]
+      }, token, delegateTimeoutMs);
+      assert.strictEqual(workflowDelegate.status, 202, 'background workflow should queue or hold reviewable work');
+      assert.ok(workflowDelegate.data.taskId, 'background workflow must return a taskId');
+      checks.push({
+        name: 'background-delegate',
+        ok: true,
+        taskId: workflowDelegate.data.taskId,
+        status: workflowDelegate.data.status,
+        followupCount: workflowDelegate.data.followupCount
+      });
+
+      const reviewSnapshot = await waitForTaskTerminalState(port, workflowDelegate.data.taskId, token, taskPollTimeoutMs);
+      checks.push({
+        name: 'background-task-terminal',
+        ok: true,
+        status: reviewSnapshot.status
+      });
+      assert.ok(['awaiting_review', 'approval_required', 'done'].includes(reviewSnapshot.status), `unexpected background task state: ${reviewSnapshot.status}`);
+
+      if (reviewSnapshot.status === 'approval_required') {
+        const err = new Error('Background workflow paused on approval_required; unexpected for live UAT');
+        err.lastSnapshot = reviewSnapshot;
+        throw err;
+      }
+
+      if (reviewSnapshot.status === 'awaiting_review') {
+        const reviewResponse = await request(port, 'POST', `/api/task/${encodeURIComponent(workflowDelegate.data.taskId)}/review`, {
+          decision: autoReviewDecision,
+          notes: 'live-uat automatic review approval'
+        }, token);
+        assert.strictEqual(reviewResponse.status, 200, 'review endpoint should accept automatic decision');
+        checks.push({
+          name: 'background-review',
+          ok: true,
+          decision: autoReviewDecision,
+          nextTaskId: reviewResponse.data.nextTaskId || null
+        });
+
+        if (reviewResponse.data.nextTaskId) {
+          const followupSnapshot = await waitForTaskTerminalState(port, reviewResponse.data.nextTaskId, token, taskPollTimeoutMs);
+          checks.push({
+            name: 'background-followup-terminal',
+            ok: true,
+            status: followupSnapshot.status
+          });
+          assert.ok(['awaiting_review', 'done'].includes(followupSnapshot.status), `unexpected follow-up task state: ${followupSnapshot.status}`);
+        }
+      }
     }
 
     console.log('[live-uat] ' + JSON.stringify({

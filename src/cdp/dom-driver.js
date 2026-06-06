@@ -28,6 +28,15 @@ function hasCompletionMarker(text) {
   return markers.some(m => text.includes(m));
 }
 
+const DIALOG_BUTTON_SELECTOR = [
+  'button',
+  'a[role="button"]',
+  '[role="button"].monaco-button',
+  '.monaco-button',
+  '.monaco-text-button',
+  '[role="button"]'
+].join(', ');
+
 class DomDriver {
   constructor(client, config) {
     this.client = client;
@@ -528,6 +537,7 @@ class DomDriver {
   }
 
   async sendMessage(text) {
+    const normalizedExpected = String(text || '').replace(/\s+/g, ' ').trim();
     const focusResult = await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
@@ -552,19 +562,44 @@ class DomDriver {
     await this.client.send('Input.insertText', { text });
     await sleep(100);
 
-    const inputResult = await this.client.send('Runtime.evaluate', {
+    let inputResult = await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
           var el = document.querySelector('.chat-input-v2-input-box-editable');
           var value = el ? (el.innerText || el.textContent || '').trim() : '';
-          return { ok: value === ${safeJsValue(String(text).trim())}, text: value };
+          var normalized = value.replace(/\\s+/g, ' ').trim();
+          return {
+            ok: normalized === ${safeJsValue(normalizedExpected)},
+            text: value,
+            normalized: normalized
+          };
         })()
       `,
       returnByValue: true
     });
-    const inputInfo = inputResult.result?.value || {};
+
+    let inputInfo = inputResult.result?.value || {};
     if (!inputInfo.ok) {
-      throw new Error(`Failed to set composer text: ${inputInfo.text || 'unknown'}`);
+      await this.typeMessage(text);
+      inputResult = await this.client.send('Runtime.evaluate', {
+        expression: `
+          (function() {
+            var el = document.querySelector('.chat-input-v2-input-box-editable');
+            var value = el ? (el.innerText || el.textContent || '').trim() : '';
+            var normalized = value.replace(/\\s+/g, ' ').trim();
+            return {
+              ok: normalized === ${safeJsValue(normalizedExpected)},
+              text: value,
+              normalized: normalized
+            };
+          })()
+        `,
+        returnByValue: true
+      });
+      inputInfo = inputResult.result?.value || {};
+    }
+    if (!inputInfo.ok) {
+      throw new Error(`Failed to set composer text: ${inputInfo.normalized || inputInfo.text || 'unknown'}`);
     }
     await sleep(this.config.postActionDelayMs * 2);
 
@@ -763,10 +798,15 @@ class DomDriver {
             for (var i = 0; i < indicators.length; i++) {
               var el = indicators[i];
               if (el && el.offsetParent !== null && el.getBoundingClientRect().width > 0) {
-                var titleEl = el.querySelector('[class*="title"]') || el.querySelector('[role="heading"]') || el;
-                var buttons = el.querySelectorAll('button');
+                var titleEl = el.querySelector('.monaco-dialog-title') || el.querySelector('[class*="title"]') || el.querySelector('[role="heading"]') || el;
+                var buttons = el.querySelectorAll(${safeJsValue(DIALOG_BUTTON_SELECTOR)});
                 var buttonTexts = [];
-                buttons.forEach(function(b) { buttonTexts.push(b.textContent.trim()); });
+                buttons.forEach(function(b) {
+                  if (!b || b.offsetParent === null) return;
+                  var text = (b.innerText || b.textContent || '').trim();
+                  if (!text) return;
+                  if (!buttonTexts.includes(text)) buttonTexts.push(text);
+                });
                 var fullText = (titleEl.textContent || '').trim().substring(0, 200);
                 // Detect if this is a command execution approval dialog
                 var cmdKeywords = ['执行', '运行', '命令', 'command'];
@@ -1084,6 +1124,12 @@ class DomDriver {
         expression: `
           (function() {
             var targetLabels = ${JSON.stringify(targetLabels)};
+            var action = ${JSON.stringify(action)};
+            function isNegativeMatch(text) {
+              if (!text) return false;
+              if (action !== 'trust' && action !== 'approve') return false;
+              return /不信任|deny|cancel|关闭|dismiss/i.test(text);
+            }
 
             // Find all clickable elements in visible dialogs
             var dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"], .modal, .modal-overlay, [class*="dialog"], [class*="overlay"], .monaco-dialog');
@@ -1092,16 +1138,26 @@ class DomDriver {
             if (dialogs.length > 0) {
               for (var d = 0; d < dialogs.length; d++) {
                 if (dialogs[d].offsetParent === null) continue;
-                var btns = dialogs[d].querySelectorAll('button, a[role="button"], [class*="button"], [class*="btn"]');
+                var btns = dialogs[d].querySelectorAll(${safeJsValue(DIALOG_BUTTON_SELECTOR)});
                 for (var b = 0; b < btns.length; b++) {
-                  buttonsToSearch.push(btns[b]);
+                  var btn = btns[b];
+                  if (!btn || btn.offsetParent === null) continue;
+                  var text = (btn.innerText || btn.textContent || '').trim();
+                  var rect = btn.getBoundingClientRect();
+                  if (!text || rect.width < 12 || rect.height < 12) continue;
+                  buttonsToSearch.push(btn);
                 }
               }
             } else {
               // Fallback: search all buttons
-              var allButtons = document.querySelectorAll('button, a[role="button"], [class*="button"], [class*="btn"]');
+              var allButtons = document.querySelectorAll(${safeJsValue(DIALOG_BUTTON_SELECTOR)});
               for (var b = 0; b < allButtons.length; b++) {
-                buttonsToSearch.push(allButtons[b]);
+                var fallbackBtn = allButtons[b];
+                if (!fallbackBtn || fallbackBtn.offsetParent === null) continue;
+                var fallbackText = (fallbackBtn.innerText || fallbackBtn.textContent || '').trim();
+                var fallbackRect = fallbackBtn.getBoundingClientRect();
+                if (!fallbackText || fallbackRect.width < 12 || fallbackRect.height < 12) continue;
+                buttonsToSearch.push(fallbackBtn);
               }
             }
 
@@ -1110,6 +1166,7 @@ class DomDriver {
               var btn = buttonsToSearch[b];
               if (btn.offsetParent === null) continue;
               var text = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+              if (isNegativeMatch(text)) continue;
               for (var t = 0; t < targetLabels.length; t++) {
                 if (text === targetLabels[t].toLowerCase() || text.includes(targetLabels[t].toLowerCase())) {
                   var rect = btn.getBoundingClientRect();
@@ -1138,6 +1195,7 @@ class DomDriver {
               var btn = buttonsToSearch[b];
               if (btn.offsetParent === null) continue;
               var text = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+              if (isNegativeMatch(text)) continue;
               for (var t = 0; t < targetLabels.length; t++) {
                 if (text.includes(targetLabels[t].toLowerCase()) || targetLabels[t].toLowerCase().includes(text)) {
                   var rect = btn.getBoundingClientRect();
@@ -1170,6 +1228,15 @@ class DomDriver {
       const clickResult = result.result?.value || {};
       if (clickResult.clicked) {
         await sleep(this.config.postActionDelayMs);
+        const dialogAfter = await this.checkForApprovalDialog();
+        if (dialogAfter.needsApproval) {
+          return {
+            success: false,
+            action,
+            buttonClicked: clickResult.buttonText,
+            error: 'Dialog remained visible after click'
+          };
+        }
         return {
           success: true,
           action,
@@ -1195,13 +1262,13 @@ class DomDriver {
   _getButtonLabelsForAction(action) {
     switch (action) {
       case 'trust':
-        return ['信任', 'Trust', '信任此文件夹', '信任文件夹', '打开'];
+        return ['是，我信任此作者', '信任此作者', '信任', 'Trust', '信任此文件夹', '信任文件夹', '打开'];
       case 'allow':
         return ['允许', 'Allow', '批准', 'Approve', '允许此操作'];
       case 'confirm':
         return ['确认', 'Confirm', '确定', 'OK', '确认执行', '运行'];
       case 'approve':
-        return ['批准', 'Approve', '允许', 'Allow', '确认', 'Confirm', '信任', 'Trust'];
+        return ['是，我信任此作者', '批准', 'Approve', '允许', 'Allow', '确认', 'Confirm', '信任', 'Trust'];
       case 'deny':
         return ['拒绝', 'Deny', '不允许', '禁止', '拒绝此操作'];
       case 'cancel':
@@ -1213,6 +1280,79 @@ class DomDriver {
     }
   }
 
+  _summarizeRestrictedModeState(snapshot = {}) {
+    const rawBody = String(snapshot.bodyText || '');
+    const body = rawBody.trim();
+    const bodyLower = body.toLowerCase();
+    const buttonTexts = Array.isArray(snapshot.buttonTexts)
+      ? snapshot.buttonTexts.map(text => String(text || '').trim()).filter(Boolean)
+      : [];
+
+    const hasAny = (haystack, needles) => needles.some(needle => haystack.includes(needle));
+    const buttonMatches = (patterns) => buttonTexts.some(text => patterns.some(pattern => pattern.test(text)));
+
+    const onWorkspaceTrustPage = hasAny(bodyLower, ['工作区信任', 'workspace trust']);
+    const trustedCopyVisible = hasAny(bodyLower, [
+      '你信任此文件夹',
+      'you trust this folder',
+      'all files in the current window are trusted'
+    ]);
+    const untrustButtonVisible = buttonMatches([/不信任/i, /don't trust/i, /stop trusting/i]);
+    const trustButtonVisible = buttonMatches([/^信任$/, /^trust$/i, /信任此文件夹/, /trust this folder/i, /信任父级/, /trust parent/i]);
+    const manageButtonVisible = buttonMatches([/^管理$/, /^manage$/i]);
+
+    if (onWorkspaceTrustPage && (trustedCopyVisible || untrustButtonVisible)) {
+      return {
+        restricted: false,
+        trusted: true,
+        panelOpen: true,
+        title: '工作区信任',
+        trustButtonFound: false,
+        trustButtonText: '',
+        manageButtonFound: false,
+        hasOverlay: snapshot.hasOverlay === true
+      };
+    }
+
+    const hasRestrictedBanner = hasAny(bodyLower, [
+      '受限模式',
+      'restricted mode',
+      '安全地浏览代码',
+      'trust this folder',
+      '信任此文件夹',
+      '点击「信任」',
+      '点击信任'
+    ]);
+
+    if (onWorkspaceTrustPage || hasRestrictedBanner) {
+      const title = onWorkspaceTrustPage
+        ? '工作区信任'
+        : (snapshot.title || '受限模式');
+      return {
+        restricted: true,
+        trusted: false,
+        panelOpen: onWorkspaceTrustPage,
+        title,
+        trustButtonFound: trustButtonVisible,
+        trustButtonText: trustButtonVisible
+          ? buttonTexts.find(text => /^信任$|^trust$|信任此文件夹|trust this folder|信任父级|trust parent/i.test(text)) || ''
+          : '',
+        manageButtonFound: manageButtonVisible,
+        hasOverlay: snapshot.hasOverlay === true
+      };
+    }
+
+    return {
+      restricted: false,
+      trusted: false,
+      panelOpen: false,
+      trustButtonFound: false,
+      trustButtonText: '',
+      manageButtonFound: false,
+      hasOverlay: snapshot.hasOverlay === true
+    };
+  }
+
   /**
    * Check for restricted mode and click the Trust button if found.
    * Returns the result of the operation.
@@ -1221,14 +1361,133 @@ class DomDriver {
     try {
       const restrictedCheck = await this.checkRestrictedMode();
       if (!restrictedCheck || !restrictedCheck.restricted) {
+        if (restrictedCheck?.trusted) {
+          return { success: true, action: 'already_trusted', panelOpen: restrictedCheck.panelOpen === true };
+        }
         return { success: false, reason: 'no_restricted_mode_found' };
       }
+
+      const openManage = async () => {
+        const result = await this.client.send('Runtime.evaluate', {
+          expression: `
+            (() => {
+              const candidates = Array.from(document.querySelectorAll('button, a[role="button"], [role="button"], .monaco-button'));
+              for (const el of candidates) {
+                if (!el || el.offsetParent === null) continue;
+                const text = (el.innerText || el.textContent || '').trim();
+                if (!text) continue;
+                if (!/管理|manage/i.test(text)) continue;
+                const rect = el.getBoundingClientRect();
+                el.dispatchEvent(new PointerEvent('pointerdown', {
+                  bubbles: true, cancelable: true, composed: true,
+                  clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2,
+                  button: 0, buttons: 1, pointerType: 'mouse'
+                }));
+                el.dispatchEvent(new PointerEvent('pointerup', {
+                  bubbles: true, cancelable: true, composed: true,
+                  clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2,
+                  button: 0, buttons: 1, pointerType: 'mouse'
+                }));
+                el.dispatchEvent(new MouseEvent('click', {
+                  bubbles: true, cancelable: true,
+                  clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2
+                }));
+                if (typeof el.click === 'function') el.click();
+                return { clicked: true, text };
+              }
+              return { clicked: false };
+            })()
+          `,
+          returnByValue: true
+        });
+        return result.result?.value || { clicked: false };
+      };
+
+      const clickTrustFromRestrictedPanel = async () => {
+        const result = await this.client.send('Runtime.evaluate', {
+          expression: `
+            (() => {
+              const preferred = ['信任', 'Trust', '信任父级', 'Trust Parent'];
+              const candidates = Array.from(document.querySelectorAll('button, a[role="button"], [role="button"], .monaco-button, .monaco-text-button, .quick-input-widget button'));
+              for (const label of preferred) {
+                for (const el of candidates) {
+                  if (!el || el.offsetParent === null) continue;
+                  const text = (el.innerText || el.textContent || '').trim();
+                  if (!text || text !== label) continue;
+                  const rect = el.getBoundingClientRect();
+                  if (rect.width < 12 || rect.height < 12) continue;
+                  el.dispatchEvent(new PointerEvent('pointerdown', {
+                    bubbles: true, cancelable: true, composed: true,
+                    clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2,
+                    button: 0, buttons: 1, pointerType: 'mouse'
+                  }));
+                  el.dispatchEvent(new PointerEvent('pointerup', {
+                    bubbles: true, cancelable: true, composed: true,
+                    clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2,
+                    button: 0, buttons: 1, pointerType: 'mouse'
+                  }));
+                  el.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true, cancelable: true,
+                    clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2
+                  }));
+                  if (typeof el.click === 'function') el.click();
+                  return { clicked: true, text };
+                }
+              }
+              return { clicked: false };
+            })()
+          `,
+          returnByValue: true
+        });
+        return result.result?.value || { clicked: false };
+      };
 
       if (restrictedCheck.trustButtonFound) {
         const approveResult = await this.approveDialog('trust');
         if (approveResult.success) {
           await sleep(this.config.postActionDelayMs * 2);
           return { success: true, action: 'trust_clicked', buttonText: approveResult.buttonText };
+        }
+      }
+
+      if (restrictedCheck.manageButtonFound) {
+        const manageResult = await openManage();
+        if (manageResult.clicked) {
+          for (let attempt = 0; attempt < 8; attempt++) {
+            await sleep(Math.max(this.config.postActionDelayMs, 200));
+            const restrictedAfterManage = await this.checkRestrictedMode();
+            if (!restrictedAfterManage.restricted || restrictedAfterManage.trusted) {
+              return {
+                success: true,
+                action: 'trust_clicked',
+                buttonText: manageResult.text
+              };
+            }
+          }
+          const panelTrustResult = await clickTrustFromRestrictedPanel();
+          if (panelTrustResult.clicked) {
+            await sleep(this.config.postActionDelayMs * 2);
+            const restrictedAfter = await this.checkRestrictedMode();
+            if (!restrictedAfter.restricted || restrictedAfter.trusted) {
+              return {
+                success: true,
+                action: 'trust_clicked',
+                buttonText: panelTrustResult.text,
+                manageButtonText: manageResult.text
+              };
+            }
+          }
+
+          const approveResult = await this.approveDialog('trust');
+          if (approveResult.success) {
+            await sleep(this.config.postActionDelayMs * 2);
+            return {
+              success: true,
+              action: 'trust_clicked',
+              buttonText: approveResult.buttonText,
+              manageButtonText: manageResult.text
+            };
+          }
         }
       }
 
@@ -1572,16 +1831,23 @@ class DomDriver {
             const bodyText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
             const queueMatch = bodyText.match(/排在第\\s*(\\d+)\\s*位/);
             const queueNotice = bodyText.includes('排队提醒') || bodyText.includes('请求量较高') || bodyText.toLowerCase().includes('queue');
+            const sendBtn = document.querySelector('.chat-input-v2-send-button');
+            const sendDisabled = sendBtn ?
+              (sendBtn.disabled || /disabled/.test(sendBtn.className)) : false;
+            const trigger = document.querySelector('.chat-model-label,[role="combobox"],[class*="model-select"],[class*="ai-model-select"]');
+            const currentModel = trigger ? (trigger.textContent?.replace(/\\s+/g, ' ').trim() || '') : '';
             if (queueMatch || queueNotice) {
               return {
                 found: true,
                 queued: true,
                 position: queueMatch ? Number(queueMatch[1]) : null,
-                message: queueMatch ? ('排在第 ' + queueMatch[1] + ' 位') : 'Queue notice is visible'
+                message: queueMatch ? ('排在第 ' + queueMatch[1] + ' 位') : 'Queue notice is visible',
+                sendDisabled,
+                canSubmit: !sendDisabled,
+                currentModel
               };
             }
 
-            const trigger = document.querySelector('.chat-model-label,[role="combobox"],[class*="model-select"],[class*="ai-model-select"]');
             if (!trigger) return { found: false, queued: false };
             const isDisabled = trigger.disabled ||
                               trigger.getAttribute('aria-disabled') === 'true';
@@ -1589,10 +1855,6 @@ class DomDriver {
                           trigger.closest('[class*="ai-model-select"]');
             const hasDisabledClass = wrapper ?
               /ai-model-select-disabled|model-select-disabled/.test(wrapper.className) : false;
-            const sendBtn = document.querySelector('.chat-input-v2-send-button');
-            const sendDisabled = sendBtn ?
-              (sendBtn.disabled || /disabled/.test(sendBtn.className)) : false;
-            const currentModel = trigger.textContent?.replace(/\\s+/g, ' ').trim() || '';
             return {
               found: true,
               queued: false,
@@ -1612,7 +1874,9 @@ class DomDriver {
         return {
           queued: true,
           position: info.position || null,
-          message: info.message || 'Queue notice is visible'
+          message: info.message || 'Queue notice is visible',
+          canSubmit: info.canSubmit === true,
+          currentModel: info.currentModel || ''
         };
       }
 
@@ -1925,59 +2189,33 @@ class DomDriver {
       const result = await this.client.send('Runtime.evaluate', {
         expression: `
           (() => {
-            const body = document.body ? document.body.textContent : '';
+            const body = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+            const titleEl = document.querySelector('.monaco-dialog-title, [role="heading"], h1, h2, h3, .pane-header');
+            const title = titleEl ? (titleEl.innerText || titleEl.textContent || '').trim() : '';
+            const controls = Array.from(document.querySelectorAll('button, a[role="button"], [role="button"], .monaco-button, .monaco-text-button, [class*="button"], [class*="btn"]'));
+            const buttonTexts = controls
+              .filter(el => el && el.offsetParent !== null)
+              .map(el => (el.innerText || el.textContent || '').trim())
+              .filter(Boolean);
+            const modals = document.querySelectorAll('[class*="modal"], [class*="dialog"], [class*="overlay"], [class*="mask"]');
+            const hasOverlay = Array.from(modals).some(m => {
+              const rect = m.getBoundingClientRect();
+              return rect.width > 100 && rect.height > 50;
+            });
 
-            const cnKeywords = ['\\u53d7\\u9650\\u6a21\\u5f0f', '\\u4fe1\\u4efb\\u6b64\\u6587\\u4ef6\\u5939', '\\u4fe1\\u4efb\\u6587\\u4ef6\\u5939', '\\u5b89\\u5168\\u6a21\\u5f0f', '\\u70b9\\u51fb\\u300c\\u4fe1\\u4efb\\u300d', '\\u70b9\\u51fb\\u4fe1\\u4efb'];
-            const hasCnKeyword = cnKeywords.some(k => body.includes(k));
-
-            const enKeywords = ['restricted mode', 'trust this folder', 'trust folder', 'click trust'];
-            const hasEnKeyword = enKeywords.some(k => body.toLowerCase().includes(k));
-
-            if (hasCnKeyword || hasEnKeyword) {
-              let trustButtonFound = false;
-              let manageButtonFound = false;
-              let trustButtonText = '';
-
-              const allButtons = document.querySelectorAll('button, a[role="button"], [class*="button"], [class*="btn"]');
-              for (const btn of allButtons) {
-                const t = btn.textContent.trim();
-                const lower = t.toLowerCase();
-                if (lower.includes('\\u4fe1\\u4efb') || lower.includes('trust') || lower.includes('\\u6253\\u5f00')) {
-                  trustButtonFound = true;
-                  trustButtonText = t;
-                }
-                if (lower.includes('\\u7ba1\\u7406') || lower.includes('manage')) {
-                  manageButtonFound = true;
-                }
-              }
-
-              const modals = document.querySelectorAll('[class*="modal"], [class*="dialog"], [class*="overlay"], [class*="mask"]');
-              const hasOverlay = Array.from(modals).some(m => {
-                const rect = m.getBoundingClientRect();
-                return rect.width > 100 && rect.height > 50;
-              });
-
-              const titleMatch = body.match(/\\u53d7\\u9650\\u6a21\\u5f0f[^\\u3002\\n]*/);
-              const title = titleMatch ? titleMatch[0].trim() : (hasCnKeyword ? '\\u53d7\\u9650\\u6a21\\u5f0f' : 'Restricted Mode');
-
-              return {
-                restricted: true,
-                title: title,
-                trustButtonFound: trustButtonFound,
-                trustButtonText: trustButtonText,
-                manageButtonFound: manageButtonFound,
-                hasOverlay: hasOverlay
-              };
-            }
-
-            return { restricted: false };
+            return {
+              bodyText: body,
+              title,
+              buttonTexts,
+              hasOverlay
+            };
           })()
         `,
         returnByValue: true,
         timeout: 5000
       });
 
-      return result.result?.value || { restricted: false };
+      return this._summarizeRestrictedModeState(result.result?.value || {});
     } catch (err) {
       return { restricted: false, error: err.message };
     }

@@ -92,6 +92,43 @@ test('DEFAULT_RESPONSE_SELECTORS includes assistant class', () => {
   assert.ok(DEFAULT_RESPONSE_SELECTORS.some(s => s.includes('assistant')));
 });
 
+test('approveDialog trust labels include Monaco trust button text', () => {
+  const driver = new DomDriver(null, getConfig());
+  const labels = driver._getButtonLabelsForAction('trust');
+  assert.ok(labels.includes('是，我信任此作者'));
+});
+
+test('approveDialog approve labels include Monaco trust button text', () => {
+  const driver = new DomDriver(null, getConfig());
+  const labels = driver._getButtonLabelsForAction('approve');
+  assert.ok(labels.includes('是，我信任此作者'));
+});
+
+test('restricted mode summary treats trusted workspace page as not restricted', () => {
+  const driver = new DomDriver(null, getConfig());
+  const summary = driver._summarizeRestrictedModeState({
+    bodyText: '工作区信任\n你信任此文件夹\n配置设置',
+    buttonTexts: ['不信任', '配置设置'],
+    hasOverlay: true
+  });
+  assert.strictEqual(summary.restricted, false);
+  assert.strictEqual(summary.trusted, true);
+  assert.strictEqual(summary.panelOpen, true);
+});
+
+test('restricted mode summary detects actionable trust panel', () => {
+  const driver = new DomDriver(null, getConfig());
+  const summary = driver._summarizeRestrictedModeState({
+    bodyText: '工作区信任\n此文件夹中的功能受限，请信任此文件夹',
+    buttonTexts: ['信任', '配置设置'],
+    hasOverlay: true
+  });
+  assert.strictEqual(summary.restricted, true);
+  assert.strictEqual(summary.trusted, false);
+  assert.strictEqual(summary.panelOpen, true);
+  assert.strictEqual(summary.trustButtonFound, true);
+});
+
 test('getConfig respects TRAECN_COMPOSER_SELECTORS env var', () => {
   process.env.TRAECN_COMPOSER_SELECTORS = '.custom-input,textarea';
   const config = getConfig();

@@ -7,6 +7,7 @@ const { buildConfirmationPlan } = require('../shared/operation-confirmation');
 
 let passed = 0;
 let failed = 0;
+const pendingAsyncTests = [];
 
 function test(name, fn) {
   try {
@@ -18,6 +19,10 @@ function test(name, fn) {
     console.error(`  FAIL: ${name}`);
     console.error(`        ${err.message}`);
   }
+}
+
+function asyncTest(name, fn) {
+  pendingAsyncTests.push({ name, fn });
 }
 
 console.log('\n[gateway.test.js] Running RateLimiter and sanitizeLog tests...\n');
@@ -169,6 +174,94 @@ test('Gateway computes CORS headers for allowed origins', () => {
   assert.strictEqual(headers.Vary, 'Origin');
 });
 
+test('Gateway normalizes followup tasks from strings and objects', () => {
+  const gateway = new Gateway();
+  const result = gateway._normalizeFollowupTasks([
+    'step 2',
+    { task: 'step 3', reviewRequired: false, includeProcessText: true },
+    null
+  ]);
+  assert.deepStrictEqual(result, [
+    { task: 'step 2', reviewRequired: true },
+    { task: 'step 3', reviewRequired: false, includeProcessText: true }
+  ]);
+});
+
+test('Gateway creates queued task with review workflow metadata', () => {
+  const gateway = new Gateway();
+  gateway.driver = { config: { queuePerTaskTimeoutMs: 1234 } };
+  gateway.taskHistoryStore = {
+    createTask: () => 'task_test_1',
+    recordStep: () => {}
+  };
+  const task = gateway._createQueuedTask({
+    task: 'review me',
+    reviewRequired: true,
+    followupTasks: ['next task'],
+    notifyUrl: 'https://example.test/hook'
+  }, { running: true, queueMessage: 'busy' });
+  assert.strictEqual(task.taskId, 'task_test_1');
+  assert.strictEqual(task.reviewRequired, true);
+  assert.strictEqual(task.followupTasks.length, 1);
+  assert.strictEqual(task.queueState, 'running');
+  assert.strictEqual(task.notifyUrl, 'https://example.test/hook');
+});
+
+test('Gateway queue runtime summary excludes terminal tasks', () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.set('queued_task', { status: 'queued' });
+  gateway.taskQueue.set('review_task', { status: 'awaiting_review' });
+  gateway.taskQueue.set('done_task', { status: 'done' });
+  gateway.taskQueue.set('cancelled_task', { status: 'cancelled' });
+  const summary = gateway._queueRuntimeSummary();
+  assert.strictEqual(summary.tasks.total, 2);
+  assert.strictEqual(summary.tasks.byStatus.queued, 1);
+  assert.strictEqual(summary.tasks.byStatus.awaiting_review, 1);
+  assert.strictEqual(summary.tasks.byStatus.done, undefined);
+});
+
+test('Gateway preflight allows delegation when queue notice is advisory but send is possible', () => {
+  const gateway = new Gateway();
+  const nextAction = gateway._preflightNextAction({
+    connected: true,
+    surface: { kind: 'workspace' },
+    readiness: { ready: true },
+    queue: { queued: true, canSubmit: true, running: false },
+    dialog: { hasDialog: false }
+  });
+  assert.strictEqual(nextAction, 'delegate_async');
+});
+
+asyncTest('Gateway continues reviewed task into queued followup task', async () => {
+  const gateway = new Gateway();
+  gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
+  gateway.taskHistoryStore = {
+    createTask: () => 'task_followup_1',
+    recordStep: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway._emitTaskNotification = async () => {};
+  gateway._ensureBackgroundPolling = () => {};
+
+  const task = {
+    taskId: 'task_parent',
+    task: 'parent',
+    status: 'awaiting_review',
+    createdAt: Date.now(),
+    followupTasks: [{ task: 'child', reviewRequired: true }],
+    reviewRequired: true,
+    notifyUrl: null,
+    chatId: null,
+    result: { text: 'done', stable: true, elapsedMs: 10 }
+  };
+
+  const result = await gateway._continueReviewedTask('task_parent', task, 'approve', 'looks good');
+  assert.strictEqual(result.status, 'continued');
+  assert.strictEqual(result.nextTaskId, 'task_followup_1');
+});
+
 function restoreEnv(key, value) {
   if (value === undefined) {
     delete process.env[key];
@@ -177,5 +270,22 @@ function restoreEnv(key, value) {
   }
 }
 
-console.log(`\n[gateway.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+(async () => {
+  for (const { name, fn } of pendingAsyncTests) {
+    try {
+      await fn();
+      passed++;
+      console.log(`  PASS: ${name}`);
+    } catch (err) {
+      failed++;
+      console.error(`  FAIL: ${name}`);
+      console.error(`        ${err.message}`);
+    }
+  }
+
+  console.log(`\n[gateway.test.js] Results: ${passed} passed, ${failed} failed\n`);
+  process.exit(failed > 0 ? 1 : 0);
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});

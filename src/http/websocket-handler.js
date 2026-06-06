@@ -386,6 +386,22 @@ class WebSocketHandler {
         message.deadline = task.deadline;
         message.remaining = Math.max(0, task.deadline - Date.now());
         break;
+      case 'awaiting_review':
+        message.result = {
+          text: task.result?.text || '',
+          stable: task.result?.stable || false,
+          elapsedMs: task.result?.elapsedMs || null
+        };
+        message.reviewRequired = true;
+        message.followupCount = task.followupTasks?.length || 0;
+        break;
+      case 'approval_required':
+        message.result = {
+          text: task.result?.text || '',
+          needsApproval: true,
+          question: task.result?.question || ''
+        };
+        break;
     }
 
     for (const clientInfo of subs) {
@@ -399,11 +415,16 @@ class WebSocketHandler {
         return 0;
       case 'executing':
         return 50;
+      case 'approval_required':
+        return 75;
+      case 'awaiting_review':
+        return 90;
       case 'done':
         return 100;
       case 'error':
       case 'cancelled':
       case 'queue_timeout':
+      case 'review_rejected':
         return -1;
       default:
         return null;
