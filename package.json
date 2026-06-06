@@ -50,7 +50,7 @@
     "test:cli": "node scripts/traecn-cli.test.js"
   },
   "dependencies": {
-    "playwright": "^1.59.1",
+    "playwright": "^1.60.0",
     "ws": "^8.20.0"
   }
 }
