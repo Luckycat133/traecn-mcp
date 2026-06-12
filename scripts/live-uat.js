@@ -161,9 +161,11 @@ async function main() {
   const checks = [];
   let lastStatusData = null;
   let lastReadinessData = null;
+  let gateway = null;
   try {
     const started = await startGateway({ host: '127.0.0.1', port: 0 });
     server = started.server;
+    gateway = started.gateway;
     const port = server.address().port;
 
     const status = await request(port, 'GET', '/api/status?allowAutoStart=false', null, token);
@@ -319,11 +321,15 @@ async function main() {
     }, null, 2));
     process.exitCode = 1;
   } finally {
-    if (server) {
+    if (gateway && typeof gateway.shutdown === 'function') {
+      await gateway.shutdown();
+    } else if (server) {
       if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
     }
   }
+
+  process.exit(process.exitCode || 0);
 }
 
 main().catch(err => {

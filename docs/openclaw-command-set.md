@@ -30,6 +30,7 @@ needs to send the raw task text unchanged.
 | `capabilities` | Return compact agent capability catalog | none |
 | `preflight` | Return compact live preflight state and optional command plan | none |
 | `confirm_plan` | Build side-effect, risk, and preflight plan without operating TraeCN | `command` |
+| `restart_trae_debug` | Confirmed restart of Trae CN with existing logged-in profile and CDP enabled | none |
 | `status` | Check gateway and automation status | none |
 | `readiness` | Check whether TraeCN UI automation targets are ready | none |
 | `new_chat` | Create and switch to a new TraeCN chat | none |
@@ -67,13 +68,40 @@ needs to send the raw task text unchanged.
 }
 ```
 
+When `preflight.nextAction` is
+`restart_traecn_with_debug_existing_profile`, first plan or call the confirmed
+recovery command:
+
+```json
+{
+  "command": "restart_trae_debug",
+  "params": {
+    "confirmationPhrase": "restart-trae-cn-with-debug-existing-profile"
+  }
+}
+```
+
 ```json
 {
   "command": "delegate",
   "params": {
     "task": "分析当前项目并提出三个可执行改进建议",
     "includeProcessText": false,
-    "waitForQueue": true
+    "waitForQueue": true,
+    "autoModelFallback": true,
+    "modelProbeIntervalMs": 60000
+  }
+}
+```
+
+```json
+{
+  "command": "delegate_async",
+  "params": {
+    "task": "全面审查当前仓库并输出 findings-first 结果",
+    "reviewRequired": true,
+    "waitForQueue": true,
+    "fallbackModels": ["GLM-5.1", "Kimi-K2.6", "DeepSeek-V4-Flash"]
   }
 }
 ```
@@ -108,6 +136,9 @@ needs to send the raw task text unchanged.
 - Start with `preflight` before sending tasks to a live TraeCN UI; fall back to
   `status` and `readiness` only when debugging a specific probe.
 - Use `delegate_async` plus `task_status` for long-running or queued work.
+- Add `fallbackModels` or `autoModelFallback=true` when OpenClaw should let the
+  gateway probe alternate models in the background instead of keeping the caller
+  in a token-consuming wait loop.
 - Use `dialog_status` before `approve_dialog` when OpenClaw needs to explain a
   pending confirmation to the user.
 - Use `settings_navigate`, `settings_read`, and `settings_set` instead of the

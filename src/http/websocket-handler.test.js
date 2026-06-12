@@ -1,12 +1,13 @@
 'use strict';
 
 const assert = require('assert');
-const { WebSocketHandler } = require('./websocket-handler');
+const { WebSocketHandler, WS_MAX_PAYLOAD_BYTES, WS_HEARTBEAT_INTERVAL, WS_HEARTBEAT_TIMEOUT } = require('./websocket-handler');
 const http = require('http');
 const { WebSocket } = require('ws');
 
 let passed = 0;
 let failed = 0;
+const pendingAsyncTests = [];
 
 function test(name, fn) {
   try {
@@ -20,7 +21,18 @@ function test(name, fn) {
   }
 }
 
+function asyncTest(name, fn) {
+  pendingAsyncTests.push({ name, fn });
+}
+
 console.log('\n[websocket-handler.test.js] Running WebSocket handler tests...\n');
+
+test('WebSocket constants: payload cap and heartbeat intervals are sensible', () => {
+  assert.ok(WS_MAX_PAYLOAD_BYTES > 0, 'WS_MAX_PAYLOAD_BYTES must be positive');
+  assert.ok(WS_MAX_PAYLOAD_BYTES <= 1024 * 1024, 'WS_MAX_PAYLOAD_BYTES must be <= 1 MiB to prevent DoS');
+  assert.ok(WS_HEARTBEAT_INTERVAL >= 5000, 'ping interval must be at least 5s');
+  assert.ok(WS_HEARTBEAT_TIMEOUT > WS_HEARTBEAT_INTERVAL, 'timeout must exceed ping interval');
+});
 
 test('WebSocketHandler initializes with gateway', () => {
   const mockGateway = { token: '', allowedOrigins: '' };
@@ -489,5 +501,71 @@ test('WebSocketHandler subscribe and unsubscribe to task from events endpoint', 
   assert.strictEqual(mockWs.messages[1].taskId, 'task1');
 });
 
-console.log(`\n[websocket-handler.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+asyncTest('WebSocketHandler accepts direct task websocket subscriptions on /ws/tasks/:id', async () => {
+  const gateway = {
+    token: '',
+    allowedOrigins: '',
+    taskQueue: new Map([
+      ['task-live-1', { status: 'queued', createdAt: Date.now(), deadline: Date.now() + 5000 }]
+    ])
+  };
+  const handler = new WebSocketHandler(gateway);
+  const server = http.createServer((req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  handler.initialize(server);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+
+  try {
+    const messages = await new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/tasks/task-live-1`);
+      const received = [];
+      const timer = setTimeout(() => {
+        ws.close();
+        resolve(received);
+      }, 1000);
+
+      ws.on('message', data => {
+        received.push(JSON.parse(data.toString()));
+        if (received.length >= 2) {
+          clearTimeout(timer);
+          ws.close();
+          resolve(received);
+        }
+      });
+      ws.on('error', err => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+
+    assert.strictEqual(messages[0].type, 'subscribed');
+    assert.strictEqual(messages[1].type, 'taskUpdate');
+    assert.strictEqual(messages[1].taskId, 'task-live-1');
+  } finally {
+    handler.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+(async () => {
+  for (const { name, fn } of pendingAsyncTests) {
+    try {
+      await fn();
+      passed++;
+      console.log(`  PASS: ${name}`);
+    } catch (err) {
+      failed++;
+      console.error(`  FAIL: ${name}`);
+      console.error(`        ${err.message}`);
+    }
+  }
+
+  console.log(`\n[websocket-handler.test.js] Results: ${passed} passed, ${failed} failed\n`);
+  process.exit(failed > 0 ? 1 : 0);
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});

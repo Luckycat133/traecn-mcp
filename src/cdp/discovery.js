@@ -5,7 +5,7 @@ const { TraeCNAutomationError } = require('./errors');
 const { CDPClient } = require('./client');
 const { getEnvWithFallback, safeClose } = require('../shared/utils');
 
-const DEFAULT_DISCOVERY_PORTS = ['9222', '9223', '9224', '9225', '9226', '9230'];
+const DEFAULT_DISCOVERY_PORTS = ['9222', '9223', '9224', '9225', '9226', '9230', '9333', '9334'];
 
 function classifyTargetSurface(target = {}) {
   const title = String(target.title || '').toLowerCase();
@@ -127,6 +127,7 @@ async function resolveCDPEndpoint(options = {}) {
 
   const ports = uniquePorts([configuredPort], [quickstartPort], extraPorts, DEFAULT_DISCOVERY_PORTS);
   let lastError = null;
+  let configuredPortError = null;
   let firstReachable = null;
 
   for (const port of ports) {
@@ -137,12 +138,16 @@ async function resolveCDPEndpoint(options = {}) {
       if (endpoint.isTraeCN) return endpoint;
     } catch (err) {
       lastError = err;
+      if (String(port) === String(configuredPort)) {
+        configuredPortError = err;
+      }
     }
   }
 
   if (firstReachable) return firstReachable;
 
-  throw TraeCNAutomationError.connectionFailed(host, configuredPort, lastError ? lastError.message : 'No CDP endpoint found');
+  const cause = configuredPortError || lastError;
+  throw TraeCNAutomationError.connectionFailed(host, configuredPort, cause ? cause.message : 'No CDP endpoint found');
 }
 
 function scoreTarget(target, titleKeywords) {
@@ -332,6 +337,7 @@ async function connectToTarget(targetInfo) {
 }
 
 module.exports = {
+  DEFAULT_DISCOVERY_PORTS,
   classifyTargetSurface,
   describeCDPSurface,
   fetchCDPTargets,

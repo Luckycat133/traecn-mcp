@@ -1,7 +1,15 @@
 'use strict';
 
 const assert = require('assert');
-const { buildStartCommand, findTraeCNBinary, isTraeCNRunning, getQuickstartConfig } = require('./quickstart');
+const {
+  buildStartCommand,
+  findTraeCNBinary,
+  isTraeCNMainProcessCommand,
+  isTraeCNRunning,
+  quitTraeCN,
+  restartTraeCNWithDebug,
+  getQuickstartConfig
+} = require('./quickstart');
 
 let passed = 0;
 let failed = 0;
@@ -23,6 +31,7 @@ console.log('\n[quickstart.test.js] Running tests...\n');
 test('getQuickstartConfig returns object with required keys', () => {
   const config = getQuickstartConfig();
   assert.ok('useIsolatedProfile' in config);
+  assert.ok('profileMode' in config);
   assert.ok('remoteDebuggingPort' in config);
   assert.ok('gatewayPort' in config);
   assert.ok('gatewayHost' in config);
@@ -40,11 +49,29 @@ test('getQuickstartConfig default gatewayHost is 127.0.0.1', () => {
   assert.strictEqual(config.gatewayHost, '127.0.0.1');
 });
 
-test('getQuickstartConfig default useIsolatedProfile is true', () => {
+test('getQuickstartConfig default remoteDebuggingPort is 9334', () => {
+  delete process.env.TRAECN_QUICKSTART_REMOTE_DEBUGGING_PORT;
+  delete process.env.TRAE_QUICKSTART_REMOTE_DEBUGGING_PORT;
+  const config = getQuickstartConfig();
+  assert.strictEqual(config.remoteDebuggingPort, '9334');
+});
+
+test('getQuickstartConfig defaults to existing profile', () => {
   delete process.env.TRAECN_QUICKSTART_USE_ISOLATED_PROFILE;
   delete process.env.TRAE_QUICKSTART_USE_ISOLATED_PROFILE;
+  delete process.env.TRAECN_QUICKSTART_PROFILE_MODE;
+  delete process.env.TRAE_QUICKSTART_PROFILE_MODE;
+  const config = getQuickstartConfig();
+  assert.strictEqual(config.useIsolatedProfile, false);
+  assert.strictEqual(config.profileMode, 'existing');
+});
+
+test('getQuickstartConfig supports isolated-profile mode', () => {
+  process.env.TRAECN_QUICKSTART_PROFILE_MODE = 'isolated';
   const config = getQuickstartConfig();
   assert.strictEqual(config.useIsolatedProfile, true);
+  assert.strictEqual(config.profileMode, 'isolated');
+  delete process.env.TRAECN_QUICKSTART_PROFILE_MODE;
 });
 
 test('findTraeCNBinary returns string or null', () => {
@@ -52,6 +79,22 @@ test('findTraeCNBinary returns string or null', () => {
   delete process.env.TRAE_BIN;
   const result = findTraeCNBinary();
   assert.ok(result === null || typeof result === 'string');
+});
+
+test('quickstart exports confirmed restart helpers', () => {
+  assert.strictEqual(typeof quitTraeCN, 'function');
+  assert.strictEqual(typeof restartTraeCNWithDebug, 'function');
+});
+
+test('isTraeCNMainProcessCommand ignores Crashpad helper profile paths', () => {
+  assert.strictEqual(
+    isTraeCNMainProcessCommand('/Applications/Trae CN.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler --user-data-dir=/tmp/traecnclaw-profile-9334'),
+    false
+  );
+  assert.strictEqual(
+    isTraeCNMainProcessCommand('/Applications/Trae CN.app/Contents/MacOS/Electron --remote-debugging-port=9334'),
+    true
+  );
 });
 
 test('findTraeCNBinary respects TRAECN_BIN env var', () => {

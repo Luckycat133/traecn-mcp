@@ -4,6 +4,7 @@ const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const secretVault = require('./secret-vault');
 
 const LOG_LEVELS = ['error', 'warn', 'info', 'debug', 'trace'];
 
@@ -65,6 +66,12 @@ const CONFIG_SCHEMA = {
     additionalProperties: {
       type: 'boolean'
     }
+  },
+  secrets: {
+    type: 'object',
+    default: {},
+    description: 'Sensitive values (API keys, tokens). Always encrypted at rest when a passphrase is configured.',
+    additionalProperties: { type: 'string' }
   }
 };
 
@@ -82,7 +89,8 @@ const DEFAULT_CONFIG = {
     allowedOrigins: '',
     enabled: true
   },
-  plugins: {}
+  plugins: {},
+  secrets: {}
 };
 
 class ConfigValidationError extends Error {
@@ -101,6 +109,13 @@ class ConfigManager extends EventEmitter {
       ? options.watchEnabled
       : process.env.TRAECN_CONFIG_WATCH === '1';
     this.maxHistory = options.maxHistory || 50;
+    // The passphrase used to encrypt/decrypt the `secrets` section. If
+    // unset, the secrets section is stored as plaintext (still better than
+    // a hard-coded key — operators are expected to set this in production).
+    this.encryptionPassphrase = options.encryptionPassphrase
+      || process.env.TRAECN_CONFIG_ENCRYPTION_KEY
+      || process.env.TRAE_CONFIG_ENCRYPTION_KEY
+      || '';
 
     this._config = this._deepClone(DEFAULT_CONFIG);
     this._history = [];
@@ -118,6 +133,14 @@ class ConfigManager extends EventEmitter {
     }
   }
 
+  _isEncryptionEnabled() {
+    return Boolean(this.encryptionPassphrase);
+  }
+
+  _secretsOptions() {
+    return { passphrase: this.encryptionPassphrase };
+  }
+
   _deepClone(obj) {
     return JSON.parse(JSON.stringify(obj));
   }
@@ -129,7 +152,9 @@ class ConfigManager extends EventEmitter {
       }
       const content = fs.readFileSync(this.configFile, 'utf8');
       const parsed = JSON.parse(content);
-      this._mergeConfig(parsed, false);
+      // Decrypt any encrypted values back to plaintext for in-memory use.
+      const decrypted = secretVault.decryptObject(parsed, this._secretsOptions());
+      this._mergeConfig(decrypted, false);
     } catch (err) {
       console.error('[ConfigManager] Failed to load config file:', err.message);
     }
@@ -157,7 +182,8 @@ class ConfigManager extends EventEmitter {
     try {
       const content = fs.readFileSync(this.configFile, 'utf8');
       const parsed = JSON.parse(content);
-      this._mergeConfig(parsed, true);
+      const decrypted = secretVault.decryptObject(parsed, this._secretsOptions());
+      this._mergeConfig(decrypted, true);
       this.emit('configFileChanged', this.getConfig());
     } catch (err) {
       console.error('[ConfigManager] Failed to reload config file:', err.message);
@@ -251,6 +277,32 @@ class ConfigManager extends EventEmitter {
             message: `Plugin value must be a boolean`,
             current: typeof pluginValue
           });
+        }
+      }
+    }
+
+    if (config.secrets !== undefined) {
+      if (config.secrets === null || typeof config.secrets !== 'object' || Array.isArray(config.secrets)) {
+        errors.push({
+          path: 'secrets',
+          message: 'secrets must be an object',
+          current: typeof config.secrets
+        });
+      } else {
+        for (const [secretKey, secretValue] of Object.entries(config.secrets)) {
+          if (typeof secretValue !== 'string') {
+            errors.push({
+              path: `secrets.${secretKey}`,
+              message: 'Secret value must be a string',
+              current: typeof secretValue
+            });
+          } else if (secretValue.length > 4096) {
+            errors.push({
+              path: `secrets.${secretKey}`,
+              message: 'Secret value exceeds 4096 characters',
+              current: secretValue.length
+            });
+          }
         }
       }
     }
@@ -361,7 +413,13 @@ class ConfigManager extends EventEmitter {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(this.configFile, JSON.stringify(this._config, null, 2), 'utf8');
+      // Encrypt sensitive values before writing to disk. With no passphrase
+      // configured we still pass through (single-user dev setups) so the
+      // file remains editable by hand.
+      const persisted = this._isEncryptionEnabled()
+        ? secretVault.encryptObject(this._config, this._secretsOptions())
+        : this._config;
+      fs.writeFileSync(this.configFile, JSON.stringify(persisted, null, 2), 'utf8');
     } catch (err) {
       console.error('[ConfigManager] Failed to save config file:', err.message);
     }
@@ -427,6 +485,17 @@ class ConfigManager extends EventEmitter {
 
   getConfig() {
     return this._deepClone(this._config);
+  }
+
+  /**
+   * Return a single secret value from the encrypted-at-rest `secrets` block.
+   * Returns null if the key is not set or the value is not a non-empty string.
+   */
+  getSecret(name) {
+    if (!name || typeof name !== 'string') return null;
+    const value = this._config.secrets?.[name];
+    if (typeof value !== 'string' || value.length === 0) return null;
+    return value;
   }
 
   getSchema() {

@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { scoreTarget, discoverTarget, fetchCDPTargets, fetchCDPVersion, classifyTargetSurface, describeCDPSurface } = require('./discovery');
+const { DEFAULT_DISCOVERY_PORTS, scoreTarget, discoverTarget, fetchCDPTargets, fetchCDPVersion, classifyTargetSurface, describeCDPSurface } = require('./discovery');
 
 let passed = 0;
 let failed = 0;
@@ -80,6 +80,11 @@ test('describeCDPSurface prefers workspace over setup when both exist', () => {
   assert.strictEqual(surface.kind, 'workspace');
   assert.strictEqual(surface.targetId, 'workspace');
   assert.strictEqual(surface.totalPageTargets, 2);
+});
+
+test('DEFAULT_DISCOVERY_PORTS includes quickstart-style live ports', () => {
+  assert.ok(DEFAULT_DISCOVERY_PORTS.includes('9333'));
+  assert.ok(DEFAULT_DISCOVERY_PORTS.includes('9334'));
 });
 
 test('fetchCDPTargets rejects on connection failure', async () => {

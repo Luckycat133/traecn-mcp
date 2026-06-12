@@ -35,7 +35,7 @@ assert.ok(cliSource.includes("case 'capabilities'"), 'CLI must expose capabiliti
 assert.ok(cliSource.includes("case 'preflight'"), 'CLI must expose preflight command');
 assert.ok(cliSource.includes("case 'plan'"), 'CLI must expose operation plan command');
 assert.strictEqual(packageJson.scripts.doctor, 'node scripts/doctor.js');
-assert.strictEqual(packageJson.scripts['test:coverage'], 'node scripts/coverage-audit.js');
+assert.strictEqual(packageJson.scripts['test:coverage:audit'], 'node scripts/coverage-audit.js');
 assert.ok(packageJson.scripts['test:uat'].includes('coverage-audit'), 'test:uat must include coverage audit');
 assert.strictEqual(packageJson.scripts['inspect:verify'], 'node scripts/inspect-traecn.js --verify');
 assert.strictEqual(packageJson.scripts['test:live'], 'node scripts/live-uat.js');

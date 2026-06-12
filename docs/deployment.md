@@ -36,6 +36,35 @@ npm start
 
 For macOS and Windows desktop convenience, use `start-traecnapi.command` or `start-traecnapi.cmd` after reviewing the `.env` file.
 
+For unattended local queue waiting on macOS, prefer the LaunchAgent wrapper so the
+gateway survives the current terminal session:
+
+```sh
+npm run service:start
+npm run service:status
+```
+
+This installs a user LaunchAgent at `~/Library/LaunchAgents/com.traecnclaw.gateway.plist`
+and writes logs under `~/Library/Logs/TRAECNclaw/`. Stop it with:
+
+```sh
+npm run service:stop
+```
+
+The LaunchAgent path is also the recommended production path for async queue work because it now:
+
+- reloads persisted active tasks from `~/Library/Application Support/TRAECNclaw/active-queue.json`
+- avoids opening a fresh unauthenticated Trae profile by default
+  (`TRAECN_QUICKSTART_PROFILE_MODE=existing`,
+  `TRAECN_TRAE_RECOVERY_NEW_INSTANCE=0`)
+- auto-relaunches Trae CN when CDP disappears if `TRAECN_AUTO_START_TRAE=1` and
+  Trae is not already running
+- exposes `POST /api/trae/restart-debug` for confirmed recovery when Trae is
+  already running without CDP; this reuses the existing logged-in profile instead
+  of creating an isolated profile
+- lets external TraeCN model queues wait indefinitely by default; set
+  `TRAECN_QUEUE_MAX_WAIT_MS` only when you want a local queue timeout
+
 ## Verification
 
 Before release or local rollout, run:
@@ -67,6 +96,21 @@ Then verify with live TraeCN:
 ## Logging and Operations
 
 Gateway errors are returned as JSON and sensitive log keys are redacted. Check terminal output for startup errors, CDP connection failures, selector failures, queue polling errors, and forced shutdown notices.
+
+When using `delegate-async`:
+
+- `waitForQueue=true` means the gateway keeps the task in its own local background
+  queue while TraeCN is visibly queued or busy. This is the preferred mode for
+  unattended waiting.
+- `waitForQueue=false` means the caller keeps ownership of the wait and receives
+  immediate queue/running feedback instead of background persistence.
+- `fallbackModels=[...]` or `autoModelFallback=true` lets the gateway actively
+  probe alternate TraeCN models while the task waits. Probe results are persisted
+  on the task as `modelProbeResults` with `lastModelProbeAt` and
+  `nextModelProbeAt`, so callers can inspect progress without resending task
+  context.
+- `reviewRequired=true` stops the workflow at the review gate so a user can audit
+  the result and explicitly continue any follow-up tasks.
 
 ## Rollback
 

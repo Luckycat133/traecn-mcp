@@ -141,19 +141,126 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('restartTraeDebug sends confirmed POST to /api/trae/restart-debug', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, action: 'restart_trae_debug' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.restartTraeDebug({
+      confirmationPhrase: 'restart-trae-cn-with-debug-existing-profile',
+      cdpWaitMs: 1000
+    });
+    assert.strictEqual(result.data.action, 'restart_trae_debug');
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/trae/restart-debug');
+    assert.strictEqual(lastRequest.body.confirmationPhrase, 'restart-trae-cn-with-debug-existing-profile');
+    assert.strictEqual(lastRequest.body.cdpWaitMs, 1000);
+    server.close();
+  });
+
+  await asyncTest('stopGeneration sends POST to /api/trae/stop-generation', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.stopGeneration();
+    assert.strictEqual(result.data.success, true);
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/trae/stop-generation');
+    server.close();
+  });
+
+  await asyncTest('adoptCurrentTask sends POST to /api/task/adopt-current', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task_adopted', status: 'executing' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.adoptCurrentTask({
+      task: 'review repo',
+      reviewRequired: true,
+      force: true
+    });
+    assert.strictEqual(result.data.taskId, 'task_adopted');
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/task/adopt-current');
+    assert.strictEqual(lastRequest.body.task, 'review repo');
+    assert.strictEqual(lastRequest.body.reviewRequired, true);
+    assert.strictEqual(lastRequest.body.force, true);
+    server.close();
+  });
+
+  await asyncTest('review gate helpers use /api/trae/review-gate', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, url: req.url }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    await client.getReviewGateStatus();
+    assert.strictEqual(lastRequest.method, 'GET');
+    assert.strictEqual(lastRequest.url, '/api/trae/review-gate');
+
+    await client.resolveReviewGate('keep_all');
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/trae/review-gate');
+    assert.strictEqual(lastRequest.body.action, 'keep_all');
+    server.close();
+  });
+
   await asyncTest('delegate sends POST to /api/delegate', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ text: 'response', stable: true }));
     });
     const client = new TraeCNApiClient({ port, timeout: 3000 });
-    const result = await client.delegate('test task', { includeProcessText: true, waitForQueue: false });
+    const result = await client.delegate('test task', {
+      includeProcessText: true,
+      waitForQueue: false,
+      fallbackModels: ['GLM-5.1'],
+      autoModelFallback: true,
+      modelProbeIntervalMs: 15000
+    });
     assert.strictEqual(result.text, 'response');
     assert.strictEqual(lastRequest.method, 'POST');
     assert.strictEqual(lastRequest.url, '/api/delegate');
     assert.strictEqual(lastRequest.body.task, 'test task');
     assert.strictEqual(lastRequest.body.includeProcessText, true);
     assert.strictEqual(lastRequest.body.waitForQueue, false);
+    assert.deepStrictEqual(lastRequest.body.fallbackModels, ['GLM-5.1']);
+    assert.strictEqual(lastRequest.body.autoModelFallback, true);
+    assert.strictEqual(lastRequest.body.modelProbeIntervalMs, 15000);
+    server.close();
+  });
+
+  await asyncTest('delegateAsync sends fallback model options', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task_1', status: 'queued' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.delegateAsync('queued task', {
+      fallbackModels: ['GLM-5.1', 'Kimi-K2.6'],
+      modelProbeIntervalMs: 30000
+    });
+    assert.strictEqual(result.data.taskId, 'task_1');
+    assert.strictEqual(lastRequest.url, '/api/delegate-async');
+    assert.deepStrictEqual(lastRequest.body.fallbackModels, ['GLM-5.1', 'Kimi-K2.6']);
+    assert.strictEqual(lastRequest.body.modelProbeIntervalMs, 30000);
+    server.close();
+  });
+
+  await asyncTest('delegateAsync sends background execution option', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task_bg', status: 'queued' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.delegateAsync('long task', { background: true });
+    assert.strictEqual(result.data.taskId, 'task_bg');
+    assert.strictEqual(lastRequest.url, '/api/delegate-async');
+    assert.strictEqual(lastRequest.body.background, true);
     server.close();
   });
 
@@ -163,9 +270,10 @@ test('TraeCNApiClient constructor accepts custom options', () => {
       res.end(JSON.stringify({ success: true, model: 'GLM-5.1' }));
     });
     const client = new TraeCNApiClient({ port, timeout: 3000 });
-    const result = await client.switchModel('GLM-5.1');
+    const result = await client.switchModel('GLM-5.1', { waitForQueue: false });
     assert.strictEqual(result.data.success, true);
     assert.strictEqual(lastRequest.body.model, 'GLM-5.1');
+    assert.strictEqual(lastRequest.body.waitForQueue, false);
     server.close();
   });
 

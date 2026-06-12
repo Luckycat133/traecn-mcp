@@ -71,6 +71,38 @@ function generateOpenAPISpec() {
           }
         }
       },
+      '/metrics': {
+        get: {
+          summary: 'Return Prometheus metrics for the local gateway',
+          operationId: 'getMetrics',
+          responses: {
+            '200': {
+              description: 'Prometheus text exposition',
+              content: {
+                'text/plain': {
+                  schema: { type: 'string' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/metrics.json': {
+        get: {
+          summary: 'Return gateway metrics as JSON for diagnostics',
+          operationId: 'getMetricsJson',
+          responses: {
+            '200': {
+              description: 'Metrics snapshot',
+              content: {
+                'application/json': {
+                  schema: { type: 'object' }
+                }
+              }
+            }
+          }
+        }
+      },
       '/api/config': {
         get: {
           summary: 'Read runtime gateway configuration',
@@ -266,7 +298,15 @@ function generateOpenAPISpec() {
                     task: { type: 'string', description: 'The task to delegate', maxLength: 100000 },
                     projectPath: { type: 'string' },
                     sessionId: { type: 'string' },
-                    includeProcessText: { type: 'boolean', default: false }
+                    includeProcessText: { type: 'boolean', default: false },
+                    waitForQueue: { type: 'boolean', default: true },
+                    fallbackModels: {
+                      type: 'array',
+                      items: { type: 'string' },
+                      description: 'Ordered model candidates to probe when the current model is queued.'
+                    },
+                    autoModelFallback: { type: 'boolean', default: false },
+                    modelProbeIntervalMs: { type: 'number', default: 60000 }
                   }
                 }
               }
@@ -310,6 +350,13 @@ function generateOpenAPISpec() {
                     chatId: { type: 'string', description: 'Optional chat ID for notification callback' },
                     waitForQueue: { type: 'boolean', default: true },
                     includeProcessText: { type: 'boolean', default: false },
+                    fallbackModels: {
+                      type: 'array',
+                      items: { type: 'string' },
+                      description: 'Ordered model candidates to probe while the task waits in the local background queue.'
+                    },
+                    autoModelFallback: { type: 'boolean', default: false },
+                    modelProbeIntervalMs: { type: 'number', default: 60000 },
                     reviewRequired: { type: 'boolean', default: false },
                     notifyUrl: { type: 'string', description: 'Optional webhook URL for task lifecycle notifications' },
                     followupTasks: {
@@ -443,7 +490,8 @@ function generateOpenAPISpec() {
                   type: 'object',
                   required: ['model'],
                   properties: {
-                    model: { type: 'string', description: 'Model name (e.g. GLM-5.1, DeepSeek-V3.1-Terminus)' }
+                    model: { type: 'string', description: 'Model name (e.g. GLM-5.1, DeepSeek-V3.1-Terminus)' },
+                    waitForQueue: { type: 'boolean', description: 'When false, return immediately after switching with queue details instead of waiting for the model queue to clear.' }
                   }
                 }
               }
@@ -499,6 +547,39 @@ function generateOpenAPISpec() {
           security: [{ bearerAuth: [] }],
           responses: {
             '200': { description: 'Queued task list' }
+          }
+        }
+      },
+      '/api/task/adopt-current': {
+        post: {
+          summary: 'Adopt the currently queued or running Trae request as a tracked background task without resending the prompt',
+          operationId: 'adoptCurrentTask',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    task: { type: 'string', description: 'Optional task text to store with the recovered background task' },
+                    reviewRequired: { type: 'boolean' },
+                    followupTasks: { type: 'array', items: { type: 'object' } },
+                    chatId: { type: 'string' },
+                    includeProcessText: { type: 'boolean' },
+                    notifyUrl: { type: 'string' },
+                    fallbackModels: { type: 'array', items: { type: 'string' } },
+                    autoModelFallback: { type: 'boolean' },
+                    modelProbeIntervalMs: { type: 'number' },
+                    submittedAt: { type: 'number' },
+                    force: { type: 'boolean' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '202': { description: 'Current Trae request adopted and will be tracked in the background' },
+            '409': { description: 'No queued or running Trae request is visible' }
           }
         }
       },
@@ -558,6 +639,48 @@ function generateOpenAPISpec() {
             '200': { description: 'Task cancelled' },
             '400': { description: 'Task cannot be cancelled' },
             '404': { description: 'Task not found' }
+          }
+        }
+      },
+      '/api/trae/stop-generation': {
+        post: {
+          summary: 'Stop the current Trae generation or queued model request in the visible UI',
+          operationId: 'stopTraeGeneration',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': { description: 'Stop button clicked or no generation is active' },
+            '409': { description: 'Stop generation action is not currently available' }
+          }
+        }
+      },
+      '/api/trae/review-gate': {
+        get: {
+          summary: 'Inspect whether Trae is blocked on its internal task review gate',
+          operationId: 'getTraeReviewGate',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': { description: 'Review gate state' }
+          }
+        },
+        post: {
+          summary: 'Resolve Trae internal task review gate by keeping or reverting generated changes',
+          operationId: 'resolveTraeReviewGate',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    action: { type: 'string', enum: ['keep_all', 'revert_all', 'keep', 'discard'] }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Review gate resolved or not present' },
+            '409': { description: 'Review gate could not be resolved' }
           }
         }
       },
@@ -635,6 +758,36 @@ function generateOpenAPISpec() {
               }
             },
             '400': { description: 'Invalid preflight request' }
+          }
+        }
+      },
+      '/api/trae/restart-debug': {
+        post: {
+          summary: 'Restart Trae CN with remote debugging enabled and the existing logged-in profile',
+          operationId: 'restartTraeDebug',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    confirmationPhrase: {
+                      type: 'string',
+                      description: 'Required unless confirmationId matches the generated restart_trae_debug confirmation plan.'
+                    },
+                    confirmationId: { type: 'string' },
+                    projectPath: { type: 'string' },
+                    quitTimeoutMs: { type: 'number' },
+                    cdpWaitMs: { type: 'number' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Restart attempted and CDP wait result returned' },
+            '409': { description: 'Explicit confirmation required before closing Trae CN' }
           }
         }
       },

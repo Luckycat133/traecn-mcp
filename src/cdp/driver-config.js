@@ -2,6 +2,12 @@
 
 const { getEnvWithFallback, parseSelectors, parsePositiveInt } = require('../shared/utils');
 
+function parseOptionalPositiveInt(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 const DEFAULT_COMPOSER_SELECTORS = [
   '.chat-input-v2-input-box-editable',
   'textarea',
@@ -226,6 +232,9 @@ function getConfig() {
     sessionPrepareTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_SESSION_PREPARE_TIMEOUT_MS', 'TRAE_SESSION_PREPARE_TIMEOUT_MS', '5000'), 5000),
     queuePollIntervalMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_POLL_INTERVAL_MS', 'TRAE_QUEUE_POLL_INTERVAL_MS', '15000'), 15000),
     queueWaitTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_WAIT_TIMEOUT_MS', 'TRAE_QUEUE_WAIT_TIMEOUT_MS', '60000'), 60000),
+    queuePerTaskTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_PER_TASK_TIMEOUT_MS', 'TRAE_QUEUE_PER_TASK_TIMEOUT_MS', '600000'), 600000),
+    queueTimeoutExtensionMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_TIMEOUT_EXTENSION_MS', 'TRAE_QUEUE_TIMEOUT_EXTENSION_MS', '600000'), 600000),
+    queueMaxWaitMs: parseOptionalPositiveInt(getEnvWithFallback('TRAECN_QUEUE_MAX_WAIT_MS', 'TRAE_QUEUE_MAX_WAIT_MS')),
     // Approval / dialog handling
     approvalTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_APPROVAL_TIMEOUT_MS', 'TRAE_APPROVAL_TIMEOUT_MS', '120000'), 120000),
     approvalPollIntervalMs: parsePositiveInt(getEnvWithFallback('TRAECN_APPROVAL_POLL_INTERVAL_MS', 'TRAE_APPROVAL_POLL_INTERVAL_MS', '3000'), 3000)

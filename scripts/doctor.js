@@ -45,7 +45,7 @@ async function main() {
 
   if (cdp.valid) {
     await checkPort(checks, 'CDP port', cdp.host, cdp.port, {
-      warning: `No listener detected on ${cdp.connectHost}:${cdp.port}; Trae CN may not be running with remote debugging enabled. If Trae CN is already open, use "npm run start:traecn -- --force-new" to start a separate debug-enabled instance.`
+      warning: `No listener detected on ${cdp.connectHost}:${cdp.port}; Trae CN may not be running with remote debugging enabled. Prefer "TRAECN_QUICKSTART_PROFILE_MODE=existing npm run start:traecn -- --force-new --use-existing-profile" so automation reuses the logged-in profile.`
     });
     await checkCdpVersion(checks, cdp, mockBridge.enabled);
   } else {

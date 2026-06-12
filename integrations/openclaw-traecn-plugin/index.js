@@ -47,7 +47,7 @@ const toolDefinitions = [
   },
   {
     name: 'traecn_command',
-    description: 'Execute a preset TraeCN command through the local TraeCNclaw gateway. Use traecn_command_set to discover available commands. Core commands include status, readiness, new_chat, delegate, delegate_async, task_status, cancel_task, switch_mode, switch_model, queue_status, open_project, settings_read, settings_read_all, settings_set, settings_navigate, settings_back, dialog_status, approve_dialog, dismiss_dialog, batch_submit, batch_status, batch_cancel, and review_code.',
+    description: 'Execute a preset TraeCN command through the local TraeCNclaw gateway. Use traecn_command_set to discover available commands. Core commands include status, readiness, restart_trae_debug, new_chat, delegate, delegate_async, task_status, adopt_current_task, cancel_task, stop_generation, review_gate_status, resolve_review_gate, switch_mode, switch_model, queue_status, open_project, settings_read, settings_read_all, settings_set, settings_navigate, settings_back, dialog_status, approve_dialog, dismiss_dialog, batch_submit, batch_status, batch_cancel, and review_code.',
     parameters: {
       type: 'object',
       required: ['command'],
@@ -225,7 +225,14 @@ const toolDefinitions = [
         allowAutoStart: { type: 'boolean', description: 'Allow automatically starting TraeCN if not running', default: false },
         includeProcessText: { type: 'boolean', description: 'Include process/thinking information in the response', default: false },
         waitForQueue: { type: 'boolean', description: 'If true (default), queue the task when model is busy. If false, return queue info immediately without waiting.', default: true },
-        asyncPoll: { type: 'boolean', description: 'If true, always use async delegate path (returns taskId). Useful when you want to manage polling yourself.', default: false }
+        asyncPoll: { type: 'boolean', description: 'If true, always use async delegate path (returns taskId). Useful when you want to manage polling yourself.', default: false },
+        fallbackModels: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Ordered model candidates to probe while queued. The gateway switches through them and uses the first model that can submit.'
+        },
+        autoModelFallback: { type: 'boolean', description: 'Use the gateway default fallback model list while queued.', default: false },
+        modelProbeIntervalMs: { type: 'number', description: 'Minimum interval between background fallback model probes for this task.' }
       }
     },
     handler: async (params, context) => {
@@ -234,7 +241,10 @@ const toolDefinitions = [
       if (params.asyncPoll) {
         const result = await client.delegateAsync(params.task, {
           includeProcessText: params.includeProcessText,
-          waitForQueue: params.waitForQueue !== false
+          waitForQueue: params.waitForQueue !== false,
+          fallbackModels: params.fallbackModels,
+          autoModelFallback: params.autoModelFallback === true,
+          modelProbeIntervalMs: params.modelProbeIntervalMs
         });
         return result.data || result;
       }
@@ -244,7 +254,11 @@ const toolDefinitions = [
         projectPath: params.projectPath,
         sessionId: params.sessionId,
         allowAutoStart: params.allowAutoStart,
-        includeProcessText: params.includeProcessText
+        includeProcessText: params.includeProcessText,
+        waitForQueue: params.waitForQueue,
+        fallbackModels: params.fallbackModels,
+        autoModelFallback: params.autoModelFallback === true,
+        modelProbeIntervalMs: params.modelProbeIntervalMs
       });
 
       // If queued and waitForQueue is enabled, the delegate already handles
@@ -295,12 +309,13 @@ const toolDefinitions = [
       type: 'object',
       required: ['model'],
       properties: {
-        model: { type: 'string', description: 'The model name to switch to (e.g. "GLM-5.1", "DeepSeek-V3.1-Terminus")' }
+        model: { type: 'string', description: 'The model name to switch to (e.g. "GLM-5.1", "DeepSeek-V3.1-Terminus")' },
+        waitForQueue: { type: 'boolean', description: 'If false, return immediately after switching with queue details instead of waiting for the queue to clear.', default: true }
       }
     },
     handler: async (params, context) => {
       const client = new TraeCNApiClient(context);
-      return client.switchModel(params.model);
+      return client.switchModel(params.model, { waitForQueue: params.waitForQueue });
     }
   },
   {
