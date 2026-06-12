@@ -1,6 +1,9 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const {
   ConfigManager,
   ConfigValidationError,
@@ -406,6 +409,98 @@ test('ConfigValidationError has correct properties', () => {
   const error = new ConfigValidationError('Validation failed', errors);
   assert.strictEqual(error.name, 'ConfigValidationError');
   assert.strictEqual(error.errors.length, 1);
+});
+
+// ── Encrypted-at-rest config (Batch C3) ───────────────────────────────────
+
+test('ConfigManager encrypts secrets when saving with passphrase configured', () => {
+  const tmp = path.join(os.tmpdir(), `traecn-cfg-enc-${Date.now()}.json`);
+  try {
+    const manager = new ConfigManager({
+      configFile: tmp,
+      encryptionPassphrase: 'unit-test-passphrase'
+    });
+    manager.update({ secrets: { apiKey: 'sk-plain-1', token: 'tok-plain-2' } });
+    const raw = fs.readFileSync(tmp, 'utf8');
+    const persisted = JSON.parse(raw);
+    // Sensitive values must not appear in plaintext on disk.
+    assert.ok(!raw.includes('sk-plain-1'));
+    assert.ok(!raw.includes('tok-plain-2'));
+    // And they must carry the encryption prefix.
+    assert.ok(persisted.secrets.apiKey.startsWith('enc:v1:'));
+    assert.ok(persisted.secrets.token.startsWith('enc:v1:'));
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+});
+
+test('ConfigManager decrypts secrets when loading from file', () => {
+  const tmp = path.join(os.tmpdir(), `traecn-cfg-dec-${Date.now()}.json`);
+  try {
+    const writer = new ConfigManager({
+      configFile: tmp,
+      encryptionPassphrase: 'shared-passphrase'
+    });
+    writer.update({ secrets: { apiKey: 'sk-on-disk' } });
+
+    const reader = new ConfigManager({
+      configFile: tmp,
+      encryptionPassphrase: 'shared-passphrase'
+    });
+    assert.strictEqual(reader.getSecret('apiKey'), 'sk-on-disk');
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+});
+
+test('ConfigManager rejects loading encrypted config without a passphrase', () => {
+  const tmp = path.join(os.tmpdir(), `traecn-cfg-nopass-${Date.now()}.json`);
+  try {
+    const writer = new ConfigManager({
+      configFile: tmp,
+      encryptionPassphrase: 'some-passphrase'
+    });
+    writer.update({ secrets: { apiKey: 'sk-on-disk' } });
+
+    // Load with no passphrase: the value stays encrypted in memory.
+    const reader = new ConfigManager({ configFile: tmp });
+    assert.strictEqual(reader.getSecret('apiKey'), null);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+});
+
+test('ConfigManager getSecret returns null for missing or non-string values', () => {
+  const manager = new ConfigManager();
+  assert.strictEqual(manager.getSecret('nonexistent'), null);
+  assert.strictEqual(manager.getSecret(null), null);
+  manager._config.secrets.empty = '';
+  assert.strictEqual(manager.getSecret('empty'), null);
+});
+
+test('ConfigManager validates secrets section is an object', () => {
+  const manager = new ConfigManager();
+  assert.throws(() => manager.update({ secrets: 'not-an-object' }), /validation/i);
+  assert.throws(() => manager.update({ secrets: [] }), /validation/i);
+});
+
+test('ConfigManager validates secret values are strings', () => {
+  const manager = new ConfigManager();
+  assert.throws(() => manager.update({ secrets: { apiKey: 42 } }), /validation/i);
+});
+
+test('ConfigManager keeps secrets as plaintext when no passphrase is configured', () => {
+  const tmp = path.join(os.tmpdir(), `traecn-cfg-plain-${Date.now()}.json`);
+  try {
+    const manager = new ConfigManager({ configFile: tmp });
+    manager.update({ secrets: { apiKey: 'sk-plain' } });
+    const raw = fs.readFileSync(tmp, 'utf8');
+    // Without a passphrase, the value is stored as-is. Operators can
+    // inspect / hand-edit the file in single-user dev setups.
+    assert.ok(raw.includes('sk-plain'));
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
 });
 
 console.log(`\n[config-manager.test.js] Results: ${passed} passed, ${failed} failed\n`);

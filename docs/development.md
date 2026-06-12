@@ -42,13 +42,39 @@ npm run inspect:verify
 
 The verify mode loads `.env`, refuses CDP endpoints that do not look like TraeCN, checks composer/send/response/new-chat/mode selectors, and exits non-zero when the current TraeCN UI no longer matches the configured selector set.
 
-If Trae CN is already open without remote debugging, start a separate debug-enabled instance:
+If Trae CN is already open without remote debugging, prefer restarting it with
+the existing logged-in profile and the debug port enabled:
 
 ```sh
-npm run start:traecn -- --force-new
+TRAECN_QUICKSTART_PROFILE_MODE=existing npm run start:traecn -- --force-new --use-existing-profile
 ```
 
-`--force-new` uses an isolated user-data directory by default (`TRAECN_QUICKSTART_USE_ISOLATED_PROFILE=1`) so live tests do not mutate the normal Trae CN profile. Set `TRAECN_USER_DATA_DIR` when you need a specific automation profile.
+The default profile mode is `existing`, so `--force-new` does not add an
+isolated `--user-data-dir` unless you explicitly pass `--use-isolated-profile`
+or set `TRAECN_QUICKSTART_PROFILE_MODE=isolated`.
+
+For disposable selector experiments, use an isolated profile deliberately:
+
+```sh
+TRAECN_QUICKSTART_PROFILE_MODE=isolated npm run start:traecn -- --force-new --use-isolated-profile
+```
+
+For unattended queue verification, keep the gateway under `launchd` so queued tasks survive terminal exits and gateway restarts:
+
+```sh
+TRAECN_ENABLE_MOCK_BRIDGE=0 TRAECN_REMOTE_DEBUGGING_PORT=9334 TRAECN_QUICKSTART_PROFILE_MODE=existing npm run service:start
+```
+
+With the current defaults the gateway will also:
+
+- auto-relaunch Trae CN when CDP disappears (`TRAECN_AUTO_START_TRAE=1`)
+- keep active queue waits indefinitely by default; set
+  `TRAECN_QUEUE_MAX_WAIT_MS` only when a local queue timeout is required
+- persist active async queue state to `~/Library/Application Support/TRAECNclaw/active-queue.json` on macOS
+- refuse to open an isolated unauthenticated Trae profile when the normal app is
+  already running without CDP; use `restart_trae_debug` or
+  `POST /api/trae/restart-debug` with explicit confirmation to restart the
+  existing logged-in profile with remote debugging.
 
 ## Testing Strategy
 

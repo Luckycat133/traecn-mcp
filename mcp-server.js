@@ -8,6 +8,7 @@ const { buildCapabilities } = require('./src/shared/capabilities');
 const { buildConfirmationPlan } = require('./src/shared/operation-confirmation');
 const { executeCommand, listCommands } = require('./integrations/openclaw-traecn-plugin/lib/command-set');
 const { TraeCNApiClient } = require('./integrations/openclaw-traecn-plugin/lib/traecnapi-client');
+const mcpAuth = require('./src/shared/mcp-auth');
 
 const SERVER_INFO = Object.freeze({ name: 'traecnclaw', version: require('./package.json').version });
 
@@ -69,18 +70,72 @@ const MCP_TOOLS = Object.freeze([
       projectPath: { type: 'string' },
       includeProcess: { type: 'boolean' },
       autoWait: { type: 'boolean', default: true },
-      mode: { type: 'string', enum: ['solo', 'ide'] }
+      mode: { type: 'string', enum: ['solo', 'ide'] },
+      fallbackModels: { type: 'array', items: { type: 'string' } },
+      autoModelFallback: { type: 'boolean' },
+      modelProbeIntervalMs: { type: 'number' }
     }, ['task'])
   },
   {
     name: 'queue_task',
     description: 'Submit a task for queue-aware background processing and return a taskId.',
-    inputSchema: schema({ task: { type: 'string' }, projectPath: { type: 'string' } }, ['task'])
+    inputSchema: schema({
+      task: { type: 'string' },
+      projectPath: { type: 'string' },
+      fallbackModels: { type: 'array', items: { type: 'string' } },
+      autoModelFallback: { type: 'boolean' },
+      modelProbeIntervalMs: { type: 'number' }
+    }, ['task'])
   },
   {
     name: 'poll_task',
     description: 'Poll a queued TraeCN task by taskId.',
     inputSchema: schema({ taskId: { type: 'string' } })
+  },
+  {
+    name: 'adopt_current_task',
+    description: 'Recover tracking for the currently queued/running TraeCN request without resending the prompt.',
+    inputSchema: schema({
+      task: { type: 'string' },
+      reviewRequired: { type: 'boolean' },
+      force: { type: 'boolean' }
+    })
+  },
+  {
+    name: 'cancel_task',
+    description: 'Cancel a queued or review-waiting TraeCN background task.',
+    inputSchema: schema({ taskId: { type: 'string' } }, ['taskId'])
+  },
+  {
+    name: 'stop_generation',
+    description: 'Stop the current TraeCN generation or queued model request.',
+    inputSchema: schema()
+  },
+  {
+    name: 'review_gate_status',
+    description: 'Inspect whether TraeCN is blocked on its internal keep/revert review gate.',
+    inputSchema: schema()
+  },
+  {
+    name: 'resolve_review_gate',
+    description: 'Resolve TraeCN internal keep/revert review gate.',
+    inputSchema: schema({ action: { type: 'string', enum: ['keep_all', 'revert_all', 'keep', 'discard'] } })
+  },
+  {
+    name: 'dismiss_dialog',
+    description: 'Dismiss the current TraeCN dialog.',
+    inputSchema: schema()
+  },
+  {
+    name: 'restart_trae_debug',
+    description: 'Restart TraeCN with remote debugging enabled using the existing logged-in profile.',
+    inputSchema: schema({
+      confirmationPhrase: { type: 'string' },
+      confirmationId: { type: 'string' },
+      projectPath: { type: 'string' },
+      quitTimeoutMs: { type: 'number' },
+      cdpWaitMs: { type: 'number' }
+    })
   },
   {
     name: 'review_code',
@@ -91,7 +146,10 @@ const MCP_TOOLS = Object.freeze([
       focus: { type: 'array', items: { type: 'string' } },
       code: { type: 'string' },
       diff: { type: 'string' },
-      queue: { type: 'boolean' }
+      queue: { type: 'boolean' },
+      fallbackModels: { type: 'array', items: { type: 'string' } },
+      autoModelFallback: { type: 'boolean' },
+      modelProbeIntervalMs: { type: 'number' }
     }, ['instruction'])
   },
   {
@@ -102,7 +160,10 @@ const MCP_TOOLS = Object.freeze([
   {
     name: 'switch_model',
     description: 'Switch the active TraeCN model with fuzzy matching.',
-    inputSchema: schema({ name: { type: 'string' } }, ['name'])
+    inputSchema: schema({
+      name: { type: 'string' },
+      waitForQueue: { type: 'boolean' }
+    }, ['name'])
   },
   {
     name: 'switch_mode',
@@ -143,6 +204,48 @@ const MCP_TOOLS = Object.freeze([
     name: 'open_project',
     description: 'Open a local project path in TraeCN.',
     inputSchema: schema({ projectPath: { type: 'string' } }, ['projectPath'])
+  },
+  {
+    name: 'adopt_current_task',
+    description: 'Adopt an existing TraeCN queued/running request without re-sending the prompt.',
+    inputSchema: schema({
+      task: { type: 'string' },
+      reviewRequired: { type: 'boolean' },
+      followupTasks: { type: 'array', items: { type: 'object' } },
+      chatId: { type: 'string' },
+      includeProcessText: { type: 'boolean' },
+      notifyUrl: { type: 'string' },
+      fallbackModels: { type: 'array', items: { type: 'string' } },
+      autoModelFallback: { type: 'boolean' },
+      modelProbeIntervalMs: { type: 'number' },
+      submittedAt: { type: 'number' },
+      force: { type: 'boolean' }
+    })
+  },
+  {
+    name: 'cancel_task',
+    description: 'Cancel a queued or awaiting-review TraeCN task.',
+    inputSchema: schema({ taskId: { type: 'string' } }, ['taskId'])
+  },
+  {
+    name: 'stop_generation',
+    description: 'Stop the current TraeCN generation or queued request.',
+    inputSchema: schema()
+  },
+  {
+    name: 'review_gate_status',
+    description: 'Check whether TraeCN is showing an internal review gate (keep/revert changes).',
+    inputSchema: schema()
+  },
+  {
+    name: 'resolve_review_gate',
+    description: 'Resolve the TraeCN internal review gate (keep_all or revert_all).',
+    inputSchema: schema({ action: { type: 'string', enum: ['keep_all', 'revert_all'] } }, ['action'])
+  },
+  {
+    name: 'dismiss_dialog',
+    description: 'Dismiss the current TraeCN dialog without approving.',
+    inputSchema: schema()
   }
 ]);
 
@@ -151,7 +254,29 @@ function asMcpContent(value) {
   return { content: [{ type: 'text', text }] };
 }
 
-async function callTool(name, args = {}, context = envContext()) {
+async function callTool(name, args = {}, context = envContext(), authContext = {}) {
+  // Authorize before any side effects. The auth layer is a no-op when the
+  // API key manager is not enabled, preserving single-user setups.
+  const decision = mcpAuth.authorizeTool({
+    apiKeyManager: authContext.apiKeyManager,
+    keyId: authContext.keyId,
+    toolName: name,
+    args
+  });
+  if (!decision.ok) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          error: decision.message,
+          code: decision.code,
+          required: decision.required
+        }, null, 2)
+      }],
+      isError: true
+    };
+  }
+
   const skill = new TraeCNSkill(context);
 
   switch (name) {
@@ -174,12 +299,47 @@ async function callTool(name, args = {}, context = envContext()) {
       return asMcpContent(await skill.queue(args.task, args));
     case 'poll_task':
       return asMcpContent(await skill.poll(args.taskId || null));
+    case 'adopt_current_task': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.adoptCurrentTask(args);
+      return asMcpContent(result.data || result);
+    }
+    case 'cancel_task': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.cancelTask(args.taskId);
+      return asMcpContent(result.data || result);
+    }
+    case 'stop_generation': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.stopGeneration();
+      return asMcpContent(result.data || result);
+    }
+    case 'review_gate_status': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.getReviewGateStatus();
+      return asMcpContent(result.data || result);
+    }
+    case 'resolve_review_gate': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.resolveReviewGate(args.action || 'keep_all');
+      return asMcpContent(result.data || result);
+    }
+    case 'dismiss_dialog': {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'dismiss_dialog', {});
+      return asMcpContent(result.data || result);
+    }
+    case 'restart_trae_debug': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.restartTraeDebug(args);
+      return asMcpContent(result.data || result);
+    }
     case 'review_code':
       return asMcpContent(args.queue ? await skill.queue(buildCodeReviewTask(args), args) : await skill.reviewCode(args, args));
     case 'check_status':
       return asMcpContent(await skill.status(args.allowAutoStart === true));
     case 'switch_model':
-      return asMcpContent(await skill.switchModel(args.name));
+      return asMcpContent(await skill.switchModel(args.name, { waitForQueue: args.waitForQueue }));
     case 'switch_mode':
       return asMcpContent(await skill.switchMode(args.mode));
     case 'new_chat':
@@ -201,7 +361,7 @@ async function callTool(name, args = {}, context = envContext()) {
   }
 }
 
-function createMcpHandlers(context = envContext()) {
+function createMcpHandlers(context = envContext(), authContext = {}) {
   return {
     async handle(message) {
       const { method, params = {} } = message;
@@ -213,7 +373,7 @@ function createMcpHandlers(context = envContext()) {
         };
       }
       if (method === 'tools/list') return { tools: MCP_TOOLS };
-      if (method === 'tools/call') return callTool(params.name, params.arguments || {}, context);
+      if (method === 'tools/call') return callTool(params.name, params.arguments || {}, context, authContext);
       if (method === 'prompts/list') return { prompts: promptLayers.listMcpPrompts() };
       if (method === 'prompts/get') return promptLayers.getMcpPrompt(params.name, params.arguments || {});
       if (method === 'resources/list') return { resources: promptLayers.listMcpResources() };
@@ -280,5 +440,6 @@ module.exports = {
   callTool,
   createMcpHandlers,
   envContext,
-  startStdioServer
+  startStdioServer,
+  mcpAuth
 };

@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { getEnvWithFallback, parsePositiveInt } = require('./utils');
 
@@ -12,11 +13,20 @@ const DEFAULT_RETENTION_HOURS = parsePositiveInt(
   getEnvWithFallback('TRAECN_TASK_HISTORY_RETENTION_HOURS', 'TRAE_TASK_HISTORY_RETENTION_HOURS', '168'),
   168
 );
-const DEFAULT_PERSISTENCE_PATH = getEnvWithFallback(
-  'TRAECN_TASK_HISTORY_PERSISTENCE_PATH',
-  'TRAE_TASK_HISTORY_PERSISTENCE_PATH',
-  ''
-);
+function resolveDefaultPersistencePath() {
+  const configured = getEnvWithFallback(
+    'TRAECN_TASK_HISTORY_PERSISTENCE_PATH',
+    'TRAE_TASK_HISTORY_PERSISTENCE_PATH',
+    ''
+  );
+  if (configured) return configured;
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'TRAECNclaw', 'task-history.json');
+  }
+  return path.join(os.homedir(), '.traecnclaw', 'task-history.json');
+}
+
+const DEFAULT_PERSISTENCE_PATH = resolveDefaultPersistencePath();
 
 class TaskHistoryStore {
   constructor(options = {}) {
@@ -110,6 +120,76 @@ class TaskHistoryStore {
     this._dirty = true;
     this._enforceSizeLimit();
     return taskId;
+  }
+
+  ensureTask(taskId, task, options = {}) {
+    if (!taskId) return null;
+    const existing = this.tasks.get(taskId);
+    if (existing) {
+      if (options.updateExisting === true) {
+        if (task !== undefined) {
+          existing.task = String(task || '').substring(0, 10000);
+        }
+        if (options.sessionId !== undefined) existing.sessionId = options.sessionId || null;
+        if (options.status !== undefined) existing.status = options.status;
+        if (options.result !== undefined) existing.result = options.result;
+        if (options.createdAt !== undefined) existing.createdAt = options.createdAt;
+        if (options.createdAtMs !== undefined) existing.createdAtMs = options.createdAtMs;
+        if (options.sortKey !== undefined) existing.sortKey = options.sortKey;
+        if (options.completedAt !== undefined) existing.completedAt = options.completedAt;
+        if (options.elapsedMs !== undefined) existing.elapsedMs = options.elapsedMs;
+        if (Array.isArray(options.steps)) existing.steps = options.steps;
+        if (options.metadata !== undefined) existing.metadata = options.metadata || {};
+        this._dirty = true;
+        this._enforceSizeLimit();
+        this._persist();
+      }
+      return existing;
+    }
+
+    const createdAtMs = options.createdAtMs || Date.now();
+    const createdAt = options.createdAt || new Date(createdAtMs).toISOString();
+    const record = {
+      taskId,
+      sessionId: options.sessionId || null,
+      task: String(task || '').substring(0, 10000),
+      result: options.result || null,
+      status: options.status || 'running',
+      createdAt,
+      createdAtMs,
+      sortKey: options.sortKey || String(createdAtMs),
+      completedAt: options.completedAt || null,
+      elapsedMs: options.elapsedMs || null,
+      steps: Array.isArray(options.steps) ? options.steps : [],
+      metadata: options.metadata || {}
+    };
+    this.tasks.set(taskId, record);
+    this._dirty = true;
+    this._enforceSizeLimit();
+    this._persist();
+    return record;
+  }
+
+  syncTask(taskId, patch = {}) {
+    const record = this.tasks.get(taskId);
+    if (!record) return null;
+
+    if (patch.task !== undefined) record.task = String(patch.task || '').substring(0, 10000);
+    if (patch.sessionId !== undefined) record.sessionId = patch.sessionId || null;
+    if (patch.status !== undefined) record.status = patch.status;
+    if (patch.result !== undefined) record.result = patch.result;
+    if (patch.createdAt !== undefined) record.createdAt = patch.createdAt;
+    if (patch.createdAtMs !== undefined) record.createdAtMs = patch.createdAtMs;
+    if (patch.sortKey !== undefined) record.sortKey = patch.sortKey;
+    if (patch.completedAt !== undefined) record.completedAt = patch.completedAt;
+    if (patch.elapsedMs !== undefined) record.elapsedMs = patch.elapsedMs;
+    if (Array.isArray(patch.steps)) record.steps = patch.steps;
+    if (patch.metadata !== undefined) record.metadata = patch.metadata || {};
+
+    this._dirty = true;
+    this._enforceSizeLimit();
+    this._persist();
+    return record;
   }
 
   recordStep(taskId, action, details = {}) {

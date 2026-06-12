@@ -88,6 +88,16 @@ class TraeCNApiClient {
     return this._request('POST', '/api/preflight', body);
   }
 
+  async restartTraeDebug(options = {}) {
+    const body = {};
+    if (options.projectPath) body.projectPath = options.projectPath;
+    if (options.confirmationPhrase) body.confirmationPhrase = options.confirmationPhrase;
+    if (options.confirmationId) body.confirmationId = options.confirmationId;
+    if (options.quitTimeoutMs !== undefined) body.quitTimeoutMs = options.quitTimeoutMs;
+    if (options.cdpWaitMs !== undefined) body.cdpWaitMs = options.cdpWaitMs;
+    return this._request('POST', '/api/trae/restart-debug', body);
+  }
+
   async getReadiness() {
     return this._request('GET', '/api/readiness');
   }
@@ -103,6 +113,11 @@ class TraeCNApiClient {
     if (options.allowAutoStart) body.allowAutoStart = true;
     if (options.includeProcessText) body.includeProcessText = true;
     if (options.waitForQueue !== undefined) body.waitForQueue = options.waitForQueue;
+    if (options.background === true) body.background = true;
+    if (options.forceBackground === true) body.forceBackground = true;
+    if (Array.isArray(options.fallbackModels)) body.fallbackModels = options.fallbackModels;
+    if (options.autoModelFallback === true) body.autoModelFallback = true;
+    if (options.modelProbeIntervalMs !== undefined) body.modelProbeIntervalMs = options.modelProbeIntervalMs;
     // gateway wraps result in { status: 'done', text, ... };
     // unwrap the HTTP envelope for clean access by the caller
     const response = await this._request('POST', '/api/delegate', body);
@@ -114,6 +129,11 @@ class TraeCNApiClient {
     if (options.chatId) body.chatId = options.chatId;
     if (options.includeProcessText) body.includeProcessText = true;
     if (options.waitForQueue !== undefined) body.waitForQueue = options.waitForQueue;
+    if (options.background === true) body.background = true;
+    if (options.forceBackground === true) body.forceBackground = true;
+    if (Array.isArray(options.fallbackModels)) body.fallbackModels = options.fallbackModels;
+    if (options.autoModelFallback === true) body.autoModelFallback = true;
+    if (options.modelProbeIntervalMs !== undefined) body.modelProbeIntervalMs = options.modelProbeIntervalMs;
     return this._request('POST', '/api/delegate-async', body);
   }
 
@@ -121,16 +141,44 @@ class TraeCNApiClient {
     return this._request('GET', '/api/task/' + encodeURIComponent(taskId));
   }
 
+  async adoptCurrentTask(options = {}) {
+    const body = {};
+    if (options.task) body.task = options.task;
+    if (options.reviewRequired === true) body.reviewRequired = true;
+    if (Array.isArray(options.followupTasks)) body.followupTasks = options.followupTasks;
+    if (options.chatId) body.chatId = options.chatId;
+    if (options.includeProcessText === true) body.includeProcessText = true;
+    if (options.notifyUrl) body.notifyUrl = options.notifyUrl;
+    if (Array.isArray(options.fallbackModels)) body.fallbackModels = options.fallbackModels;
+    if (options.autoModelFallback === true) body.autoModelFallback = true;
+    if (options.modelProbeIntervalMs !== undefined) body.modelProbeIntervalMs = options.modelProbeIntervalMs;
+    if (options.submittedAt !== undefined) body.submittedAt = options.submittedAt;
+    if (options.force === true) body.force = true;
+    return this._request('POST', '/api/task/adopt-current', body);
+  }
+
   async cancelTask(taskId) {
     return this._request('POST', '/api/task/' + encodeURIComponent(taskId) + '/cancel');
+  }
+
+  async stopGeneration() {
+    return this._request('POST', '/api/trae/stop-generation');
+  }
+
+  async getReviewGateStatus() {
+    return this._request('GET', '/api/trae/review-gate');
+  }
+
+  async resolveReviewGate(action = 'keep_all') {
+    return this._request('POST', '/api/trae/review-gate', { action });
   }
 
   async switchMode(mode, allowAutoStart = false) {
     return this._request('POST', '/api/switch-mode', { mode, allowAutoStart });
   }
 
-  async switchModel(model) {
-    return this._request('POST', '/api/switch-model', { model });
+  async switchModel(model, options = {}) {
+    return this._request('POST', '/api/switch-model', { model, ...options });
   }
 
   async checkQueueStatus() {

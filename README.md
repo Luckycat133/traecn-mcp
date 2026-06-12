@@ -20,7 +20,7 @@ Local HTTP bridge, OpenClaw tool integration, and AI Skill module for TraeCN des
 
 - Node.js 22 or newer
 - TraeCN desktop application
-- TraeCN started with a remote debugging port, usually `--remote-debugging-port=9222`
+- TraeCN started with a remote debugging port, usually `--remote-debugging-port=9222` or a quickstart port such as `9334`
 - OpenClaw when using the plugin in `integrations/openclaw-traecn-plugin`
 
 ## Installation
@@ -40,6 +40,11 @@ Important environment variables:
 - `TRAECN_GATEWAY_TOKEN`: optional bearer token required by protected endpoints.
 - `TRAECN_ALLOWED_ORIGINS`: comma-separated browser origins allowed by CORS.
 - `TRAECN_REMOTE_DEBUGGING_PORT`: TraeCN CDP port.
+- `TRAECN_QUICKSTART_PROFILE_MODE`: `existing` by default so live automation reuses your logged-in Trae CN profile instead of a fresh isolated one. Set `isolated` only for disposable test profiles.
+- `TRAECN_TRAE_RECOVERY_NEW_INSTANCE`: defaults to `0`; keep it disabled to avoid opening a new unauthenticated Trae window during gateway recovery.
+- `TRAECN_AUTO_START_TRAE`: defaults to `1`; when the gateway loses CDP it will try to relaunch Trae CN and reconnect automatically.
+- `TRAECN_QUEUE_MAX_WAIT_MS`: optional. Leave unset to let external TraeCN model queues wait indefinitely in the local gateway; set it only when you want a local queue timeout.
+- `TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH`: optional path for persisted async queue state. By default macOS uses `~/Library/Application Support/TRAECNclaw/active-queue.json`.
 - `TRAECN_ENABLE_MOCK_BRIDGE`: set to `1` for local system tests without TraeCN.
 - `TRAECN_*_SELECTORS`: optional DOM selector overrides discovered with `npm run inspect:traecn`.
 
@@ -51,10 +56,34 @@ Start TraeCN and the gateway:
 npm run quickstart
 ```
 
+If CDP is unavailable because Trae CN is already running without a debug port,
+use the confirmed recovery command. It quits Trae CN, then starts it again with
+the existing logged-in profile and CDP enabled:
+
+```sh
+curl -s -X POST http://127.0.0.1:8788/api/trae/restart-debug \
+  -H 'Content-Type: application/json' \
+  -d '{"confirmationPhrase":"restart-trae-cn-with-debug-existing-profile"}'
+```
+
+For manual startup after quitting Trae CN yourself, start a debug-enabled
+instance against the existing logged-in profile:
+
+```sh
+TRAECN_QUICKSTART_PROFILE_MODE=existing npm run start:traecn -- --use-existing-profile
+```
+
 Start only the gateway:
 
 ```sh
 npm run start:gateway
+```
+
+For unattended queue waiting on macOS, prefer the LaunchAgent wrapper. It persists background queued tasks and reloads them after the gateway restarts:
+
+```sh
+TRAECN_ENABLE_MOCK_BRIDGE=0 TRAECN_REMOTE_DEBUGGING_PORT=9334 TRAECN_QUICKSTART_PROFILE_MODE=existing npm run service:start
+npm run service:status
 ```
 
 Open the built-in chat UI at:
@@ -170,6 +199,35 @@ The OpenAPI schema is served at `/openapi.json`. Primary endpoints:
 - MCP stdio tools through `mcp-server.js`
 
 Agents should call `GET /api/capabilities` or MCP `traecn_capabilities` first for a compact command, endpoint, token strategy, model, settings, and confirmation catalog. Before side-effecting operations, call `POST /api/preflight` or MCP `preflight` once to combine status, current `surface` (`setup` vs `workspace`), readiness, queue, dialog, and optional command-plan state. For a dry confirmation-only check, call `POST /api/confirm/plan` or MCP `plan_operation`. Fetch `/openapi.json` only when full request/response schemas are needed.
+
+For unattended local waiting on macOS, start the gateway as a LaunchAgent:
+
+```sh
+npm run service:start
+npm run service:status
+```
+
+With `delegate-async`, use `waitForQueue=true` to keep tasks in the gateway's own
+background queue while TraeCN is visibly queued, and add `reviewRequired=true`
+when you want the result to pause for user review before any follow-up tasks run.
+Add `fallbackModels` or `autoModelFallback=true` when the gateway should actively
+probe alternate models while the task waits. The agent can then release its
+context after receiving `taskId`; the local gateway persists the queue, refreshes
+`modelProbeResults`, and sends webhook/OpenClaw notifications when the task
+reaches review or completion.
+By default, external TraeCN model queues do not expire locally; set
+`maxQueueWaitMs` (or `queueMaxWaitMs`) only when a caller explicitly wants a
+queue timeout.
+
+```json
+{
+  "task": "审查当前项目并输出 findings-first 结果",
+  "waitForQueue": true,
+  "reviewRequired": true,
+  "autoModelFallback": true,
+  "modelProbeIntervalMs": 60000
+}
+```
 
 ## Testing
 

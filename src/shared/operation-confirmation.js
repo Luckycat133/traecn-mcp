@@ -6,7 +6,10 @@ const HIGH_RISK_COMMANDS = new Set([
   'dismiss_dialog',
   'batch_cancel',
   'cancel_task',
-  'update_self'
+  'stop_generation',
+  'resolve_review_gate',
+  'update_self',
+  'restart_trae_debug'
 ]);
 
 const MEDIUM_RISK_COMMANDS = new Set([
@@ -28,6 +31,8 @@ const READ_ONLY_COMMANDS = new Set([
   'status',
   'readiness',
   'task_status',
+  'adopt_current_task',
+  'review_gate_status',
   'queue_status',
   'settings_read',
   'settings_read_all',
@@ -77,7 +82,7 @@ function buildChecklist(command, params = {}) {
     checklist.push('Confirm current task can tolerate model or mode changes.');
   }
 
-  if (command === 'batch_cancel' || command === 'cancel_task') {
+  if (command === 'batch_cancel' || command === 'cancel_task' || command === 'stop_generation' || command === 'resolve_review_gate') {
     checklist.push('Confirm the task or batch ID and that cancellation is still desired.');
   }
 
@@ -128,7 +133,12 @@ function describeSideEffects(command, params) {
       return ['May enqueue multiple tasks and consume Trae CN model capacity.'];
     case 'batch_cancel':
     case 'cancel_task':
+    case 'stop_generation':
       return ['May cancel queued work.'];
+    case 'resolve_review_gate':
+      return ['May keep or revert changes at Trae CN internal task review gate.'];
+    case 'restart_trae_debug':
+      return ['Quits Trae CN, then restarts it with remote debugging enabled and the existing logged-in profile.'];
     default:
       return ['May change Trae CN state.'];
   }
@@ -139,6 +149,7 @@ function buildRecommendedFlow(command, risk, requiresConfirmation) {
   if (risk !== 'low') flow.push('check_status', 'readiness');
   if (['delegate', 'delegate_async', 'review_code', 'batch_submit'].includes(command)) flow.push('check_queue');
   if (command === 'approve_dialog' || command === 'dismiss_dialog') flow.push('check_dialog');
+  if (command === 'resolve_review_gate') flow.push('review_gate_status');
   if (command === 'settings_set') flow.push('get_settings');
   if (requiresConfirmation) flow.push('user_confirmation');
   flow.push(command || 'target_command');

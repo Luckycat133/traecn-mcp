@@ -61,7 +61,12 @@ test('preset command set includes core control commands', () => {
   assert.ok(commands.includes('capabilities'));
   assert.ok(commands.includes('preflight'));
   assert.ok(commands.includes('confirm_plan'));
+  assert.ok(commands.includes('restart_trae_debug'));
   assert.ok(commands.includes('delegate'));
+  assert.ok(commands.includes('adopt_current_task'));
+  assert.ok(commands.includes('stop_generation'));
+  assert.ok(commands.includes('review_gate_status'));
+  assert.ok(commands.includes('resolve_review_gate'));
   assert.ok(commands.includes('switch_model'));
   assert.ok(commands.includes('settings_set'));
   assert.ok(commands.includes('approve_dialog'));
@@ -90,11 +95,15 @@ test('traecn_delegate has required task parameter', () => {
   const delegate = toolDefinitions.find(t => t.name === 'traecn_delegate');
   assert.ok(delegate.parameters.required.includes('task'));
   assert.ok(delegate.parameters.properties.task);
+  assert.ok(delegate.parameters.properties.fallbackModels);
+  assert.ok(delegate.parameters.properties.autoModelFallback);
+  assert.ok(delegate.parameters.properties.modelProbeIntervalMs);
 });
 
 test('traecn_switch_model has required model parameter', () => {
   const switchModel = toolDefinitions.find(t => t.name === 'traecn_switch_model');
   assert.ok(switchModel.parameters.required.includes('model'));
+  assert.ok(switchModel.parameters.properties.waitForQueue);
 });
 
 test('traecn_switch_mode has enum constraint', () => {

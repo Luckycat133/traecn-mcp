@@ -133,6 +133,38 @@ getSkill()                // 获取实例
 
 MCP 工具中优先使用 `traecn_capabilities` 做一次低 token 能力发现，再用 `preflight` 合并状态、就绪度、队列、弹窗和可选确认计划。常见工作用 `run_task`、`queue_task`、`poll_task`、`review_code` 执行。执行 `settings_set`、`approve_dialog`、`open_project`、`delegate`、批量取消等有副作用操作前，优先用 `preflight` 或 `plan_operation` 获取风险等级、确认要求和预检步骤。需要覆盖完整命令面时，先调用 `traecn_command_set` 获取命令目录，再用 `traecn_command` 传入命令名和参数。
 
+### 无人值守排队与回传
+
+长任务应优先使用后台队列，而不是让调用方 agent 在对话上下文里等待：
+
+```javascript
+const queued = await queueTask('全面审查当前仓库', {
+  autoModelFallback: true,
+  modelProbeIntervalMs: 60000
+});
+// 返回 taskId 后，agent 可以释放上下文；gateway 会继续排队、探测模型并持久化状态。
+```
+
+HTTP/OpenClaw 参数等价：
+
+```json
+{
+  "task": "全面审查当前仓库",
+  "waitForQueue": true,
+  "reviewRequired": true,
+  "autoModelFallback": true,
+  "modelProbeIntervalMs": 60000
+}
+```
+
+任务状态会包含 `fallbackModels`、`modelProbe.lastModelProbeAt`、
+`modelProbe.nextModelProbeAt` 和 `modelProbe.results`。当 TraeCN 生成结果后，
+`reviewRequired=true` 会把任务停在 `awaiting_review`，通知用户审查；用户通过
+`POST /api/task/{taskId}/review` 或对应工具确认后，后续任务才继续排队。
+默认情况下，TraeCN 外部模型排队不会触发本地超时；只有调用方显式传入
+`maxQueueWaitMs` 或 `queueMaxWaitMs` 时，任务状态才会出现 deadline/remaining 并可能进入
+`queue_timeout`。
+
 ### Skills 模式
 
 ```javascript

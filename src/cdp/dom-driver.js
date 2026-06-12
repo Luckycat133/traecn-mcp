@@ -5,6 +5,15 @@ const { TraeCNAutomationError } = require('./errors');
 const { CDPClient } = require('./client');
 const dom = require('./browser-dom');
 const { SettingsDriver } = require('./settings-driver');
+const { CommandPaletteDriver } = require('./command-palette-driver');
+const { EditorDriver } = require('./editor-driver');
+const { FileDriver } = require('./file-driver');
+const { TerminalDriver } = require('./terminal-driver');
+const { GitDriver } = require('./git-driver');
+const { SearchDriver } = require('./search-driver');
+const { DiagnosticsDriver } = require('./diagnostics-driver');
+const { SnapshotDriver } = require('./snapshot-driver');
+const { ExtensionDriver } = require('./extension-driver');
 const { sleep, escapeJsString, safeJsValue } = require('../shared/utils');
 const {
   DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS,
@@ -28,6 +37,16 @@ function hasCompletionMarker(text) {
   return markers.some(m => text.includes(m));
 }
 
+function cleanAssistantResultText(text) {
+  let value = String(text || '').trim();
+  if (!value) return '';
+  return value
+    .replace(/^(Agent|Assistant)\s*(Thought|思考过程)\s*/i, '')
+    .replace(/^(Agent|Assistant)\s+/i, '')
+    .replace(/\s*(任务完成|Task completed)\s*$/i, '')
+    .trim();
+}
+
 const DIALOG_BUTTON_SELECTOR = [
   'button',
   'a[role="button"]',
@@ -42,6 +61,7 @@ class DomDriver {
     this.client = client;
     this.config = config || getConfig();
     this._lastTaskText = '';
+    this._pendingUserTask = '';
     this._preSendSnapshot = ''; // body text snapshot before sending task
     this._cachedMode = null;    // cached mode detection result
     this._cachedModeTs = 0;
@@ -133,6 +153,326 @@ class DomDriver {
   _invalidateModeCache() {
     this._cachedMode = null;
     this._cachedModeTs = 0;
+  }
+
+  /**
+   * Inject `window.__enhancedClick` into the page so that repeated inline
+   * click-dispatcher code can be replaced with a single function call.
+   * The helper searches for the first matching clickable element by text
+   * and dispatches PointerEvent → MouseEvent → el.click().
+   *
+   * @param {string} targetText  - exact text to match against element content
+   * @param {boolean} [normalizeText=false] - collapse whitespace before comparing
+   * @returns {{ clicked: boolean, text: string }}
+   */
+  async _ensureClickHelper() {
+    await this.client.send('Runtime.evaluate', {
+      expression: `(function() {
+        if (window.__enhancedClick) return;
+        var normalize = function(text) {
+          return String(text || '').trim();
+        };
+        window.__enhancedClick = function(targetText, normalizeText) {
+          var candidates = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
+          if (normalizeText) {
+            normalize = function(text) {
+              return String(text || '').replace(/\\s+/g, ' ').trim();
+            };
+          }
+          for (var i = 0; i < candidates.length; i++) {
+            var el = candidates[i];
+            var text = normalize(el.innerText || el.textContent || '');
+            if (text !== targetText) continue;
+            var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+            var clickable = el.tagName === 'BUTTON' ||
+              el.tagName === 'A' ||
+              el.getAttribute('role') === 'button' ||
+              (style && style.cursor === 'pointer');
+            if (!clickable || el.disabled) continue;
+            var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+            if (!rect || rect.width < 12 || rect.height < 12) continue;
+            var cx = rect.x + rect.width / 2;
+            var cy = rect.y + rect.height / 2;
+            el.dispatchEvent(new PointerEvent('pointerdown', {
+              bubbles: true, cancelable: true, composed: true,
+              clientX: cx, clientY: cy, button: 0, buttons: 1, pointerType: 'mouse'
+            }));
+            el.dispatchEvent(new PointerEvent('pointerup', {
+              bubbles: true, cancelable: true, composed: true,
+              clientX: cx, clientY: cy, button: 0, buttons: 1, pointerType: 'mouse'
+            }));
+            el.dispatchEvent(new MouseEvent('click', {
+              bubbles: true, cancelable: true, clientX: cx, clientY: cy
+            }));
+            if (typeof el.click === 'function') el.click();
+            return { clicked: true, text: text };
+          }
+          return { clicked: false, text: targetText };
+        };
+      })()`,
+      returnByValue: true
+    });
+  }
+
+  async inspectSetupWizard() {
+    try {
+      const result = await this.client.send('Runtime.evaluate', {
+        expression: `
+          (() => {
+            const url = String(location.href || '');
+            const bodyText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+            const buttons = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'))
+              .map((el, index) => {
+                const text = (el.innerText || el.textContent || '').trim();
+                const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0 };
+                const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+                const clickable = el.tagName === 'BUTTON' ||
+                  el.tagName === 'A' ||
+                  el.getAttribute('role') === 'button' ||
+                  (style && style.cursor === 'pointer');
+                return {
+                  index,
+                  text,
+                  disabled: !!el.disabled,
+                  visible: !!(el.offsetParent !== null && rect.width >= 12 && rect.height >= 12),
+                  className: typeof el.className === 'string' ? el.className : '',
+                  clickable
+                };
+              })
+              .filter(item => (item.text || item.visible) && item.clickable);
+            const isSetup = url.includes('/setup/setup.html');
+            return {
+              isSetup,
+              url,
+              text: bodyText.trim(),
+              buttons
+            };
+          })()
+        `,
+        returnByValue: true
+      });
+      return result.result?.value || { isSetup: false, url: '', text: '', buttons: [] };
+    } catch (err) {
+      return { isSetup: false, error: err.message, url: '', text: '', buttons: [] };
+    }
+  }
+
+  async completeSetupIfPresent(options = {}) {
+    const maxSteps = Number.isFinite(options.maxSteps) ? options.maxSteps : 5;
+    const delayMs = Number.isFinite(options.delayMs)
+      ? options.delayMs
+      : Math.max(this.config.postActionDelayMs * 2, 500);
+    const preferredLabels = ['跳过', '开始', '下一步', '继续', '开始使用', '完成', '进入工作台'];
+    let advanced = 0;
+
+    await this._ensureClickHelper();
+
+    for (let step = 0; step < maxSteps; step++) {
+      const snapshot = await this.inspectSetupWizard();
+      if (!snapshot.isSetup) {
+        this._invalidateModeCache();
+        return {
+          success: advanced > 0,
+          completed: advanced > 0,
+          steps: advanced,
+          finalUrl: snapshot.url || ''
+        };
+      }
+
+      const actionable = (snapshot.buttons || []).find((button) =>
+        button.visible && !button.disabled && preferredLabels.includes(button.text)
+      ) || null;
+
+      if (!actionable) {
+        return {
+          success: false,
+          completed: false,
+          steps: advanced,
+          reason: 'no_actionable_setup_button',
+          snapshot
+        };
+      }
+
+      const clickResult = await this.client.send('Runtime.evaluate', {
+        expression: `window.__enhancedClick(${safeJsValue(actionable.text)})`,
+        returnByValue: true
+      });
+
+      if (!clickResult.result?.value?.clicked) {
+        return {
+          success: false,
+          completed: false,
+          steps: advanced,
+          reason: 'setup_click_failed',
+          target: actionable.text
+        };
+      }
+
+      advanced += 1;
+      await sleep(delayMs);
+    }
+
+    const finalSnapshot = await this.inspectSetupWizard();
+    if (!finalSnapshot.isSetup) {
+      this._invalidateModeCache();
+      return {
+        success: advanced > 0,
+        completed: true,
+        steps: advanced,
+        finalUrl: finalSnapshot.url || ''
+      };
+    }
+
+    return {
+      success: advanced > 0,
+      completed: false,
+      steps: advanced,
+      reason: 'setup_max_steps_reached',
+      snapshot: finalSnapshot
+    };
+  }
+
+  async inspectWorkspaceBlockers() {
+    try {
+      const result = await this.client.send('Runtime.evaluate', {
+        expression: `
+          (() => {
+            const normalize = (text) => String(text || '').replace(/\\s+/g, ' ').trim();
+            const controls = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'))
+              .map((el) => {
+                const text = normalize(el.innerText || el.textContent || '');
+                if (!text) return null;
+                const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0, x: 0, y: 0 };
+                const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+                const visible = !!(el.offsetParent !== null && rect.width >= 12 && rect.height >= 12);
+                if (!visible) return null;
+                const clickable = el.tagName === 'BUTTON' ||
+                  el.tagName === 'A' ||
+                  el.getAttribute('role') === 'button' ||
+                  (style && style.cursor === 'pointer');
+                if (!clickable) return null;
+                return {
+                  text,
+                  className: typeof el.className === 'string' ? el.className : '',
+                  x: rect.x + rect.width / 2,
+                  y: rect.y + rect.height / 2
+                };
+              })
+              .filter(Boolean);
+
+            const bodyText = normalize(document.body ? (document.body.innerText || document.body.textContent || '') : '');
+            const titleEls = Array.from(document.querySelectorAll('h1, h2, h3, [role="heading"], .monaco-dialog-title, [class*="title"], [class*="header"]'))
+              .map((el) => normalize(el.innerText || el.textContent || ''))
+              .filter(Boolean);
+            const guideButtons = controls.filter((item) => /^(继续|下一步|开始使用|完成|知道了|跳过|关闭|稍后)$/i.test(item.text));
+            const loginButton = controls.find((item) => /^(登录|登入|log in|login|sign in)$/i.test(item.text)) || null;
+            const newTaskButton = controls.find((item) => /^(新建会话|新任务|new task|new chat)$/i.test(item.text)) || null;
+            const guideVisible = guideButtons.length > 0 && (
+              /solo beta|欢迎使用|快速开始|快捷键|选择主题|继续|开始使用|添加命令行|command line/i.test(bodyText) ||
+              titleEls.some((text) => /solo beta|欢迎使用|快速开始|快捷键|选择主题/i.test(text))
+            );
+
+            return {
+              bodyText,
+              titles: titleEls.slice(0, 8),
+              guideVisible,
+              guideButtons: guideButtons.slice(0, 10),
+              loginVisible: !!loginButton,
+              loginButton,
+              newTaskVisible: !!newTaskButton,
+              newTaskButton,
+              visibleControls: controls.slice(0, 30)
+            };
+          })()
+        `,
+        returnByValue: true
+      });
+      return result.result?.value || {
+        bodyText: '',
+        titles: [],
+        guideVisible: false,
+        guideButtons: [],
+        loginVisible: false,
+        loginButton: null,
+        newTaskVisible: false,
+        newTaskButton: null,
+        visibleControls: []
+      };
+    } catch (err) {
+      return {
+        bodyText: '',
+        titles: [],
+        guideVisible: false,
+        guideButtons: [],
+        loginVisible: false,
+        loginButton: null,
+        newTaskVisible: false,
+        newTaskButton: null,
+        visibleControls: [],
+        error: err.message
+      };
+    }
+  }
+
+  async dismissWorkspaceGuideIfPresent(options = {}) {
+    const maxSteps = Number.isFinite(options.maxSteps) ? options.maxSteps : 4;
+    const delayMs = Number.isFinite(options.delayMs)
+      ? options.delayMs
+      : Math.max(this.config.postActionDelayMs, 300);
+    const preferredLabels = ['继续', '下一步', '开始使用', '完成', '知道了', '跳过', '关闭', '稍后'];
+    let dismissed = 0;
+
+    await this._ensureClickHelper();
+
+    for (let step = 0; step < maxSteps; step++) {
+      const blockers = await this.inspectWorkspaceBlockers();
+      if (!blockers.guideVisible) {
+        return {
+          success: dismissed > 0,
+          dismissed,
+          guideVisible: false,
+          blockers
+        };
+      }
+
+      const target = (blockers.guideButtons || []).find((button) => preferredLabels.includes(button.text));
+      if (!target) {
+        return {
+          success: false,
+          dismissed,
+          guideVisible: true,
+          reason: 'no_actionable_workspace_guide_button',
+          blockers
+        };
+      }
+
+      const clickResult = await this.client.send('Runtime.evaluate', {
+        expression: `window.__enhancedClick(${safeJsValue(target.text)}, true)`,
+        returnByValue: true
+      });
+
+      if (!clickResult.result?.value?.clicked) {
+        return {
+          success: false,
+          dismissed,
+          guideVisible: true,
+          reason: 'workspace_guide_click_failed',
+          target: target.text
+        };
+      }
+
+      dismissed += 1;
+      await sleep(delayMs);
+    }
+
+    const blockers = await this.inspectWorkspaceBlockers();
+    return {
+      success: dismissed > 0 && !blockers.guideVisible,
+      dismissed,
+      guideVisible: blockers.guideVisible,
+      reason: blockers.guideVisible ? 'workspace_guide_max_steps_reached' : null,
+      blockers
+    };
   }
 
   // ── Sidebar / panel text capture ───────────────────────────────────────
@@ -318,7 +658,9 @@ class DomDriver {
 
             // Check status: must be \"\u8fdb\u884c\u4e2d\" (in progress) or have meaningful response content
             var hasContent = fullText.length > 10;
-            var isInProgress = fullText.includes('\u8fdb\u884c\u4e2d');
+            var isInProgress = fullText.includes('\u8fdb\u884c\u4e2d') ||
+              fullText.includes('\u601d\u8003\u4e2d') ||
+              !!item.querySelector('.icd-loading, .agent-loading-dot, [class*="loading"]');
 
             activeItems.push({
               el: item,
@@ -360,7 +702,6 @@ class DomDriver {
    * Used instead of _queryTaskSidebar() in IDE mode.
    */
   async _queryIdeTaskPanel(skipText) {
-    const safeSkipText = safeJsValue(skipText);
     const safePanelSels = this.config.ideTaskPanelSelectors.map(s => safeJsValue(s));
 
     const result = await this.client.send('Runtime.evaluate', {
@@ -377,35 +718,162 @@ class DomDriver {
           }
           if (!panel) return null;
 
-          var fullText = panel.textContent.trim();
-          if (fullText === ${safeSkipText}) return null;
-
-          // Look for the last assistant/agent message
-          var messages = panel.querySelectorAll(
-            '.chat-message, .agent-message, [class*="chat-message"], [class*="agent-message"], ' +
-            '[class*="assistant-chat-turn"], .chat-turn'
-          );
-          var latestText = '';
-          if (messages.length > 0) {
-            var lastMsg = messages[messages.length - 1];
-            latestText = lastMsg.textContent.trim();
-          }
-
-          var inProgress = fullText.includes('\u8fdb\u884c\u4e2d') || fullText.includes('\u6b63\u5728\u601d\u8003');
-          var isComplete = fullText.includes('\u4efb\u52a1\u5b8c\u6210') || fullText.includes('\u5df2\u5b8c\u6210');
+          var fullText = (panel.textContent || '').trim();
+          var turns = Array.from(panel.querySelectorAll(
+            'section.chat-turn, section[class*="chat-turn"], .chat-message, .agent-message, [class*="chat-message"]'
+          )).filter(function(el) {
+            return el && el.offsetParent !== null;
+          }).map(function(el) {
+            return {
+              className: (el.className || '').toString(),
+              ariaLabel: (el.getAttribute('aria-label') || '').toString(),
+              text: ((el.innerText || el.textContent || '').trim() || '')
+            };
+          }).filter(function(turn) {
+            return !!turn.text;
+          });
 
           return {
-            text: latestText || fullText.slice(0, 500),
-            inProgress: inProgress,
-            isComplete: isComplete || fullText.includes('\u5b8c\u6210') && !inProgress,
-            hasResponse: !inProgress && (latestText.length > 20 || fullText.length > 20)
+            fullText: fullText,
+            turns: turns
           };
         })()
       `,
       returnByValue: true
     });
 
-    return result.result?.value || null;
+    return this._extractLatestIdeAssistantState(result.result?.value, skipText);
+  }
+
+  _extractLatestIdeAssistantState(panelState, skipText) {
+    if (!panelState) return null;
+
+    const turns = Array.isArray(panelState.turns) ? panelState.turns : [];
+    const fullText = String(panelState.fullText || '').trim();
+    const normalizedSkip = String(skipText || '').replace(/\s+/g, ' ').trim();
+    if (!turns.length) {
+      if (!fullText || (normalizedSkip && fullText.replace(/\s+/g, ' ').trim() === normalizedSkip)) {
+        return null;
+      }
+      return {
+        text: fullText.slice(0, 500),
+        inProgress: false,
+        isComplete: fullText.includes('任务完成') || fullText.includes('已完成'),
+        hasResponse: fullText.length > 20
+      };
+    }
+
+    const normalizedTurns = turns
+      .map(turn => ({
+        className: String(turn.className || ''),
+        ariaLabel: String(turn.ariaLabel || ''),
+        text: String(turn.text || '').trim()
+      }))
+      .filter(turn => turn.text);
+
+    let lastUserIdx = -1;
+    for (let i = 0; i < normalizedTurns.length; i++) {
+      const cls = normalizedTurns[i].className.toLowerCase();
+      if (cls.includes('user')) lastUserIdx = i;
+    }
+
+    const assistantTurns = normalizedTurns.filter((turn, index) => {
+      const cls = turn.className.toLowerCase();
+      const aria = turn.ariaLabel.toLowerCase();
+      let isAssistant = cls.includes('assistant') || cls.includes('agent') || aria.includes('assistant') || aria.includes('agent');
+      if (!isAssistant && cls.includes('chat-turn')) {
+        isAssistant = !cls.includes('user');
+      }
+      return isAssistant && index > lastUserIdx;
+    });
+
+    if (!assistantTurns.length && lastUserIdx >= 0) {
+      return {
+        text: '',
+        inProgress: true,
+        isComplete: false,
+        hasResponse: false,
+        awaitingAssistant: true,
+        latestUserText: normalizedTurns[lastUserIdx].text
+      };
+    }
+
+    const latestAssistant = assistantTurns.length ? assistantTurns[assistantTurns.length - 1] : normalizedTurns[normalizedTurns.length - 1];
+    const latestText = String(latestAssistant?.text || '').trim();
+    const normalizedLatest = latestText.replace(/\s+/g, ' ').trim();
+    if (!latestText || (normalizedSkip && normalizedLatest === normalizedSkip)) {
+      return null;
+    }
+
+    const latestLower = normalizedLatest.toLowerCase();
+    const inProgress = (
+      fullText.includes('进行中') ||
+      fullText.includes('正在思考') ||
+      fullText.includes('正在分析') ||
+      latestText.includes('正在分析') ||
+      latestText.includes('等待中') ||
+      latestText.includes('排队') ||
+      latestText.includes('思考过程') ||
+      latestText.includes('...') ||
+      latestText.includes('…') ||
+      latestLower.includes('analy') ||
+      latestLower.includes('processing') ||
+      latestLower.includes('waiting') ||
+      latestLower.includes('queue')
+    );
+    const isComplete = (
+      latestText.includes('任务完成') ||
+      latestText.includes('已完成') ||
+      fullText.includes('任务完成')
+    );
+
+    return {
+      text: latestText,
+      inProgress,
+      isComplete: isComplete || (latestText.includes('完成') && !inProgress),
+      hasResponse: !inProgress && latestText.length > 20
+    };
+  }
+
+  _isIncompleteResponseText(text) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return true;
+    if (/^(agent|assistant|thought|思考过程)$/i.test(normalized)) return true;
+    const lower = normalized.toLowerCase();
+    if (/^solo\s*agent\s*思考中/i.test(normalized)) return true;
+    const startupSignals = [
+      "i'll start",
+      'i will start',
+      'start by',
+      'invoking the relevant',
+      'explore the project',
+      '调用技能',
+      '开始审查',
+      '开始分析',
+      '正在审查',
+      '正在分析',
+      '思考中',
+      'solo agent思考中',
+      'the user explicitly'
+    ];
+    const hasStartupSignal = startupSignals.some(signal => lower.includes(signal.toLowerCase()));
+    const hasFindingSignal = /(^|\n)\s*(findings|finding|问题|风险|建议|结论|summary|审查结果|发现)[:：]/i.test(normalized)
+      || /(^|\n)\s*[-*]?\s*\[?p[0-3]\]?/i.test(normalized);
+    if (hasStartupSignal && !hasFindingSignal) return true;
+    return false;
+  }
+
+  _isModelErrorResponseText(text) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return false;
+    return [
+      '模型请求失败',
+      '异常打断',
+      'model request failed',
+      'model service error',
+      '服务商错误',
+      '展开模型服务商错误信息'
+    ].some(signal => normalized.toLowerCase().includes(signal.toLowerCase()));
   }
 
   /**
@@ -442,7 +910,7 @@ class DomDriver {
               if (taskText.length > 5 && !taskText.includes('\u5f00\u59cb\u4f60\u7684\u7b2c\u4e00\u4e2a\u4efb\u52a1') && taskText !== skipText) {
                 return {
                   text: taskText,
-                  inProgress: fullText.includes('\u8fdb\u884c\u4e2d'),
+                  inProgress: fullText.includes('\u8fdb\u884c\u4e2d') || fullText.includes('\u601d\u8003\u4e2d') || !!sidebar.querySelector('.icd-loading, .agent-loading-dot, [class*="loading"]'),
                   isComplete: fullText.includes('\u4efb\u52a1\u5b8c\u6210'),
                   hasResponse: !fullText.includes('\u8fdb\u884c\u4e2d') && !fullText.includes('\u65b0\u4efb\u52a1') && taskText.length > 10
                 };
@@ -451,7 +919,7 @@ class DomDriver {
 
             if (fullText === skipText) return null;
             if (fullText.includes('\u4efb\u52a1') && fullText.length > 20) {
-              let isProcessing = fullText.includes('\u8fdb\u884c\u4e2d') || fullText.includes('\u751f\u6210\u4e2d');
+              let isProcessing = fullText.includes('\u8fdb\u884c\u4e2d') || fullText.includes('\u751f\u6210\u4e2d') || fullText.includes('\u601d\u8003\u4e2d') || !!sidebar.querySelector('.icd-loading, .agent-loading-dot, [class*="loading"]');
               return {
                 text: fullText.slice(0, 300),
                 inProgress: isProcessing,
@@ -487,6 +955,45 @@ class DomDriver {
     return dom.findFirstMatching(this.client, this.config.activitySelectors);
   }
 
+  async _findVisibleElementRuntime(selectors, options = {}) {
+    if (!this.client || typeof this.client.send !== 'function') return null;
+    const safeSelectors = safeJsValue(Array.isArray(selectors) ? selectors : []);
+    const allowDisabled = options.allowDisabled === true;
+    try {
+      const result = await this.client.send('Runtime.evaluate', {
+        expression: `
+          (function() {
+            var selectors = ${safeSelectors};
+            function visible(el) {
+              if (!el) return false;
+              var rect = el.getBoundingClientRect();
+              var style = window.getComputedStyle(el);
+              return !!(rect.width > 1 && rect.height > 1 && style.visibility !== 'hidden' && style.display !== 'none');
+            }
+            for (var i = 0; i < selectors.length; i++) {
+              var el = document.querySelector(selectors[i]);
+              if (!visible(el)) continue;
+              var className = String(el.className || '');
+              var disabled = !!(el.disabled || el.getAttribute('aria-disabled') === 'true' || /(?:^|\\s)disabled(?:\\s|$)/.test(className));
+              if (disabled && !${allowDisabled ? 'true' : 'false'}) continue;
+              return {
+                matchedSelector: selectors[i],
+                visible: true,
+                disabled: disabled,
+                text: (el.innerText || el.textContent || '').trim().slice(0, 120)
+              };
+            }
+            return null;
+          })()
+        `,
+        returnByValue: true
+      });
+      return result.result?.value || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /**
    * Find new chat button — tries SOLO selectors first, falls back to IDE selectors.
    */
@@ -516,6 +1023,238 @@ class DomDriver {
     return results;
   }
 
+  async checkTaskReviewGate() {
+    try {
+      const result = await this.client.send('Runtime.evaluate', {
+        expression: `
+          (() => {
+            const controls = Array.from(document.querySelectorAll('button, a[role="button"], [role="button"]'));
+            const visibleControls = controls
+              .filter(el => el && el.offsetParent !== null)
+              .map(el => {
+                const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+                const rect = el.getBoundingClientRect();
+                return {
+                  text,
+                  className: el.className || '',
+                  aria: el.getAttribute('aria-label') || '',
+                  x: rect.x + rect.width / 2,
+                  y: rect.y + rect.height / 2,
+                  width: rect.width,
+                  height: rect.height
+                };
+              })
+              .filter(item => item.text);
+
+            const keepAll = visibleControls.find(item => item.text === '全部保留' || /^Keep All$/i.test(item.text));
+            const revertAll = visibleControls.find(item => item.text === '全部撤销' || /^Discard All$/i.test(item.text));
+            const bodyText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+            const reviewCountMatch = bodyText.match(/(\\d+)\\s*个文件待审查/);
+            const taskCompleted = bodyText.includes('任务完成') || bodyText.includes('Task completed');
+            const waitingToSend = bodyText.includes('等待发送');
+            const newChat = document.querySelector('[aria-label="新建会话"]');
+            const newChatDisabled = newChat ? /disabled/.test(newChat.className || '') : null;
+
+            return {
+              awaitingReview: !!(keepAll || revertAll),
+              taskCompleted,
+              waitingToSend,
+              reviewCount: reviewCountMatch ? Number(reviewCountMatch[1]) : null,
+              keepAll: keepAll || null,
+              revertAll: revertAll || null,
+              newChatDisabled,
+              visibleButtons: visibleControls
+                .filter(item => /保留|撤销|审查|Review|Keep|Discard/.test(item.text))
+                .slice(0, 10)
+            };
+          })()
+        `,
+        returnByValue: true
+      });
+      return result.result?.value || {
+        awaitingReview: false,
+        taskCompleted: false,
+        waitingToSend: false,
+        reviewCount: null,
+        keepAll: null,
+        revertAll: null,
+        newChatDisabled: null,
+        visibleButtons: []
+      };
+    } catch (e) {
+      return {
+        awaitingReview: false,
+        taskCompleted: false,
+        waitingToSend: false,
+        reviewCount: null,
+        keepAll: null,
+        revertAll: null,
+        newChatDisabled: null,
+        visibleButtons: [],
+        error: e.message
+      };
+    }
+  }
+
+  async resolveTaskReviewGate(preferredAction = 'keep_all') {
+    const gate = await this.checkTaskReviewGate();
+    if (!gate.awaitingReview) {
+      return { success: false, action: preferredAction, reason: 'no_review_gate' };
+    }
+
+    const target = ['discard_all', 'revert_all'].includes(preferredAction) ? gate.revertAll : gate.keepAll;
+    if (!target) {
+      return { success: false, action: preferredAction, reason: 'target_button_not_found', gate };
+    }
+
+    try {
+      const waitForResolution = async () => {
+        for (let attempt = 0; attempt < 12; attempt++) {
+          await sleep(Math.max(this.config.postActionDelayMs, 250));
+          const after = await this.checkTaskReviewGate();
+          if (!after.awaitingReview || after.newChatDisabled === false) {
+            return {
+              success: true,
+              action: preferredAction,
+              reviewCount: gate.reviewCount,
+              buttonText: target.text,
+              newChatDisabled: after.newChatDisabled
+            };
+          }
+        }
+        return null;
+      };
+
+      await this.client.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x: target.x,
+        y: target.y,
+        button: 'left',
+        clickCount: 1
+      });
+      await this.client.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: target.x,
+        y: target.y,
+        button: 'left',
+        clickCount: 1
+      });
+
+      const mouseResolution = await waitForResolution();
+      if (mouseResolution) return mouseResolution;
+
+      await this.client.send('Runtime.evaluate', {
+        expression: `
+          (() => {
+            const buttons = Array.from(document.querySelectorAll('button, a[role="button"], [role="button"]'));
+            const target = buttons.find(el => (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ') === ${safeJsValue(target.text)});
+            if (!target) return { ok: false };
+            target.focus();
+            return { ok: true };
+          })()
+        `,
+        returnByValue: true
+      });
+      await this.client.send('Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13
+      });
+      await this.client.send('Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13
+      });
+
+      const keyboardResolution = await waitForResolution();
+      if (keyboardResolution) return keyboardResolution;
+
+      await this.client.send('Runtime.evaluate', {
+        expression: `
+          (() => {
+            const controls = Array.from(document.querySelectorAll('button, a[role="button"], [role="button"], .icd-btn, .icube-btn'));
+            const target = controls.find(el => {
+              const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+              const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+              const style = window.getComputedStyle(el);
+              return text === ${safeJsValue(target.text)}
+                && rect && rect.width > 0 && rect.height > 0
+                && style.display !== 'none'
+                && style.visibility !== 'hidden';
+            });
+            if (!target) return { ok: false, reason: 'target_not_found' };
+            target.scrollIntoView({ block: 'center', inline: 'center' });
+            target.focus();
+            const rect = target.getBoundingClientRect();
+            const opts = {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              view: window,
+              clientX: rect.x + rect.width / 2,
+              clientY: rect.y + rect.height / 2,
+              button: 0,
+              buttons: 1
+            };
+            for (const type of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+              const Ctor = type.startsWith('pointer') && window.PointerEvent ? PointerEvent : MouseEvent;
+              target.dispatchEvent(new Ctor(type, opts));
+            }
+            return { ok: true };
+          })()
+        `,
+        returnByValue: true
+      });
+
+      const syntheticResolution = await waitForResolution();
+      if (syntheticResolution) return syntheticResolution;
+
+      if (['keep_all', 'keep'].includes(preferredAction)) {
+        const individualResult = await this.client.send('Runtime.evaluate', {
+          expression: `
+            (async () => {
+              const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+              let clicked = 0;
+              for (let attempt = 0; attempt < 20; attempt++) {
+                const buttons = Array.from(document.querySelectorAll('button, a[role="button"], [role="button"], .monaco-button, .icube-btn'));
+                const keep = buttons.find(el => {
+                  const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+                  const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+                  return text === '保留' && rect && rect.width > 0 && rect.height > 0;
+                });
+                if (!keep) break;
+                keep.click();
+                clicked++;
+                await sleep(250);
+              }
+              return { clicked };
+            })()
+          `,
+          awaitPromise: true,
+          returnByValue: true
+        });
+        const individualResolution = await waitForResolution();
+        if (individualResolution) {
+          individualResolution.individualClicks = individualResult.result?.value?.clicked || 0;
+          return individualResolution;
+        }
+      }
+
+      const finalGate = await this.checkTaskReviewGate();
+      return {
+        success: false,
+        action: preferredAction,
+        reason: 'review_gate_persisted',
+        gate: finalGate,
+        buttonText: target.text
+      };
+    } catch (e) {
+      return { success: false, action: preferredAction, reason: 'error', error: e.message };
+    }
+  }
+
   // ── Message UX ─────────────────────────────────────────────────────────
 
   async typeMessage(text) {
@@ -537,7 +1276,17 @@ class DomDriver {
   }
 
   async sendMessage(text) {
+    const existingReviewGate = await this.checkTaskReviewGate();
+    if (existingReviewGate.awaitingReview) {
+      const gateResolution = await this.resolveTaskReviewGate('keep_all');
+      if (!gateResolution.success) {
+        throw new Error(`Task review gate blocked message send: ${gateResolution.reason || gateResolution.error || 'unknown'}`);
+      }
+      await sleep(this.config.postActionDelayMs * 2);
+    }
+
     const normalizedExpected = String(text || '').replace(/\s+/g, ' ').trim();
+    this._pendingUserTask = normalizedExpected;
     const focusResult = await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
@@ -632,6 +1381,33 @@ class DomDriver {
       await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
     }
     await sleep(this.config.postActionDelayMs);
+  }
+
+  async stopGeneration() {
+    if (!this.client || typeof this.client.send !== 'function') {
+      return { success: false, reason: 'no_cdp_client' };
+    }
+    const result = await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var stopIcon = document.querySelector('.codicon-stop-circle,[class*="stop-circle"],[class*="stop"]');
+          var button = stopIcon ? stopIcon.closest('button,[role="button"],.chat-input-v2-send-button') : null;
+          if (!button) button = document.querySelector('button.chat-input-v2-send-button:not(.disabled), .chat-input-v2-send-button:not(.disabled)');
+          if (!button) return { success: false, reason: 'stop_button_not_found' };
+          var rect = button.getBoundingClientRect();
+          var cx = rect.x + rect.width / 2;
+          var cy = rect.y + rect.height / 2;
+          button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0, buttons: 1, pointerType: 'mouse' }));
+          button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0, buttons: 1, pointerType: 'mouse' }));
+          button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+          if (typeof button.click === 'function') button.click();
+          return { success: true, reason: 'clicked_stop_button' };
+        })()
+      `,
+      returnByValue: true
+    });
+    await sleep(Math.max(this.config.postActionDelayMs * 2, 500));
+    return result.result?.value || { success: false, reason: 'no_result' };
   }
 
   // ── Core polling ───────────────────────────────────────────────────────
@@ -755,6 +1531,15 @@ class DomDriver {
       state.taskText = taskSourceResult.text;
       state.taskInProgress = taskSourceResult.inProgress;
       state.taskComplete = taskSourceResult.isComplete;
+    }
+    if (taskSourceResult && taskSourceResult.awaitingAssistant) {
+      state.taskText = '';
+      state.taskInProgress = true;
+      state.taskComplete = false;
+      state.responseText = '';
+      state.awaitingAssistant = true;
+      state.latestUserText = taskSourceResult.latestUserText || '';
+      return state;
     }
 
     if (!state.responseText || state.responseText.length < 20) {
@@ -931,6 +1716,25 @@ class DomDriver {
     try {
       while (Date.now() - startTime < this.config.timeoutMs) {
         const state = await this._pollResponseState();
+        if (state.awaitingAssistant) {
+          lastText = '';
+          stableCount = 0;
+          await sleep(pollInterval);
+          continue;
+        }
+        const reviewGate = await this.checkTaskReviewGate();
+        if (reviewGate.awaitingReview && reviewGate.taskCompleted) {
+          const gateResolution = await this.resolveTaskReviewGate('keep_all');
+          if (gateResolution.success) {
+            await sleep(Math.max(this.config.postActionDelayMs * 2, 500));
+          }
+        }
+        const completionCandidate = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
+        const completionLooksStale = completionCandidate && (
+          (this._preSendSnapshot && this._preSendSnapshot.includes(completionCandidate)) ||
+          (this._lastTaskText && this._lastTaskText.includes(completionCandidate))
+        );
+        let currentText = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
         // Periodic dialog check during streaming - detect dialogs that appear mid-execution
         const approvalCheckInterval = this.config.approvalPollIntervalMs || 3000;
         if (this._lastApprovalCheckAt === undefined || (Date.now() - this._lastApprovalCheckAt) >= approvalCheckInterval) {
@@ -984,25 +1788,46 @@ class DomDriver {
         }
 
 
-        if (state.taskComplete || (state.taskText && !state.taskInProgress)) {
-          const text = state.taskText || state.responseText;
-          if (text) { cleanup(); return { text, stable: true, elapsedMs: Date.now() - startTime }; }
+        if (!completionLooksStale && (state.taskComplete || (state.taskText && !state.taskInProgress))) {
+          const text = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
+          if (this._isModelErrorResponseText(text)) {
+            cleanup();
+            return { text, stable: false, elapsedMs: Date.now() - startTime, modelError: true, error: 'Trae model request failed' };
+          }
+          if (text && !this._isIncompleteResponseText(text)) { cleanup(); return { text, stable: true, elapsedMs: Date.now() - startTime }; }
         }
 
-        let currentText = sanitizeActivityText(state.responseText || '');
+        const pendingTask = String(this._pendingUserTask || '').replace(/\s+/g, ' ').trim();
+        const normalizedCurrent = String(currentText || '').replace(/\s+/g, ' ').trim();
+        const currentLooksLikePromptEcho = pendingTask && normalizedCurrent && (
+          normalizedCurrent === pendingTask ||
+          normalizedCurrent.endsWith(pendingTask) ||
+          (normalizedCurrent.includes(pendingTask) && normalizedCurrent.length <= pendingTask.length + 24)
+        );
+        if (currentLooksLikePromptEcho) {
+          currentText = '';
+        }
 
-        if (!currentText || currentText.length < 5) {
-          const contentScan = await this._scanContentArea();
-          if (contentScan && contentScan.areaFound && contentScan.text) {
-            currentText = sanitizeActivityText(contentScan.text);
+        if (state.taskInProgress) {
+          lastText = currentText;
+          stableCount = 0;
+          await sleep(pollInterval);
+          continue;
+        }
+
+        if ((!currentText || currentText.length <= 10 || this._isIncompleteResponseText(currentText)) && isIdeMode) {
+          // IDE mode fallback: prefer the chat panel before any broad content
+          // scan, otherwise editor text can be mistaken for the assistant reply.
+          const panelText = await this._captureIdePanelText();
+          if (panelText) {
+            currentText = cleanAssistantResultText(sanitizeActivityText(panelText));
           }
         }
 
-        if (!currentText || currentText.length < 5 && isIdeMode) {
-          // IDE mode fallback: try capturing the full chat panel text
-          const panelText = await this._captureIdePanelText();
-          if (panelText) {
-            currentText = sanitizeActivityText(panelText);
+        if ((!currentText || currentText.length <= 10 || this._isIncompleteResponseText(currentText)) && !isIdeMode) {
+          const contentScan = await this._scanContentArea();
+          if (contentScan && contentScan.areaFound && contentScan.text) {
+            currentText = cleanAssistantResultText(sanitizeActivityText(contentScan.text));
           }
         }
 
@@ -1083,7 +1908,11 @@ class DomDriver {
         const isStable = currentText && currentText === lastText && currentText.length >= 1;
         if (isStable) {
           stableCount++;
-          if (stableCount >= effectiveRequiredStable) {
+          if (stableCount >= effectiveRequiredStable && this._isModelErrorResponseText(currentText)) {
+            cleanup();
+            return { text: currentText, stable: false, elapsedMs: Date.now() - startTime, modelError: true, error: 'Trae model request failed' };
+          }
+          if (stableCount >= effectiveRequiredStable && !this._isIncompleteResponseText(currentText)) {
             cleanup();
             return { text: currentText, stable: true, elapsedMs: Date.now() - startTime };
           }
@@ -1095,9 +1924,11 @@ class DomDriver {
       }
 
       const finalText = lastText || (streamingBuffer.length > 0 ? streamingBuffer.join(' ') : '');
+      this._pendingUserTask = '';
       cleanup();
       return { text: finalText, stable: false, elapsedMs: Date.now() - startTime, timedOut: true };
     } catch (err) {
+      this._pendingUserTask = '';
       cleanup();
       throw err;
     }
@@ -1637,6 +2468,7 @@ class DomDriver {
     if (response && response.text) {
       this._lastTaskText = response.text;
     }
+    this._pendingUserTask = '';
 
     if (response.timedOut && !response.text) {
       throw TraeCNAutomationError.responseTimeout(this.config.timeoutMs);
@@ -1659,6 +2491,17 @@ class DomDriver {
   }
 
   async newChat() {
+    const existingReviewGate = await this.checkTaskReviewGate();
+    if (existingReviewGate.awaitingReview) {
+      const gateResolution = await this.resolveTaskReviewGate('keep_all');
+      if (!gateResolution.success) {
+        throw new Error(`Task review gate blocked new chat: ${gateResolution.reason || gateResolution.error || 'unknown'}`);
+      }
+      await sleep(this.config.postActionDelayMs * 2);
+    }
+
+    const previousPanelText = await this._captureIdePanelText();
+
     // Try keyboard shortcut first (works in both modes)
     await this.client.send('Input.dispatchKeyEvent', {
       type: 'keyDown', key: 'n', code: 'KeyN', modifiers: 6
@@ -1667,15 +2510,46 @@ class DomDriver {
       type: 'keyUp', key: 'n', code: 'KeyN', modifiers: 6
     });
 
-    // Clear pre-send snapshot on new chat
-    this._preSendSnapshot = '';
-
     const safeComposerSels = safeJsValue(this.config.composerSelectors);
     const ready = await this._waitForExpression(
       `(function(){var s=${safeComposerSels};for(var i=0;i<s.length;i++){var e=document.querySelector(s[i]);if(e&&e.getBoundingClientRect().width>20&&e.offsetParent!==null)return true;}return false;})()`,
       4000, 200
     );
     if (!ready) await sleep(2000);
+
+    let panelChanged = false;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const panelText = await this._captureIdePanelText();
+      if (!previousPanelText || !panelText || panelText !== previousPanelText) {
+        panelChanged = true;
+        break;
+      }
+      await sleep(250);
+    }
+
+    if (!panelChanged) {
+      const newChatButton = await this.findNewChatButton();
+      if (newChatButton && newChatButton.nodeId) {
+        await dom.clickNode(this.client, newChatButton.nodeId);
+        await sleep(this.config.postActionDelayMs * 2);
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const panelText = await this._captureIdePanelText();
+          if (!previousPanelText || !panelText || panelText !== previousPanelText) {
+            panelChanged = true;
+            break;
+          }
+          await sleep(250);
+        }
+      }
+    }
+
+    if (!panelChanged && previousPanelText) {
+      throw new Error('Failed to open a fresh chat while an existing task was still active');
+    }
+
+    this._lastTaskText = '';
+    this._pendingUserTask = '';
+    this._preSendSnapshot = '';
     return true;
   }
 
@@ -1828,20 +2702,37 @@ class DomDriver {
     const triggerResult = await this.client.send('Runtime.evaluate', {
         expression: `
           (function() {
-            const bodyText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
-            const queueMatch = bodyText.match(/排在第\\s*(\\d+)\\s*位/);
-            const queueNotice = bodyText.includes('排队提醒') || bodyText.includes('请求量较高') || bodyText.toLowerCase().includes('queue');
             const sendBtn = document.querySelector('.chat-input-v2-send-button');
             const sendDisabled = sendBtn ?
               (sendBtn.disabled || /disabled/.test(sendBtn.className)) : false;
             const trigger = document.querySelector('.chat-model-label,[role="combobox"],[class*="model-select"],[class*="ai-model-select"]');
             const currentModel = trigger ? (trigger.textContent?.replace(/\\s+/g, ' ').trim() || '') : '';
-            if (queueMatch || queueNotice) {
+            const queueCandidates = Array.from(document.querySelectorAll('div,span,p,section,[role="alert"],[class*="queue"],[class*="toast"],[class*="notice"]'))
+              .map((el) => {
+                const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                if (!text || text.length > 240) return null;
+                const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+                const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+                const visible = !!(rect && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight && style && style.visibility !== 'hidden' && style.display !== 'none');
+                if (!visible) return null;
+                const positionMatch = text.match(/排在第\\s*(\\d+)\\s*位/);
+                const notice = text.includes('排队提醒') ||
+                  text.includes('请求量较高') ||
+                  text.includes('当前使用人数较多') ||
+                  text.includes('模型繁忙') ||
+                  /\\b(queue|queued|busy)\\b/i.test(text);
+                if (!positionMatch && !notice) return null;
+                return { text, position: positionMatch ? Number(positionMatch[1]) : null, y: rect.top };
+              })
+              .filter(Boolean)
+              .sort((a, b) => b.y - a.y);
+            const queueNotice = queueCandidates[0] || null;
+            if (queueNotice) {
               return {
                 found: true,
                 queued: true,
-                position: queueMatch ? Number(queueMatch[1]) : null,
-                message: queueMatch ? ('排在第 ' + queueMatch[1] + ' 位') : 'Queue notice is visible',
+                position: queueNotice.position,
+                message: queueNotice.position ? ('排在第 ' + queueNotice.position + ' 位') : queueNotice.text,
                 sendDisabled,
                 canSubmit: !sendDisabled,
                 currentModel
@@ -2163,9 +3054,28 @@ class DomDriver {
 
 
   async checkReadiness() {
-    const composer = await this.findComposer();
-    const sendBtn = await this.findSendButton();
-    const response = await this.findResponseRegion();
+    let composer = await this.findComposer();
+    let sendBtn = await this.findSendButton();
+    let response = await this.findResponseRegion();
+    let workspaceGuide = null;
+    let composerFallback = null;
+    let sendBtnFallback = null;
+
+    if (!(composer && sendBtn)) {
+      workspaceGuide = await this.dismissWorkspaceGuideIfPresent();
+      if (workspaceGuide.dismissed > 0 || workspaceGuide.success) {
+        composer = await this.findComposer();
+        sendBtn = await this.findSendButton();
+        response = await this.findResponseRegion();
+      }
+    }
+
+    if (!composer) {
+      composerFallback = await this._findVisibleElementRuntime(this.config.composerSelectors, { allowDisabled: true });
+    }
+    if (!sendBtn) {
+      sendBtnFallback = await this._findVisibleElementRuntime(this.config.sendButtonSelectors, { allowDisabled: true });
+    }
 
     // Include mode info
     let modeInfo = null;
@@ -2175,12 +3085,47 @@ class DomDriver {
       modeInfo = { mode: 'unknown', confidence: 0, indicators: [] };
     }
 
+    const blockers = await this.inspectWorkspaceBlockers();
+    const restricted = await this.checkRestrictedMode();
+    const dialog = await this.checkForApprovalDialog();
+    let blocker = null;
+    const composerReady = !!(composer || composerFallback);
+    const sendButtonReady = !!(sendBtn || sendBtnFallback);
+    if (!(composerReady && sendButtonReady)) {
+      if (dialog.needsApproval) blocker = 'approval_dialog';
+      else if (restricted.restricted) blocker = 'trust_workspace';
+      else if (blockers.guideVisible) blocker = 'workspace_guide';
+      else if (blockers.loginVisible) blocker = 'login_required';
+      else if (blockers.newTaskVisible) blocker = 'open_task_panel';
+      else blocker = 'composer_unavailable';
+    }
+
     return {
-      ready: !!(composer && sendBtn),
-      composer: composer ? { matchedSelector: composer.matchedSelector } : null,
-      sendButton: sendBtn ? { matchedSelector: sendBtn.matchedSelector } : null,
+      ready: !!(composerReady && sendButtonReady),
+      composer: composer ? { matchedSelector: composer.matchedSelector } : (composerFallback ? {
+        matchedSelector: composerFallback.matchedSelector,
+        runtimeFallback: true
+      } : null),
+      sendButton: sendBtn ? { matchedSelector: sendBtn.matchedSelector } : (sendBtnFallback ? {
+        matchedSelector: sendBtnFallback.matchedSelector,
+        runtimeFallback: true,
+        disabled: sendBtnFallback.disabled === true
+      } : null),
       responseRegion: response ? { matchedSelector: response.matchedSelector } : null,
-      mode: modeInfo
+      mode: modeInfo,
+      blocker,
+      workspaceGuide: workspaceGuide ? {
+        success: workspaceGuide.success === true,
+        dismissed: workspaceGuide.dismissed || 0,
+        guideVisible: workspaceGuide.guideVisible === true,
+        reason: workspaceGuide.reason || null
+      } : null,
+      blockers: {
+        guideVisible: blockers.guideVisible === true,
+        guideButtons: Array.isArray(blockers.guideButtons) ? blockers.guideButtons.map(item => item.text).slice(0, 6) : [],
+        loginVisible: blockers.loginVisible === true,
+        newTaskVisible: blockers.newTaskVisible === true
+      }
     };
   }
 
@@ -2227,6 +3172,69 @@ class DomDriver {
     }
     return this._settingsDriver;
   }
+
+  get palette() {
+    if (!this._paletteDriver) {
+      this._paletteDriver = new CommandPaletteDriver(this.client, this.config);
+    }
+    return this._paletteDriver;
+  }
+
+  get editor() {
+    if (!this._editorDriver) {
+      this._editorDriver = new EditorDriver(this.client, this.config, { palette: this.palette });
+    }
+    return this._editorDriver;
+  }
+
+  get file() {
+    if (!this._fileDriver) {
+      this._fileDriver = new FileDriver(this.client, this.config, { palette: this.palette });
+    }
+    return this._fileDriver;
+  }
+
+  get terminal() {
+    if (!this._terminalDriver) {
+      this._terminalDriver = new TerminalDriver(this.client, this.config, { palette: this.palette });
+    }
+    return this._terminalDriver;
+  }
+
+  get git() {
+    if (!this._gitDriver) {
+      this._gitDriver = new GitDriver(this.client, this.config, { palette: this.palette });
+    }
+    return this._gitDriver;
+  }
+
+  get search() {
+    if (!this._searchDriver) {
+      this._searchDriver = new SearchDriver(this.client, this.config, { palette: this.palette });
+    }
+    return this._searchDriver;
+  }
+
+  get diagnostics() {
+    if (!this._diagnosticsDriver) {
+      this._diagnosticsDriver = new DiagnosticsDriver(this.client, this.config, { palette: this.palette });
+    }
+    return this._diagnosticsDriver;
+  }
+
+  get snapshot() {
+    if (!this._snapshotDriver) {
+      this._snapshotDriver = new SnapshotDriver(this.client, this.config);
+    }
+    return this._snapshotDriver;
+  }
+
+  get extension() {
+    if (!this._extensionDriver) {
+      this._extensionDriver = new ExtensionDriver(this.client, this.config, { palette: this.palette });
+    }
+    return this._extensionDriver;
+  }
 }
 
 module.exports = {
@@ -2239,5 +3247,14 @@ module.exports = {
   DEFAULT_ACTIVITY_SELECTORS,
   DEFAULT_NEW_CHAT_SELECTORS,
   DEFAULT_MODE_TAB_SELECTORS,
-  SettingsDriver
+  SettingsDriver,
+  CommandPaletteDriver,
+  EditorDriver,
+  FileDriver,
+  TerminalDriver,
+  GitDriver,
+  SearchDriver,
+  DiagnosticsDriver,
+  SnapshotDriver,
+  ExtensionDriver
 };

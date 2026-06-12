@@ -5,10 +5,20 @@ const { DomDriver, getConfig, sanitizeActivityText, DEFAULT_COMPOSER_SELECTORS, 
 
 let passed = 0;
 let failed = 0;
+const pendingAsyncTests = [];
 
 function test(name, fn) {
   try {
-    fn();
+    const result = fn();
+    if (result && typeof result.then === 'function') {
+      pendingAsyncTests.push({
+        name,
+        promise: Promise.resolve(result)
+          .then(() => ({ ok: true }))
+          .catch((err) => ({ ok: false, err }))
+      });
+      return;
+    }
     passed++;
     console.log(`  PASS: ${name}`);
   } catch (err) {
@@ -50,11 +60,49 @@ test('getConfig returns numeric timeout', () => {
   assert.ok(config.timeoutMs > 0);
 });
 
+test('getConfig leaves queueMaxWaitMs unset by default', () => {
+  delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
+  delete process.env.TRAE_QUEUE_MAX_WAIT_MS;
+  const config = getConfig();
+  assert.strictEqual(config.queueMaxWaitMs, null);
+});
+
+test('getConfig parses explicit queueMaxWaitMs', () => {
+  process.env.TRAECN_QUEUE_MAX_WAIT_MS = '12345';
+  const config = getConfig();
+  assert.strictEqual(config.queueMaxWaitMs, 12345);
+  delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
+});
+
 test('getConfig sendTrigger defaults to button', () => {
   delete process.env.TRAECN_SEND_TRIGGER;
   delete process.env.TRAE_SEND_TRIGGER;
   const config = getConfig();
   assert.strictEqual(config.sendTrigger, 'button');
+});
+
+test('checkQueueStatus ignores historical queue text without visible queue notice', async () => {
+  const fakeClient = {
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      assert.ok((payload.expression || '').includes('queueCandidates'));
+      return {
+        result: {
+          value: {
+            found: true,
+            queued: false,
+            isDisabled: false,
+            hasDisabledClass: false,
+            sendDisabled: false,
+            currentModel: 'DeepSeek-V4-Pro'
+          }
+        }
+      };
+    }
+  };
+  const driver = new DomDriver(fakeClient, getConfig());
+  const result = await driver.checkQueueStatus();
+  assert.strictEqual(result.queued, false);
 });
 
 test('sanitizeActivityText removes Chinese thinking indicators', () => {
@@ -129,6 +177,428 @@ test('restricted mode summary detects actionable trust panel', () => {
   assert.strictEqual(summary.trustButtonFound, true);
 });
 
+test('completeSetupIfPresent advances multi-step setup wizard and exits when workspace is ready', async () => {
+  let inspectCount = 0;
+  let clickCount = 0;
+  const fakeClient = {
+    async send(method, payload) {
+      if (method !== 'Runtime.evaluate') throw new Error(`unexpected method: ${method}`);
+      const expression = payload.expression || '';
+      if (expression.includes('const url = String(location.href || \'\')')) {
+        inspectCount += 1;
+        if (inspectCount === 1) {
+          return {
+            result: {
+              value: {
+                isSetup: true,
+                url: 'vscode-file://.../setup/setup.html',
+                text: '欢迎使用\\n开始',
+                buttons: [
+                  { text: '开始', disabled: false, visible: true }
+                ]
+              }
+            }
+          };
+        }
+        if (inspectCount === 2) {
+          return {
+            result: {
+              value: {
+                isSetup: true,
+                url: 'vscode-file://.../setup/setup.html',
+                text: '快捷键\\nVS Code\\n继续',
+                buttons: [
+                  { text: 'VS Code', disabled: false, visible: true },
+                  { text: '继续', disabled: false, visible: true }
+                ]
+              }
+            }
+          };
+        }
+        return {
+          result: {
+            value: {
+              isSetup: false,
+              url: 'vscode-file://.../workbench/workbench.html',
+              text: 'workspace',
+              buttons: []
+            }
+          }
+        };
+      }
+      if (expression.includes('window.__enhancedClick("开始")')) {
+        clickCount += 1;
+        return { result: { value: { clicked: true, text: '开始' } } };
+      }
+      if (expression.includes('window.__enhancedClick("继续")')) {
+        clickCount += 1;
+        return { result: { value: { clicked: true, text: '继续' } } };
+      }
+      if (expression.includes('if (window.__enhancedClick) return')) {
+        return { result: { value: undefined } };
+      }
+      throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
+    }
+  };
+  const driver = new DomDriver(fakeClient, { ...getConfig(), postActionDelayMs: 0 });
+  const result = await driver.completeSetupIfPresent({ delayMs: 0 });
+  assert.strictEqual(result.completed, true);
+  assert.strictEqual(result.steps, 2);
+  assert.strictEqual(clickCount, 2);
+});
+
+test('completeSetupIfPresent returns no_actionable_setup_button when setup page has no supported CTA', async () => {
+  const fakeClient = {
+    async send(method, payload) {
+      if (method !== 'Runtime.evaluate') throw new Error(`unexpected method: ${method}`);
+      const expression = payload.expression || '';
+      if (expression.includes('const url = String(location.href || \'\')')) {
+        return {
+          result: {
+            value: {
+              isSetup: true,
+              url: 'vscode-file://.../setup/setup.html',
+              text: '某个未知引导页',
+              buttons: [
+                { text: '稍后提醒我', disabled: false, visible: true }
+              ]
+            }
+          }
+        };
+      }
+      if (expression.includes('if (window.__enhancedClick) return')) {
+        return { result: { value: undefined } };
+      }
+      throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
+    }
+  };
+  const driver = new DomDriver(fakeClient, getConfig());
+  const result = await driver.completeSetupIfPresent();
+  assert.strictEqual(result.completed, false);
+  assert.strictEqual(result.reason, 'no_actionable_setup_button');
+});
+
+test('completeSetupIfPresent can click setup skip links rendered as pointer divs', async () => {
+  let inspectCount = 0;
+  let clicked = false;
+  const fakeClient = {
+    async send(method, payload) {
+      if (method !== 'Runtime.evaluate') throw new Error(`unexpected method: ${method}`);
+      const expression = payload.expression || '';
+      if (expression.includes('const url = String(location.href || \'\')')) {
+        inspectCount += 1;
+        if (inspectCount === 1) {
+          return {
+            result: {
+              value: {
+                isSetup: true,
+                url: 'vscode-file://.../setup/setup.html',
+                text: '添加命令行\\n安装 `trae-cn` 命令\\n跳过',
+                buttons: [
+                  { text: '安装 `trae-cn` 命令', disabled: false, visible: true, clickable: true },
+                  { text: '跳过', disabled: false, visible: true, clickable: true }
+                ]
+              }
+            }
+          };
+        }
+        return {
+          result: {
+            value: {
+              isSetup: false,
+              url: 'vscode-file://.../workbench/workbench.html',
+              text: 'workspace',
+              buttons: []
+            }
+          }
+        };
+      }
+      if (expression.includes('window.__enhancedClick("跳过")')) {
+        clicked = true;
+        return { result: { value: { clicked: true, text: '跳过' } } };
+      }
+      if (expression.includes('if (window.__enhancedClick) return')) {
+        return { result: { value: undefined } };
+      }
+      throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
+    }
+  };
+  const driver = new DomDriver(fakeClient, { ...getConfig(), postActionDelayMs: 0 });
+  const result = await driver.completeSetupIfPresent({ delayMs: 0 });
+  assert.strictEqual(result.completed, true);
+  assert.strictEqual(clicked, true);
+});
+
+test('dismissWorkspaceGuideIfPresent clears visible workspace onboarding overlay', async () => {
+  let clicked = false;
+  const fakeClient = {
+    async send(method, payload) {
+      if (method !== 'Runtime.evaluate') throw new Error(`unexpected method: ${method}`);
+      const expression = payload.expression || '';
+      if (expression.includes('window.__enhancedClick("继续"')) {
+        clicked = true;
+        return { result: { value: { clicked: true, text: '继续' } } };
+      }
+      if (expression.includes('if (window.__enhancedClick) return')) {
+        return { result: { value: undefined } };
+      }
+      throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
+    }
+  };
+  const driver = new DomDriver(fakeClient, { ...getConfig(), postActionDelayMs: 0 });
+  let inspectCount = 0;
+  driver.inspectWorkspaceBlockers = async () => {
+    inspectCount += 1;
+    if (inspectCount === 1) {
+      return {
+        bodyText: 'NEW SOLO BETA\\n继续',
+        titles: ['NEW SOLO BETA'],
+        guideVisible: true,
+        guideButtons: [{ text: '继续', x: 120, y: 200 }],
+        loginVisible: false,
+        newTaskVisible: false,
+        visibleControls: [{ text: '继续' }]
+      };
+    }
+    return {
+      bodyText: 'workspace',
+      titles: [],
+      guideVisible: false,
+      guideButtons: [],
+      loginVisible: false,
+      newTaskVisible: true,
+      visibleControls: [{ text: '新建会话' }]
+    };
+  };
+  const result = await driver.dismissWorkspaceGuideIfPresent({ delayMs: 0 });
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.dismissed, 1);
+  assert.strictEqual(clicked, true);
+});
+
+test('checkTaskReviewGate detects visible keep/discard controls', async () => {
+  const fakeClient = {
+    async send() {
+      return {
+        result: {
+          value: {
+            awaitingReview: true,
+            taskCompleted: true,
+            waitingToSend: true,
+            reviewCount: 1,
+            keepAll: { text: '全部保留', x: 100, y: 200 },
+            revertAll: { text: '全部撤销', x: 80, y: 200 },
+            newChatDisabled: true,
+            visibleButtons: [{ text: '全部保留' }, { text: '全部撤销' }]
+          }
+        }
+      };
+    }
+  };
+  const driver = new DomDriver(fakeClient, getConfig());
+  const gate = await driver.checkTaskReviewGate();
+  assert.strictEqual(gate.awaitingReview, true);
+  assert.strictEqual(gate.reviewCount, 1);
+  assert.strictEqual(gate.keepAll.text, '全部保留');
+});
+
+test('resolveTaskReviewGate short-circuits when no review gate is present', async () => {
+  const driver = new DomDriver({ send: async () => ({ result: { value: null } }) }, getConfig());
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false });
+  const result = await driver.resolveTaskReviewGate('keep_all');
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.reason, 'no_review_gate');
+});
+
+test('extractLatestIdeAssistantState waits for assistant turn after latest user turn', () => {
+  const driver = new DomDriver(null, getConfig());
+  const state = driver._extractLatestIdeAssistantState({
+    fullText: '旧回答 用户新问题',
+    turns: [
+      { className: 'chat-turn assistant task', text: '旧回答\\n任务完成' },
+      { className: 'chat-turn user', text: '用户新问题' }
+    ]
+  }, '旧回答 任务完成');
+  assert.strictEqual(state.awaitingAssistant, true);
+  assert.strictEqual(state.inProgress, true);
+  assert.strictEqual(state.latestUserText, '用户新问题');
+});
+
+test('extractLatestIdeAssistantState prefers assistant turn after latest user turn', () => {
+  const driver = new DomDriver(null, getConfig());
+  const state = driver._extractLatestIdeAssistantState({
+    fullText: '用户新问题 Agent 正在分析问题',
+    turns: [
+      { className: 'chat-turn user', text: '用户新问题' },
+      { className: 'chat-turn assistant task', text: 'Agent\\n正在分析问题' }
+    ]
+  }, '');
+  assert.strictEqual(state.awaitingAssistant, undefined);
+  assert.strictEqual(state.inProgress, true);
+  assert.ok(state.text.includes('正在分析问题'));
+});
+
+test('isIncompleteResponseText treats skill invocation preamble as incomplete', () => {
+  const driver = new DomDriver(null, getConfig());
+  assert.strictEqual(driver._isIncompleteResponseText('Agent'), true);
+  assert.strictEqual(driver._isIncompleteResponseText('Thought'), true);
+  assert.strictEqual(
+    driver._isIncompleteResponseText("I'll start by invoking the relevant code review skill, then explore the project structure.调用技能: TRAE-code-review"),
+    true
+  );
+  assert.strictEqual(
+    driver._isIncompleteResponseText('[P1] src/http/gateway.js: restart recovery can time out\\n问题: ...\\n建议: ...'),
+    false
+  );
+  assert.strictEqual(
+    driver._isIncompleteResponseText('SOLO Agent思考中...The user explicitly asked for a marker'),
+    true
+  );
+  assert.strictEqual(
+    driver._isIncompleteResponseText('SOLO Agent思考中...The user is asking for a complete code review of the project at /Users/Shared/projects/TRAECNclaw. Then list'),
+    true
+  );
+  assert.strictEqual(
+    driver._isIncompleteResponseText('调用技能: TRAE-code-reviewThoughtNow I have the code review skill loaded. Let me start by exploring the project structure to understand what we are working with. '.repeat(6)),
+    true
+  );
+});
+
+test('isModelErrorResponseText detects Trae model provider failures', () => {
+  const driver = new DomDriver(null, getConfig());
+  assert.strictEqual(
+    driver._isModelErrorResponseText('Agent\n模型请求失败，点击右侧箭头展开模型服务商错误信息进行排查。\n异常打断'),
+    true
+  );
+  assert.strictEqual(driver._isModelErrorResponseText('Findings:\\n[P2] no model issue'), false);
+});
+
+test('collectResponse returns mid-stream approval without currentText initialization error', async () => {
+  const config = getConfig();
+  config.timeoutMs = 200;
+  config.pollIntervalMs = 10;
+  config.approvalPollIntervalMs = 0;
+  const driver = new DomDriver({
+    send: async () => {},
+    on: () => {},
+    off: () => {}
+  }, config);
+  let approvalChecks = 0;
+  driver.detectMode = async () => ({ mode: 'solo', confidence: 0.9, indicators: [] });
+  driver._pollResponseState = async () => ({
+    taskComplete: false,
+    taskText: '排队中',
+    taskInProgress: false,
+    responseText: ''
+  });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, taskCompleted: false });
+  driver.checkForApprovalDialog = async () => {
+    approvalChecks++;
+    return approvalChecks === 1
+      ? { needsApproval: false }
+      : { needsApproval: true, question: '批准执行命令?', dialogType: 'command', buttons: ['允许'] };
+  };
+
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.needsApproval, true);
+  assert.strictEqual(result.dialogType, 'command');
+  assert.ok(typeof result.text === 'string');
+});
+
+test('collectResponse strips IDE role and completion wrappers', async () => {
+  const config = getConfig();
+  config.timeoutMs = 200;
+  config.pollIntervalMs = 10;
+  config.approvalPollIntervalMs = 0;
+  const driver = new DomDriver({
+    send: async () => {},
+    on: () => {},
+    off: () => {}
+  }, config);
+  driver.detectMode = async () => ({ mode: 'ide', confidence: 0.9, indicators: ['ide'] });
+  driver._pollResponseState = async () => ({
+    taskComplete: true,
+    taskText: 'Agent\n思考过程\n\nTRAECN_REAL_UAT_OK_20260612B\n\n任务完成',
+    taskInProgress: true,
+    responseText: ''
+  });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, taskCompleted: false });
+  driver.checkForApprovalDialog = async () => ({ needsApproval: false });
+
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.stable, true);
+  assert.strictEqual(result.text, 'TRAECN_REAL_UAT_OK_20260612B');
+});
+
+test('stopGeneration clicks visible stop button', async () => {
+  const driver = new DomDriver({
+    send: async (method, params) => {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      assert.ok(params.expression.includes('codicon-stop-circle'));
+      return { result: { value: { success: true, reason: 'clicked_stop_button' } } };
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+  const result = await driver.stopGeneration();
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.reason, 'clicked_stop_button');
+});
+
+test('checkReadiness reports login blocker when composer is unavailable', async () => {
+  const driver = new DomDriver(null, getConfig());
+  driver.findComposer = async () => null;
+  driver.findSendButton = async () => null;
+  driver.findResponseRegion = async () => null;
+  driver.dismissWorkspaceGuideIfPresent = async () => ({ success: false, dismissed: 0, guideVisible: false, reason: null });
+  driver.detectMode = async () => ({ mode: 'ide', confidence: 0.9, indicators: ['workbench'] });
+  driver.inspectWorkspaceBlockers = async () => ({
+    guideVisible: false,
+    guideButtons: [],
+    loginVisible: true,
+    newTaskVisible: false
+  });
+  driver.checkRestrictedMode = async () => ({ restricted: false });
+  driver.checkForApprovalDialog = async () => ({ needsApproval: false });
+
+  const readiness = await driver.checkReadiness();
+  assert.strictEqual(readiness.ready, false);
+  assert.strictEqual(readiness.blocker, 'login_required');
+  assert.strictEqual(readiness.blockers.loginVisible, true);
+});
+
+test('checkReadiness accepts runtime-visible composer with disabled empty send button', async () => {
+  const config = getConfig();
+  config.composerSelectors = ['.chat-input-v2-input-box-editable'];
+  config.sendButtonSelectors = ['button.chat-input-v2-send-button'];
+  const driver = new DomDriver({
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        if (params.expression.includes('.chat-input-v2-input-box-editable')) {
+          return { result: { value: { matchedSelector: '.chat-input-v2-input-box-editable', visible: true, disabled: false } } };
+        }
+        if (params.expression.includes('button.chat-input-v2-send-button')) {
+          return { result: { value: { matchedSelector: 'button.chat-input-v2-send-button', visible: true, disabled: true } } };
+        }
+      }
+      return { result: { value: null } };
+    }
+  }, config);
+  driver.findComposer = async () => null;
+  driver.findSendButton = async () => null;
+  driver.findResponseRegion = async () => null;
+  driver.dismissWorkspaceGuideIfPresent = async () => ({ success: false, dismissed: 0, guideVisible: false, reason: null });
+  driver.detectMode = async () => ({ mode: 'solo', confidence: 0.9, indicators: ['chat'] });
+  driver.inspectWorkspaceBlockers = async () => ({ guideVisible: false, guideButtons: [], loginVisible: false, newTaskVisible: false });
+  driver.checkRestrictedMode = async () => ({ restricted: false });
+  driver.checkForApprovalDialog = async () => ({ needsApproval: false });
+
+  const readiness = await driver.checkReadiness();
+  assert.strictEqual(readiness.ready, true);
+  assert.strictEqual(readiness.blocker, null);
+  assert.strictEqual(readiness.composer.runtimeFallback, true);
+  assert.strictEqual(readiness.sendButton.runtimeFallback, true);
+  assert.strictEqual(readiness.sendButton.disabled, true);
+});
+
 test('getConfig respects TRAECN_COMPOSER_SELECTORS env var', () => {
   process.env.TRAECN_COMPOSER_SELECTORS = '.custom-input,textarea';
   const config = getConfig();
@@ -144,8 +614,26 @@ test('getConfig falls back to TRAE_COMPOSER_SELECTORS', () => {
   delete process.env.TRAE_COMPOSER_SELECTORS;
 });
 
-console.log(`\n[dom-driver.test.js] Results: ${passed} passed, ${failed} failed\n`);
+(async () => {
+  for (const { name, promise } of pendingAsyncTests) {
+    try {
+      const result = await promise;
+      if (!result.ok) throw result.err;
+      passed++;
+      console.log(`  PASS: ${name}`);
+    } catch (err) {
+      failed++;
+      console.error(`  FAIL: ${name}`);
+      console.error(`        ${err.message}`);
+    }
+  }
 
-if (failed > 0) {
+  console.log(`\n[dom-driver.test.js] Results: ${passed} passed, ${failed} failed\n`);
+
+  if (failed > 0) {
+    process.exit(1);
+  }
+})().catch((err) => {
+  console.error(err);
   process.exit(1);
-}
+});

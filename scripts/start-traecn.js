@@ -6,7 +6,10 @@ const { getEnvWithFallback } = require('../src/shared/utils');
 async function main() {
   const args = process.argv.slice(2);
   const forceNew = args.includes('--force-new');
-  const projectPath = args.find(arg => arg !== '--force-new') || getEnvWithFallback('TRAECN_PROJECT_PATH', 'TRAE_PROJECT_PATH', '');
+  const useExistingProfile = args.includes('--use-existing-profile');
+  const useIsolatedProfile = args.includes('--use-isolated-profile');
+  const filteredArgs = args.filter(arg => !['--force-new', '--use-existing-profile', '--use-isolated-profile'].includes(arg));
+  const projectPath = filteredArgs[0] || getEnvWithFallback('TRAECN_PROJECT_PATH', 'TRAE_PROJECT_PATH', '');
 
   if (isTraeCNRunning() && !forceNew) {
     console.log('[TRAECNclaw] TraeCN is already running.');
@@ -21,10 +24,21 @@ async function main() {
   }
 
   try {
-    const result = startTraeCN({ binPath, projectPath, newInstance: forceNew });
+    const result = startTraeCN({
+      binPath,
+      projectPath,
+      newInstance: forceNew,
+      useIsolatedProfile: useExistingProfile ? false : (useIsolatedProfile ? true : undefined)
+    });
     console.log(`[TRAECNclaw] TraeCN started (PID: ${result.pid})`);
     if (forceNew) {
       console.log('[TRAECNclaw] Started a new TraeCN instance for remote debugging.');
+    }
+    if (useExistingProfile) {
+      console.log('[TRAECNclaw] Reused the existing Trae CN profile (no isolated user-data-dir).');
+    }
+    if (useIsolatedProfile) {
+      console.log('[TRAECNclaw] Started with an isolated Trae CN profile.');
     }
     if (projectPath) {
       console.log(`[TRAECNclaw] Project: ${projectPath}`);

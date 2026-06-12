@@ -66,6 +66,14 @@ planOperation(command, params?)  // npm simple API
 // OpenClaw command: confirm_plan
 ```
 
+### 已登录 Trae 调试恢复
+```javascript
+// HTTP: POST /api/trae/restart-debug
+// OpenClaw command: restart_trae_debug
+// 需要 confirmationPhrase: restart-trae-cn-with-debug-existing-profile
+// 用 existing profile 重启，不创建未登录隔离窗口
+```
+
 ### 任务管理
 ```javascript
 runTask(task, opts)      // 运行任务 → text
@@ -150,6 +158,14 @@ queueTask    ← q
 pollTask     ← p
 checkStatus  ← s
 preflight    ← pf
+
+delegate_async + waitForQueue=true
+- When Trae shows its own queue, the gateway keeps the task in the local
+  background queue instead of pushing immediately.
+- Pair with reviewRequired=true to stop on result review before continuing any
+  follow-up work.
+- Add autoModelFallback=true or fallbackModels=[...] to let the gateway probe
+  alternate models while the agent stops waiting.
 switchModel  ← model
 switchMode   ← mode
 getSettings  ← settings
@@ -232,3 +248,7 @@ const { TraeCNSkill } = require('traecnclaw/skill');
 ---
 
 **提示**：在 IDE 中使用 Tab 补全函数名，节省输入时间！
+// macOS unattended local service
+// npm: npm run service:start
+// npm: npm run service:status
+// npm: npm run service:stop

@@ -1,7 +1,11 @@
 'use strict';
 
 const assert = require('assert');
-const { MCP_TOOLS, createMcpHandlers } = require('./mcp-server');
+const { MCP_TOOLS, createMcpHandlers, callTool } = require('./mcp-server');
+const { ApiKeyManager } = require('./src/shared/api-key-manager');
+const mcpAuth = require('./src/shared/mcp-auth');
+
+process.env.TRAECN_API_KEYS_ENABLED = '1';
 
 let passed = 0;
 let failed = 0;
@@ -28,6 +32,13 @@ async function test(name, fn) {
     assert.ok(names.includes('preflight'));
     assert.ok(names.includes('run_task'));
     assert.ok(names.includes('queue_task'));
+    assert.ok(names.includes('adopt_current_task'));
+    assert.ok(names.includes('cancel_task'));
+    assert.ok(names.includes('stop_generation'));
+    assert.ok(names.includes('dismiss_dialog'));
+    assert.ok(names.includes('restart_trae_debug'));
+    assert.ok(names.includes('review_gate_status'));
+    assert.ok(names.includes('resolve_review_gate'));
     assert.ok(names.includes('review_code'));
     assert.ok(names.includes('traecn_command'));
   });
@@ -92,6 +103,101 @@ async function test(name, fn) {
     assert.strictEqual(payload.risk, 'high');
     assert.strictEqual(payload.requiresConfirmation, true);
     assert.ok(payload.recommendedFlow.includes('check_dialog'));
+  });
+
+  // ── MCP tool authorization (Batch C2) ────────────────────────────────────
+
+  await test('MCP tools/call allows calls when auth layer is disabled', async () => {
+    const handlers = createMcpHandlers({ test: true }, {
+      apiKeyManager: { enabled: false }
+    });
+    const result = await handlers.handle({
+      method: 'tools/call',
+      params: { name: 'traecn_command_set', arguments: {} }
+    });
+    const payload = JSON.parse(result.content[0].text);
+    assert.ok(payload.commands.some(c => c.command === 'review_code'));
+  });
+
+  await test('MCP tools/call rejects calls with no keyId when auth is enabled', async () => {
+    const manager = new ApiKeyManager({ enabled: true });
+    const handlers = createMcpHandlers({ test: true }, {
+      apiKeyManager: manager,
+      keyId: null
+    });
+    const result = await handlers.handle({
+      method: 'tools/call',
+      params: { name: 'check_status', arguments: {} }
+    });
+    assert.strictEqual(result.isError, true);
+    const payload = JSON.parse(result.content[0].text);
+    assert.strictEqual(payload.code, 'MCP_AUTH_REQUIRED');
+  });
+
+  await test('MCP tools/call rejects when key lacks required permission', async () => {
+    const manager = new ApiKeyManager({ enabled: true });
+    const { keyId } = manager.createKey({ name: 'reader', permissions: ['read'] });
+    const handlers = createMcpHandlers({ test: true }, {
+      apiKeyManager: manager,
+      keyId
+    });
+    const result = await handlers.handle({
+      method: 'tools/call',
+      params: { name: 'run_task', arguments: { task: 'review repo' } }
+    });
+    assert.strictEqual(result.isError, true);
+    const payload = JSON.parse(result.content[0].text);
+    assert.strictEqual(payload.code, 'MCP_AUTH_DENIED');
+    assert.strictEqual(payload.required, 'delegate');
+  });
+
+  await test('MCP tools/call accepts read key on read tool', async () => {
+    const manager = new ApiKeyManager({ enabled: true });
+    const { keyId } = manager.createKey({ name: 'reader', permissions: ['read'] });
+    const handlers = createMcpHandlers({ test: true }, {
+      apiKeyManager: manager,
+      keyId
+    });
+    const result = await handlers.handle({
+      method: 'tools/call',
+      params: { name: 'check_status', arguments: {} }
+    });
+    // check_status still attempts to reach the gateway; the relevant
+    // assertion is that it did NOT short-circuit with an auth error.
+    const text = result.content[0].text;
+    assert.ok(!text.includes('MCP_AUTH_REQUIRED'));
+    assert.ok(!text.includes('MCP_AUTH_DENIED'));
+  });
+
+  await test('MCP tools/call honors traecn_command permission from arguments', async () => {
+    const manager = new ApiKeyManager({ enabled: true });
+    const { keyId } = manager.createKey({ name: 'writer', permissions: ['read', 'write'] });
+    const handlers = createMcpHandlers({ test: true }, {
+      apiKeyManager: manager,
+      keyId
+    });
+
+    // read+write is enough for the read-prefixed 'status' command.
+    const ok = await handlers.handle({
+      method: 'tools/call',
+      params: { name: 'traecn_command', arguments: { command: 'status' } }
+    });
+    assert.ok(!ok.isError || !ok.content[0].text.includes('MCP_AUTH_DENIED'));
+
+    // read+write is not enough for a delegate command.
+    const denied = await handlers.handle({
+      method: 'tools/call',
+      params: { name: 'traecn_command', arguments: { command: 'open_project' } }
+    });
+    assert.strictEqual(denied.isError, true);
+    const payload = JSON.parse(denied.content[0].text);
+    assert.strictEqual(payload.code, 'MCP_AUTH_DENIED');
+  });
+
+  await test('mcp-auth module is exported from mcp-server', () => {
+    const mcpServer = require('./mcp-server');
+    assert.ok(mcpServer.mcpAuth);
+    assert.strictEqual(typeof mcpServer.mcpAuth.authorizeTool, 'function');
   });
 
   console.log(`\n[mcp-server.test.js] Results: ${passed} passed, ${failed} failed\n`);

@@ -3,19 +3,7 @@
 const { TraeCNApiClient } = require('../../integrations/openclaw-traecn-plugin/lib/traecnapi-client');
 const { TraeCNSkillError } = require('./errors');
 const { buildCodeReviewTask } = require('./review');
-
-/** 已知支持的模型列表 */
-const KNOWN_MODELS = [
-  'Doubao-Seed-2.0-Code',
-  'Doubao-Seed-1.8',
-  'GLM-5.1',
-  'DeepSeek-V3.1-Terminus',
-  'MiniMax-M2.7',
-  'MiniMax-M2.5',
-  'Kimi-K2.5',
-  'Qwen3.6-Plus',
-  'Qwen3.5-Plus'
-];
+const { KNOWN_MODELS } = require('../shared/models');
 
 /** 设置区域的别名映射 */
 const SETTINGS_SECTIONS = {
@@ -115,7 +103,15 @@ class TraeCNSkill {
    * @returns {Promise<object>} 运行结果
    */
   async run(task, opts = {}) {
-    const { projectPath, includeProcess, autoWait = true, mode = null } = opts;
+    const {
+      projectPath,
+      includeProcess,
+      autoWait = true,
+      mode = null,
+      fallbackModels,
+      autoModelFallback,
+      modelProbeIntervalMs
+    } = opts;
 
     if (mode) {
       await this.switchMode(mode).catch(() => {});
@@ -137,13 +133,19 @@ class TraeCNSkill {
         result = await this._delegateWithPoll(task, { 
           projectPath, 
           sessionId: this._sessionId, 
-          includeProcess 
+          includeProcess,
+          fallbackModels,
+          autoModelFallback,
+          modelProbeIntervalMs
         });
       } else {
         result = await this.client.delegate(task, {
           projectPath,
           sessionId: this._sessionId,
-          includeProcessText: includeProcess
+          includeProcessText: includeProcess,
+          fallbackModels,
+          autoModelFallback,
+          modelProbeIntervalMs
         });
       }
 
@@ -165,13 +167,16 @@ class TraeCNSkill {
    * @returns {Promise<object>} 队列结果
    */
   async queue(task, opts = {}) {
-    const { projectPath } = opts;
+    const { projectPath, fallbackModels, autoModelFallback, modelProbeIntervalMs } = opts;
     
     try {
       const result = await this.client.delegateAsync(task, {
         projectPath,
         sessionId: this._sessionId,
-        waitForQueue: true
+        waitForQueue: true,
+        fallbackModels,
+        autoModelFallback,
+        modelProbeIntervalMs
       });
 
       this._lastTaskId = result.taskId || result.data?.taskId;
@@ -247,12 +252,12 @@ class TraeCNSkill {
    * @returns {Promise<object>} 切换结果
    * @throws {TraeCNSkillError} 如果模型未知
    */
-  async switchModel(model) {
+  async switchModel(model, options = {}) {
     const normalized = this._normalizeModel(model);
     if (!normalized) {
       throw TraeCNSkillError.unknownModel(model, KNOWN_MODELS);
     }
-    return await this.client.switchModel(normalized);
+    return await this.client.switchModel(normalized, options);
   }
 
   /**
@@ -556,12 +561,15 @@ class TraeCNSkill {
    * @returns {Promise<any>} 任务结果
    */
   async _delegateWithPoll(task, opts) {
-    const { projectPath, sessionId, includeProcess } = opts;
+    const { projectPath, sessionId, includeProcess, fallbackModels, autoModelFallback, modelProbeIntervalMs } = opts;
 
     let result = await this.client.delegate(task, {
       projectPath,
       sessionId,
-      includeProcessText: includeProcess
+      includeProcessText: includeProcess,
+      fallbackModels,
+      autoModelFallback,
+      modelProbeIntervalMs
     });
 
     const d = result.data || result;

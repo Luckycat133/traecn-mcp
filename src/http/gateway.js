@@ -1,6 +1,10 @@
 'use strict';
 
+const fs = require('fs');
 const http = require('http');
+const os = require('os');
+const zlib = require('zlib');
+const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('url');
 const packageInfo = require('../../package.json');
@@ -8,6 +12,7 @@ const { discoverTarget, connectToTarget, resolveCDPEndpoint, fetchCDPTargets, de
 const { DomDriver, getConfig } = require('../cdp/dom-driver');
 const { SETTINGS_SECTIONS } = require('../cdp/settings-driver');
 const { MockDriver } = require('../cdp/mock-driver');
+const { DriverRouter, DRIVER_SPEC } = require('./driver-router');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
@@ -16,8 +21,12 @@ const { ConfigManager } = require('../shared/config-manager');
 const { getGlobalStore } = require('../shared/task-history');
 const { buildCapabilities } = require('../shared/capabilities');
 const { buildConfirmationPlan } = require('../shared/operation-confirmation');
+const requestContext = require('../shared/request-context');
+const { globalMetrics } = require('../shared/metrics');
 const { listCommands } = require('../../integrations/openclaw-traecn-plugin/lib/command-set');
 const { WebSocketHandler } = require('./websocket-handler');
+const { findTraeCNBinary, isTraeCNRunning, restartTraeCNWithDebug, startTraeCN, getQuickstartConfig } = require('../config/quickstart');
+const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
 
 function normalizeUrl(rawUrl) {
   return rawUrl.replace(/[\x80-\xff]/g, ch => {
@@ -40,6 +49,10 @@ const DEFAULT_HTML_HEADERS = {
   'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline' 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"
 };
+// Safe X-Request-ID: ASCII letters/digits/_- up to 128 chars. Anything else is
+// rejected and replaced with a server-generated id.
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
 
 function sanitizeLog(obj) {
   if (!obj || typeof obj !== 'object') return obj;
@@ -141,12 +154,26 @@ class HttpError extends Error {
   }
 }
 
-function jsonResponse(res, data, statusCode = 200, headers = {}) {
-  res.writeHead(statusCode, {
-    ...DEFAULT_JSON_HEADERS,
-    ...headers
-  });
-  res.end(JSON.stringify(data));
+function jsonResponse(res, data, statusCode = 200, headers = {}, req = null) {
+  const body = Buffer.from(JSON.stringify(data), 'utf8');
+  const acceptEncoding = req ? (req.headers['accept-encoding'] || '') : '';
+  const useGzip = body.length > 1024 && acceptEncoding.includes('gzip');
+  const responseHeaders = { ...DEFAULT_JSON_HEADERS, ...headers };
+
+  if (useGzip) {
+    responseHeaders['Content-Encoding'] = 'gzip';
+    res.writeHead(statusCode, responseHeaders);
+    zlib.gzip(body, (err, compressed) => {
+      if (err) {
+        res.end(body);
+      } else {
+        res.end(compressed);
+      }
+    });
+  } else {
+    res.writeHead(statusCode, responseHeaders);
+    res.end(body);
+  }
 }
 
 function htmlResponse(res, html, statusCode = 200, headers = {}) {
@@ -250,6 +277,18 @@ class Gateway {
     this.isPolling = false;
     this.taskLocks = new Set();
     this.activeTimers = new Set();
+    this.autoStartTrae = getEnvWithFallback('TRAECN_AUTO_START_TRAE', 'TRAE_AUTO_START_TRAE', '1') !== '0';
+    this.traeRecoveryCooldownMs = parsePositiveInt(
+      getEnvWithFallback('TRAECN_TRAE_RECOVERY_COOLDOWN_MS', 'TRAE_TRAE_RECOVERY_COOLDOWN_MS', '30000'),
+      30000
+    );
+    this.traeRecoveryWaitMs = parsePositiveInt(
+      getEnvWithFallback('TRAECN_TRAE_RECOVERY_WAIT_MS', 'TRAE_TRAE_RECOVERY_WAIT_MS', '60000'),
+      60000
+    );
+    this.lastTraeRecoveryAt = 0;
+    this.activeQueuePersistencePath = this._resolveActiveQueuePersistencePath();
+    this._restoreActiveQueue();
 
     this.configManager.on('configChanged', (data) => {
       this._applyConfigChanges(data.changes);
@@ -287,9 +326,191 @@ class Gateway {
     return timer;
   }
 
+  _resolveActiveQueuePersistencePath() {
+    const configured = getEnvWithFallback(
+      'TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH',
+      'TRAE_ACTIVE_QUEUE_PERSISTENCE_PATH',
+      ''
+    );
+    if (configured) return path.resolve(configured);
+
+    if (process.platform === 'darwin') {
+      return path.join(os.homedir(), 'Library', 'Application Support', 'TRAECNclaw', 'active-queue.json');
+    }
+    return path.join(os.homedir(), '.traecnclaw', 'active-queue.json');
+  }
+
+  _persistActiveQueue() {
+    if (!this.activeQueuePersistencePath) return;
+    const activeTasks = Array.from(this.taskQueue.entries())
+      .filter(([, task]) => !this._isTerminalTaskStatus(task.status))
+      .map(([taskId, task]) => ({ taskId, ...task }));
+
+    try {
+      const dirPath = path.dirname(this.activeQueuePersistencePath);
+      fs.mkdirSync(dirPath, { recursive: true });
+      fs.writeFileSync(this.activeQueuePersistencePath, JSON.stringify({
+        version: 1,
+        savedAt: new Date().toISOString(),
+        tasks: activeTasks
+      }, null, 2), 'utf8');
+    } catch (err) {
+      console.error('[QueuePersistence] Failed to persist active queue:', err.message);
+    }
+  }
+
+  _syncTaskHistoryMirror(task) {
+    if (!task || !task.taskId || !this.taskHistoryStore || typeof this.taskHistoryStore.ensureTask !== 'function') {
+      return;
+    }
+    const historyStatusMap = {
+      queued: 'queued',
+      executing: 'executing',
+      awaiting_review: 'awaiting_review',
+      approval_required: 'approval_required',
+      done: 'completed',
+      error: 'failed',
+      queue_timeout: 'failed',
+      review_rejected: 'cancelled',
+      cancelled: 'cancelled'
+    };
+    const status = historyStatusMap[task.status] || task.status || 'running';
+    const isTerminal = ['completed', 'failed', 'cancelled'].includes(status);
+    const completedAt = isTerminal ? (task.completedAt || new Date().toISOString()) : null;
+    const elapsedMs = task.createdAt ? Math.max(0, Date.now() - task.createdAt) : null;
+    this.taskHistoryStore.ensureTask(task.taskId, task.task, {
+      updateExisting: true,
+      status,
+      createdAtMs: task.createdAt,
+      createdAt: new Date(task.createdAt).toISOString(),
+      result: task.result || null,
+      completedAt,
+      elapsedMs,
+      metadata: {
+        source: 'delegate_async_restore',
+        reviewRequired: task.reviewRequired === true,
+        followupCount: Array.isArray(task.followupTasks) ? task.followupTasks.length : 0,
+        notifyUrl: task.notifyUrl || null,
+        queueState: task.queueState || null,
+        currentModel: task.currentModel || null,
+        fallbackModels: Array.isArray(task.fallbackModels) ? task.fallbackModels : [],
+        lastModelProbeAt: task.lastModelProbeAt || null,
+        submittedToTrae: task.submittedToTrae === true,
+        submittedAt: task.submittedAt || null
+      }
+    });
+  }
+
+  _restoreActiveQueue() {
+    if (!this.activeQueuePersistencePath || !fs.existsSync(this.activeQueuePersistencePath)) return;
+    if (this.mockBridge) {
+      console.warn('[QueuePersistence] Skipping active queue restore while mock bridge is enabled');
+      return;
+    }
+    try {
+      const raw = fs.readFileSync(this.activeQueuePersistencePath, 'utf8');
+      const parsed = JSON.parse(raw);
+      const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+      const now = Date.now();
+      for (const item of tasks) {
+        if (!item || !item.taskId || this._isTerminalTaskStatus(item.status)) continue;
+        const restored = { ...item };
+        if (restored.status === 'executing' && restored.submittedToTrae !== true) {
+          restored.status = 'queued';
+        }
+        if (restored.status === 'executing') {
+          restored.submittedToTrae = true;
+        }
+        if (!restored.createdAt || Number.isNaN(restored.createdAt)) {
+          restored.createdAt = now;
+        }
+        const perTaskTimeoutMs = restored.deadline && restored.createdAt
+          ? Math.max(1000, restored.deadline - restored.createdAt)
+          : null;
+        if (!restored.deadline) {
+          restored.deadline = null;
+          restored.maxDeadline = null;
+        } else if (!restored.maxDeadline) {
+          restored.maxDeadline = now + (perTaskTimeoutMs || 600000);
+        }
+        restored.error = restored.error || null;
+        restored.result = restored.result || null;
+        this.taskQueue.set(restored.taskId, restored);
+        this._syncTaskHistoryMirror(restored);
+      }
+    } catch (err) {
+      console.error('[QueuePersistence] Failed to restore active queue:', err.message);
+    }
+  }
+
   _clearInterval(timer) {
     clearInterval(timer);
     this.activeTimers.delete(timer);
+  }
+
+  async _attemptTraeRecovery(reason) {
+    if (this.mockBridge || !this.autoStartTrae) return false;
+
+    const now = Date.now();
+    if (now - this.lastTraeRecoveryAt < this.traeRecoveryCooldownMs) {
+      return false;
+    }
+    this.lastTraeRecoveryAt = now;
+
+    const binPath = findTraeCNBinary();
+    if (!binPath) {
+      console.warn('[Gateway] Trae recovery skipped: binary not found');
+      return false;
+    }
+
+    const quickstart = getQuickstartConfig();
+    const requestedPort = getEnvWithFallback(
+      'TRAECN_REMOTE_DEBUGGING_PORT',
+      'TRAE_REMOTE_DEBUGGING_PORT',
+      quickstart.remoteDebuggingPort || '9334'
+    );
+    process.env.TRAECN_REMOTE_DEBUGGING_PORT = requestedPort;
+
+    try {
+      const running = isTraeCNRunning();
+      const recoveryNewInstance = getEnvWithFallback(
+        'TRAECN_TRAE_RECOVERY_NEW_INSTANCE',
+        'TRAE_TRAE_RECOVERY_NEW_INSTANCE',
+        '0'
+      ) === '1';
+      if (running && !recoveryNewInstance) {
+        console.warn('[Gateway] Trae recovery skipped: normal Trae is already running without a reachable CDP endpoint; restart Trae CN with remote debugging enabled and existing profile.');
+        return false;
+      }
+      const launched = startTraeCN({
+        binPath,
+        newInstance: recoveryNewInstance,
+        useIsolatedProfile: quickstart.profileMode === 'existing' ? false : quickstart.useIsolatedProfile
+      });
+      console.log('[Gateway] Trae recovery launched:', {
+        reason: reason?.message || String(reason || 'unknown'),
+        requestedPort,
+        profileMode: quickstart.profileMode,
+        recoveryNewInstance,
+        alreadyRunning: running,
+        pid: launched.pid
+      });
+    } catch (err) {
+      console.error('[Gateway] Trae recovery failed:', err.message);
+      return false;
+    }
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < this.traeRecoveryWaitMs) {
+      try {
+        await discoverTarget();
+        return true;
+      } catch (err) {
+        await new Promise(resolve => { this._setTimeout(resolve, 1500); });
+      }
+    }
+    console.warn('[Gateway] Trae recovery timed out waiting for CDP surface');
+    return false;
   }
 
   _normalizeFollowupTasks(items) {
@@ -309,32 +530,78 @@ class Gateway {
       .filter(item => item && item.task && item.task.length <= 100000);
   }
 
+  _normalizeFallbackModels(items, autoModelFallback = false) {
+    const rawItems = Array.isArray(items)
+      ? items
+      : (typeof items === 'string' ? items.split(',') : []);
+    const candidateItems = rawItems.length > 0
+      ? rawItems
+      : (autoModelFallback ? DEFAULT_FALLBACK_MODELS : []);
+    const seen = new Set();
+    return candidateItems
+      .map(item => String(item || '').trim())
+      .filter(item => item && item.length <= 120)
+      .filter(item => {
+        const key = item.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 12);
+  }
+
+  _modelProbeIntervalMs(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MODEL_PROBE_INTERVAL_MS;
+    return Math.max(15000, Math.min(parsed, 10 * 60 * 1000));
+  }
+
   _createQueuedTask(body, queueStatus = {}) {
     const reviewRequired = body.reviewRequired === true;
     const followupTasks = this._normalizeFollowupTasks(body.followupTasks);
+    const fallbackModels = this._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
+    const modelProbeIntervalMs = this._modelProbeIntervalMs(body.modelProbeIntervalMs);
     const historyTaskId = this.taskHistoryStore.createTask(null, body.task, {
       metadata: {
         source: 'delegate_async',
         reviewRequired,
         followupCount: followupTasks.length,
-        notifyUrl: body.notifyUrl || null
+        notifyUrl: body.notifyUrl || null,
+        fallbackModels
       }
     });
     const perTaskTimeoutMs = this.driver.config.queuePerTaskTimeoutMs || 600000;
+    const explicitQueueMaxWaitMs = Number(body.maxQueueWaitMs ?? body.queueMaxWaitMs ?? this.driver.config.queueMaxWaitMs);
+    const queueMaxWaitMs = Number.isFinite(explicitQueueMaxWaitMs) && explicitQueueMaxWaitMs > 0
+      ? explicitQueueMaxWaitMs
+      : null;
+    const now = Date.now();
     const task = {
       taskId: historyTaskId,
       chatId: body.chatId || null,
       task: body.task,
       status: 'queued',
-      createdAt: Date.now(),
-      deadline: Date.now() + perTaskTimeoutMs,
+      createdAt: now,
+      deadline: queueMaxWaitMs ? now + Math.min(perTaskTimeoutMs, queueMaxWaitMs) : null,
+      maxDeadline: queueMaxWaitMs ? now + queueMaxWaitMs : null,
+      timeoutExtensions: 0,
       attempts: 0,
       includeProcessText: body.includeProcessText === true,
       reviewRequired,
       followupTasks,
       notifyUrl: typeof body.notifyUrl === 'string' ? body.notifyUrl : null,
+      submittedToTrae: false,
+      submittedAt: null,
       queueState: queueStatus.running ? 'running' : 'queued',
+      queuePosition: queueStatus.queuePosition || queueStatus.position || null,
+      currentModel: queueStatus.currentModel || null,
+      queueEstimatedWait: queueStatus.queueEstimatedWait || null,
       queueMessage: queueStatus.queueMessage || queueStatus.message || null,
+      fallbackModels,
+      modelProbeIntervalMs,
+      lastModelProbeAt: null,
+      nextModelProbeAt: fallbackModels.length > 0 ? Date.now() : null,
+      modelProbeResults: [],
       result: null,
       error: null,
       reviewDecision: null,
@@ -346,12 +613,178 @@ class Gateway {
         queueState: task.queueState,
         queuePosition: queueStatus.queuePosition || queueStatus.position || null,
         queueMessage: task.queueMessage,
+        fallbackModels,
         reviewRequired,
         followupCount: followupTasks.length
       }
     });
     this.taskQueue.set(historyTaskId, task);
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
     return task;
+  }
+
+  _maybeExtendQueuedTaskDeadline(task, queueStatus = {}) {
+    if (!task || !task.deadline || !task.maxDeadline) return false;
+    const now = Date.now();
+    if (now <= task.deadline) return false;
+    const queueStillActive = queueStatus.queued === true || queueStatus.running === true;
+    if (!queueStillActive) return false;
+    if (now >= task.maxDeadline) return false;
+
+    const extensionMs = this.driver.config.queueTimeoutExtensionMs || this.driver.config.queuePerTaskTimeoutMs || 600000;
+    task.deadline = Math.min(task.maxDeadline, now + extensionMs);
+    task.timeoutExtensions = (task.timeoutExtensions || 0) + 1;
+    this.taskHistoryStore.recordStep(task.taskId, 'queue_extended', {
+      details: {
+        timeoutExtensions: task.timeoutExtensions,
+        deadline: task.deadline,
+        maxDeadline: task.maxDeadline,
+        queueMessage: queueStatus.queueMessage || queueStatus.message || null
+      }
+    });
+    return true;
+  }
+
+  _updateQueuedTaskSnapshot(task, queueStatus = {}) {
+    task.queueState = queueStatus.running ? 'running' : (queueStatus.queued ? 'queued' : task.queueState);
+    task.queuePosition = queueStatus.queuePosition || queueStatus.position || null;
+    task.currentModel = queueStatus.currentModel || task.currentModel || null;
+    task.queueEstimatedWait = queueStatus.queueEstimatedWait || null;
+    task.queueMessage = queueStatus.queueMessage || queueStatus.message || task.queueMessage || null;
+    task.queueCanSubmit = queueStatus.canSubmit === true;
+  }
+
+  _queueDetailsFromStatus(queueStatus = {}, fallbackModel = null) {
+    return {
+      state: queueStatus.running ? 'running' : (queueStatus.queued ? 'queued' : 'ready'),
+      currentModel: queueStatus.currentModel || fallbackModel || null,
+      queuePosition: queueStatus.queuePosition || queueStatus.position || null,
+      queueEstimatedWait: queueStatus.queueEstimatedWait || null,
+      queueMessage: queueStatus.queueMessage || queueStatus.message || null,
+      canSubmit: queueStatus.canSubmit === true
+    };
+  }
+
+  _normalizeModelSwitchResult(switchResult) {
+    return typeof switchResult === 'object' && switchResult !== null
+      ? switchResult
+      : {
+          success: !String(switchResult || '').startsWith('model_switch_blocked') &&
+            !String(switchResult || '').startsWith('no model items') &&
+            !String(switchResult || '').startsWith('model not found'),
+          switchResult
+        };
+  }
+
+  async _probeFallbackModels(task, options = {}) {
+    const models = this._normalizeFallbackModels(task?.fallbackModels, false);
+    const now = Date.now();
+    if (!task || models.length === 0) {
+      return { attempted: false, ready: false, results: [], queueStatus: null };
+    }
+    if (task.nextModelProbeAt && now < task.nextModelProbeAt) {
+      return { attempted: false, ready: false, results: task.modelProbeResults || [], queueStatus: null };
+    }
+
+    const results = [];
+    let selectedQueueStatus = null;
+    let selectedModel = null;
+    for (const model of models) {
+      const startedAt = Date.now();
+      try {
+        const switchResult = await this.driver.switchModel(model);
+        const normalizedSwitch = this._normalizeModelSwitchResult(switchResult);
+        if (!normalizedSwitch.success) {
+          results.push({
+            model,
+            ok: false,
+            error: normalizedSwitch.error || 'Model switch failed',
+            switchResult: normalizedSwitch.switchResult || switchResult,
+            elapsedMs: Date.now() - startedAt
+          });
+          continue;
+        }
+        const status = await this.driver.checkQueueStatus();
+        const ready = status.running !== true && status.queued !== true;
+        const probeResult = {
+          model: normalizedSwitch.model || model,
+          requestedModel: model,
+          ok: true,
+          ready,
+          queued: status.queued === true,
+          running: status.running === true,
+          canSubmit: status.canSubmit === true,
+          switchResult: normalizedSwitch.switchResult || switchResult,
+          queueDetails: this._queueDetailsFromStatus(status, normalizedSwitch.model || model),
+          elapsedMs: Date.now() - startedAt
+        };
+        results.push(probeResult);
+        selectedQueueStatus = status;
+        selectedModel = probeResult.model;
+        if (ready) break;
+      } catch (err) {
+        results.push({
+          model,
+          ok: false,
+          error: err.message,
+          elapsedMs: Date.now() - startedAt
+        });
+      }
+    }
+
+    task.lastModelProbeAt = now;
+    task.nextModelProbeAt = now + this._modelProbeIntervalMs(task.modelProbeIntervalMs);
+    task.modelProbeResults = results;
+    if (selectedModel) task.currentModel = selectedModel;
+    if (selectedQueueStatus) this._updateQueuedTaskSnapshot(task, selectedQueueStatus);
+    if (options.recordHistory !== false && this.taskHistoryStore && typeof this.taskHistoryStore.recordStep === 'function') {
+      this.taskHistoryStore.recordStep(task.taskId, 'model_probe', {
+        details: {
+          attemptedModels: models,
+          selectedModel,
+          ready: selectedQueueStatus ? (selectedQueueStatus.running !== true && (selectedQueueStatus.queued !== true || selectedQueueStatus.canSubmit === true)) : false,
+          results: results.map(result => ({
+            model: result.model,
+            ok: result.ok,
+            ready: result.ready === true,
+            queued: result.queued === true,
+            running: result.running === true,
+            canSubmit: result.canSubmit === true,
+            error: result.error || null
+          }))
+        }
+      });
+    }
+    return {
+      attempted: true,
+      ready: selectedQueueStatus ? (selectedQueueStatus.running !== true && selectedQueueStatus.queued !== true) : false,
+      selectedModel,
+      queueStatus: selectedQueueStatus,
+      results
+    };
+  }
+
+  async _refreshQueuedTaskSnapshot(task) {
+    if (!task || task.status !== 'queued' || this.mockBridge) return;
+    try {
+      await this._ensureConnection();
+      const queueStatus = await this.driver.checkQueueStatus();
+      this._updateQueuedTaskSnapshot(task, queueStatus);
+    } catch (err) {
+      console.error('[TaskStatus] queue snapshot refresh failed:', err.message);
+    }
+  }
+
+  async _refreshExecutingTaskSnapshot(task) {
+    if (!task || task.status !== 'executing' || this.mockBridge) return;
+    try {
+      await this._ensureConnection();
+      const queueStatus = await this.driver.checkQueueStatus();
+      this._updateQueuedTaskSnapshot(task, queueStatus);
+    } catch (err) {
+      console.error('[TaskStatus] executing snapshot refresh failed:', err.message);
+    }
   }
 
   async _emitTaskNotification(taskId, task, eventType, extra = {}) {
@@ -401,6 +834,78 @@ class Gateway {
     }
   }
 
+  async _recoverAwaitingReviewFromGate(task) {
+    if (!this.driver || typeof this.driver.checkTaskReviewGate !== 'function') return null;
+    try {
+      const gate = await this.driver.checkTaskReviewGate();
+      if (!gate.awaitingReview || !gate.taskCompleted) return null;
+
+      let panelText = '';
+      if (typeof this.driver._captureIdePanelText === 'function') {
+        panelText = await this.driver._captureIdePanelText();
+      }
+
+      const text = panelText || 'Trae 已生成结果，但当前停在内部审查闸口，等待审查决定。';
+      return {
+        text,
+        stable: false,
+        elapsedMs: Date.now() - task.createdAt,
+        timedOut: false,
+        needsApproval: false,
+        reviewGatePending: true
+      };
+    } catch (err) {
+      console.error('[Queue] review gate recovery failed:', err.message);
+      return null;
+    }
+  }
+
+  _isReviewableResult(result) {
+    if (!result || result.needsApproval) return false;
+    if (result.timedOut || result.truncated || result.streaming || result.modelError) return false;
+    const text = typeof result.text === 'string' ? result.text.trim() : '';
+    if (!text) return false;
+    if (text.length < 80) return false;
+    if (this._isFailedResultText(text)) return false;
+    if (/^solo\s*agent\s*思考中/i.test(text)) return false;
+    if (/^调用技能[:：]/i.test(text)) return false;
+    if (/^(i'll|i will)\s+start\b/i.test(text)) return false;
+    if (/\blet me start\b/i.test(text)) return false;
+    if (/^(thought|思考过程)\b/i.test(text)) return false;
+    if (/^(好的|收到|明白|了解|我来|正在|开始|ok|okay|sure|got it|understood|alright)\b/i.test(text)) return false;
+    return result.stable === true;
+  }
+
+  _isSuccessfulResult(result) {
+    if (!result || result.needsApproval) return false;
+    if (result.timedOut || result.truncated || result.streaming || result.modelError) return false;
+    const text = typeof result.text === 'string' ? result.text.trim() : '';
+    if (!this._hasMeaningfulResultText(text) || this._isFailedResultText(text)) return false;
+    return result.stable === true;
+  }
+
+  _hasMeaningfulResultText(text) {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return false;
+    if (/^(agent|assistant|thought|思考过程)$/i.test(value)) return false;
+    return value.length >= 12 || /任务完成|findings|finding|p[0-3]|问题|风险|建议|结论|完成|done/i.test(value);
+  }
+
+  _isFailedResultText(text) {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return false;
+    return [
+      '手动终止输出',
+      '异常打断',
+      '模型请求失败',
+      '服务商错误',
+      'manual stop',
+      'manually stopped',
+      'cancelled output',
+      'generation stopped'
+    ].some(pattern => value.toLowerCase().includes(pattern.toLowerCase()));
+  }
+
   async _finalizeBackgroundTask(taskId, task, status, payload = {}) {
     task.status = status;
     if (payload.result !== undefined) task.result = payload.result;
@@ -445,6 +950,8 @@ class Gateway {
     if (this.wsHandler) {
       this.wsHandler.notifyTaskStatusChange(taskId, task);
     }
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
   }
 
   async _continueReviewedTask(taskId, task, decision, notes = '') {
@@ -475,7 +982,9 @@ class Gateway {
       reviewRequired: nextSpec.reviewRequired !== false,
       followupTasks: task.followupTasks,
       notifyUrl: task.notifyUrl,
-      chatId: task.chatId
+      chatId: task.chatId,
+      fallbackModels: task.fallbackModels || [],
+      modelProbeIntervalMs: task.modelProbeIntervalMs
     }, { queued: true, queueMessage: '等待上一审查通过后继续执行' });
     nextTask.queueState = 'workflow';
 
@@ -503,7 +1012,6 @@ class Gateway {
   _clearAllTimers() {
     for (const timer of this.activeTimers) {
       clearTimeout(timer);
-      clearInterval(timer);
     }
     this.activeTimers.clear();
   }
@@ -524,7 +1032,7 @@ class Gateway {
   }
 
   _json(req, res, data, statusCode = 200, headers = {}) {
-    return jsonResponse(res, data, statusCode, { ...this._corsHeaders(req), ...headers });
+    return jsonResponse(res, data, statusCode, { ...this._corsHeaders(req), ...headers }, req);
   }
 
   _html(req, res, html, statusCode = 200, headers = {}) {
@@ -556,9 +1064,31 @@ class Gateway {
     return allowed.includes(origin) || allowed.includes('*');
   }
 
+  /**
+   * Resolve the rate-limit identity for a request.
+   *
+   * Preference order:
+   *   1. authKeyId populated on the request context (e.g. an authenticated
+   *      API-key call) — this is the only stable identifier when a single
+   *      client funnels traffic through a shared egress.
+   *   2. IP address — works for unauthenticated traffic, but NAT / proxies
+   *      collapse many real callers into one bucket.
+   *   3. 'anonymous' as a final fallback (e.g. unix socket or missing peer).
+   */
+  _resolveRateLimitKey(req) {
+    try {
+      const authKeyId = requestContext.get('authKeyId');
+      if (authKeyId && typeof authKeyId === 'string') {
+        return `key:${authKeyId}`;
+      }
+    } catch { /* no active context — fall through */ }
+    const ip = req?.socket?.remoteAddress;
+    return ip ? `ip:${ip}` : 'anonymous';
+  }
+
   _checkRateLimit(req) {
-    const ip = req.socket.remoteAddress;
-    return this.rateLimiter.check(ip);
+    const key = this._resolveRateLimitKey(req);
+    return this.rateLimiter.check(key);
   }
 
   _checkIdempotency(req) {
@@ -579,6 +1109,34 @@ class Gateway {
   }
 
   async _ensureConnection() {
+    const closeCurrentConnection = async () => {
+      if (!this.client) return;
+      try {
+        await this.client.close();
+      } catch (e) {
+        console.error('[Gateway] Error closing stale CDP client:', e.message);
+      }
+      this.client = null;
+      this.driver = null;
+    };
+
+    const connectFresh = async () => {
+      try {
+        const discovered = await discoverTarget();
+        this.client = await connectToTarget(discovered, discovered.client);
+        this.driver = new DomDriver(this.client);
+        return discovered;
+      } catch (err) {
+        await closeCurrentConnection();
+        const recovered = await this._attemptTraeRecovery(err);
+        if (!recovered) throw err;
+        const discovered = await discoverTarget();
+        this.client = await connectToTarget(discovered, discovered.client);
+        this.driver = new DomDriver(this.client);
+        return discovered;
+      }
+    };
+
     if (this.mockBridge) {
       if (!this.driver) {
         this.driver = new MockDriver();
@@ -586,21 +1144,129 @@ class Gateway {
       return;
     }
 
-    if (this.client && this.client.isConnected && this.driver) {
-      return;
+    if (!this.client || !this.client.isConnected || !this.driver) {
+      await closeCurrentConnection();
+      await connectFresh();
     }
 
-    const discovered = await discoverTarget();
-    this.client = await connectToTarget(discovered, discovered.client);
-    this.driver = new DomDriver(this.client);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (!this.client || !this.client.isConnected || !this.driver) {
+        await closeCurrentConnection();
+        await connectFresh();
+      }
+
+      let snapshot = null;
+      try {
+        snapshot = typeof this.driver.inspectSetupWizard === 'function'
+          ? await this.driver.inspectSetupWizard()
+          : null;
+      } catch (e) {
+        console.warn('[Gateway] Setup state probe failed:', e.message);
+      }
+
+      if (!snapshot?.isSetup) {
+        return;
+      }
+
+      if (typeof this.driver.completeSetupIfPresent !== 'function') {
+        return;
+      }
+
+      let setupResult = null;
+      try {
+        setupResult = await this.driver.completeSetupIfPresent();
+      } catch (e) {
+        console.warn('[Gateway] Setup auto-advance failed:', e.message);
+        return;
+      }
+
+      if (!this.client || !this.client.isConnected) {
+        await closeCurrentConnection();
+        continue;
+      }
+
+      if (!setupResult || (setupResult.completed !== true && (setupResult.steps || 0) === 0)) {
+        return;
+      }
+    }
   }
 
   async handleRequest(req, res) {
+    // Resolve and pin a request id for this HTTP transaction. The header is
+    // validated so attackers cannot inject log-poisoning characters; if the
+    // header is missing/invalid we generate a fresh id.
+    const requestId = this._resolveRequestId(req);
+    req._requestId = requestId;
+    req._requestStart = Date.now();
+    try {
+      res.setHeader('X-Request-ID', requestId);
+    } catch {
+      // res may already be destroyed; ignore.
+    }
+
+    // Wrap res.end so we record the final status code, duration, and payload
+    // size once the response is fully written. This keeps the metrics
+    // pipeline honest (it observes what actually went out the wire) and
+    // survives early returns from handler code.
+    this._instrumentResponseForMetrics(req, res);
+
+    return requestContext.run({ requestId }, () => this._handleRequestImpl(req, res));
+  }
+
+  _instrumentResponseForMetrics(req, res) {
+    if (res.__metricsInstrumented) return;
+    res.__metricsInstrumented = true;
+    const originalEnd = res.end.bind(res);
+    res.end = (chunk, encoding, callback) => {
+      try {
+        const duration = Date.now() - (req._requestStart || Date.now());
+        const statusCode = res.statusCode || 200;
+        const responseSize = chunk ? Buffer.byteLength(chunk) : 0;
+        globalMetrics.recordHttpRequest(
+          req.method,
+          req.url,
+          statusCode,
+          duration,
+          parseInt(req.headers['content-length'] || '0', 10) || 0,
+          responseSize
+        );
+      } catch (err) {
+        // Never let metrics collection break the actual response.
+        console.error('[Metrics] recordHttpRequest failed:', err.message);
+      }
+      return originalEnd(chunk, encoding, callback);
+    };
+  }
+
+  _resolveRequestId(req) {
+    const headerId = req.headers && req.headers['x-request-id'];
+    if (typeof headerId === 'string' && REQUEST_ID_PATTERN.test(headerId)) {
+      return headerId;
+    }
+    return requestContext.generateRequestId();
+  }
+
+  _finishRequestLog(req, res, statusCode) {
+    const requestId = req._requestId || requestContext.getRequestId() || '-';
+    const duration = Date.now() - (req._requestStart || Date.now());
+    // Lightweight stdout-friendly breadcrumb. Full structured logs use logger.js.
+    if (process.env.TRAECN_QUIET_LOG !== '1') {
+      const stream = (statusCode >= 500) ? process.stderr : process.stdout;
+      try {
+        stream.write(
+          `[Gateway] ${req.method} ${req.url} -> ${statusCode} [requestId=${requestId}] [duration=${duration}ms]\n`
+        );
+      } catch { /* ignore */ }
+    }
+  }
+
+  async _handleRequestImpl(req, res) {
     let parsedUrl;
     const normalizedUrl = normalizeUrl(req.url);
     try {
       parsedUrl = new URL(normalizedUrl, `http://${req.headers.host}`);
     } catch(e) {
+      this._finishRequestLog(req, res, 400);
       return this._json(req, res, { error: 'Invalid URL: ' + e.message }, 400);
     }
     req._normalizedUrl = normalizedUrl;
@@ -611,21 +1277,31 @@ class Gateway {
       res.writeHead(204, {
         ...this._corsHeaders(req),
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-TraeCN-Token, Idempotency-Key',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-TraeCN-Token, Idempotency-Key, X-Request-ID',
         'Access-Control-Max-Age': '86400'
       });
       res.end();
+      this._finishRequestLog(req, res, 204);
       return;
     }
 
     if (!this._checkOrigin(req)) {
+      this._finishRequestLog(req, res, 403);
       return this._json(req, res, { error: 'Origin not allowed' }, 403);
     }
 
     if (pathname === '/api/status' && method === 'GET') {
+      if (!this._checkRateLimit(req)) {
+        this._finishRequestLog(req, res, 429);
+        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
+      }
       return this._handleStatus(req, res);
     }
     if (pathname === '/api/capabilities' && method === 'GET') {
+      if (!this._checkRateLimit(req)) {
+        this._finishRequestLog(req, res, 429);
+        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
+      }
       return this._json(req, res, buildCapabilities({ commands: listCommands() }));
     }
 
@@ -645,22 +1321,50 @@ class Gateway {
       return this._handleConfigDiff(req, res);
     }
     if (pathname === '/' && method === 'GET') {
+      if (!this._checkRateLimit(req)) {
+        this._finishRequestLog(req, res, 429);
+        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
+      }
       return this._html(req, res, renderChatUI());
     }
     if (pathname === '/openapi.json' && method === 'GET') {
+      if (!this._checkRateLimit(req)) {
+        this._finishRequestLog(req, res, 429);
+        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
+      }
       return this._json(req, res, generateOpenAPISpec());
     }
 
+    // /metrics is intentionally unauthenticated so Prometheus can scrape it.
+    // The endpoint rate-limits per IP to deter abuse.
+    if (pathname === '/metrics' && method === 'GET') {
+      if (!this._checkRateLimit(req)) {
+        this._finishRequestLog(req, res, 429);
+        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
+      }
+      return this._handleMetrics(req, res);
+    }
+    if (pathname === '/metrics.json' && method === 'GET') {
+      if (!this._checkRateLimit(req)) {
+        this._finishRequestLog(req, res, 429);
+        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
+      }
+      return this._handleMetricsJson(req, res);
+    }
+
     if (!this._authenticate(req)) {
+      this._finishRequestLog(req, res, 401);
       return this._json(req, res, { error: 'Unauthorized' }, 401);
     }
 
     if (!this._checkRateLimit(req)) {
+      this._finishRequestLog(req, res, 429);
       return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
     }
 
     const idempotencyResponse = this._checkIdempotency(req);
     if (idempotencyResponse) {
+      this._finishRequestLog(req, res, idempotencyResponse.statusCode);
       return this._json(req, res, idempotencyResponse.data, idempotencyResponse.statusCode);
     }
 
@@ -702,6 +1406,18 @@ class Gateway {
       if (pathname === '/api/new-chat' && method === 'POST') {
         return await this._handleNewChat(req, res);
       }
+      if (pathname === '/api/trae/stop-generation' && method === 'POST') {
+        return await this._handleStopGeneration(req, res);
+      }
+      if (pathname === '/api/trae/restart-debug' && method === 'POST') {
+        return await this._handleRestartTraeDebug(req, res);
+      }
+      if (pathname === '/api/trae/review-gate' && method === 'GET') {
+        return await this._handleReviewGateStatus(req, res);
+      }
+      if (pathname === '/api/trae/review-gate' && method === 'POST') {
+        return await this._handleReviewGateResolve(req, res);
+      }
       if (pathname === '/api/detect-mode' && method === 'GET') {
         return await this._handleDetectMode(req, res);
       }
@@ -717,9 +1433,12 @@ class Gateway {
       if (pathname === '/api/queue/status' && method === 'GET') {
         return this._handleQueueStatusList(req, res);
       }
+      if (pathname === '/api/task/adopt-current' && method === 'POST') {
+        return await this._handleAdoptCurrentTask(req, res);
+      }
       if (pathname.match(/^\/api\/task\/[^/]+$/) && method === 'GET') {
         const taskId = pathname.split('/').pop();
-        return this._handleTaskStatus(req, res, taskId);
+        return await this._handleTaskStatus(req, res, taskId);
       }
       if (pathname.match(/^\/api\/task\/[^/]+\/review$/) && method === 'POST') {
         const segments = pathname.split('/');
@@ -729,7 +1448,7 @@ class Gateway {
       if (pathname.match(/^\/api\/task\/[^/]+\/cancel$/) && method === 'POST') {
         const segments = pathname.split('/');
         const taskId = segments[3];
-        return this._handleTaskCancel(req, res, taskId);
+        return await this._handleTaskCancel(req, res, taskId);
       }
       if (pathname === '/api/tasks/batch' && method === 'POST') {
         return this._handleBatchSubmit(req, res);
@@ -787,15 +1506,34 @@ class Gateway {
       if (pathname === '/api/dialog/status' && method === 'GET') {
         return await this._handleDialogStatus(req, res);
       }
+      // v0.4.0 — driver-level commands
+      const driverRoute = {
+        editor: '/api/editor',
+        file: '/api/file',
+        terminal: '/api/terminal',
+        git: '/api/git',
+        search: '/api/search',
+        diagnostics: '/api/diagnostics',
+        snapshot: '/api/snapshot',
+        extension: '/api/extension',
+        command: '/api/command'
+      };
+      for (const [name, path_] of Object.entries(driverRoute)) {
+        if (pathname === path_ && method === 'POST') {
+          return await this._handleDriverAction(req, res, name);
+        }
+      }
       if (pathname === '/debug/automation' && method === 'GET' && this.debugEndpoints) {
         return await this._handleDebugAutomation(req, res);
       }
 
-      this._json(req, res, { error: 'Not found' }, 404);
+      this._finishRequestLog(req, res, 404);
+      return this._json(req, res, { error: 'Not found' }, 404);
     } catch (err) {
       console.error('[Gateway] Error:', sanitizeLog({ message: err.message, code: err.code }));
       const statusCode = err instanceof HttpError ? err.statusCode : (err instanceof TraeCNAutomationError ? 502 : 500);
-      this._json(req, res, { error: err.message, code: err.code || 'INTERNAL_ERROR' }, statusCode);
+      this._finishRequestLog(req, res, statusCode);
+      return this._json(req, res, { error: err.message, code: err.code || 'INTERNAL_ERROR' }, statusCode);
     }
   }
 
@@ -872,6 +1610,7 @@ class Gateway {
       mockBridge: this.mockBridge,
       cdpReachable,
       cdp: cdpVersion ? { browser: cdpVersion.Browser, protocolVersion: cdpVersion['Protocol-Version'] } : null,
+      traeRunning: this.mockBridge ? null : isTraeCNRunning(),
       surface,
       uptime: process.uptime()
     };
@@ -889,6 +1628,7 @@ class Gateway {
     return {
       ready: readiness.ready === true,
       mode: readiness.mode || null,
+      blocker: readiness.blocker || null,
       currentModel: readiness.currentModel || null,
       composer: readiness.composer ? {
         selector: readiness.composer.matchedSelector || null,
@@ -902,6 +1642,17 @@ class Gateway {
       responseRegion: readiness.responseRegion ? {
         selector: readiness.responseRegion.matchedSelector || null,
         visible: readiness.responseRegion.visible !== false
+      } : null,
+      workspaceGuide: readiness.workspaceGuide ? {
+        dismissed: readiness.workspaceGuide.dismissed || 0,
+        guideVisible: readiness.workspaceGuide.guideVisible === true,
+        reason: readiness.workspaceGuide.reason || null
+      } : null,
+      blockers: readiness.blockers ? {
+        guideVisible: readiness.blockers.guideVisible === true,
+        guideButtons: Array.isArray(readiness.blockers.guideButtons) ? readiness.blockers.guideButtons.slice(0, 6) : [],
+        loginVisible: readiness.blockers.loginVisible === true,
+        newTaskVisible: readiness.blockers.newTaskVisible === true
       } : null
     };
   }
@@ -953,10 +1704,14 @@ class Gateway {
     };
   }
 
-  _preflightNextAction({ connected, surface, readiness, queue, dialog }) {
-    if (!connected) return 'connect_traecn';
+  _preflightNextAction({ connected, surface, readiness, queue, dialog, status }) {
+    if (!connected) return status?.traeRunning ? 'restart_traecn_with_debug_existing_profile' : 'connect_traecn';
     if (surface?.kind === 'setup') return 'complete_setup_or_login';
     if (dialog?.hasDialog) return dialog.canAutoApprove ? 'approve_dialog' : 'inspect_dialog';
+    if (readiness?.blocker === 'workspace_guide') return 'dismiss_workspace_guide';
+    if (readiness?.blocker === 'login_required') return 'login_traecn';
+    if (readiness?.blocker === 'trust_workspace') return 'approve_dialog';
+    if (readiness?.blocker === 'open_task_panel') return 'open_task_panel';
     if (queue?.queued && queue?.canSubmit) return 'delegate_async';
     if (queue?.queued) return 'wait_queue_or_switch_model';
     if (queue?.running) return 'poll_or_wait';
@@ -970,13 +1725,16 @@ class Gateway {
       return this._json(req, res, { error: 'command must be a string' }, 400);
     }
 
-    const status = await this._statusSnapshot();
+    let status = await this._statusSnapshot();
     const connectionProbe = await this._probe('connection', async () => {
       await this._ensureConnection();
       return true;
     });
 
     const connected = connectionProbe.ok;
+    if (connected) {
+      status = await this._statusSnapshot();
+    }
     const readinessProbe = connected
       ? await this._probe('readiness', () => this.driver.checkReadiness())
       : { name: 'readiness', ok: false, error: connectionProbe.error, code: connectionProbe.code };
@@ -1001,7 +1759,7 @@ class Gateway {
       : null;
     const queueAllowsSubmit = !queue?.queued || queue?.canSubmit === true;
     const canDelegate = connected && readiness?.ready === true && queueAllowsSubmit && !queue?.running && !dialog?.hasDialog;
-    const nextAction = this._preflightNextAction({ connected, surface: status.surface, readiness, queue, dialog });
+    const nextAction = this._preflightNextAction({ connected, surface: status.surface, readiness, queue, dialog, status });
     const commands = listCommands();
 
     this._json(req, res, {
@@ -1051,6 +1809,61 @@ class Gateway {
 
   async _handleStatus(req, res) {
     this._json(req, res, await this._statusSnapshot());
+  }
+
+  /**
+   * Prometheus exposition format metrics endpoint.
+   * The body uses the standard text/plain; version=0.0.4 content type so
+   * any Prometheus / VictoriaMetrics / Mimir scraper picks it up without
+   * extra configuration. Counters, gauges, and histograms are exposed with
+   * the `traecn_*` prefix defined in MetricsCollector.
+   */
+  _handleMetrics(req, res) {
+    // Refresh volatile gauges so scrapers see fresh values.
+    try { this._refreshMetricsGauges(); } catch { /* never fail the scrape */ }
+    const body = globalMetrics.toPrometheus();
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+      'Cache-Control': 'no-store'
+    });
+    res.end(body);
+  }
+
+  /**
+   * JSON variant for ad-hoc debugging (curl, dashboards, smoke tests).
+   * Mirrors `/metrics` semantics but is not meant for production scraping.
+   */
+  _handleMetricsJson(req, res) {
+    try { this._refreshMetricsGauges(); } catch { /* never fail the scrape */ }
+    this._json(req, res, globalMetrics.getMetrics());
+  }
+
+  /**
+   * Push the latest live state from the gateway into the metrics gauges.
+   * Scrapes should always see the current queue depth, CDP connection
+   * status, and active session count — not whatever was true at startup.
+   */
+  _refreshMetricsGauges() {
+    globalMetrics.setActiveSessions(this.sessions?.size || 0);
+    globalMetrics.setActiveTasks(this._activeTaskCount());
+    if (this.client && this.client.isConnected) {
+      globalMetrics.setCdpConnection('connected');
+    } else {
+      globalMetrics.setCdpConnection('disconnected');
+    }
+    const queueSize = Array.from(this.taskQueue.values())
+      .filter(task => !this._isTerminalTaskStatus(task.status)).length;
+    globalMetrics.setQueueSize('tasks', queueSize);
+    globalMetrics.setQueueSize('batches', this.batchTasks?.size || 0);
+  }
+
+  _activeTaskCount() {
+    if (!this.taskQueue) return 0;
+    let count = 0;
+    for (const task of this.taskQueue.values()) {
+      if (!this._isTerminalTaskStatus(task.status)) count++;
+    }
+    return count;
   }
 
   _handleGetConfig(req, res) {
@@ -1234,6 +2047,118 @@ class Gateway {
     this._json(req, res, { success });
   }
 
+  async _handleStopGeneration(req, res) {
+    await this._ensureConnection();
+    const result = typeof this.driver.stopGeneration === 'function'
+      ? await this.driver.stopGeneration()
+      : { success: false, reason: 'driver_does_not_support_stop_generation' };
+    this._json(req, res, result, result.success === false ? 409 : 200);
+  }
+
+  async _handleRestartTraeDebug(req, res) {
+    const body = await parseBody(req);
+    const expectedPhrase = 'restart-trae-cn-with-debug-existing-profile';
+    const plan = buildConfirmationPlan({
+      command: 'restart_trae_debug',
+      params: {
+        projectPath: body.projectPath || null,
+        profileMode: 'existing'
+      },
+      forceConfirm: true
+    });
+    const confirmed = body.confirmationPhrase === expectedPhrase || body.confirmationId === plan.confirmationId;
+    if (!confirmed) {
+      return this._json(req, res, {
+        error: 'Explicit confirmation required before restarting Trae CN',
+        confirmationPhrase: expectedPhrase,
+        confirmationId: plan.confirmationId,
+        plan
+      }, 409);
+    }
+
+    if (this.client) {
+      try {
+        await this.client.close();
+      } catch (_) {}
+      this.client = null;
+      this.driver = null;
+    }
+
+    const quickstart = getQuickstartConfig();
+    const requestedPort = getEnvWithFallback(
+      'TRAECN_REMOTE_DEBUGGING_PORT',
+      'TRAE_REMOTE_DEBUGGING_PORT',
+      quickstart.remoteDebuggingPort || '9334'
+    );
+    process.env.TRAECN_REMOTE_DEBUGGING_PORT = requestedPort;
+
+    let restart;
+    try {
+      restart = await restartTraeCNWithDebug({
+        projectPath: body.projectPath,
+        quitTimeoutMs: body.quitTimeoutMs,
+        pollMs: body.pollMs
+      });
+    } catch (err) {
+      return this._json(req, res, {
+        ok: false,
+        error: err.message,
+        profileMode: 'existing',
+        requestedPort
+      }, 500);
+    }
+
+    const cdpWaitMs = Number.isFinite(Number(body.cdpWaitMs)) ? Number(body.cdpWaitMs) : 60000;
+    const startedAt = Date.now();
+    let connected = false;
+    let surface = null;
+    let lastError = null;
+    while (Date.now() - startedAt < cdpWaitMs) {
+      try {
+        surface = await discoverTarget();
+        connected = true;
+        break;
+      } catch (err) {
+        lastError = err.message;
+        await new Promise(resolve => { this._setTimeout(resolve, 1000); });
+      }
+    }
+
+    this._json(req, res, {
+      ok: connected,
+      action: 'restart_trae_debug',
+      profileMode: 'existing',
+      requestedPort,
+      restart,
+      cdpWaitMs,
+      connected,
+      surface: surface ? describeCDPSurface([surface.target || surface]) : null,
+      error: connected ? null : (lastError || 'Timed out waiting for CDP')
+    }, connected ? 200 : 504);
+  }
+
+  async _handleReviewGateStatus(req, res) {
+    await this._ensureConnection();
+    const result = typeof this.driver.checkTaskReviewGate === 'function'
+      ? await this.driver.checkTaskReviewGate()
+      : { awaitingReview: false, reason: 'driver_does_not_support_review_gate' };
+    this._json(req, res, result);
+  }
+
+  async _handleReviewGateResolve(req, res) {
+    const body = await parseBody(req);
+    const action = body.action || 'keep_all';
+    if (!['keep_all', 'revert_all', 'keep', 'discard'].includes(action)) {
+      return this._json(req, res, { error: 'action must be keep_all or revert_all' }, 400);
+    }
+    await this._ensureConnection();
+    const normalizedAction = action === 'keep' ? 'keep_all' : (action === 'discard' ? 'revert_all' : action);
+    const result = typeof this.driver.resolveTaskReviewGate === 'function'
+      ? await this.driver.resolveTaskReviewGate(normalizedAction)
+      : { success: false, reason: 'driver_does_not_support_review_gate' };
+    this._json(req, res, result, result.success === false ? 409 : 200);
+  }
+
   async _handleDetectMode(req, res) {
     await this._ensureConnection();
     const modeInfo = await this.driver.detectMode();
@@ -1271,9 +2196,7 @@ class Gateway {
 
     await this._ensureConnection();
     const switchResult = await this.driver.switchModel(body.model);
-    const normalizedSwitch = typeof switchResult === 'object' && switchResult !== null
-      ? switchResult
-      : { success: !String(switchResult || '').startsWith('model_switch_blocked') && !String(switchResult || '').startsWith('no model items') && !String(switchResult || '').startsWith('model not found'), switchResult };
+    const normalizedSwitch = this._normalizeModelSwitchResult(switchResult);
 
     if (!normalizedSwitch.success) {
       return this._json(req, res, {
@@ -1283,6 +2206,22 @@ class Gateway {
         switchResult: normalizedSwitch.switchResult || switchResult,
         error: normalizedSwitch.error || 'Model switch failed'
       }, 502);
+    }
+
+    if (body.waitForQueue === false) {
+      const status = await this.driver.checkQueueStatus();
+      return this._json(req, res, {
+        success: true,
+        model: normalizedSwitch.model || body.model,
+        requestedModel: body.model,
+        switchResult: normalizedSwitch.switchResult || switchResult,
+        previousModel: normalizedSwitch.previousModel || null,
+        alreadySelected: normalizedSwitch.alreadySelected || false,
+        queued: status.queued === true,
+        running: status.running === true,
+        canSubmit: status.canSubmit === true,
+        queueDetails: this._queueDetailsFromStatus(status, normalizedSwitch.model || body.model)
+      });
     }
 
     // Wait for model to become available (up to 10 minutes)
@@ -1308,7 +2247,7 @@ class Gateway {
       }
 
       // Still queued — wait and retry
-      await new Promise(r => setTimeout(r, queuePollIntervalMs));
+      await new Promise(r => { this._setTimeout(r, queuePollIntervalMs); });
       waitedMs += queuePollIntervalMs;
     }
 
@@ -1337,7 +2276,6 @@ class Gateway {
     }
 
     const { spawn } = require('child_process');
-    const { sleep } = require('../shared/utils');
     const projectPath = body.projectPath;
     let result;
 
@@ -1373,17 +2311,29 @@ class Gateway {
       });
 
       if (result.success) {
-        // Wait for the new window/tab to load its DOM
-        await sleep(3000);
+        // Poll for CDP target readiness (replaces hardcoded sleep)
+        const { fetchCDPTargets } = require('../cdp/discovery');
+        const host = process.env.TRAECN_CDP_HOST || process.env.TRAE_CDP_HOST || '127.0.0.1';
+        const port = process.env.TRAECN_REMOTE_DEBUGGING_PORT || process.env.TRAE_REMOTE_DEBUGGING_PORT || '9222';
+        const maxWaitMs = 15000;
+        const pollIntervalMs = 1000;
+        const startTime = Date.now();
+
+        let pageTarget = null;
+        while (Date.now() - startTime < maxWaitMs) {
+          try {
+            const targets = await fetchCDPTargets(host, port);
+            pageTarget = targets.find(t => t.type === 'page');
+            if (pageTarget && pageTarget.webSocketDebuggerUrl) break;
+          } catch (e) {
+            // CDP not ready yet — retry
+          }
+          await new Promise(r => this._setTimeout(r, pollIntervalMs));
+        }
 
         // Try to check for restricted mode dialog via CDP
         try {
-          const { fetchCDPTargets } = require('../cdp/discovery');
           const { CDPClient } = require('../cdp/client');
-          const host = process.env.TRAECN_CDP_HOST || process.env.TRAE_CDP_HOST || '127.0.0.1';
-          const port = process.env.TRAECN_REMOTE_DEBUGGING_PORT || process.env.TRAE_REMOTE_DEBUGGING_PORT || '9222';
-          const targets = await fetchCDPTargets(host, port);
-          const pageTarget = targets.find(t => t.type === 'page');
 
           if (pageTarget && pageTarget.webSocketDebuggerUrl) {
             const cdpClient = new CDPClient(pageTarget.webSocketDebuggerUrl);
@@ -1419,8 +2369,9 @@ class Gateway {
       success: false,
       version: packageInfo.version,
       force: body.force === true,
-      message: 'Automatic self-update is not enabled. Pull the latest repository revision and run npm install.'
-    }, 501);
+      message: 'Automatic self-update is not enabled. Pull the latest repository revision and run npm install.',
+      currentVersion: packageInfo.version
+    }, 200);
   }
 
   async _handleReadiness(req, res) {
@@ -1446,11 +2397,6 @@ class Gateway {
       beta: 'Beta', about: '关于 TRAE'
     };
     const section = raw ? (SECTION_ALIASES[raw] || (() => {
-      if (/[\x80-\xff]/.test(raw)) {
-        const rawBytes = Buffer.from(raw, 'latin1');
-        const encoded = Array.from(rawBytes).map(b => '%' + b.toString(16).toUpperCase().padStart(2, '0')).join('');
-        return decodeURIComponent(encoded);
-      }
       try { return decodeURIComponent(raw); } catch(e) { return raw; }
     })()) : null;
 
@@ -1674,11 +2620,40 @@ class Gateway {
     const chatId = body.chatId || null;
     const includeProcessText = body.includeProcessText === true;
     const waitForQueue = body.waitForQueue !== false;
+    const fallbackModels = this._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
+    const modelProbeIntervalMs = this._modelProbeIntervalMs(body.modelProbeIntervalMs);
     await this._ensureConnection();
 
     // Get queue status with enhanced detection
-    const queueStatus = await this.driver.checkQueueStatus();
-    const queueBlocked = queueStatus.running || (queueStatus.queued && queueStatus.canSubmit !== true);
+    let queueStatus = await this.driver.checkQueueStatus();
+    let modelProbe = null;
+    let queueVisible = queueStatus.queued === true;
+    let queueBlocked = queueStatus.running || (queueVisible && queueStatus.canSubmit !== true);
+    let shouldBackgroundWait = queueStatus.running || (waitForQueue && queueVisible);
+
+    if ((shouldBackgroundWait || queueBlocked) && fallbackModels.length > 0) {
+      const probeTask = {
+        taskId: 'probe_' + Date.now(),
+        fallbackModels,
+        modelProbeIntervalMs,
+        nextModelProbeAt: Date.now(),
+        modelProbeResults: [],
+        currentModel: queueStatus.currentModel || null,
+        queueState: queueStatus.running ? 'running' : (queueStatus.queued ? 'queued' : null)
+      };
+      modelProbe = await this._probeFallbackModels(probeTask, { recordHistory: false });
+      if (modelProbe.queueStatus) {
+        queueStatus = modelProbe.queueStatus;
+        queueVisible = queueStatus.queued === true;
+        queueBlocked = queueStatus.running || (queueVisible && queueStatus.canSubmit !== true);
+        shouldBackgroundWait = queueStatus.running || (waitForQueue && queueVisible && queueStatus.canSubmit !== true);
+      }
+      body.fallbackModels = fallbackModels;
+      body.modelProbeIntervalMs = modelProbeIntervalMs;
+      body.initialModelProbeResults = modelProbe.results || [];
+      body.initialLastModelProbeAt = probeTask.lastModelProbeAt || null;
+      body.initialNextModelProbeAt = probeTask.nextModelProbeAt || null;
+    }
 
     // Build queue ETA message
     let queueEtaMessage = '';
@@ -1688,11 +2663,41 @@ class Gateway {
       queueEtaMessage = `，当前第 ${queueStatus.queuePosition} 位`;
     }
 
-    if (queueBlocked) {
+    if (shouldBackgroundWait || queueBlocked) {
       if (!waitForQueue) {
+        if (queueVisible && queueStatus.canSubmit === true && !queueStatus.running) {
+          // Caller explicitly opted out of local waiting. Let Trae own the queue.
+        } else {
         // Caller doesn't want to wait — return queue info immediately
+          return this._json(req, res, {
+            status: queueStatus.queued ? 'queued' : 'running',
+            queueDetails: {
+              state: queueStatus.queued ? 'queued' : 'running',
+              currentModel: queueStatus.currentModel || '',
+              queuePosition: queueStatus.queuePosition,
+              queueEstimatedWait: queueStatus.queueEstimatedWait,
+              queueMessage: queueStatus.queueMessage || (queueStatus.running ? '模型正在执行其他任务' : '模型排队中')
+            },
+            message: `${queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'}${queueEtaMessage}，请稍后重试或设置 waitForQueue=true 自动等待`,
+            model: queueStatus.currentModel
+          }, 202);
+        }
+      }
+
+      if (shouldBackgroundWait) {
+        body.chatId = chatId;
+        body.includeProcessText = includeProcessText;
+        const task = this._createQueuedTask(body, queueStatus);
+        if (Array.isArray(body.initialModelProbeResults)) {
+          task.modelProbeResults = body.initialModelProbeResults;
+          task.lastModelProbeAt = body.initialLastModelProbeAt;
+          task.nextModelProbeAt = body.initialNextModelProbeAt;
+        }
+        this._ensureBackgroundPolling();
+
         return this._json(req, res, {
-          status: queueStatus.queued ? 'queued' : 'running',
+          taskId: task.taskId,
+          status: 'queued',
           queueDetails: {
             state: queueStatus.queued ? 'queued' : 'running',
             currentModel: queueStatus.currentModel || '',
@@ -1700,43 +2705,143 @@ class Gateway {
             queueEstimatedWait: queueStatus.queueEstimatedWait,
             queueMessage: queueStatus.queueMessage || (queueStatus.running ? '模型正在执行其他任务' : '模型排队中')
           },
-          message: `${queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'}${queueEtaMessage}，请稍后重试或设置 waitForQueue=true 自动等待`,
+          reviewRequired: task.reviewRequired,
+          followupCount: task.followupTasks.length,
+          modelProbeResults: task.modelProbeResults || [],
+          nextModelProbeAt: task.nextModelProbeAt || null,
+          message: `${queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'}${queueEtaMessage}，任务已加入后台。用 traecn_task_status 查询进度`,
           model: queueStatus.currentModel
         }, 202);
       }
+    }
 
+    if (body.background === true || body.forceBackground === true) {
       body.chatId = chatId;
       body.includeProcessText = includeProcessText;
-      const task = this._createQueuedTask(body, queueStatus);
+      const task = this._createQueuedTask(body, {
+        ...queueStatus,
+        queued: true,
+        queueMessage: queueStatus.queueMessage || 'background execution requested'
+      });
+      if (Array.isArray(body.initialModelProbeResults)) {
+        task.modelProbeResults = body.initialModelProbeResults;
+        task.lastModelProbeAt = body.initialLastModelProbeAt;
+        task.nextModelProbeAt = body.initialNextModelProbeAt;
+      }
       this._ensureBackgroundPolling();
-
       return this._json(req, res, {
         taskId: task.taskId,
         status: 'queued',
         queueDetails: {
-          state: queueStatus.queued ? 'queued' : 'running',
+          state: 'queued',
           currentModel: queueStatus.currentModel || '',
           queuePosition: queueStatus.queuePosition,
           queueEstimatedWait: queueStatus.queueEstimatedWait,
-          queueMessage: queueStatus.queueMessage || (queueStatus.running ? '模型正在执行其他任务' : '模型排队中')
+          queueMessage: task.queueMessage
         },
         reviewRequired: task.reviewRequired,
         followupCount: task.followupTasks.length,
-        message: `${queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'}${queueEtaMessage}，任务已加入后台。用 traecn_task_status 查询进度`,
+        modelProbeResults: task.modelProbeResults || [],
+        nextModelProbeAt: task.nextModelProbeAt || null,
+        message: '任务已加入后台执行队列。用 traecn_task_status 查询进度',
         model: queueStatus.currentModel
       }, 202);
     }
 
     // Model is idle/ready — execute synchronously with timeout protection
+    if (!this.driver) {
+      return this._json(req, res, { error: 'CDP driver not available — connection may have failed' }, 503);
+    }
+
     let result;
     let timeoutId;
+    let delegatePromise;
     try {
       const syncTimeout = 180000;
       const timeoutPromise = new Promise((_, reject) =>
         { timeoutId = this._setTimeout(() => reject(new Error('delegate timeout (' + syncTimeout + 'ms)')), syncTimeout); }
       );
-      result = await Promise.race([this.driver.delegate(body.task), timeoutPromise]);
+      delegatePromise = this.driver.delegate(body.task);
+      result = await Promise.race([delegatePromise, timeoutPromise]);
     } catch (e) {
+      if (/delegate timeout/i.test(e.message || '') && delegatePromise) {
+        const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
+        const task = this._createQueuedTask({
+          task: body.task,
+          reviewRequired: body.reviewRequired === true,
+          followupTasks: normalizedFollowups,
+          chatId,
+          includeProcessText,
+          notifyUrl: body.notifyUrl
+        }, {
+          queued: true,
+          running: false,
+          queueMessage: 'sync delegate timed out; tracking submitted Trae request in background'
+        });
+        task.status = 'executing';
+        task.submittedToTrae = true;
+        task.submittedAt = Date.now();
+        task.error = null;
+        this.taskLocks.add(task.taskId);
+        this._syncTaskHistoryMirror(task);
+        this._persistActiveQueue();
+
+        delegatePromise
+          .then(async (resolvedResult) => {
+            const liveTask = this.taskQueue.get(task.taskId);
+            if (!liveTask || this._isTerminalTaskStatus(liveTask.status)) return;
+            await this._finalizeCollectedBackgroundResult(task.taskId, liveTask, resolvedResult);
+          })
+          .catch(async (err) => {
+            const liveTask = this.taskQueue.get(task.taskId);
+            if (!liveTask || this._isTerminalTaskStatus(liveTask.status)) return;
+            if (await this._retryBackgroundTaskAfterError(task.taskId, liveTask, err)) {
+              return;
+            }
+            await this._finalizeBackgroundTask(task.taskId, liveTask, 'error', {
+              error: err.message
+            });
+          })
+          .finally(() => {
+            this.taskLocks.delete(task.taskId);
+          });
+
+        return this._json(req, res, {
+          taskId: task.taskId,
+          status: task.status,
+          submittedToTrae: true,
+          reviewRequired: task.reviewRequired,
+          followupCount: task.followupTasks.length,
+          message: 'Trae 请求已提交但同步等待超时，已自动转入后台追踪。用 traecn_task_status 查询进度'
+        }, 202);
+      }
+      const recoveredResult = await this._recoverAwaitingReviewFromGate({
+        createdAt: Date.now(),
+        followupTasks: this._normalizeFollowupTasks(body.followupTasks),
+        reviewRequired: body.reviewRequired === true
+      });
+      if (recoveredResult) {
+        const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
+        const task = this._createQueuedTask({
+          task: body.task,
+          reviewRequired: body.reviewRequired === true,
+          followupTasks: normalizedFollowups,
+          chatId,
+          includeProcessText,
+          notifyUrl: body.notifyUrl
+        }, { queued: false, running: false, queueMessage: 'recovered from review gate' });
+        await this._finalizeBackgroundTask(task.taskId, task, 'awaiting_review', {
+          result: recoveredResult
+        });
+        return this._json(req, res, {
+          taskId: task.taskId,
+          status: task.status,
+          reviewRequired: task.reviewRequired,
+          followupCount: task.followupTasks.length,
+          message: 'Trae 已生成结果，但当前停在内部审查闸口；任务已恢复为等待审查',
+          resultPreview: (recoveredResult.text || '').slice(0, 500)
+        }, 202);
+      }
       return this._json(req, res, { error: 'delegate failed: ' + e.message }, 504);
     } finally {
       if (timeoutId) this._clearTimeout(timeoutId);
@@ -1747,32 +2852,43 @@ class Gateway {
     }
 
     const responseData = {
-      status: 'done',
+      status: this._isSuccessfulResult(result) ? 'done' : 'error',
       text: result.text,
       stable: result.stable,
       elapsedMs: result.elapsedMs,
       timedOut: result.timedOut || false,
       needsApproval: result.needsApproval || false,
-      question: result.question || ''
+      question: result.question || '',
+      error: this._isSuccessfulResult(result) ? undefined : (result.error || 'Trae returned an incomplete, timed-out, or failed result')
     };
 
     if (body.reviewRequired === true || this._normalizeFollowupTasks(body.followupTasks).length > 0) {
+      const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
       const task = this._createQueuedTask({
-        ...body,
+        task: body.task,
+        reviewRequired: body.reviewRequired === true,
+        followupTasks: normalizedFollowups,
         chatId,
-        includeProcessText
+        includeProcessText,
+        notifyUrl: body.notifyUrl
       }, { queued: false, running: false, queueMessage: 'immediate execution' });
-      await this._finalizeBackgroundTask(task.taskId, task, result.needsApproval ? 'approval_required' : 'awaiting_review', {
-        result
+      const status = result.needsApproval
+        ? 'approval_required'
+        : (this._isReviewableResult(result) ? 'awaiting_review' : 'error');
+      await this._finalizeBackgroundTask(task.taskId, task, status, {
+        result,
+        error: status === 'error' ? 'Trae returned an incomplete or timed-out result before review' : undefined
       });
       return this._json(req, res, {
         taskId: task.taskId,
         status: task.status,
         reviewRequired: task.reviewRequired,
         followupCount: task.followupTasks.length,
-        message: task.status === 'approval_required' ? 'Trae 结果需要先处理确认弹窗' : 'Trae 已完成，等待人工审查',
+        message: task.status === 'approval_required'
+          ? 'Trae 结果需要先处理确认弹窗'
+          : (task.status === 'awaiting_review' ? 'Trae 已完成，等待人工审查' : 'Trae 返回了不完整或超时结果，未进入审查'),
         resultPreview: (result.text || '').slice(0, 500)
-      }, 202);
+      }, task.status === 'error' ? 504 : 202);
     }
 
     if (includeProcessText && result.processText) {
@@ -1785,10 +2901,67 @@ class Gateway {
 
   // ── Task status & cancel ──────────────────────────────────────────────────
 
-  _handleTaskStatus(req, res, taskId) {
+  _historyTaskStatusResponse(record) {
+    if (!record) return null;
+    const statusMap = {
+      completed: 'done',
+      failed: 'error',
+      cancelled: 'cancelled',
+      queued: 'queued',
+      executing: 'executing',
+      awaiting_review: 'awaiting_review',
+      approval_required: 'approval_required'
+    };
+    const status = statusMap[record.status] || record.status || 'unknown';
+    const response = {
+      taskId: record.taskId,
+      status,
+      historyStatus: record.status,
+      createdAt: record.createdAtMs || Date.parse(record.createdAt) || null,
+      elapsed: record.elapsedMs || (record.createdAtMs ? Math.max(0, Date.now() - record.createdAtMs) : null),
+      completedAt: record.completedAt || null,
+      message: status === 'error' ? '执行出错（来自历史记录）' : '任务已从活跃队列移至历史记录',
+      fromHistory: true,
+      metadata: record.metadata || {},
+      stepCount: Array.isArray(record.steps) ? record.steps.length : 0
+    };
+
+    if (record.result) {
+      if (record.result.error) {
+        response.error = record.result.error;
+      } else {
+        response.result = record.result;
+      }
+    }
+    if (Array.isArray(record.steps) && record.steps.length > 0) {
+      const lastFailed = [...record.steps].reverse().find(step => step.success === false || step.error);
+      const lastStep = record.steps[record.steps.length - 1];
+      response.lastStep = {
+        action: lastStep.action,
+        timestamp: lastStep.timestamp,
+        success: lastStep.success,
+        error: lastStep.error || null,
+        details: lastStep.details || {}
+      };
+      if (lastFailed && !response.error) response.error = lastFailed.error || lastFailed.details?.error || null;
+    }
+    return response;
+  }
+
+  async _handleTaskStatus(req, res, taskId) {
     const task = this.taskQueue.get(taskId);
     if (!task) {
+      const historyTask = this.taskHistoryStore.getTask(taskId);
+      if (historyTask) {
+        return this._json(req, res, this._historyTaskStatusResponse(historyTask));
+      }
       return this._json(req, res, { error: 'Task not found' }, 404);
+    }
+
+    if (task.status === 'queued') {
+      await this._refreshQueuedTaskSnapshot(task);
+    } else if (task.status === 'executing') {
+      await this._refreshExecutingTaskSnapshot(task);
     }
 
     const response = {
@@ -1802,11 +2975,35 @@ class Gateway {
       case 'queued':
         response.message = '队列等待中';
         response.queueElapsed = Date.now() - task.createdAt;
-        response.deadline = task.deadline;
-        response.remaining = Math.max(0, task.deadline - Date.now());
+        response.deadline = task.deadline || null;
+        response.remaining = task.deadline ? Math.max(0, task.deadline - Date.now()) : null;
+        response.queueDetails = {
+          state: task.queueState || 'queued',
+          queuePosition: task.queuePosition || null,
+          queueEstimatedWait: task.queueEstimatedWait || null,
+          queueMessage: task.queueMessage || null,
+          currentModel: task.currentModel || null,
+          canSubmit: task.queueCanSubmit === true
+        };
+        response.fallbackModels = task.fallbackModels || [];
+        response.modelProbe = {
+          lastModelProbeAt: task.lastModelProbeAt || null,
+          nextModelProbeAt: task.nextModelProbeAt || null,
+          results: task.modelProbeResults || []
+        };
         break;
       case 'executing':
         response.message = 'Trae 正在执行';
+        response.submittedToTrae = task.submittedToTrae === true;
+        response.submittedAt = task.submittedAt || null;
+        response.queueDetails = {
+          state: task.queueState || null,
+          queuePosition: task.queuePosition || null,
+          queueEstimatedWait: task.queueEstimatedWait || null,
+          queueMessage: task.queueMessage || null,
+          currentModel: task.currentModel || null,
+          canSubmit: task.queueCanSubmit === true
+        };
         break;
       case 'approval_required':
         response.message = 'Trae 需要先处理确认弹窗';
@@ -1882,25 +3079,38 @@ class Gateway {
     this._json(req, res, result);
   }
 
-  _handleTaskCancel(req, res, taskId) {
+  async _handleTaskCancel(req, res, taskId) {
     const task = this.taskQueue.get(taskId);
     if (!task) {
       return this._json(req, res, { error: 'Task not found' }, 404);
     }
-    if (!['queued', 'awaiting_review', 'approval_required'].includes(task.status)) {
+    if (!['queued', 'executing', 'awaiting_review', 'approval_required'].includes(task.status)) {
       return this._json(req, res, {
         error: 'Task is not in a cancellable state',
         status: task.status
       }, 400);
     }
+    let stopResult = null;
+    if (task.status === 'executing' && task.submittedToTrae === true && this.driver && typeof this.driver.stopGeneration === 'function') {
+      try {
+        stopResult = await this.driver.stopGeneration();
+      } catch (err) {
+        stopResult = { success: false, error: err.message };
+      }
+    }
     // Remove task from locks if it's there
     this.taskLocks.delete(taskId);
     task.status = 'cancelled';
+    task.error = null;
+    task.cancelledAt = Date.now();
+    if (stopResult) task.stopResult = stopResult;
     this.taskHistoryStore.cancelTask(taskId);
     if (this.wsHandler) {
       this.wsHandler.notifyTaskStatusChange(taskId, task);
     }
-    this._json(req, res, { taskId, status: 'cancelled' });
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+    this._json(req, res, { taskId, status: 'cancelled', stopResult });
   }
 
   async _handleBatchSubmit(req, res) {
@@ -1971,7 +3181,7 @@ class Gateway {
 
   _startBatchExecution(batchId) {
     const batch = this.batchTasks.get(batchId);
-    if (!batch) return;
+    if (!batch || batch._cancelled) return;
 
     if (batch.strategy === 'parallel') {
       this._executeBatchParallel(batchId);
@@ -2032,10 +3242,10 @@ class Gateway {
 
   async _executeSingleBatchTask(batchId, taskId) {
     const batch = this.batchTasks.get(batchId);
-    if (!batch) return;
+    if (!batch || batch._cancelled) return;
 
     const task = batch.tasks.find(t => t.taskId === taskId);
-    if (!task || task.status !== 'executing') return;
+    if (!task || task.status !== 'executing' || batch._cancelled) return;
 
     try {
       await this._ensureConnection();
@@ -2147,8 +3357,9 @@ class Gateway {
     }
 
     batch.status = 'cancelled';
+    batch._cancelled = true;
     for (const task of batch.tasks) {
-      if (task.status === 'pending') {
+      if (task.status === 'pending' || task.status === 'executing') {
         task.status = 'cancelled';
       }
     }
@@ -2169,10 +3380,203 @@ class Gateway {
       taskId: id,
       status: t.status,
       createdAt: t.createdAt,
+      currentModel: t.currentModel || null,
+      fallbackModels: t.fallbackModels || [],
+      lastModelProbeAt: t.lastModelProbeAt || null,
+      nextModelProbeAt: t.nextModelProbeAt || null,
+      modelProbeResults: t.modelProbeResults || [],
+      submittedToTrae: t.submittedToTrae === true,
+      submittedAt: t.submittedAt || null,
       result: t.status === 'done' ? t.result : undefined,
       error: t.status === 'error' ? t.error : undefined
       }));
     this._json(req, res, { tasks });
+  }
+
+  async _finalizeCollectedBackgroundResult(taskId, task, result) {
+    task.result = result;
+
+    if (result.needsApproval) {
+      await this._finalizeBackgroundTask(taskId, task, 'approval_required', {
+        result
+      });
+    } else if (task.reviewRequired || (task.followupTasks && task.followupTasks.length > 0)) {
+      if (this._isReviewableResult(result)) {
+        await this._finalizeBackgroundTask(taskId, task, 'awaiting_review', {
+          result
+        });
+      } else {
+        if (await this._retryBackgroundTaskAfterResult(taskId, task, result)) {
+          return;
+        }
+        await this._finalizeBackgroundTask(taskId, task, 'error', {
+          result,
+          error: 'Trae returned an incomplete or timed-out result before review'
+        });
+      }
+    } else if (this._isSuccessfulResult(result)) {
+      await this._finalizeBackgroundTask(taskId, task, 'done', {
+        result
+      });
+    } else {
+      if (await this._retryBackgroundTaskAfterResult(taskId, task, result)) {
+        return;
+      }
+      await this._finalizeBackgroundTask(taskId, task, 'error', {
+        result,
+        error: result.error || 'Trae returned an incomplete, timed-out, or failed result'
+      });
+    }
+  }
+
+  _backgroundResultRetryMode(result) {
+    if (!result || result.needsApproval) return null;
+    const text = typeof result.text === 'string' ? result.text.trim() : '';
+    if (result.timedOut || result.truncated || result.streaming || !this._hasMeaningfulResultText(text)) return 'collect';
+    if (result.modelError || this._isFailedResultText(text)) return 'resubmit';
+    return null;
+  }
+
+  async _retryBackgroundTaskAfterResult(taskId, task, result, options = {}) {
+    const retryMode = this._backgroundResultRetryMode(result);
+    if (!retryMode) return false;
+
+    const maxAttempts = Number.isFinite(Number(options.maxAttempts))
+      ? Number(options.maxAttempts)
+      : Number(process.env.TRAECN_BACKGROUND_MAX_RETRIES || 3);
+    const attempts = Number(task.attempts || 0);
+    if (attempts >= maxAttempts) return false;
+
+    task.attempts = attempts + 1;
+    task.error = result?.error || (
+      retryMode === 'collect'
+        ? 'Trae result was incomplete; collecting again'
+        : 'Trae returned a failed result; resubmitting task'
+    );
+    task.result = result;
+    if (retryMode === 'collect' && task.submittedToTrae === true) {
+      task.status = 'executing';
+    } else {
+      task.status = 'queued';
+      task.submittedToTrae = false;
+      task.submittedAt = null;
+      task.queueState = 'queued';
+      task.queueMessage = task.queueMessage || 'retry scheduled after failed result';
+    }
+
+    this.taskHistoryStore.recordStep(taskId, 'retry_scheduled', {
+      success: true,
+      details: {
+        attempts: task.attempts,
+        maxAttempts,
+        retryMode,
+        submittedToTrae: task.submittedToTrae === true,
+        error: task.error,
+        timedOut: result?.timedOut === true,
+        truncated: result?.truncated === true,
+        streaming: result?.streaming === true,
+        modelError: result?.modelError === true
+      }
+    });
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+    return true;
+  }
+
+  async _retryBackgroundTaskAfterError(taskId, task, err, options = {}) {
+    const maxAttempts = Number.isFinite(Number(options.maxAttempts))
+      ? Number(options.maxAttempts)
+      : Number(process.env.TRAECN_BACKGROUND_MAX_RETRIES || 3);
+    const attempts = Number(task.attempts || 0);
+    if (attempts >= maxAttempts) return false;
+
+    task.attempts = attempts + 1;
+    task.error = err?.message || String(err || 'unknown error');
+    task.status = task.submittedToTrae === true ? 'executing' : 'queued';
+    this.taskHistoryStore.recordStep(taskId, 'retry_scheduled', {
+      success: true,
+      details: {
+        attempts: task.attempts,
+        maxAttempts,
+        submittedToTrae: task.submittedToTrae === true,
+        error: task.error
+      }
+    });
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+    return true;
+  }
+
+  async _collectSubmittedBackgroundTask(taskId, task) {
+    await this._ensureConnection();
+    const queueStatus = await this.driver.checkQueueStatus();
+    this._updateQueuedTaskSnapshot(task, queueStatus);
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+
+    const result = await this.driver.collectResponse();
+    await this._finalizeCollectedBackgroundResult(taskId, task, result);
+    return result;
+  }
+
+  async _handleAdoptCurrentTask(req, res) {
+    const body = await parseBody(req);
+    const taskText = typeof body.task === 'string' && body.task.trim()
+      ? body.task
+      : 'Adopt existing Trae request from current chat';
+    if (taskText.length > 100000) {
+      return this._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
+    }
+
+    await this._ensureConnection();
+    const queueStatus = await this.driver.checkQueueStatus();
+    const hasSubmittedWork = queueStatus.queued === true || queueStatus.running === true || body.force === true;
+    if (!hasSubmittedWork) {
+      return this._json(req, res, {
+        error: 'No visible queued or running Trae request to adopt. Pass force=true only if the current chat is already producing a response.',
+        queueDetails: this._queueDetailsFromStatus(queueStatus)
+      }, 409);
+    }
+
+    const task = this._createQueuedTask({
+      task: taskText,
+      reviewRequired: body.reviewRequired === true,
+      followupTasks: this._normalizeFollowupTasks(body.followupTasks),
+      chatId: body.chatId || null,
+      includeProcessText: body.includeProcessText === true,
+      notifyUrl: body.notifyUrl,
+      fallbackModels: body.fallbackModels,
+      autoModelFallback: body.autoModelFallback === true,
+      modelProbeIntervalMs: body.modelProbeIntervalMs
+    }, {
+      ...queueStatus,
+      queued: queueStatus.queued !== false,
+      queueMessage: queueStatus.queueMessage || queueStatus.message || 'adopted existing Trae request'
+    });
+    task.status = 'executing';
+    task.submittedToTrae = true;
+    task.submittedAt = Number.isFinite(Number(body.submittedAt)) ? Number(body.submittedAt) : Date.now();
+    task.queueMessage = queueStatus.queueMessage || queueStatus.message || 'adopted existing Trae request';
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+    this._ensureBackgroundPolling();
+
+    return this._json(req, res, {
+      taskId: task.taskId,
+      status: task.status,
+      submittedToTrae: true,
+      reviewRequired: task.reviewRequired,
+      followupCount: task.followupTasks.length,
+      queueDetails: {
+        state: task.queueState || (queueStatus.running ? 'running' : 'queued'),
+        currentModel: task.currentModel || queueStatus.currentModel || null,
+        queuePosition: task.queuePosition || null,
+        queueEstimatedWait: task.queueEstimatedWait || null,
+        queueMessage: task.queueMessage || null,
+        canSubmit: task.queueCanSubmit === true
+      },
+      message: '已接管当前 Trae 请求；后台将只等待/收集现有结果，不会重新发送任务'
+    }, 202);
   }
 
   // ── Background polling (queue-aware) ──────────────────────────────────────
@@ -2201,28 +3605,78 @@ class Gateway {
         }
         
         for (const [taskId, task] of this.taskQueue) {
-          // Skip if task is not queued or already locked
-          if (task.status !== 'queued' || this.taskLocks.has(taskId)) continue;
+          if (this.taskLocks.has(taskId)) continue;
 
-          // Check per-task queue timeout
-          if (Date.now() > task.deadline) {
-            console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
-            await this._finalizeBackgroundTask(taskId, task, 'queue_timeout', {
-              error: 'Task exceeded queue wait timeout'
-            });
+          if (task.status === 'executing' && task.submittedToTrae === true) {
+            this.taskLocks.add(taskId);
+            try {
+              await this._collectSubmittedBackgroundTask(taskId, task);
+            } catch (e) {
+              console.error('[Queue] Submitted task', taskId, 'recovery error:', e.message);
+              if (/review gate/i.test(e.message || '')) {
+                const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
+                if (recoveredResult) {
+                  task.result = recoveredResult;
+                  await this._finalizeBackgroundTask(taskId, task, 'awaiting_review', {
+                    result: recoveredResult
+                  });
+                  continue;
+                }
+              }
+              if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
+                continue;
+              }
+              task.error = e.message;
+              this._syncTaskHistoryMirror(task);
+              this._persistActiveQueue();
+            } finally {
+              this.taskLocks.delete(taskId);
+            }
             continue;
           }
 
+          // Skip if task is not queued
+          if (task.status !== 'queued') continue;
+
           try {
             await this._ensureConnection();
-            const queueStatus = await this.driver.checkQueueStatus();
+            let queueStatus = await this.driver.checkQueueStatus();
+            this._updateQueuedTaskSnapshot(task, queueStatus);
+
+            if ((queueStatus.queued || queueStatus.running) && Array.isArray(task.fallbackModels) && task.fallbackModels.length > 0) {
+              const probe = await this._probeFallbackModels(task);
+              if (probe.queueStatus) {
+                queueStatus = probe.queueStatus;
+                this._updateQueuedTaskSnapshot(task, queueStatus);
+              }
+            }
+
+            if (task.deadline && Date.now() > task.deadline) {
+              const extended = this._maybeExtendQueuedTaskDeadline(task, queueStatus);
+              if (!extended) {
+                console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
+                await this._finalizeBackgroundTask(taskId, task, 'queue_timeout', {
+                  error: 'Task exceeded queue wait timeout'
+                });
+                continue;
+              }
+            }
 
             // Still queued or actively running — skip this task for now
-            if (queueStatus.queued || queueStatus.running) continue;
+            if (queueStatus.running || (queueStatus.queued && queueStatus.canSubmit !== true)) {
+              if (this.wsHandler) {
+                this.wsHandler.notifyTaskStatusChange(taskId, task);
+              }
+              this._syncTaskHistoryMirror(task);
+              this._persistActiveQueue();
+              continue;
+            }
 
             // Lock this task before execution
             this.taskLocks.add(taskId);
             task.status = 'executing';
+            this._syncTaskHistoryMirror(task);
+            this._persistActiveQueue();
 
             if (this.wsHandler) {
               this.wsHandler.notifyTaskStatusChange(taskId, task);
@@ -2233,24 +3687,27 @@ class Gateway {
               // delegate() which would also call newChat)
               await this.driver.newChat();
               await this.driver.sendMessage(task.task);
+              task.submittedToTrae = true;
+              task.submittedAt = Date.now();
+              this._syncTaskHistoryMirror(task);
+              this._persistActiveQueue();
               const result = await this.driver.collectResponse();
-              task.result = result;
-
-              if (result.needsApproval) {
-                await this._finalizeBackgroundTask(taskId, task, 'approval_required', {
-                  result
-                });
-              } else if (task.reviewRequired || (task.followupTasks && task.followupTasks.length > 0)) {
-                await this._finalizeBackgroundTask(taskId, task, 'awaiting_review', {
-                  result
-                });
-              } else {
-                await this._finalizeBackgroundTask(taskId, task, 'done', {
-                  result
-                });
-              }
+              await this._finalizeCollectedBackgroundResult(taskId, task, result);
             } catch (e) {
               console.error('[Queue] Task', taskId, 'execution error:', e.message);
+              if (/review gate/i.test(e.message || '')) {
+                const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
+                if (recoveredResult) {
+                  task.result = recoveredResult;
+                  await this._finalizeBackgroundTask(taskId, task, 'awaiting_review', {
+                    result: recoveredResult
+                  });
+                  continue;
+                }
+              }
+              if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
+                continue;
+              }
               await this._finalizeBackgroundTask(taskId, task, 'error', {
                 error: e.message
               });
@@ -2284,6 +3741,7 @@ class Gateway {
     
     this._stopBackgroundPolling();
     this._clearAllTimers();
+    this._persistActiveQueue();
     
     const taskCount = this.taskQueue.size;
     this.taskQueue.clear();
@@ -2357,3 +3815,68 @@ async function startGateway(options = {}) {
 }
 
 module.exports = { Gateway, startGateway, sanitizeLog, RateLimiter };
+
+// ── v0.4.0 driver command handling ─────────────────────────────────────
+
+const { DriverRouter: _DriverRouter } = require('./driver-router');
+
+Gateway.prototype._getDriverRouter = function() {
+  if (!this._driverRouter) {
+    this._driverRouter = new _DriverRouter(this.driver);
+  }
+  return this._driverRouter;
+};
+
+Gateway.prototype._handleDriverAction = async function(req, res, driverName) {
+  await this._ensureConnection();
+  if (!this.driver) {
+    return this._json(req, res, {
+      error: 'CDP driver not initialized; TraeCN may not be reachable',
+      code: 'DRIVER_NOT_READY'
+    }, 503);
+  }
+  if (this.mockBridge) {
+    return this._json(req, res, {
+      error: 'Driver commands require a live TraeCN connection; mock bridge is active (TRAECN_ENABLE_MOCK_BRIDGE=1)',
+      code: 'MOCK_BRIDGE_ACTIVE'
+    }, 503);
+  }
+  let body;
+  try {
+    body = await new Promise((resolve, reject) => {
+      let buf = '';
+      let size = 0;
+      const max = 1024 * 1024;
+      req.on('data', chunk => {
+        size += chunk.length;
+        if (size > max) { reject(new Error('body too large')); req.destroy(); return; }
+        buf += chunk;
+      });
+      req.on('end', () => {
+        if (!buf) return resolve({});
+        try { resolve(JSON.parse(buf)); }
+        catch (e) { reject(new Error('Invalid JSON body')); }
+      });
+      req.on('error', reject);
+    });
+  } catch (err) {
+    return this._json(req, res, { error: err.message || 'Invalid JSON body' }, 400);
+  }
+  if (!body || typeof body !== 'object') {
+    return this._json(req, res, { error: 'JSON object body required' }, 400);
+  }
+  const router = this._getDriverRouter();
+  try {
+    const result = await router.invoke(driverName, body);
+    return this._json(req, res, { ok: true, driver: driverName, action: body.action, result });
+  } catch (err) {
+    const code = err.code || 'DRIVER_ERROR';
+    return this._json(req, res, {
+      ok: false,
+      driver: driverName,
+      action: body.action,
+      error: err.message,
+      code
+    }, code === 'UNKNOWN_DRIVER' || code === 'UNKNOWN_ACTION' || code === 'MISSING_ACTION' ? 400 : 500);
+  }
+};

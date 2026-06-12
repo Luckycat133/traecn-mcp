@@ -4,17 +4,35 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+
+const TEST_HISTORY_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'task-history-suite-'));
+const TEST_HISTORY_PATH = path.join(TEST_HISTORY_DIR, 'task-history.json');
+process.env.TRAECN_TASK_HISTORY_PERSISTENCE_PATH = TEST_HISTORY_PATH;
+try {
+  fs.unlinkSync(TEST_HISTORY_PATH);
+} catch {}
+
 const { TaskHistoryStore, getGlobalStore, resetGlobalStore } = require('./task-history');
 
 let passed = 0;
 let failed = 0;
 
+function resetPersistentState() {
+  resetGlobalStore();
+  try {
+    fs.unlinkSync(TEST_HISTORY_PATH);
+  } catch {}
+}
+
 function test(name, fn) {
   try {
+    resetPersistentState();
     fn();
+    resetPersistentState();
     passed++;
     console.log(`  PASS: ${name}`);
   } catch (err) {
+    resetPersistentState();
     failed++;
     console.error(`  FAIL: ${name}`);
     console.error(`        ${err.message}`);
@@ -44,6 +62,40 @@ test('createTask stores task with correct fields', () => {
   assert.ok(task.createdAt, 'should have createdAt');
   assert.strictEqual(task.completedAt, null);
   assert.deepStrictEqual(task.steps, []);
+  store.shutdown();
+});
+
+test('ensureTask upserts a provided task record when missing', () => {
+  const store = new TaskHistoryStore({ maxSize: 100 });
+  const record = store.ensureTask('task_existing_1', 'Queued task', {
+    status: 'running',
+    createdAtMs: 1234,
+    createdAt: new Date(1234).toISOString(),
+    metadata: { source: 'restore' }
+  });
+  assert.strictEqual(record.taskId, 'task_existing_1');
+  assert.strictEqual(store.getTask('task_existing_1').metadata.source, 'restore');
+  store.shutdown();
+});
+
+test('ensureTask updates an existing record when updateExisting is true', () => {
+  const store = new TaskHistoryStore({ maxSize: 100 });
+  store.ensureTask('task_existing_2', 'Queued task', {
+    status: 'queued',
+    createdAtMs: 1234,
+    createdAt: new Date(1234).toISOString()
+  });
+  const updated = store.ensureTask('task_existing_2', 'Queued task updated', {
+    updateExisting: true,
+    status: 'awaiting_review',
+    result: { text: 'review me' },
+    completedAt: new Date(5678).toISOString(),
+    elapsedMs: 444
+  });
+  assert.strictEqual(updated.status, 'awaiting_review');
+  assert.strictEqual(updated.task, 'Queued task updated');
+  assert.strictEqual(updated.result.text, 'review me');
+  assert.strictEqual(updated.elapsedMs, 444);
   store.shutdown();
 });
 
@@ -338,6 +390,13 @@ test('persistence writes to file', () => {
   store2.shutdown();
 });
 
+test('default persistence path is enabled when no explicit path is provided', () => {
+  const store = new TaskHistoryStore({ maxSize: 100 });
+  assert.ok(store.persistencePath);
+  assert.strictEqual(store.persistencePath, TEST_HISTORY_PATH);
+  store.shutdown();
+});
+
 test('history tasks are sorted by createdAt descending', () => {
   const store = new TaskHistoryStore({ maxSize: 100 });
   store.createTask(null, 'First');
@@ -373,4 +432,5 @@ test('step details are stored correctly', () => {
 });
 
 console.log(`\n[task-history.test.js] Results: ${passed} passed, ${failed} failed\n`);
+fs.rmSync(TEST_HISTORY_DIR, { recursive: true, force: true });
 process.exit(failed > 0 ? 1 : 0);

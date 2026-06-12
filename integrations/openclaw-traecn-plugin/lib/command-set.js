@@ -9,13 +9,18 @@ const COMMANDS = Object.freeze({
   CAPABILITIES: 'capabilities',
   PREFLIGHT: 'preflight',
   CONFIRM_PLAN: 'confirm_plan',
+  RESTART_TRAE_DEBUG: 'restart_trae_debug',
   STATUS: 'status',
   READINESS: 'readiness',
   NEW_CHAT: 'new_chat',
   DELEGATE: 'delegate',
   DELEGATE_ASYNC: 'delegate_async',
   TASK_STATUS: 'task_status',
+  ADOPT_CURRENT_TASK: 'adopt_current_task',
   CANCEL_TASK: 'cancel_task',
+  STOP_GENERATION: 'stop_generation',
+  REVIEW_GATE_STATUS: 'review_gate_status',
+  RESOLVE_REVIEW_GATE: 'resolve_review_gate',
   SWITCH_MODE: 'switch_mode',
   SWITCH_MODEL: 'switch_model',
   QUEUE_STATUS: 'queue_status',
@@ -31,7 +36,18 @@ const COMMANDS = Object.freeze({
   BATCH_SUBMIT: 'batch_submit',
   BATCH_STATUS: 'batch_status',
   BATCH_CANCEL: 'batch_cancel',
-  REVIEW_CODE: 'review_code'
+  REVIEW_CODE: 'review_code',
+  // v0.4.0 — new driver-level commands. Each takes an `action` param that
+  // routes to a specific method on the corresponding driver.
+  EDITOR: 'editor',
+  FILE: 'file',
+  TERMINAL: 'terminal',
+  GIT: 'git',
+  SEARCH: 'search',
+  DIAGNOSTICS: 'diagnostics',
+  SNAPSHOT: 'snapshot',
+  EXTENSION: 'extension',
+  COMMAND: 'command'
 });
 
 const COMMAND_DEFINITIONS = Object.freeze([
@@ -52,6 +68,12 @@ const COMMAND_DEFINITIONS = Object.freeze([
     summary: '为即将执行的命令生成副作用、风险等级、确认要求和预检步骤，不执行实际操作',
     required: ['command'],
     optional: ['params', 'forceConfirm']
+  },
+  {
+    command: COMMANDS.RESTART_TRAE_DEBUG,
+    summary: '在明确确认后关闭 Trae CN，并用已登录 existing profile 和 CDP 调试端口重新启动',
+    required: [],
+    optional: ['confirmationPhrase', 'confirmationId', 'projectPath', 'quitTimeoutMs', 'cdpWaitMs']
   },
   {
     command: COMMANDS.STATUS,
@@ -75,13 +97,13 @@ const COMMAND_DEFINITIONS = Object.freeze([
     command: COMMANDS.DELEGATE,
     summary: '向 TraeCN 发送任务并等待最终响应',
     required: ['task'],
-    optional: ['projectPath', 'sessionId', 'allowAutoStart', 'includeProcessText', 'waitForQueue']
+    optional: ['projectPath', 'sessionId', 'allowAutoStart', 'includeProcessText', 'waitForQueue', 'background', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
   },
   {
     command: COMMANDS.DELEGATE_ASYNC,
     summary: '向 TraeCN 提交异步任务，返回 taskId 或直接返回结果',
     required: ['task'],
-    optional: ['chatId', 'includeProcessText', 'waitForQueue']
+    optional: ['chatId', 'includeProcessText', 'waitForQueue', 'background', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
   },
   {
     command: COMMANDS.TASK_STATUS,
@@ -90,10 +112,34 @@ const COMMAND_DEFINITIONS = Object.freeze([
     optional: []
   },
   {
+    command: COMMANDS.ADOPT_CURRENT_TASK,
+    summary: '接管 TraeCN 当前已经提交但本地丢失追踪的排队/生成请求，只等待并收集现有结果，不重新发送任务',
+    required: [],
+    optional: ['task', 'reviewRequired', 'followupTasks', 'chatId', 'includeProcessText', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'submittedAt', 'force']
+  },
+  {
     command: COMMANDS.CANCEL_TASK,
     summary: '取消仍在排队的异步任务',
     required: ['taskId'],
     optional: []
+  },
+  {
+    command: COMMANDS.STOP_GENERATION,
+    summary: '停止 TraeCN 当前正在生成或排队的请求，清理同步超时后残留的 UI 队列',
+    required: [],
+    optional: []
+  },
+  {
+    command: COMMANDS.REVIEW_GATE_STATUS,
+    summary: '检查 TraeCN 是否停在内部任务审查闸口（全部保留/全部撤销）',
+    required: [],
+    optional: []
+  },
+  {
+    command: COMMANDS.RESOLVE_REVIEW_GATE,
+    summary: '处理 TraeCN 内部任务审查闸口，可全部保留或全部撤销以恢复自动化流程',
+    required: [],
+    optional: ['action']
   },
   {
     command: COMMANDS.SWITCH_MODE,
@@ -105,7 +151,7 @@ const COMMAND_DEFINITIONS = Object.freeze([
     command: COMMANDS.SWITCH_MODEL,
     summary: '切换 TraeCN 当前模型',
     required: ['model'],
-    optional: []
+    optional: ['waitForQueue']
   },
   {
     command: COMMANDS.QUEUE_STATUS,
@@ -189,7 +235,61 @@ const COMMAND_DEFINITIONS = Object.freeze([
     command: COMMANDS.REVIEW_CODE,
     summary: '将代码、diff 或审查说明委派给 TraeCN 执行结构化代码审查',
     required: ['instruction'],
-    optional: ['files', 'focus', 'code', 'diff', 'queue', 'projectPath', 'sessionId', 'includeProcessText', 'waitForQueue']
+    optional: ['files', 'focus', 'code', 'diff', 'queue', 'projectPath', 'sessionId', 'includeProcessText', 'waitForQueue', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
+  },
+  {
+    command: COMMANDS.EDITOR,
+    summary: '驱动 TraeCN 编辑器：接受/拒绝 AI 改动、保存、格式化、注释、撤销/重做、跳转、读/写活跃编辑器内容。action 必传。',
+    required: ['action'],
+    optional: ['text', 'value', 'line', 'column']
+  },
+  {
+    command: COMMANDS.FILE,
+    summary: '文件与工作区操作：open/close/save/revert/listOpen/listTree + 直接磁盘 readDisk/writeDisk/deleteDisk/mkdirDisk/renameDisk。',
+    required: [],
+    optional: ['action', 'filePath', 'content', 'oldPath', 'newPath', 'rootPath', 'maxDepth', 'ignore']
+  },
+  {
+    command: COMMANDS.TERMINAL,
+    summary: '驱动集成终端：open/new/kill/clear/snapshot/tail/send/sendLine/sendKey (Ctrl+C/D/L/Z 等)。',
+    required: [],
+    optional: ['action', 'text', 'key', 'code', 'wvk', 'modifiers', 'lines', 'title']
+  },
+  {
+    command: COMMANDS.GIT,
+    summary: 'Git / SCM 操作：stageAll/unstageAll/commit/push/pull/sync/fetch/branch/checkout/stash/commitWithMessage/readStatus/execGit (CLI fallback)。',
+    required: [],
+    optional: ['action', 'message', 'args', 'cwd', 'filePath']
+  },
+  {
+    command: COMMANDS.SEARCH,
+    summary: 'Search / Find in Files：open/findInFiles/find (带 query/include/exclude/timeoutMs)/readResults/collapseAll。',
+    required: [],
+    optional: ['action', 'query', 'include', 'exclude', 'maxResults', 'timeoutMs']
+  },
+  {
+    command: COMMANDS.DIAGNOSTICS,
+    summary: '诊断：openProblems/nextProblem/prevProblem/readAll/readModelMarkers/count/hover。',
+    required: [],
+    optional: ['action', 'max', 'line', 'column']
+  },
+  {
+    command: COMMANDS.SNAPSHOT,
+    summary: '快照：dom/text/layout/pageHash/screenshot/screenshotElement，供回放与调试。',
+    required: [],
+    optional: ['action', 'selector', 'targetPath', 'max', 'minSize']
+  },
+  {
+    command: COMMANDS.EXTENSION,
+    summary: '扩展：openExtensions/install/uninstall/enable/disable/searchMarketplace/readVisible/listViaCLI/installViaCLI/uninstallViaCLI。',
+    required: [],
+    optional: ['action', 'query', 'extensionId', 'version', 'maxResults', 'timeoutMs']
+  },
+  {
+    command: COMMANDS.COMMAND,
+    summary: '走 VS Code Command Palette：open/close/run(commandId)/runSequence(commandIds)。',
+    required: ['action'],
+    optional: ['commandId', 'commandIds']
   }
 ]);
 
@@ -256,6 +356,14 @@ async function executeCommand(client, command, params = {}) {
         } catch {}
       }
       return { status: 200, data: buildConfirmationPlan(params) };
+    case COMMANDS.RESTART_TRAE_DEBUG:
+      return client.restartTraeDebug({
+        confirmationPhrase: params.confirmationPhrase,
+        confirmationId: params.confirmationId,
+        projectPath: params.projectPath,
+        quitTimeoutMs: params.quitTimeoutMs,
+        cdpWaitMs: params.cdpWaitMs
+      });
     case COMMANDS.STATUS:
       return client.getStatus(params.allowAutoStart === true);
     case COMMANDS.READINESS:
@@ -269,27 +377,55 @@ async function executeCommand(client, command, params = {}) {
         sessionId: params.sessionId,
         allowAutoStart: params.allowAutoStart === true,
         includeProcessText: params.includeProcessText === true,
-        waitForQueue: params.waitForQueue !== false
+        waitForQueue: params.waitForQueue !== false,
+        background: params.background === true,
+        fallbackModels: params.fallbackModels,
+        autoModelFallback: params.autoModelFallback === true,
+        modelProbeIntervalMs: params.modelProbeIntervalMs
       });
     case COMMANDS.DELEGATE_ASYNC:
       requireParam(params, 'task');
       return client.delegateAsync(withLayeredTask(command, params).task, {
         chatId: params.chatId,
         includeProcessText: params.includeProcessText === true,
-        waitForQueue: params.waitForQueue !== false
+        waitForQueue: params.waitForQueue !== false,
+        background: params.background === true,
+        fallbackModels: params.fallbackModels,
+        autoModelFallback: params.autoModelFallback === true,
+        modelProbeIntervalMs: params.modelProbeIntervalMs
       });
     case COMMANDS.TASK_STATUS:
       requireParam(params, 'taskId');
       return client.getTaskStatus(params.taskId);
+    case COMMANDS.ADOPT_CURRENT_TASK:
+      return client.adoptCurrentTask({
+        task: params.task,
+        reviewRequired: params.reviewRequired === true,
+        followupTasks: params.followupTasks,
+        chatId: params.chatId,
+        includeProcessText: params.includeProcessText === true,
+        notifyUrl: params.notifyUrl,
+        fallbackModels: params.fallbackModels,
+        autoModelFallback: params.autoModelFallback === true,
+        modelProbeIntervalMs: params.modelProbeIntervalMs,
+        submittedAt: params.submittedAt,
+        force: params.force === true
+      });
     case COMMANDS.CANCEL_TASK:
       requireParam(params, 'taskId');
       return client.cancelTask(params.taskId);
+    case COMMANDS.STOP_GENERATION:
+      return client.stopGeneration();
+    case COMMANDS.REVIEW_GATE_STATUS:
+      return client.getReviewGateStatus();
+    case COMMANDS.RESOLVE_REVIEW_GATE:
+      return client.resolveReviewGate(params.action || 'keep_all');
     case COMMANDS.SWITCH_MODE:
       requireParam(params, 'mode');
       return client.switchMode(params.mode, params.allowAutoStart === true);
     case COMMANDS.SWITCH_MODEL:
       requireParam(params, 'model');
-      return client.switchModel(params.model);
+      return client.switchModel(params.model, { waitForQueue: params.waitForQueue });
     case COMMANDS.QUEUE_STATUS:
       return client.checkQueueStatus();
     case COMMANDS.OPEN_PROJECT:
@@ -345,14 +481,21 @@ async function executeCommand(client, command, params = {}) {
         return client.delegateAsync(task, {
           chatId: params.chatId,
           includeProcessText: params.includeProcessText === true,
-          waitForQueue: params.waitForQueue !== false
+          waitForQueue: params.waitForQueue !== false,
+          background: params.background === true,
+          fallbackModels: params.fallbackModels,
+          autoModelFallback: params.autoModelFallback === true,
+          modelProbeIntervalMs: params.modelProbeIntervalMs
         });
       }
       return client.delegate(task, {
         projectPath: params.projectPath,
         sessionId: params.sessionId,
         includeProcessText: params.includeProcessText === true,
-        waitForQueue: params.waitForQueue !== false
+        waitForQueue: params.waitForQueue !== false,
+        fallbackModels: params.fallbackModels,
+        autoModelFallback: params.autoModelFallback === true,
+        modelProbeIntervalMs: params.modelProbeIntervalMs
       });
     }
     default:

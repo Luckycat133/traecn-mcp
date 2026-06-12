@@ -5,6 +5,13 @@ const crypto = require('crypto');
 
 const WS_HEARTBEAT_INTERVAL = 30000;
 const WS_HEARTBEAT_TIMEOUT = 60000;
+// Hard cap on inbound WS frame payload. Default 64 KiB; messages above this
+// size are dropped by the ws library with code 1009 (Message Too Big).
+// Prevents slow-loris / memory-exhaustion attacks on long-lived WS clients.
+const WS_MAX_PAYLOAD_BYTES = parseInt(
+  (typeof process !== 'undefined' && process.env && process.env.TRAECN_WS_MAX_PAYLOAD_BYTES) || '65536',
+  10
+);
 
 class WebSocketHandler {
   constructor(gateway) {
@@ -19,7 +26,7 @@ class WebSocketHandler {
   initialize(server) {
     this.wss = new WebSocketServer({
       noServer: true,
-      path: '/ws'
+      maxPayload: WS_MAX_PAYLOAD_BYTES
     });
 
     this.wss.on('connection', (ws, req, context) => {
@@ -518,4 +525,4 @@ class WebSocketHandler {
   }
 }
 
-module.exports = { WebSocketHandler };
+module.exports = { WebSocketHandler, WS_MAX_PAYLOAD_BYTES, WS_HEARTBEAT_INTERVAL, WS_HEARTBEAT_TIMEOUT };
