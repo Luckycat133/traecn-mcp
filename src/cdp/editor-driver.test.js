@@ -104,6 +104,65 @@ test('readApplyState / listActive / readActive / writeActive return parsed JSON'
   });
 });
 
+test('readActive returns ok=true from the model fallback when no editor is registered', () => {
+  // Simulate Monaco having models loaded but getEditors() returning [] — the
+  // exact state the live editor hits when the workbench is between rendering
+  // a file and registering the editor instance with the API.
+  const c = mockClient();
+  c.send = (method, params) => {
+    if (method !== 'Runtime.evaluate') return Promise.resolve({ result: {} });
+    if (typeof params.expression !== 'string') return Promise.resolve({ result: { value: true } });
+    if (params.expression.includes('window.monaco')) {
+      // The polyfill mimics the real getModels() payload: a single model
+      // with a known URI, used by the model-fallback branch.
+      const payload = JSON.stringify({
+        ok: true,
+        value: '// file content from model fallback',
+        language: 'javascript',
+        source: 'model-fallback',
+        uri: 'file:///tmp/example.js'
+      });
+      return Promise.resolve({ result: { value: payload } });
+    }
+    return Promise.resolve({ result: { value: true } });
+  };
+  const d = new EditorDriver(c, {});
+  return d.readActive().then(r => {
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.source, 'model-fallback');
+    assert.strictEqual(r.uri, 'file:///tmp/example.js');
+    assert.strictEqual(r.value, '// file content from model fallback');
+  });
+});
+
+test('listActive augments with model-only rows when editors are not registered', () => {
+  const c = mockClient();
+  c.send = (method, params) => {
+    if (method !== 'Runtime.evaluate') return Promise.resolve({ result: {} });
+    if (typeof params.expression === 'string' && params.expression.includes('getEditors')) {
+      // Polyfill: no editors, but getModels returns one model-only entry.
+      const rows = [{
+        id: null,
+        language: 'javascript',
+        uri: 'file:///tmp/example.js',
+        lineCount: 42,
+        hasEditor: false,
+        visible: true
+      }];
+      return Promise.resolve({ result: { value: JSON.stringify(rows) } });
+    }
+    return Promise.resolve({ result: { value: true } });
+  };
+  const d = new EditorDriver(c, {});
+  return d.listActive().then(rows => {
+    assert.ok(Array.isArray(rows));
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].uri, 'file:///tmp/example.js');
+    assert.strictEqual(rows[0].hasEditor, false);
+    assert.strictEqual(rows[0].visible, true);
+  });
+});
+
 Promise.all(asyncTests).then(() => {
   console.log(`\n  Results: ${passed} passed, ${failed} failed\n`);
   process.exit(failed > 0 ? 1 : 0);

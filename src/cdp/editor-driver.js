@@ -240,12 +240,46 @@ class EditorDriver {
   async readActive() {
     const r = await this.client.send('Runtime.evaluate', {
       expression: `(()=>{
-        const editors = window.monaco?.editor?.getEditors?.() || [];
-        const active = editors.find(e => e.hasTextFocus && e.hasTextFocus()) || editors[0];
+        const monaco = window.monaco?.editor;
+        if (!monaco) return JSON.stringify({ ok: false, error: 'monaco not present' });
+        const editors = monaco.getEditors ? monaco.getEditors() : [];
+        let active = editors.find(e => { try { return e.hasTextFocus && e.hasTextFocus(); } catch { return false; } });
+        if (!active && editors.length > 0) active = editors[0];
+        // Fallback: editors haven't been registered yet but a model is loaded in
+        // the DOM (this happens when the workbench just opened a file before
+        // Monaco has had a chance to attach its editor instance to the pane).
+        // We pick the model whose URI appears in the visible .monaco-editor
+        // elements and read the content straight from the model.
+        if (!active && monaco.getModels) {
+          const visibleDom = Array.from(document.querySelectorAll('.monaco-editor[data-uri], .monaco-editor'))
+            .find(el => el && el.offsetParent !== null);
+          if (visibleDom) {
+            const uriAttr = visibleDom.getAttribute('data-uri') || null;
+            const models = monaco.getModels();
+            const model = uriAttr
+              ? models.find(m => m.uri && m.uri.toString() === uriAttr)
+              : (models.find(m => m.getLineCount() > 0) || null);
+            if (model) {
+              return JSON.stringify({
+                ok: true,
+                value: model.getValue(),
+                language: model.getLanguageId ? model.getLanguageId() : undefined,
+                source: 'model-fallback',
+                uri: model.uri && model.uri.toString()
+              });
+            }
+          }
+        }
         if (!active) return JSON.stringify({ ok: false, error: 'no editor' });
         const model = active.getModel();
-        const value = model ? model.getValue() : '';
-        return JSON.stringify({ ok: true, value, language: model?.getLanguageId?.() });
+        if (!model) return JSON.stringify({ ok: false, error: 'no model' });
+        return JSON.stringify({
+          ok: true,
+          value: model.getValue(),
+          language: model.getLanguageId ? model.getLanguageId() : undefined,
+          source: 'editor',
+          uri: model.uri && model.uri.toString()
+        });
       })()`,
       returnByValue: true
     });
@@ -263,14 +297,33 @@ class EditorDriver {
     const safeValue = safeJsValue(value);
     const r = await this.client.send('Runtime.evaluate', {
       expression: `(()=>{
-        const editors = window.monaco?.editor?.getEditors?.() || [];
-        const active = editors.find(e => e.hasTextFocus && e.hasTextFocus()) || editors[0];
-        if (!active) return JSON.stringify({ ok: false, error: 'no editor' });
-        const model = active.getModel();
+        const monaco = window.monaco?.editor;
+        if (!monaco) return JSON.stringify({ ok: false, error: 'monaco not present' });
+        const editors = monaco.getEditors ? monaco.getEditors() : [];
+        let active = editors.find(e => { try { return e.hasTextFocus && e.hasTextFocus(); } catch { return false; } });
+        if (!active && editors.length > 0) active = editors[0];
+        // Same fallback as readActive: if Monaco hasn't attached an editor
+        // instance yet, write straight to the model that has a visible DOM.
+        let model = active ? active.getModel() : null;
+        if (!model && monaco.getModels) {
+          const visibleDom = Array.from(document.querySelectorAll('.monaco-editor'))
+            .find(el => el && el.offsetParent !== null);
+          if (visibleDom) {
+            const uriAttr = visibleDom.getAttribute('data-uri') || null;
+            const models = monaco.getModels();
+            model = uriAttr
+              ? models.find(m => m.uri && m.uri.toString() === uriAttr)
+              : (models.find(m => m.getLineCount() > 0) || null);
+          }
+        }
         if (!model) return JSON.stringify({ ok: false, error: 'no model' });
         const fullRange = model.getFullModelRange();
         model.applyEdits([{ range: fullRange, text: ${safeValue}, forceMoveMarkers: true }]);
-        return JSON.stringify({ ok: true, length: ${safeValue}.length });
+        return JSON.stringify({
+          ok: true,
+          length: ${safeValue}.length,
+          uri: model.uri && model.uri.toString()
+        });
       })()`,
       returnByValue: true
     });
@@ -287,13 +340,37 @@ class EditorDriver {
   async listActive() {
     const r = await this.client.send('Runtime.evaluate', {
       expression: `(()=>{
-        const editors = window.monaco?.editor?.getEditors?.() || [];
-        return JSON.stringify(editors.map(e => ({
+        const monaco = window.monaco?.editor;
+        if (!monaco) return JSON.stringify([]);
+        const editors = monaco.getEditors ? monaco.getEditors() : [];
+        const editorRows = editors.map(e => ({
           id: e.getId(),
           language: e.getModel()?.getLanguageId?.(),
           uri: e.getModel()?.uri?.toString?.(),
           lineCount: e.getModel()?.getLineCount?.() || 0
-        })));
+        }));
+        // Augment with models that don't yet have an attached editor instance.
+        // Each entry carries a hasEditor flag so the caller can tell apart
+        // a fully wired-up editor from a model-only row.
+        if (monaco.getModels) {
+          const knownUris = new Set(editorRows.map(r => r.uri).filter(Boolean));
+          for (const m of monaco.getModels()) {
+            const uri = m.uri && m.uri.toString();
+            if (!uri || knownUris.has(uri)) continue;
+            const visible = !!Array.from(document.querySelectorAll('.monaco-editor'))
+              .find(el => el && el.offsetParent !== null
+                && (!el.getAttribute('data-uri') || el.getAttribute('data-uri') === uri));
+            editorRows.push({
+              id: null,
+              language: m.getLanguageId ? m.getLanguageId() : undefined,
+              uri,
+              lineCount: m.getLineCount ? m.getLineCount() : 0,
+              hasEditor: false,
+              visible
+            });
+          }
+        }
+        return JSON.stringify(editorRows);
       })()`,
       returnByValue: true
     });
