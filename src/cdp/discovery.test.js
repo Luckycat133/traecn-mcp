@@ -44,6 +44,27 @@ test('scoreTarget penalizes devtools', () => {
   assert.ok(score < 0, 'Score should be negative for devtools');
 });
 
+test('scoreTarget demotes DiffView, settings, welcome, login targets', () => {
+  const keywords = ['Trae', 'TraeCNClaw'];
+  const diffView = scoreTarget({ type: 'page', title: 'DiffView — TraeCNClaw', url: '' }, keywords);
+  const settings = scoreTarget({ type: 'page', title: 'Settings — TraeCNClaw', url: '' }, keywords);
+  const welcome = scoreTarget({ type: 'page', title: 'Welcome to Trae CN', url: '' }, keywords);
+  const ide = scoreTarget({ type: 'page', title: 'src/foo.js — TraeCNClaw', url: '' }, keywords);
+  const bareProject = scoreTarget({ type: 'page', title: 'TraeCNClaw', url: '' }, keywords);
+
+  assert.ok(diffView < ide, 'DiffView should score lower than the IDE workbench');
+  assert.ok(settings < ide, 'Settings should score lower than the IDE workbench');
+  assert.ok(welcome < welcome ? false : welcome < bareProject, 'Welcome should score lower than the bare project target');
+  assert.ok(ide > 0, 'IDE workbench should still be selectable');
+});
+
+test('scoreTarget prefers a file-tab title over a review-suffix title with the same project', () => {
+  const keywords = ['Trae', 'TraeCNClaw'];
+  const fileTab = scoreTarget({ type: 'page', title: 'src/cdp/discovery.js — TraeCNClaw', url: '' }, keywords);
+  const reviewSuffix = scoreTarget({ type: 'page', title: 'DiffView — TraeCNClaw', url: '' }, keywords);
+  assert.ok(fileTab > reviewSuffix, 'file tab must outrank a review surface sharing the same project');
+});
+
 test('scoreTarget matches multiple keywords', () => {
   const target = { type: 'page', title: 'Trae CN Chat', url: '' };
   const score = scoreTarget(target, ['Trae', 'Trae CN']);

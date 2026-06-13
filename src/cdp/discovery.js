@@ -173,6 +173,24 @@ function scoreTarget(target, titleKeywords) {
     score -= 50;
   }
 
+  // Penalize target kinds that are not the IDE workbench, so the IDE
+  // wins when both a DiffView and the real editor pane are open.
+  // These are the targets where Monaco is not (yet) loaded, or where
+  // the workbench is showing an AI dialog / setup wizard instead of
+  // the file tree.
+  if (title.includes('diffview') || title.includes('diff view')) score -= 80;
+  if (title.includes('review')) score -= 40;
+  if (title.includes('settings') || title.includes('设置') || title.includes('preferences')) score -= 60;
+  if (title.includes('welcome') || title.includes('setup') || title.includes('getting started')) score -= 100;
+  if (title.includes('login') || title.includes('登录') || title.includes('signin')) score -= 50;
+  if (title.includes('update') || title.includes('安装') || title.includes('install')) score -= 30;
+  // Slight bonus for titles that look like a real file tab: e.g.
+  // "src/foo.js — myproject" or just "myproject". This pushes the IDE
+  // workbench ahead of a generic "Trae CN" / "TraeCNClaw" target.
+  if (/[\w\/\\]+\.\w+/.test(title) || /^[\w.\-]+$/.test(title)) {
+    score += 5;
+  }
+
   return score;
 }
 
