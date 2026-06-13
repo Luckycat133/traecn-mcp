@@ -1277,7 +1277,7 @@ class DomDriver {
 
   async sendMessage(text) {
     const existingReviewGate = await this.checkTaskReviewGate();
-    if (existingReviewGate.awaitingReview) {
+    if (existingReviewGate.awaitingReview && existingReviewGate.reviewCount !== 0) {
       const gateResolution = await this.resolveTaskReviewGate('keep_all');
       if (!gateResolution.success) {
         throw new Error(`Task review gate blocked message send: ${gateResolution.reason || gateResolution.error || 'unknown'}`);
@@ -1611,7 +1611,125 @@ class DomDriver {
               }
             }
             
+            var visibleReviewCards = document.querySelectorAll('.ask-user-question-card-container, [class*="ask-user-question-card"]');
+            for (var vc = 0; vc < visibleReviewCards.length; vc++) {
+              var visibleCard = visibleReviewCards[vc];
+              if (!visibleCard || visibleCard.offsetParent === null) continue;
+              var visibleRect = visibleCard.getBoundingClientRect();
+              if (visibleRect.width < 100 || visibleRect.height < 40) continue;
+              if (visibleRect.bottom < 0 || visibleRect.top > window.innerHeight) continue;
+              var visibleCardText = visibleCard.textContent || '';
+              var isReviewScopeCard = /What would you like me to review\\?|Review Scope|Latest commit changes|Uncommitted changes|Specific files or folder/i.test(visibleCardText);
+              var isPendingQuestion = /\\u6b63\\u5728\\u7b49\\u5f85\\u4f60\\u7684\\u64cd\\u4f5c|Cancel|Next|\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a/i.test(visibleCardText);
+              if (!isReviewScopeCard || !isPendingQuestion) continue;
+              var visibleReviewButtons = [];
+              var visibleOptions = [];
+              var visibleReviewButtonNodes = visibleCard.querySelectorAll(${safeJsValue(`${DIALOG_BUTTON_SELECTOR}, [class*="button"], [class*="btn"], div, span`)});
+              visibleReviewButtonNodes.forEach(function(b) {
+                if (!b || b.offsetParent === null) return;
+                var text = (b.innerText || b.textContent || '').trim();
+                if (!text) return;
+                if (/^(\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a|Cancel|Next)$/i.test(text) && !visibleReviewButtons.includes(text)) {
+                  visibleReviewButtons.push(text);
+                }
+              });
+              var knownLabels = [
+                'Latest commit changes',
+                'Uncommitted changes',
+                'Current workspace changes',
+                'Changes compared to a branch',
+                'A specific MR/PR',
+                'Specific files',
+                'Specific files or folder',
+                'Compare with a branch',
+                '\\u5176\\u4ed6'
+              ];
+              var optionNodes = visibleCard.querySelectorAll('.ask-user-single-choice-item, .icd-checkbox-item-container, [class*="single-choice"], [class*="checkbox-item"], [role="radio"], [role="option"]');
+              optionNodes.forEach(function(option) {
+                if (!option || option.offsetParent === null) return;
+                var rect = option.getBoundingClientRect();
+                if (rect.width < 50 || rect.height < 20) return;
+                var text = (option.innerText || option.textContent || '').replace(/\\s+/g, ' ').trim();
+                if (!text) return;
+                var label = '';
+                for (var ko = 0; ko < knownLabels.length; ko++) {
+                  if (text.includes(knownLabels[ko])) {
+                    label = knownLabels[ko];
+                    break;
+                  }
+                }
+                if (!label) return;
+                var description = text.replace(label, '').trim();
+                if (!visibleOptions.some(function(item) { return item.label === label; })) {
+                  visibleOptions.push({ label: label, description: description });
+                }
+              });
+              var compactText = visibleCardText.replace(/\\s+/g, ' ').trim();
+              var hits = [];
+              knownLabels.forEach(function(label) {
+                var idx = compactText.indexOf(label);
+                if (idx >= 0) hits.push({ label: label, index: idx });
+              });
+              hits.sort(function(a, b) { return a.index - b.index; });
+              var parsedOptions = [];
+              for (var hi = 0; hi < hits.length; hi++) {
+                var start = hits[hi].index + hits[hi].label.length;
+                var end = hi + 1 < hits.length ? hits[hi + 1].index : compactText.length;
+                var desc = compactText.slice(start, end)
+                  .replace(/^(What would you like me to review\\?|Review scope|Review Scope|1\\/2|Cancel|Next|\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a|\\u6b63\\u5728\\u7b49\\u5f85\\u4f60\\u7684\\u64cd\\u4f5c)\\s*/i, '')
+                  .replace(/\\s*(1\\/2|Review scope|Review Scope|Cancel|Next|\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a|\\u6b63\\u5728\\u7b49\\u5f85\\u4f60\\u7684\\u64cd\\u4f5c).*$/i, '')
+                  .trim();
+                if (!parsedOptions.some(function(item) { return item.label === hits[hi].label; })) {
+                  parsedOptions.push({ label: hits[hi].label, description: desc });
+                }
+              }
+              if (parsedOptions.length >= 2) {
+                visibleOptions = parsedOptions;
+              }
+              return {
+                found: true,
+                title: 'Review Scope',
+                buttons: visibleReviewButtons.slice(0, 5),
+                options: visibleOptions.slice(0, 8),
+                type: 'review_scope_question',
+                isCommandExec: false,
+                canAutoApprove: false
+              };
+            }
+
             var bodyText = document.body.textContent || '';
+            var reviewScopePatterns = [
+              'What would you like me to review?',
+              'Review Scope',
+              'Latest commit changes',
+              'Uncommitted changes',
+              'Specific files or folder',
+              '\\u6b63\\u5728\\u7b49\\u5f85\\u4f60\\u7684\\u64cd\\u4f5c'
+            ];
+            var reviewScopeHits = 0;
+            for (var r = 0; r < reviewScopePatterns.length; r++) {
+              if (bodyText.includes(reviewScopePatterns[r])) reviewScopeHits++;
+            }
+            if (reviewScopeHits >= 2 && document.querySelector('.ask-user-question-card-status-pending')) {
+              var reviewButtons = [];
+              var reviewButtonNodes = document.querySelectorAll(${safeJsValue(DIALOG_BUTTON_SELECTOR)});
+              reviewButtonNodes.forEach(function(b) {
+                if (!b || b.offsetParent === null) return;
+                var text = (b.innerText || b.textContent || '').trim();
+                if (!text) return;
+                if (/^(\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a|Cancel|Next)$/i.test(text) && !reviewButtons.includes(text)) {
+                  reviewButtons.push(text);
+                }
+              });
+              return {
+                found: true,
+                title: 'Review Scope',
+                buttons: reviewButtons.slice(0, 5),
+                type: 'review_scope_question',
+                isCommandExec: false,
+                canAutoApprove: false
+              };
+            }
             var approvalPatterns = ['\\u9700\\u8981\\u60a8\\u6388\\u6743', '\\u9700\\u8981\\u60a8\\u7684\\u6279\\u51c6', '\\u662f\\u5426\\u5141\\u8bb8', 'Do you want to proceed', 'requires your confirmation'];
             for (var j = 0; j < approvalPatterns.length; j++) {
               if (bodyText.includes(approvalPatterns[j])) {
@@ -1632,7 +1750,9 @@ class DomDriver {
           question: dialog.title || 'Trae\\u9700\\u8981\\u60a8\\u786e\\u8ba4',
           dialogType: dialog.type || 'approval',
           buttons: dialog.buttons || [],
+          options: dialog.options || [],
           isCommandExec: dialog.isCommandExec || false,
+          canAutoApprove: dialog.canAutoApprove === true,
         };
       }
       return { needsApproval: false };
@@ -1649,7 +1769,16 @@ class DomDriver {
   async collectResponse() {
     const dialog = await this.checkForApprovalDialog();
     if (dialog.needsApproval) {
-      return { text: '', stable: false, elapsedMs: 0, needsApproval: true, question: dialog.question, dialogType: dialog.dialogType };
+      return {
+        text: '',
+        stable: false,
+        elapsedMs: 0,
+        needsApproval: true,
+        question: dialog.question,
+        dialogType: dialog.dialogType,
+        buttons: dialog.buttons || [],
+        options: dialog.options || []
+      };
     }
 
     const modeInfo = await this.detectMode();
@@ -1788,8 +1917,9 @@ class DomDriver {
         }
 
 
-        if (!completionLooksStale && (state.taskComplete || (state.taskText && !state.taskInProgress))) {
-          const text = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
+        const hasTaskText = !!String(state.taskText || '').trim();
+        if (!completionLooksStale && hasTaskText && (state.taskComplete || !state.taskInProgress)) {
+          const text = cleanAssistantResultText(sanitizeActivityText(state.taskText || ''));
           if (this._isModelErrorResponseText(text)) {
             cleanup();
             return { text, stable: false, elapsedMs: Date.now() - startTime, modelError: true, error: 'Trae model request failed' };
@@ -1992,6 +2122,25 @@ class DomDriver {
               }
             }
 
+            var reviewCards = document.querySelectorAll('.ask-user-question-card-container, [class*="ask-user-question-card"]');
+            for (var rc = 0; rc < reviewCards.length; rc++) {
+              var card = reviewCards[rc];
+              if (!card || card.offsetParent === null) continue;
+              var cardText = card.textContent || '';
+              if (!/Review Scope|What would you like me to review\\?|\\u6b63\\u5728\\u7b49\\u5f85\\u4f60\\u7684\\u64cd\\u4f5c/i.test(cardText)) continue;
+              var cardNodes = card.querySelectorAll('button, [role="button"], [class*="button"], [class*="btn"], div, span');
+              for (var cn = 0; cn < cardNodes.length; cn++) {
+                var node = cardNodes[cn];
+                if (!node || node.offsetParent === null) continue;
+                var nodeText = (node.innerText || node.textContent || '').trim();
+                if (!/^(\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a|Cancel|Next)$/i.test(nodeText)) continue;
+                var clickable = node.closest('button, a[role="button"], [role="button"], .monaco-button, .monaco-text-button, [class*="button"], [class*="btn"]') || node;
+                var nodeRect = clickable.getBoundingClientRect();
+                if (nodeRect.width < 12 || nodeRect.height < 12) continue;
+                if (!buttonsToSearch.includes(clickable)) buttonsToSearch.push(clickable);
+              }
+            }
+
             // First pass: exact match
             for (var b = 0; b < buttonsToSearch.length; b++) {
               var btn = buttonsToSearch[b];
@@ -2084,6 +2233,126 @@ class DomDriver {
     } catch (e) {
       return { success: false, action, error: e.message };
     }
+  }
+
+  async answerQuestionDialog(answer) {
+    const selectedAnswer = String(answer || '').trim();
+    if (!selectedAnswer) {
+      return { success: false, action: 'answer', error: 'answer is required' };
+    }
+
+    const dialog = await this.checkForApprovalDialog();
+    if (!dialog.needsApproval) {
+      return { success: false, action: 'answer', answer: selectedAnswer, error: 'No question dialog found' };
+    }
+
+    const result = await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var answer = ${safeJsValue(selectedAnswer)};
+          var aliases = [answer];
+          if (/current|uncommitted|workspace|staged|\\u672a\\u63d0\\u4ea4|\\u5de5\\u4f5c\\u533a/i.test(answer)) {
+            aliases.push('Current workspace changes', 'Uncommitted changes', 'Review uncommitted/staged changes in the workspace', 'Review any uncommitted or staged workspace changes');
+          }
+          if (/latest|commit|recent|\\u6700\\u8fd1|\\u63d0\\u4ea4/i.test(answer)) {
+            aliases.push('Latest commit changes', 'Review only the changes in the most recent commit');
+          }
+          if (/specific|file|folder|path|\\u6587\\u4ef6|\\u76ee\\u5f55/i.test(answer)) {
+            aliases.push('Specific files', 'Specific files or folder', 'Review specific file(s) in the project', 'Review a specific file, directory, or set of files');
+          }
+          if (/branch|compare|\\u5206\\u652f|\\u5bf9\\u6bd4/i.test(answer)) {
+            aliases.push('Compare with a branch', 'Review changes compared to another branch');
+          }
+          if (/other|\\u5176\\u4ed6/i.test(answer)) {
+            aliases.push('\\u5176\\u4ed6', 'Other');
+          }
+
+          function isVisible(el) {
+            if (!el || el.offsetParent === null) return false;
+            var rect = el.getBoundingClientRect();
+            return rect.width >= 12 && rect.height >= 12 && rect.bottom >= 0 && rect.top <= window.innerHeight;
+          }
+
+          function clickElement(el) {
+            var rect = el.getBoundingClientRect();
+            var x = rect.x + rect.width / 2;
+            var y = rect.y + rect.height / 2;
+            el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0, buttons: 1, pointerType: 'mouse' }));
+            el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0, buttons: 0, pointerType: 'mouse' }));
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+            if (typeof el.click === 'function') el.click();
+          }
+
+          var cards = document.querySelectorAll('.ask-user-question-card-container, [class*="ask-user-question-card"]');
+          var targetCard = null;
+          for (var c = 0; c < cards.length; c++) {
+            if (!isVisible(cards[c])) continue;
+            var cardText = cards[c].textContent || '';
+            if (/What would you like me to review\\?|Review Scope|Latest commit changes|Uncommitted changes|Specific files or folder/i.test(cardText)) {
+              targetCard = cards[c];
+              break;
+            }
+          }
+          if (!targetCard) return { success: false, error: 'No visible question card found' };
+
+          var optionNodes = targetCard.querySelectorAll('.ask-user-single-choice-item, .icd-checkbox-item-container, [class*="single-choice"], [class*="checkbox-item"], [role="radio"], [role="option"], div');
+          var selectedOption = null;
+          var selectedText = '';
+          for (var i = 0; i < optionNodes.length; i++) {
+            var option = optionNodes[i];
+            if (!isVisible(option)) continue;
+            var text = (option.innerText || option.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!text) continue;
+            for (var a = 0; a < aliases.length; a++) {
+              var alias = String(aliases[a] || '').replace(/\\s+/g, ' ').trim();
+              if (!alias) continue;
+              if (text.toLowerCase().includes(alias.toLowerCase()) || alias.toLowerCase().includes(text.toLowerCase())) {
+                selectedOption = option.closest('.ask-user-single-choice-item, .icd-checkbox-item-container, [role="radio"], [role="option"]') || option;
+                selectedText = text;
+                break;
+              }
+            }
+            if (selectedOption) break;
+          }
+          if (!selectedOption) return { success: false, error: 'No matching answer option found', answer: answer };
+          clickElement(selectedOption);
+
+          var nextNodes = targetCard.querySelectorAll('button, [role="button"], [class*="button"], [class*="btn"], div, span');
+          var nextButton = null;
+          for (var n = 0; n < nextNodes.length; n++) {
+            var node = nextNodes[n];
+            if (!isVisible(node)) continue;
+            var nodeText = (node.innerText || node.textContent || '').trim();
+            if (/^(\\u4e0b\\u4e00\\u4e2a|Next)$/i.test(nodeText)) {
+              nextButton = node.closest('button, a[role="button"], [role="button"], .monaco-button, .monaco-text-button, [class*="button"], [class*="btn"]') || node;
+              break;
+            }
+          }
+          if (!nextButton) return { success: false, error: 'No next button found', selectedOption: selectedText };
+          clickElement(nextButton);
+          return { success: true, selectedOption: selectedText, buttonClicked: (nextButton.innerText || nextButton.textContent || '').trim() };
+        })()
+      `,
+      returnByValue: true
+    });
+
+    const answerResult = result.result?.value || {};
+    if (!answerResult.success) {
+      return { success: false, action: 'answer', answer: selectedAnswer, error: answerResult.error || 'Failed to answer question dialog' };
+    }
+
+    await sleep(this.config.postActionDelayMs);
+    const dialogAfter = await this.checkForApprovalDialog();
+    return {
+      success: !dialogAfter.needsApproval,
+      action: 'answer',
+      answer: selectedAnswer,
+      selectedOption: answerResult.selectedOption,
+      buttonClicked: answerResult.buttonClicked,
+      error: dialogAfter.needsApproval ? 'Question dialog remained visible after answering' : undefined
+    };
   }
 
   /**
@@ -2492,7 +2761,7 @@ class DomDriver {
 
   async newChat() {
     const existingReviewGate = await this.checkTaskReviewGate();
-    if (existingReviewGate.awaitingReview) {
+    if (existingReviewGate.awaitingReview && existingReviewGate.reviewCount !== 0) {
       const gateResolution = await this.resolveTaskReviewGate('keep_all');
       if (!gateResolution.success) {
         throw new Error(`Task review gate blocked new chat: ${gateResolution.reason || gateResolution.error || 'unknown'}`);
