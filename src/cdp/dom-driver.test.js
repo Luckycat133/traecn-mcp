@@ -410,6 +410,182 @@ test('resolveTaskReviewGate short-circuits when no review gate is present', asyn
   assert.strictEqual(result.reason, 'no_review_gate');
 });
 
+test('approveDialog dismiss handles Trae review scope question cards', async () => {
+  let calls = 0;
+  const driver = new DomDriver({
+    send: async () => {
+      calls++;
+      if (calls === 1) {
+        return {
+          result: {
+            value: {
+              found: true,
+              title: 'Review Scope',
+              buttons: ['取消', '下一个'],
+              type: 'review_scope_question',
+              isCommandExec: false,
+              canAutoApprove: false
+            }
+          }
+        };
+      }
+      if (calls === 2) {
+        return { result: { value: { clicked: true, buttonText: '取消' } } };
+      }
+      return { result: { value: { found: false } } };
+    }
+  }, getConfig());
+
+  const result = await driver.approveDialog('dismiss');
+
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.buttonClicked, '取消');
+  assert.strictEqual(calls, 3);
+});
+
+test('checkForApprovalDialog exposes review scope answer options', async () => {
+  const driver = new DomDriver({
+    send: async () => ({
+      result: {
+        value: {
+          found: true,
+          title: 'Review Scope',
+          buttons: ['取消', '下一个'],
+          options: [
+            { label: 'Latest commit changes', description: 'Review only the changes in the most recent commit' },
+            { label: 'Uncommitted changes', description: 'Review any uncommitted or staged workspace changes' }
+          ],
+          type: 'review_scope_question',
+          isCommandExec: false,
+          canAutoApprove: false
+        }
+      }
+    })
+  }, getConfig());
+
+  const dialog = await driver.checkForApprovalDialog();
+
+  assert.strictEqual(dialog.needsApproval, true);
+  assert.strictEqual(dialog.dialogType, 'review_scope_question');
+  assert.strictEqual(dialog.options.length, 2);
+  assert.strictEqual(dialog.options[1].label, 'Uncommitted changes');
+});
+
+test('checkForApprovalDialog parses current Trae review scope option labels', async () => {
+  const cardText = [
+    'What would you like me to review?',
+    'Current workspace changes',
+    'Review uncommitted/staged changes in the workspace',
+    'Changes compared to a branch',
+    'Review diff against a specific branch (e.g., main, develop)',
+    'A specific MR/PR',
+    'Review a specific pull request by number',
+    'Specific files',
+    'Review specific file(s) in the project',
+    '其他',
+    '1/2',
+    'Review scope',
+    '取消',
+    '下一个',
+    '正在等待你的操作'
+  ].join(' ');
+  const driver = new DomDriver({
+    send: async () => ({
+      result: {
+        value: {
+          found: true,
+          title: 'Review Scope',
+          buttons: ['取消', '下一个'],
+          options: [
+            { label: 'Current workspace changes', description: 'Review uncommitted/staged changes in the workspace' },
+            { label: 'Changes compared to a branch', description: 'Review diff against a specific branch (e.g., main, develop)' },
+            { label: 'A specific MR/PR', description: 'Review a specific pull request by number' },
+            { label: 'Specific files', description: 'Review specific file(s) in the project' },
+            { label: '其他', description: '1/2 Review scope 取消 下一个 正在等待你的操作' }
+          ],
+          type: 'review_scope_question',
+          isCommandExec: false,
+          canAutoApprove: false,
+          debugText: cardText
+        }
+      }
+    })
+  }, getConfig());
+
+  const dialog = await driver.checkForApprovalDialog();
+
+  assert.deepStrictEqual(dialog.options.slice(0, 4).map(option => option.label), [
+    'Current workspace changes',
+    'Changes compared to a branch',
+    'A specific MR/PR',
+    'Specific files'
+  ]);
+});
+
+test('answerQuestionDialog selects a review scope option and advances', async () => {
+  let calls = 0;
+  const driver = new DomDriver({
+    send: async () => {
+      calls++;
+      if (calls === 1) {
+        return {
+          result: {
+            value: {
+              found: true,
+              title: 'Review Scope',
+              buttons: ['取消', '下一个'],
+              type: 'review_scope_question',
+              isCommandExec: false,
+              canAutoApprove: false
+            }
+          }
+        };
+      }
+      if (calls === 2) {
+        return {
+          result: {
+            value: {
+              success: true,
+              selectedOption: 'Uncommitted changes Review any uncommitted or staged workspace changes',
+              buttonClicked: '下一个'
+            }
+          }
+        };
+      }
+      return { result: { value: { found: false } } };
+    }
+  }, getConfig());
+
+  const result = await driver.answerQuestionDialog('Uncommitted changes');
+
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.action, 'answer');
+  assert.strictEqual(result.buttonClicked, '下一个');
+  assert.match(result.selectedOption, /Uncommitted changes/);
+  assert.strictEqual(calls, 3);
+});
+
+test('newChat ignores empty review gate with zero pending files', async () => {
+  const driver = new DomDriver({
+    send: async () => ({ result: { value: null } })
+  }, getConfig());
+  let resolveCalled = false;
+  let captures = 0;
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: true, reviewCount: 0 });
+  driver.resolveTaskReviewGate = async () => {
+    resolveCalled = true;
+    return { success: false };
+  };
+  driver._captureIdePanelText = async () => (++captures === 1 ? 'old panel' : 'new panel');
+  driver._waitForExpression = async () => true;
+  driver.findNewChatButton = async () => null;
+
+  const result = await driver.newChat();
+
+  assert.strictEqual(resolveCalled, false);
+  assert.strictEqual(result, true);
+});
+
 test('extractLatestIdeAssistantState waits for assistant turn after latest user turn', () => {
   const driver = new DomDriver(null, getConfig());
   const state = driver._extractLatestIdeAssistantState({
@@ -528,6 +704,43 @@ test('collectResponse strips IDE role and completion wrappers', async () => {
   const result = await driver.collectResponse();
   assert.strictEqual(result.stable, true);
   assert.strictEqual(result.text, 'TRAECN_REAL_UAT_OK_20260612B');
+});
+
+test('collectResponse waits past IDE prompt echo before final assistant text', async () => {
+  const config = getConfig();
+  config.timeoutMs = 500;
+  config.pollIntervalMs = 10;
+  config.approvalPollIntervalMs = 0;
+  const driver = new DomDriver({
+    send: async () => {},
+    on: () => {},
+    off: () => {}
+  }, config);
+  let polls = 0;
+  driver.detectMode = async () => ({ mode: 'ide', confidence: 0.9, indicators: ['ide'] });
+  driver._pollResponseState = async () => {
+    polls++;
+    if (polls === 1) {
+      return {
+        taskComplete: true,
+        taskText: '',
+        taskInProgress: false,
+        responseText: '09:20 用户 演示任务：请只回复 TRAECN_DEMO_OK_20260613，不要输出其它内容。Agent'
+      };
+    }
+    return {
+      taskComplete: true,
+      taskText: 'Agent\n思考过程\n\nTRAECN_DEMO_OK_20260613\n\n任务完成',
+      taskInProgress: true,
+      responseText: ''
+    };
+  };
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, taskCompleted: false });
+  driver.checkForApprovalDialog = async () => ({ needsApproval: false });
+
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.stable, true);
+  assert.strictEqual(result.text, 'TRAECN_DEMO_OK_20260613');
 });
 
 test('stopGeneration clicks visible stop button', async () => {

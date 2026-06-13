@@ -1211,7 +1211,9 @@ function generateOpenAPISpec() {
                 schema: {
                   type: 'object',
                   properties: {
-                    action: { type: 'string', enum: ['auto', 'trust', 'allow', 'confirm', 'approve', 'deny', 'cancel', 'dismiss'] }
+                    action: { type: 'string', enum: ['auto', 'trust', 'allow', 'confirm', 'approve', 'deny', 'cancel', 'dismiss', 'answer'] },
+                    answer: { type: 'string', description: 'Answer text or option label for Trae question cards, e.g. Uncommitted changes' },
+                    option: { type: 'string', description: 'Alias for answer' }
                   }
                 }
               }
