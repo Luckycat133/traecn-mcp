@@ -821,7 +821,10 @@ class Gateway {
               elapsedMs: task.result.elapsedMs || 0,
               timedOut: task.result.timedOut || false,
               needsApproval: task.result.needsApproval || false,
-              question: task.result.question || ''
+              question: task.result.question || '',
+              dialogType: task.result.dialogType || null,
+              buttons: task.result.buttons || [],
+              options: task.result.options || []
             } : null,
             error: task.error || null,
             followupCount: task.followupTasks?.length || 0,
@@ -867,6 +870,7 @@ class Gateway {
     if (!text) return false;
     if (text.length < 80) return false;
     if (this._isFailedResultText(text)) return false;
+    if (this._isIncompleteReviewText(text)) return false;
     if (/^solo\s*agent\s*思考中/i.test(text)) return false;
     if (/^调用技能[:：]/i.test(text)) return false;
     if (/^(i'll|i will)\s+start\b/i.test(text)) return false;
@@ -880,7 +884,7 @@ class Gateway {
     if (!result || result.needsApproval) return false;
     if (result.timedOut || result.truncated || result.streaming || result.modelError) return false;
     const text = typeof result.text === 'string' ? result.text.trim() : '';
-    if (!this._hasMeaningfulResultText(text) || this._isFailedResultText(text)) return false;
+    if (!this._hasMeaningfulResultText(text) || this._isFailedResultText(text) || this._isIncompleteReviewText(text)) return false;
     return result.stable === true;
   }
 
@@ -904,6 +908,18 @@ class Gateway {
       'cancelled output',
       'generation stopped'
     ].some(pattern => value.toLowerCase().includes(pattern.toLowerCase()));
+  }
+
+  _isIncompleteReviewText(text) {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return true;
+    return [
+      /(?:^|\s)\d+\s*\/\s*\d+\s*已完成/i,
+      /思考中[.。…]*/i,
+      /\bthought\b/i,
+      /\blet me (now )?(look|check|read|inspect|explore|review)\b/i,
+      /调用技能[:：]/i
+    ].some(pattern => pattern.test(value));
   }
 
   async _finalizeBackgroundTask(taskId, task, status, payload = {}) {
@@ -2275,89 +2291,134 @@ class Gateway {
       return this._json(req, res, { error: 'projectPath is required' }, 400);
     }
 
-    const { spawn } = require('child_process');
     const projectPath = body.projectPath;
+    const newInstance = body.newInstance === true;
     let result;
 
     try {
-      const SPAWN_TIMEOUT_MS = 10000;
-      const child = spawn('trae-cn', ['--reuse-window', projectPath], {
-        stdio: 'pipe'
-      });
+      // Use the existing quickstart machinery so we honor TRAECN_BIN / platform-specific
+      // binary resolution (.app bundles on macOS, .exe on Windows) instead of relying on
+      // a `trae-cn` shim that does not exist on this machine.
+      const {
+        findTraeCNBinary,
+        isTraeCNRunning,
+        startTraeCN
+      } = require('../config/quickstart');
 
-      const spawnTimeout = setTimeout(() => {
-        child.kill('SIGTERM');
-      }, SPAWN_TIMEOUT_MS);
+      const cdpHost = process.env.TRAECN_CDP_HOST || process.env.TRAE_CDP_HOST || '127.0.0.1';
+      const cdpPort = process.env.TRAECN_REMOTE_DEBUGGING_PORT || process.env.TRAE_REMOTE_DEBUGGING_PORT || '9222';
 
-      result = await new Promise((resolve) => {
-        let stdout = '';
-        let stderr = '';
-        child.stdout.on('data', d => stdout += d);
-        child.stderr.on('data', d => stderr += d);
-        child.on('error', (err) => {
-          clearTimeout(spawnTimeout);
-          resolve({ success: false, error: err.message });
-        });
-        child.on('close', (code) => {
-          clearTimeout(spawnTimeout);
-          resolve({
-            success: code === 0,
-            projectPath,
-            exitCode: code,
-            stdout: stdout.trim(),
-            stderr: stderr.trim()
-          });
-        });
-      });
+      const alreadyRunning = isTraeCNRunning();
 
-      if (result.success) {
-        // Poll for CDP target readiness (replaces hardcoded sleep)
-        const { fetchCDPTargets } = require('../cdp/discovery');
-        const host = process.env.TRAECN_CDP_HOST || process.env.TRAE_CDP_HOST || '127.0.0.1';
-        const port = process.env.TRAECN_REMOTE_DEBUGGING_PORT || process.env.TRAE_REMOTE_DEBUGGING_PORT || '9222';
-        const maxWaitMs = 15000;
-        const pollIntervalMs = 1000;
-        const startTime = Date.now();
-
-        let pageTarget = null;
-        while (Date.now() - startTime < maxWaitMs) {
-          try {
-            const targets = await fetchCDPTargets(host, port);
-            pageTarget = targets.find(t => t.type === 'page');
-            if (pageTarget && pageTarget.webSocketDebuggerUrl) break;
-          } catch (e) {
-            // CDP not ready yet — retry
-          }
-          await new Promise(r => this._setTimeout(r, pollIntervalMs));
-        }
-
-        // Try to check for restricted mode dialog via CDP
+      if (alreadyRunning && !newInstance) {
+        // TraeCN is already running. Restarting it would lose the user's session,
+        // unsaved buffers, and AI chat context. We refuse to spawn a duplicate and
+        // report the current surface so the caller can decide what to do (e.g.
+        // ask the user to switch projects manually, or call --newInstance=true
+        // to opt into spawning a separate window).
+        let currentSurface = null;
         try {
-          const { CDPClient } = require('../cdp/client');
-
-          if (pageTarget && pageTarget.webSocketDebuggerUrl) {
-            const cdpClient = new CDPClient(pageTarget.webSocketDebuggerUrl);
-            await cdpClient.connect();
-            await cdpClient.send('DOM.enable');
-            await cdpClient.send('Runtime.enable');
-            const { DomDriver } = require('../cdp/dom-driver');
-            const tempDriver = new DomDriver(cdpClient);
-            const restrictedCheck = await tempDriver.checkRestrictedMode();
-            await cdpClient.close();
-
-            if (restrictedCheck && restrictedCheck.restricted) {
-              result.restrictedMode = true;
-              result.restrictedInfo = restrictedCheck;
-              result.message = '受限模式已启用，请在Trae CN窗口手动点击「信任」以继续';
-            }
+          const { fetchCDPTargets } = require('../cdp/discovery');
+          const targets = await fetchCDPTargets(cdpHost, cdpPort);
+          const page = targets.find(t => t.type === 'page');
+          if (page) {
+            currentSurface = {
+              targetId: page.id,
+              title: page.title,
+              url: page.url
+            };
           }
-        } catch (cdpErr) {
-          // CDP not available yet (gateway just started, browser not ready) — non-fatal
-          result._cdpCheckNote = 'CDP check skipped: ' + cdpErr.message;
+        } catch (e) {
+          // CDP probe failed — TraeCN may be running but unreachable. Fall through
+          // to the not-running path so the caller can still try to start a fresh
+          // instance.
         }
+
+        result = {
+          success: false,
+          alreadyRunning: true,
+          projectPath,
+          currentSurface,
+          cdp: { host: cdpHost, port: cdpPort },
+          hint: 'TraeCN is already running. Pass newInstance=true to spawn a separate window, or stop TraeCN first.',
+          error: currentSurface
+            ? `TraeCN is already running on workspace "${currentSurface.title || '(untitled)'}".`
+            : 'TraeCN is already running but CDP did not return any page target.'
+        };
+        this._json(req, res, result, 409);
+        return;
+      }
+
+      // TraeCN is not running (or caller asked for a separate window). Start it
+      // with the project via the canonical quickstart helper so we get the right
+      // binary path, --remote-debugging-port, and platform-correct spawn args.
+      const binPath = findTraeCNBinary();
+      if (!binPath) {
+        result = {
+          success: false,
+          projectPath,
+          error: 'TraeCN binary not found. Set TRAECN_BIN environment variable.'
+        };
+        this._json(req, res, result, 404);
+        return;
+      }
+
+      const startResult = startTraeCN({ binPath, projectPath, newInstance });
+      result = {
+        success: true,
+        projectPath,
+        binPath,
+        pid: startResult.pid,
+        command: startResult.command,
+        args: startResult.args,
+        cdp: { host: cdpHost, port: cdpPort },
+        started: true
+      };
+
+      // Poll for CDP target readiness (replaces hardcoded sleep)
+      const { fetchCDPTargets } = require('../cdp/discovery');
+      const maxWaitMs = 15000;
+      const pollIntervalMs = 1000;
+      const startTime = Date.now();
+
+      let pageTarget = null;
+      while (Date.now() - startTime < maxWaitMs) {
+        try {
+          const targets = await fetchCDPTargets(cdpHost, cdpPort);
+          pageTarget = targets.find(t => t.type === 'page');
+          if (pageTarget && pageTarget.webSocketDebuggerUrl) break;
+        } catch (e) {
+          // CDP not ready yet — retry
+        }
+        await new Promise(r => this._setTimeout(r, pollIntervalMs));
+      }
+
+      // Try to check for restricted mode dialog via CDP
+      try {
+        const { CDPClient } = require('../cdp/client');
+
+        if (pageTarget && pageTarget.webSocketDebuggerUrl) {
+          const cdpClient = new CDPClient(pageTarget.webSocketDebuggerUrl);
+          await cdpClient.connect();
+          await cdpClient.send('DOM.enable');
+          await cdpClient.send('Runtime.enable');
+          const { DomDriver } = require('../cdp/dom-driver');
+          const tempDriver = new DomDriver(cdpClient);
+          const restrictedCheck = await tempDriver.checkRestrictedMode();
+          await cdpClient.close();
+
+          if (restrictedCheck && restrictedCheck.restricted) {
+            result.restrictedMode = true;
+            result.restrictedInfo = restrictedCheck;
+            result.message = '受限模式已启用，请在Trae CN窗口手动点击「信任」以继续';
+          }
+        }
+      } catch (cdpErr) {
+        // CDP not available yet (gateway just started, browser not ready) — non-fatal
+        result._cdpCheckNote = 'CDP check skipped: ' + cdpErr.message;
       }
     } catch (err) {
-      result = { success: false, error: err.message };
+      result = { success: false, projectPath, error: err.message };
     }
 
     this._json(req, res, result);
@@ -2509,6 +2570,29 @@ class Gateway {
       });
     }
 
+    if (action === 'answer') {
+      const answer = body.answer || body.option || body.value;
+      if (!answer) {
+        return this._json(req, res, { error: 'answer is required for dialog answer action' }, 400);
+      }
+      if (typeof this.driver.answerQuestionDialog !== 'function') {
+        return this._json(req, res, { error: 'Driver does not support question dialog answers' }, 501);
+      }
+      const result = await this.driver.answerQuestionDialog(answer);
+      const resumedTaskIds = result.success
+        ? this._resumeApprovalRequiredTasksAfterDialogAnswer(answer, result)
+        : [];
+      return this._json(req, res, {
+        success: result.success,
+        action,
+        answer,
+        resumedTaskIds,
+        selectedOption: result.selectedOption,
+        buttonClicked: result.buttonClicked,
+        error: result.error
+      });
+    }
+
     if (!['trust', 'allow', 'confirm', 'approve', 'deny', 'cancel', 'dismiss'].includes(action)) {
       return this._json(req, res, { error: 'Invalid action: ' + action }, 400);
     }
@@ -2567,6 +2651,10 @@ class Gateway {
       dialogType: dialog.dialogType || null,
       question: dialog.question || null,
       buttons: dialog.buttons || [],
+      options: dialog.options || [],
+      answerAction: dialog.dialogType === 'review_scope_question'
+        ? { endpoint: '/api/dialog/approve', method: 'POST', body: { action: 'answer', answer: '<option label>' } }
+        : null,
       canAutoApprove: dialog.canAutoApprove || false
     });
   }
@@ -2830,9 +2918,7 @@ class Gateway {
           includeProcessText,
           notifyUrl: body.notifyUrl
         }, { queued: false, running: false, queueMessage: 'recovered from review gate' });
-        await this._finalizeBackgroundTask(task.taskId, task, 'awaiting_review', {
-          result: recoveredResult
-        });
+        await this._finalizeCollectedBackgroundResult(task.taskId, task, recoveredResult);
         return this._json(req, res, {
           taskId: task.taskId,
           status: task.status,
@@ -2872,13 +2958,10 @@ class Gateway {
         includeProcessText,
         notifyUrl: body.notifyUrl
       }, { queued: false, running: false, queueMessage: 'immediate execution' });
-      const status = result.needsApproval
-        ? 'approval_required'
-        : (this._isReviewableResult(result) ? 'awaiting_review' : 'error');
-      await this._finalizeBackgroundTask(task.taskId, task, status, {
-        result,
-        error: status === 'error' ? 'Trae returned an incomplete or timed-out result before review' : undefined
-      });
+      task.submittedToTrae = true;
+      task.submittedAt = Date.now();
+      task.queueState = 'running';
+      await this._finalizeCollectedBackgroundResult(task.taskId, task, result);
       return this._json(req, res, {
         taskId: task.taskId,
         status: task.status,
@@ -2886,7 +2969,11 @@ class Gateway {
         followupCount: task.followupTasks.length,
         message: task.status === 'approval_required'
           ? 'Trae 结果需要先处理确认弹窗'
-          : (task.status === 'awaiting_review' ? 'Trae 已完成，等待人工审查' : 'Trae 返回了不完整或超时结果，未进入审查'),
+          : (task.status === 'awaiting_review'
+              ? 'Trae 已完成，等待人工审查'
+              : (task.status === 'executing'
+                  ? 'Trae 已返回过程文本，任务已转入后台继续收集。用 traecn_task_status 查询进度'
+                  : 'Trae 返回了不完整或超时结果，未进入审查')),
         resultPreview: (result.text || '').slice(0, 500)
       }, task.status === 'error' ? 504 : 202);
     }
@@ -3010,7 +3097,13 @@ class Gateway {
         response.result = {
           text: task.result?.text || '',
           needsApproval: true,
-          question: task.result?.question || ''
+          question: task.result?.question || '',
+          dialogType: task.result?.dialogType || null,
+          buttons: task.result?.buttons || [],
+          options: task.result?.options || [],
+          answerAction: task.result?.dialogType === 'review_scope_question'
+            ? { endpoint: '/api/dialog/approve', method: 'POST', body: { action: 'answer', answer: '<option label>' } }
+            : null
         };
         break;
       case 'awaiting_review':
@@ -3429,16 +3522,17 @@ class Gateway {
     }
   }
 
-  _backgroundResultRetryMode(result) {
+  _backgroundResultRetryMode(result, task = null) {
     if (!result || result.needsApproval) return null;
     const text = typeof result.text === 'string' ? result.text.trim() : '';
-    if (result.timedOut || result.truncated || result.streaming || !this._hasMeaningfulResultText(text)) return 'collect';
     if (result.modelError || this._isFailedResultText(text)) return 'resubmit';
+    if (task?.reviewRequired === true && !this._isReviewableResult(result)) return 'collect';
+    if (result.timedOut || result.truncated || result.streaming || result.stable !== true || !this._hasMeaningfulResultText(text)) return 'collect';
     return null;
   }
 
   async _retryBackgroundTaskAfterResult(taskId, task, result, options = {}) {
-    const retryMode = this._backgroundResultRetryMode(result);
+    const retryMode = this._backgroundResultRetryMode(result, task);
     if (!retryMode) return false;
 
     const maxAttempts = Number.isFinite(Number(options.maxAttempts))
@@ -3448,11 +3542,10 @@ class Gateway {
     if (attempts >= maxAttempts) return false;
 
     task.attempts = attempts + 1;
-    task.error = result?.error || (
-      retryMode === 'collect'
-        ? 'Trae result was incomplete; collecting again'
-        : 'Trae returned a failed result; resubmitting task'
-    );
+    const retryMessage = retryMode === 'collect'
+      ? 'Trae result was incomplete; collecting again'
+      : 'Trae returned a failed result; resubmitting task';
+    task.error = result?.error ? `${retryMessage}: ${result.error}` : retryMessage;
     task.result = result;
     if (retryMode === 'collect' && task.submittedToTrae === true) {
       task.status = 'executing';
@@ -3493,6 +3586,7 @@ class Gateway {
     task.attempts = attempts + 1;
     task.error = err?.message || String(err || 'unknown error');
     task.status = task.submittedToTrae === true ? 'executing' : 'queued';
+    task.queueState = task.status;
     this.taskHistoryStore.recordStep(taskId, 'retry_scheduled', {
       success: true,
       details: {
@@ -3517,6 +3611,48 @@ class Gateway {
     const result = await this.driver.collectResponse();
     await this._finalizeCollectedBackgroundResult(taskId, task, result);
     return result;
+  }
+
+  _resumeApprovalRequiredTasksAfterDialogAnswer(answer, result = {}) {
+    const resumedTaskIds = [];
+    const answeredAt = Date.now();
+
+    for (const [taskId, task] of this.taskQueue) {
+      if (task.status !== 'approval_required') continue;
+
+      const dialogType = String(task.result?.dialogType || '');
+      const question = String(task.result?.question || '');
+      const isReviewScopeQuestion = dialogType === 'review_scope_question'
+        || /review scope|what would you like me to review/i.test(question);
+      if (!isReviewScopeQuestion) continue;
+
+      task.status = 'executing';
+      task.submittedToTrae = true;
+      task.submittedAt = task.submittedAt || answeredAt;
+      task.queueState = 'running';
+      task.queueMessage = 'question answered; waiting for Trae result';
+      task.error = null;
+      task.answeredDialog = {
+        answer,
+        selectedOption: result.selectedOption || null,
+        buttonClicked: result.buttonClicked || null,
+        answeredAt
+      };
+
+      this.taskHistoryStore.recordStep(taskId, 'dialog_answered', {
+        success: true,
+        details: task.answeredDialog
+      });
+      this._syncTaskHistoryMirror(task);
+      resumedTaskIds.push(taskId);
+    }
+
+    if (resumedTaskIds.length > 0) {
+      this._persistActiveQueue();
+      this._ensureBackgroundPolling();
+    }
+
+    return resumedTaskIds;
   }
 
   async _handleAdoptCurrentTask(req, res) {
@@ -3617,18 +3753,16 @@ class Gateway {
                 const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
                 if (recoveredResult) {
                   task.result = recoveredResult;
-                  await this._finalizeBackgroundTask(taskId, task, 'awaiting_review', {
-                    result: recoveredResult
-                  });
+                  await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
                   continue;
                 }
               }
               if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
                 continue;
               }
-              task.error = e.message;
-              this._syncTaskHistoryMirror(task);
-              this._persistActiveQueue();
+              await this._finalizeBackgroundTask(taskId, task, 'error', {
+                error: e.message
+              });
             } finally {
               this.taskLocks.delete(taskId);
             }
@@ -3699,9 +3833,7 @@ class Gateway {
                 const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
                 if (recoveredResult) {
                   task.result = recoveredResult;
-                  await this._finalizeBackgroundTask(taskId, task, 'awaiting_review', {
-                    result: recoveredResult
-                  });
+                  await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
                   continue;
                 }
               }

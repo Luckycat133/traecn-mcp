@@ -535,6 +535,7 @@ test('Gateway only treats stable non-timeout output as reviewable', () => {
   assert.strictEqual(gateway._isReviewableResult({ text: 'Thought\nFindings\nP1 fake', stable: true }), false);
   assert.strictEqual(gateway._isReviewableResult({ text: 'Agent\n手动终止输出', stable: true }), false);
   assert.strictEqual(gateway._isReviewableResult({ text: 'Agent\n异常打断', stable: true }), false);
+  assert.strictEqual(gateway._isReviewableResult({ text: '0/9 已完成 探索项目结构 审查自动排队机制 Thought Let me now look at the key areas more closely. 思考中...'.repeat(2), stable: true }), false);
 });
 
 test('Gateway only treats stable non-error output as successful', () => {
@@ -666,14 +667,60 @@ asyncTest('Gateway schedules retry instead of final error for transient backgrou
 
   assert.strictEqual(retried, true);
   assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.queueState, 'executing');
   assert.strictEqual(task.attempts, 1);
   assert.strictEqual(task.error, 'CDP disconnected');
+
+  task.submittedToTrae = false;
+  task.queueState = 'running';
+  task.status = 'running';
+  task.attempts = 0;
+  const requeued = await gateway._retryBackgroundTaskAfterError(task.taskId, task, new Error('model busy'), {
+    maxAttempts: 2
+  });
+  assert.strictEqual(requeued, true);
+  assert.strictEqual(task.status, 'queued');
+  assert.strictEqual(task.queueState, 'queued');
 
   task.attempts = 2;
   const exhausted = await gateway._retryBackgroundTaskAfterError(task.taskId, task, new Error('still broken'), {
     maxAttempts: 2
   });
   assert.strictEqual(exhausted, false);
+});
+
+asyncTest('Gateway finalizes submitted executing task after recovery retries are exhausted', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue = new Map();
+  gateway.taskLocks = new Set();
+  let pollOnce = null;
+  gateway._setInterval = (fn) => {
+    pollOnce = fn;
+    return { id: 'timer' };
+  };
+  gateway._clearInterval = () => {};
+  gateway._collectSubmittedBackgroundTask = async () => {
+    throw new Error('CDP disconnected permanently');
+  };
+  gateway._emitTaskNotification = async () => {};
+
+  const task = {
+    taskId: 'task_submitted_retry_exhausted',
+    status: 'executing',
+    task: 'review repo',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    attempts: 3,
+    reviewRequired: true,
+    followupTasks: []
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  gateway._ensureBackgroundPolling();
+  await pollOnce();
+
+  assert.strictEqual(task.status, 'error');
+  assert.strictEqual(task.error, 'CDP disconnected permanently');
 });
 
 asyncTest('Gateway keeps submitted task executing when collected result times out', async () => {
@@ -728,6 +775,59 @@ asyncTest('Gateway keeps collecting when result is only a role label', async () 
   assert.strictEqual(task.attempts, 1);
 });
 
+asyncTest('Gateway keeps collecting short UI noise for review-required tasks', async () => {
+  const gateway = new Gateway();
+  const task = {
+    taskId: 'task_retry_ui_noise',
+    status: 'executing',
+    task: 'review repo',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    attempts: 0,
+    reviewRequired: true,
+    followupTasks: []
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '(parameter) res: any',
+    stable: true,
+    elapsedMs: 4033
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.submittedToTrae, true);
+  assert.strictEqual(task.attempts, 1);
+  assert.match(task.error, /collecting again/);
+});
+
+asyncTest('Gateway keeps collecting incomplete review-gate process text', async () => {
+  const gateway = new Gateway();
+  const task = {
+    taskId: 'task_retry_process_review',
+    status: 'executing',
+    task: 'review repo',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    attempts: 0,
+    reviewRequired: true,
+    followupTasks: []
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '0/9 已完成 探索项目结构 审查自动排队机制 Thought Let me now look at the key areas more closely. 思考中...'.repeat(2),
+    stable: false,
+    elapsedMs: 381904,
+    reviewGatePending: true
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.submittedToTrae, true);
+  assert.strictEqual(task.attempts, 1);
+  assert.match(task.error, /collecting again/);
+});
+
 asyncTest('Gateway resubmits background task when Trae returns failed text', async () => {
   const gateway = new Gateway();
   const task = {
@@ -747,6 +847,35 @@ asyncTest('Gateway resubmits background task when Trae returns failed text', asy
     text: 'Agent\n手动终止输出',
     stable: true,
     elapsedMs: 1234
+  });
+
+  assert.strictEqual(task.status, 'queued');
+  assert.strictEqual(task.submittedToTrae, false);
+  assert.strictEqual(task.submittedAt, null);
+  assert.strictEqual(task.attempts, 1);
+  assert.match(task.error, /resubmitting task/);
+});
+
+asyncTest('Gateway resubmits background task when Trae reports model error', async () => {
+  const gateway = new Gateway();
+  const task = {
+    taskId: 'task_retry_model_error',
+    status: 'executing',
+    task: 'review repo',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    submittedAt: Date.now() - 3000,
+    attempts: 0,
+    reviewRequired: true,
+    followupTasks: []
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '模型请求失败',
+    stable: false,
+    modelError: true,
+    error: 'Trae model request failed'
   });
 
   assert.strictEqual(task.status, 'queued');
@@ -1026,8 +1155,8 @@ asyncTest('Gateway sync delegate_async recovers review gate into awaiting_review
   };
   gateway._ensureConnection = async () => {};
   gateway._recoverAwaitingReviewFromGate = async () => ({
-    text: 'Agent 审查结果内容',
-    stable: false,
+    text: 'Findings\nP2 src/http/gateway.js: review gate recovery returned a concrete actionable finding with enough detail to be reviewable by the caller.',
+    stable: true,
     elapsedMs: 1234,
     timedOut: false,
     needsApproval: false,
@@ -1062,7 +1191,7 @@ asyncTest('Gateway sync delegate_async recovers review gate into awaiting_review
   assert.strictEqual(responseStatus, 202);
   assert.strictEqual(responseData.status, 'awaiting_review');
   assert.strictEqual(responseData.taskId, 'task_sync_recover');
-  assert.ok(responseData.resultPreview.includes('审查结果内容'));
+  assert.ok(responseData.resultPreview.includes('Findings'));
 });
 
 asyncTest('Gateway switch-model can return immediately with queue details when waitForQueue is false', async () => {
@@ -1317,6 +1446,47 @@ asyncTest('Gateway sync delegate timeout converts submitted request to tracked b
   assert.ok(trackedTask.result.text.includes('Findings'));
 });
 
+asyncTest('Gateway sync delegate keeps collecting incomplete review output in background', async () => {
+  const gateway = new Gateway();
+  gateway.driver = {
+    config: { queuePerTaskTimeoutMs: 1000 },
+    checkQueueStatus: async () => ({ queued: false, running: false, canSubmit: true, currentModel: 'DeepSeek-V4-Pro' }),
+    delegate: async () => ({
+      text: '好，让我来 review 这个 TRAECNclaw 项目。 0/5 已完成 了解项目结构和架构 审查核心代码：gateway.js 总结发现的问题和建议 审查安全和配置 审查测试质量',
+      stable: true,
+      elapsedMs: 15341
+    })
+  };
+  gateway._ensureConnection = async () => {};
+  gateway._ensureBackgroundPolling = () => {};
+
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+
+  const req = new Readable({
+    read() {
+      this.push(JSON.stringify({ task: 'review repo', waitForQueue: true, reviewRequired: true }));
+      this.push(null);
+    }
+  });
+  req.headers = { 'content-type': 'application/json' };
+
+  await gateway._handleDelegateAsync(req, {});
+
+  assert.strictEqual(responseStatus, 202);
+  assert.strictEqual(responseData.status, 'executing');
+  assert.match(responseData.message, /后台继续收集/);
+  const task = gateway.taskQueue.get(responseData.taskId);
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.submittedToTrae, true);
+  assert.strictEqual(task.attempts, 1);
+});
+
 test('Gateway _clearAllTimers uses only clearTimeout (not redundant clearInterval)', () => {
   const gateway = new Gateway();
   const timer = gateway._setTimeout(() => {}, 10000);
@@ -1479,6 +1649,103 @@ test('Gateway preflight allows delegation when queue notice is advisory but send
   assert.strictEqual(nextAction, 'delegate_async');
 });
 
+asyncTest('Gateway dialog approve can answer Trae question cards', async () => {
+  const gateway = new Gateway();
+  gateway._ensureConnection = async () => {};
+  let pollingStarted = false;
+  gateway._ensureBackgroundPolling = () => { pollingStarted = true; };
+  gateway.driver = {
+    checkForApprovalDialog: async () => ({
+      needsApproval: true,
+      dialogType: 'review_scope_question',
+      question: 'Review Scope',
+      buttons: ['取消', '下一个']
+    }),
+    checkRestrictedMode: async () => ({ restricted: false }),
+    answerQuestionDialog: async (answer) => ({
+      success: true,
+      action: 'answer',
+      answer,
+      selectedOption: 'Uncommitted changes Review any uncommitted or staged workspace changes',
+      buttonClicked: '下一个'
+    })
+  };
+  gateway.taskQueue.set('task_waiting_for_scope', {
+    taskId: 'task_waiting_for_scope',
+    task: 'review repo',
+    status: 'approval_required',
+    result: {
+      needsApproval: true,
+      dialogType: 'review_scope_question',
+      question: 'Review Scope'
+    },
+    submittedToTrae: true,
+    createdAt: Date.now()
+  });
+
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status) => {
+    responseData = data;
+    responseStatus = status;
+  };
+
+  const req = new Readable({
+    read() {
+      this.push(JSON.stringify({ action: 'answer', answer: 'Uncommitted changes' }));
+      this.push(null);
+    }
+  });
+  req.headers = { 'content-type': 'application/json' };
+
+  await gateway._handleDialogApprove(req, {});
+
+  assert.strictEqual(responseStatus, undefined);
+  assert.strictEqual(responseData.success, true);
+  assert.strictEqual(responseData.action, 'answer');
+  assert.strictEqual(responseData.answer, 'Uncommitted changes');
+  assert.strictEqual(responseData.buttonClicked, '下一个');
+  assert.deepStrictEqual(responseData.resumedTaskIds, ['task_waiting_for_scope']);
+  const resumedTask = gateway.taskQueue.get('task_waiting_for_scope');
+  assert.strictEqual(resumedTask.status, 'executing');
+  assert.strictEqual(resumedTask.submittedToTrae, true);
+  assert.strictEqual(resumedTask.queueState, 'running');
+  assert.strictEqual(resumedTask.answeredDialog.answer, 'Uncommitted changes');
+  assert.strictEqual(pollingStarted, true);
+});
+
+asyncTest('Gateway dialog status exposes Trae question options and answer action', async () => {
+  const gateway = new Gateway();
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    checkForApprovalDialog: async () => ({
+      needsApproval: true,
+      dialogType: 'review_scope_question',
+      question: 'Review Scope',
+      buttons: ['取消', '下一个'],
+      options: [
+        { label: 'Latest commit changes', description: 'Review only the latest commit' },
+        { label: 'Uncommitted changes', description: 'Review uncommitted workspace changes' }
+      ],
+      canAutoApprove: false
+    }),
+    checkRestrictedMode: async () => ({ restricted: false })
+  };
+
+  let responseData = null;
+  gateway._json = (req, res, data) => {
+    responseData = data;
+  };
+
+  await gateway._handleDialogStatus({}, {});
+
+  assert.strictEqual(responseData.hasDialog, true);
+  assert.strictEqual(responseData.dialogType, 'review_scope_question');
+  assert.strictEqual(responseData.options.length, 2);
+  assert.strictEqual(responseData.options[1].label, 'Uncommitted changes');
+  assert.deepStrictEqual(responseData.answerAction.body, { action: 'answer', answer: '<option label>' });
+});
+
 asyncTest('Gateway delegate-async keeps advisory queue in local background queue when waitForQueue=true', async () => {
   const gateway = new Gateway();
   gateway.driver = {
@@ -1560,6 +1827,162 @@ function restoreEnv(key, value) {
     process.env[key] = value;
   }
 }
+
+// ── open-project handler (v0.4.x) ───────────────────────────────────────
+
+asyncTest('Gateway open-project returns 400 when projectPath is missing', async () => {
+  const gateway = new Gateway();
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+
+  const req = new Readable({ read() {} });
+  req.headers = { 'content-type': 'application/json' };
+  req.push('{}');
+  req.push(null);
+
+  await gateway._handleOpenProject(req, {});
+  assert.strictEqual(responseStatus, 400);
+  assert.ok(responseData.error.includes('projectPath'));
+});
+
+asyncTest('Gateway open-project refuses to spawn when TraeCN is already running', async () => {
+  const gateway = new Gateway();
+  // Stub quickstart to simulate TraeCN already running with a live CDP target.
+  const quickstart = require('../config/quickstart');
+  const origIsRunning = quickstart.isTraeCNRunning;
+  const origFind = quickstart.findTraeCNBinary;
+  const origStart = quickstart.startTraeCN;
+  quickstart.isTraeCNRunning = () => true;
+  // Should never be called in this branch, but be defensive.
+  quickstart.startTraeCN = () => {
+    throw new Error('startTraeCN must not be invoked when TraeCN is already running');
+  };
+
+  // Stub the CDP discovery used inside the handler to report a stable surface.
+  const discovery = require('../cdp/discovery');
+  const origFetch = discovery.fetchCDPTargets;
+  discovery.fetchCDPTargets = async () => ([
+    { type: 'page', id: 'page-1', title: 'hello.py — TraeCNClaw', webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/page-1' }
+  ]);
+
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+
+  try {
+    const req = new Readable({ read() {} });
+    req.headers = { 'content-type': 'application/json' };
+    req.push(JSON.stringify({ projectPath: '/tmp/some-project' }));
+    req.push(null);
+
+    await gateway._handleOpenProject(req, {});
+    assert.strictEqual(responseStatus, 409);
+    assert.strictEqual(responseData.success, false);
+    assert.strictEqual(responseData.alreadyRunning, true);
+    assert.strictEqual(responseData.projectPath, '/tmp/some-project');
+    assert.ok(responseData.currentSurface);
+    assert.strictEqual(responseData.currentSurface.title, 'hello.py — TraeCNClaw');
+    assert.ok(/already running/i.test(responseData.error));
+    assert.ok(/newInstance/.test(responseData.hint));
+  } finally {
+    quickstart.isTraeCNRunning = origIsRunning;
+    quickstart.findTraeCNBinary = origFind;
+    quickstart.startTraeCN = origStart;
+    discovery.fetchCDPTargets = origFetch;
+  }
+});
+
+asyncTest('Gateway open-project can opt into a separate window via newInstance=true', async () => {
+  const gateway = new Gateway();
+  const quickstart = require('../config/quickstart');
+  const origIsRunning = quickstart.isTraeCNRunning;
+  const origFind = quickstart.findTraeCNBinary;
+  const origStart = quickstart.startTraeCN;
+  quickstart.isTraeCNRunning = () => true; // even with TraeCN running, opt-in should proceed
+  let startCalledWith = null;
+  quickstart.startTraeCN = (opts) => {
+    startCalledWith = opts;
+    return { pid: 12345, command: 'open', args: ['-a', '/Applications/Trae CN.app', '--args', '/tmp/some-project'] };
+  };
+  quickstart.findTraeCNBinary = () => '/Applications/Trae CN.app';
+
+  // CDP probe inside the handler should still run; return nothing so the polling
+  // loop times out gracefully and we don't have to mock the rest of the flow.
+  const discovery = require('../cdp/discovery');
+  const origFetch = discovery.fetchCDPTargets;
+  discovery.fetchCDPTargets = async () => [];
+
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+
+  try {
+    const req = new Readable({ read() {} });
+    req.headers = { 'content-type': 'application/json' };
+    req.push(JSON.stringify({ projectPath: '/tmp/some-project', newInstance: true }));
+    req.push(null);
+
+    await gateway._handleOpenProject(req, {});
+    assert.strictEqual(responseStatus, 200);
+    assert.strictEqual(responseData.success, true);
+    assert.strictEqual(responseData.started, true);
+    assert.strictEqual(responseData.pid, 12345);
+    assert.ok(startCalledWith);
+    assert.strictEqual(startCalledWith.projectPath, '/tmp/some-project');
+    assert.strictEqual(startCalledWith.newInstance, true);
+  } finally {
+    quickstart.isTraeCNRunning = origIsRunning;
+    quickstart.findTraeCNBinary = origFind;
+    quickstart.startTraeCN = origStart;
+    discovery.fetchCDPTargets = origFetch;
+  }
+});
+
+asyncTest('Gateway open-project returns 404 when no TraeCN binary is resolvable', async () => {
+  const gateway = new Gateway();
+  const quickstart = require('../config/quickstart');
+  const origIsRunning = quickstart.isTraeCNRunning;
+  const origFind = quickstart.findTraeCNBinary;
+  const origStart = quickstart.startTraeCN;
+  quickstart.isTraeCNRunning = () => false;
+  quickstart.findTraeCNBinary = () => null; // simulate the binary being uninstalled
+
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+
+  try {
+    const req = new Readable({ read() {} });
+    req.headers = { 'content-type': 'application/json' };
+    req.push(JSON.stringify({ projectPath: '/tmp/some-project' }));
+    req.push(null);
+
+    await gateway._handleOpenProject(req, {});
+    assert.strictEqual(responseStatus, 404);
+    assert.ok(/binary not found/i.test(responseData.error));
+  } finally {
+    quickstart.isTraeCNRunning = origIsRunning;
+    quickstart.findTraeCNBinary = origFind;
+    quickstart.startTraeCN = origStart;
+  }
+});
 
 (async () => {
   for (const { name, fn } of pendingAsyncTests) {
