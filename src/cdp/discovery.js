@@ -310,6 +310,12 @@ async function discoverTarget(options = {}) {
     if (r.status === 'fulfilled') live.push(r.value);
   }
 
+  // Preserve the score ordering from `candidates` instead of returning the
+  // first probe to complete — that ordering already knows which target is
+  // most likely the real IDE workbench, while Promise.allSettled returns
+  // results in completion order which has nothing to do with suitability.
+  live.sort((a, b) => (b.candidate.score || 0) - (a.candidate.score || 0));
+
   function buildTarget(p) {
     return {
       id: p.candidate.id, title: p.candidate.title, url: p.candidate.url,
