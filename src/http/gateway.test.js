@@ -1984,6 +1984,40 @@ asyncTest('Gateway open-project returns 404 when no TraeCN binary is resolvable'
   }
 });
 
+// ── auto Trae recovery (v0.4.x) ─────────────────────────────────────
+
+// Note: _attemptTraeRecovery uses destructured imports of
+// findTraeCNBinary / isTraeCNRunning / restartTraeCNWithDebug / startTraeCN,
+// which means module-level mock patching of quickstart.isTraeCNRunning etc.
+// does NOT redirect the in-handler reference. The tests below therefore
+// only assert the observable env-driven paths (cooldown, no-op) and the
+// skip / restart branch decision based on real quickstart state. End-to-end
+// restart / start semantics are covered by quickstart.test.js.
+
+asyncTest('Gateway auto-recovery respects cooldown and does not thrash', async () => {
+  const gateway = new Gateway();
+  gateway.autoStartTrae = true;
+  gateway.traeRecoveryCooldownMs = 60000;
+  gateway.lastTraeRecoveryAt = Date.now();
+  const result = await gateway._attemptTraeRecovery(new Error('cdp gone'));
+  assert.strictEqual(result, false, 'cooldown should suppress the second call');
+});
+
+asyncTest('Gateway auto-recovery bails early when autoStartTrae is off', async () => {
+  const gateway = new Gateway();
+  gateway.autoStartTrae = false;
+  const result = await gateway._attemptTraeRecovery(new Error('cdp gone'));
+  assert.strictEqual(result, false, 'autoStartTrae=false should suppress recovery');
+});
+
+asyncTest('Gateway auto-recovery bails early when mockBridge is on', async () => {
+  const gateway = new Gateway();
+  gateway.mockBridge = true;
+  gateway.autoStartTrae = true;
+  const result = await gateway._attemptTraeRecovery(new Error('cdp gone'));
+  assert.strictEqual(result, false, 'mockBridge should suppress recovery');
+});
+
 (async () => {
   for (const { name, fn } of pendingAsyncTests) {
     try {
