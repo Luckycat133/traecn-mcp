@@ -26,6 +26,7 @@ const { globalMetrics } = require('../shared/metrics');
 const { listCommands } = require('../../integrations/openclaw-traecn-plugin/lib/command-set');
 const { WebSocketHandler } = require('./websocket-handler');
 const { findTraeCNBinary, isTraeCNRunning, restartTraeCNWithDebug, startTraeCN, getQuickstartConfig } = require('../config/quickstart');
+const { CDPHealthWatcher } = require('../cdp/health-watcher');
 const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
 
 function normalizeUrl(rawUrl) {
@@ -287,6 +288,28 @@ class Gateway {
       60000
     );
     this.lastTraeRecoveryAt = 0;
+    this.autoRecover = getEnvWithFallback('TRAECN_AUTO_RECOVER', 'TRAE_AUTO_RECOVER', '0') === '1';
+    this.autoRecoverProbeMs = parsePositiveInt(
+      getEnvWithFallback('TRAECN_AUTO_RECOVER_PROBE_MS', 'TRAE_AUTO_RECOVER_PROBE_MS', '30000'),
+      30000
+    );
+    this.autoRecoverMax = parsePositiveInt(
+      getEnvWithFallback('TRAECN_AUTO_RECOVER_MAX', 'TRAE_AUTO_RECOVER_MAX', '5'),
+      5
+    );
+    this.autoRecoverProbeTimeoutMs = parsePositiveInt(
+      getEnvWithFallback('TRAECN_AUTO_RECOVER_PROBE_TIMEOUT_MS', 'TRAE_AUTO_RECOVER_PROBE_TIMEOUT_MS', '5000'),
+      5000
+    );
+    this.healthWatcher = new CDPHealthWatcher({
+      gateway: this,
+      enabled: this.autoRecover,
+      probeIntervalMs: this.autoRecoverProbeMs,
+      maxRecoveries: this.autoRecoverMax,
+      probeTimeoutMs: this.autoRecoverProbeTimeoutMs,
+      logger: console,
+      label: 'Gateway'
+    });
     this.activeQueuePersistencePath = this._resolveActiveQueuePersistencePath();
     this._restoreActiveQueue();
 
@@ -389,6 +412,7 @@ class Gateway {
       metadata: {
         source: 'delegate_async_restore',
         reviewRequired: task.reviewRequired === true,
+        autoContinue: task.autoContinue === true,
         followupCount: Array.isArray(task.followupTasks) ? task.followupTasks.length : 0,
         notifyUrl: task.notifyUrl || null,
         queueState: task.queueState || null,
@@ -547,10 +571,24 @@ class Gateway {
         return {
           task: item.task,
           reviewRequired: item.reviewRequired !== false,
+          autoContinue: item.autoContinue === true,
           includeProcessText: item.includeProcessText === true
         };
       })
       .filter(item => item && item.task && item.task.length <= 100000);
+  }
+
+  _taskWithProjectContext(taskText, projectPath) {
+    const task = String(taskText || '').trim();
+    const path = typeof projectPath === 'string' ? projectPath.trim() : '';
+    if (!path) return task;
+    if (task.includes(`Project path: ${path}`) || task.includes(`项目路径：${path}`)) return task;
+    return [
+      `Project path: ${path}`,
+      'Work only in this project path unless the user explicitly says otherwise.',
+      '',
+      task
+    ].join('\n');
   }
 
   _normalizeFallbackModels(items, autoModelFallback = false) {
@@ -581,13 +619,19 @@ class Gateway {
 
   _createQueuedTask(body, queueStatus = {}) {
     const reviewRequired = body.reviewRequired === true;
+    const autoContinue = body.autoContinue === true;
     const followupTasks = this._normalizeFollowupTasks(body.followupTasks);
     const fallbackModels = this._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
     const modelProbeIntervalMs = this._modelProbeIntervalMs(body.modelProbeIntervalMs);
+    const projectPath = typeof body.projectPath === 'string' && body.projectPath.trim()
+      ? body.projectPath.trim()
+      : null;
     const historyTaskId = this.taskHistoryStore.createTask(null, body.task, {
       metadata: {
         source: 'delegate_async',
+        projectPath,
         reviewRequired,
+        autoContinue,
         followupCount: followupTasks.length,
         notifyUrl: body.notifyUrl || null,
         fallbackModels
@@ -603,6 +647,7 @@ class Gateway {
       taskId: historyTaskId,
       chatId: body.chatId || null,
       task: body.task,
+      projectPath,
       status: 'queued',
       createdAt: now,
       deadline: queueMaxWaitMs ? now + Math.min(perTaskTimeoutMs, queueMaxWaitMs) : null,
@@ -611,6 +656,7 @@ class Gateway {
       attempts: 0,
       includeProcessText: body.includeProcessText === true,
       reviewRequired,
+      autoContinue,
       followupTasks,
       notifyUrl: typeof body.notifyUrl === 'string' ? body.notifyUrl : null,
       submittedToTrae: false,
@@ -638,6 +684,7 @@ class Gateway {
         queueMessage: task.queueMessage,
         fallbackModels,
         reviewRequired,
+        autoContinue,
         followupCount: followupTasks.length
       }
     });
@@ -903,6 +950,52 @@ class Gateway {
     return result.stable === true;
   }
 
+  _isEchoedTaskResult(result, task = null) {
+    const text = typeof result?.text === 'string' ? result.text : '';
+    const taskText = typeof task?.task === 'string' ? task.task : '';
+    if (text.length < 40 || taskText.length < 40) return false;
+
+    const normalize = value => String(value || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[^\p{L}\p{N}\s/._:-]+/gu, '')
+      .trim();
+    const normalizedText = normalize(text);
+    const normalizedTask = normalize(taskText);
+    if (normalizedText.length < 40 || normalizedTask.length < 40) return false;
+
+    if (normalizedText.includes(normalizedTask) && normalizedText.length <= normalizedTask.length + 120) {
+      return true;
+    }
+
+    const taskPrefix = normalizedTask.slice(0, Math.min(normalizedTask.length, 160));
+    return normalizedText.includes(taskPrefix) && normalizedText.length <= normalizedTask.length * 1.25;
+  }
+
+  _isReviewableTaskResult(result, task = null) {
+    return (this._isReviewableResult(result) || this._hasStrongCompletionEvidence(result?.text))
+      && !this._isFailedResultText(result?.text || '')
+      && !this._isEchoedTaskResult(result, task);
+  }
+
+  _isSuccessfulTaskResult(result, task = null) {
+    return (this._isSuccessfulResult(result) || this._hasStrongCompletionEvidence(result?.text))
+      && !this._isFailedResultText(result?.text || '')
+      && !this._isEchoedTaskResult(result, task);
+  }
+
+  _hasStrongCompletionEvidence(text) {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (value.length < 120) return false;
+    return [
+      /任务完成|完成总结|最终报告|final report|delivery summary|completed successfully/i,
+      /(?:all|全部)\s+\d+\s+tests?\s+pass(?:ed)?/i,
+      /all tests pass(?:ed)?|所有测试通过|测试已通过/i,
+      /\d+\s*\/\s*\d+\s*已完成.*(?:final report|summary|总结|报告)/i,
+      /(?:tests?|测试).{0,80}(?:pass(?:ed)?|通过|0\s+fail)/i
+    ].some(pattern => pattern.test(value));
+  }
+
   _isSuccessfulResult(result) {
     if (!result || result.needsApproval) return false;
     if (result.timedOut || result.truncated || result.streaming || result.modelError) return false;
@@ -936,6 +1029,8 @@ class Gateway {
   _isIncompleteReviewText(text) {
     const value = String(text || '').replace(/\s+/g, ' ').trim();
     if (!value) return true;
+    const hasCompletionMarker = /任务完成|所有测试通过|测试已通过|已完成。以下是|已完成，以下是|completed successfully|all tests pass(?:ed)?|delivery summary|final report/i.test(value);
+    if (hasCompletionMarker && value.length >= 120) return false;
     return [
       /(?:^|\s)\d+\s*\/\s*\d+\s*已完成/i,
       /思考中[.。…]*/i,
@@ -1017,8 +1112,10 @@ class Gateway {
     const nextSpec = task.followupTasks.shift();
     const nextTask = this._createQueuedTask({
       task: nextSpec.task,
+      projectPath: task.projectPath || null,
       includeProcessText: nextSpec.includeProcessText === true,
       reviewRequired: nextSpec.reviewRequired !== false,
+      autoContinue: task.autoContinue === true || nextSpec.autoContinue === true,
       followupTasks: task.followupTasks,
       notifyUrl: task.notifyUrl,
       chatId: task.chatId,
@@ -1157,6 +1254,7 @@ class Gateway {
       }
       this.client = null;
       this.driver = null;
+      if (this.healthWatcher) this.healthWatcher.stop();
     };
 
     const connectFresh = async () => {
@@ -1164,6 +1262,7 @@ class Gateway {
         const discovered = await discoverTarget();
         this.client = await connectToTarget(discovered, discovered.client);
         this.driver = new DomDriver(this.client);
+        if (this.healthWatcher) this.healthWatcher.start(this.client);
         return discovered;
       } catch (err) {
         await closeCurrentConnection();
@@ -1172,6 +1271,7 @@ class Gateway {
         const discovered = await discoverTarget();
         this.client = await connectToTarget(discovered, discovered.client);
         this.driver = new DomDriver(this.client);
+        if (this.healthWatcher) this.healthWatcher.start(this.client);
         return discovered;
       }
     };
@@ -2059,7 +2159,7 @@ class Gateway {
       session.messages.push({ role: 'user', content: body.task, timestamp: new Date().toISOString() });
     }
 
-    const result = await this.driver.delegate(body.task);
+    const result = await this.driver.delegate(this._taskWithProjectContext(body.task, body.projectPath));
 
     if (session) {
       session.messages.push({ role: 'assistant', content: result.text, timestamp: new Date().toISOString() });
@@ -2817,6 +2917,7 @@ class Gateway {
             queueMessage: queueStatus.queueMessage || (queueStatus.running ? '模型正在执行其他任务' : '模型排队中')
           },
           reviewRequired: task.reviewRequired,
+          autoContinue: task.autoContinue === true,
           followupCount: task.followupTasks.length,
           modelProbeResults: task.modelProbeResults || [],
           nextModelProbeAt: task.nextModelProbeAt || null,
@@ -2851,6 +2952,7 @@ class Gateway {
           queueMessage: task.queueMessage
         },
         reviewRequired: task.reviewRequired,
+        autoContinue: task.autoContinue === true,
         followupCount: task.followupTasks.length,
         modelProbeResults: task.modelProbeResults || [],
         nextModelProbeAt: task.nextModelProbeAt || null,
@@ -2872,14 +2974,16 @@ class Gateway {
       const timeoutPromise = new Promise((_, reject) =>
         { timeoutId = this._setTimeout(() => reject(new Error('delegate timeout (' + syncTimeout + 'ms)')), syncTimeout); }
       );
-      delegatePromise = this.driver.delegate(body.task);
+      delegatePromise = this.driver.delegate(this._taskWithProjectContext(body.task, body.projectPath));
       result = await Promise.race([delegatePromise, timeoutPromise]);
     } catch (e) {
       if (/delegate timeout/i.test(e.message || '') && delegatePromise) {
         const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
         const task = this._createQueuedTask({
           task: body.task,
+          projectPath: body.projectPath,
           reviewRequired: body.reviewRequired === true,
+          autoContinue: body.autoContinue === true,
           followupTasks: normalizedFollowups,
           chatId,
           includeProcessText,
@@ -2929,13 +3033,16 @@ class Gateway {
       const recoveredResult = await this._recoverAwaitingReviewFromGate({
         createdAt: Date.now(),
         followupTasks: this._normalizeFollowupTasks(body.followupTasks),
-        reviewRequired: body.reviewRequired === true
+        reviewRequired: body.reviewRequired === true,
+        autoContinue: body.autoContinue === true
       });
       if (recoveredResult) {
         const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
         const task = this._createQueuedTask({
           task: body.task,
+          projectPath: body.projectPath,
           reviewRequired: body.reviewRequired === true,
+          autoContinue: body.autoContinue === true,
           followupTasks: normalizedFollowups,
           chatId,
           includeProcessText,
@@ -2975,7 +3082,9 @@ class Gateway {
       const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
       const task = this._createQueuedTask({
         task: body.task,
+        projectPath: body.projectPath,
         reviewRequired: body.reviewRequired === true,
+        autoContinue: body.autoContinue === true,
         followupTasks: normalizedFollowups,
         chatId,
         includeProcessText,
@@ -3365,7 +3474,7 @@ class Gateway {
 
     try {
       await this._ensureConnection();
-      const result = await this.driver.delegate(task.task);
+      const result = await this.driver.delegate(this._taskWithProjectContext(task.task, task.projectPath));
 
       task.status = 'done';
       task.result = {
@@ -3517,10 +3626,15 @@ class Gateway {
         result
       });
     } else if (task.reviewRequired || (task.followupTasks && task.followupTasks.length > 0)) {
-      if (this._isReviewableResult(result)) {
-        await this._finalizeBackgroundTask(taskId, task, 'awaiting_review', {
-          result
-        });
+      if (this._isReviewableTaskResult(result, task)) {
+        if (task.autoContinue === true) {
+          task.result = result;
+          await this._continueReviewedTask(taskId, task, 'approve', 'autoContinue');
+        } else {
+          await this._finalizeBackgroundTask(taskId, task, 'awaiting_review', {
+            result
+          });
+        }
       } else {
         if (await this._retryBackgroundTaskAfterResult(taskId, task, result)) {
           return;
@@ -3530,7 +3644,7 @@ class Gateway {
           error: 'Trae returned an incomplete or timed-out result before review'
         });
       }
-    } else if (this._isSuccessfulResult(result)) {
+    } else if (this._isSuccessfulTaskResult(result, task)) {
       await this._finalizeBackgroundTask(taskId, task, 'done', {
         result
       });
@@ -3545,11 +3659,23 @@ class Gateway {
     }
   }
 
+  async _finalizePersistedResultIfComplete(taskId, task) {
+    if (!task || !task.result) return false;
+    if (this._backgroundResultRetryMode(task.result, task)) return false;
+    await this._finalizeCollectedBackgroundResult(taskId, task, task.result);
+    return this._isTerminalTaskStatus(task.status);
+  }
+
   _backgroundResultRetryMode(result, task = null) {
     if (!result || result.needsApproval) return null;
     const text = typeof result.text === 'string' ? result.text.trim() : '';
     if (result.modelError || this._isFailedResultText(text)) return 'resubmit';
-    if (task?.reviewRequired === true && !this._isReviewableResult(result)) return 'collect';
+    if (this._isEchoedTaskResult(result, task)) return 'collect';
+    const needsWorkflowCheckpoint = task?.reviewRequired === true
+      || task?.autoContinue === true
+      || (Array.isArray(task?.followupTasks) && task.followupTasks.length > 0);
+    if (needsWorkflowCheckpoint && !this._isReviewableTaskResult(result, task)) return 'collect';
+    if (this._isSuccessfulTaskResult(result, task)) return null;
     if (result.timedOut || result.truncated || result.streaming || result.stable !== true || !this._hasMeaningfulResultText(text)) return 'collect';
     return null;
   }
@@ -3699,7 +3825,9 @@ class Gateway {
 
     const task = this._createQueuedTask({
       task: taskText,
+      projectPath: body.projectPath || null,
       reviewRequired: body.reviewRequired === true,
+      autoContinue: body.autoContinue === true,
       followupTasks: this._normalizeFollowupTasks(body.followupTasks),
       chatId: body.chatId || null,
       includeProcessText: body.includeProcessText === true,
@@ -3769,6 +3897,9 @@ class Gateway {
           if (task.status === 'executing' && task.submittedToTrae === true) {
             this.taskLocks.add(taskId);
             try {
+              if (await this._finalizePersistedResultIfComplete(taskId, task)) {
+                continue;
+              }
               await this._collectSubmittedBackgroundTask(taskId, task);
             } catch (e) {
               console.error('[Queue] Submitted task', taskId, 'recovery error:', e.message);
@@ -3843,7 +3974,7 @@ class Gateway {
               // Create a fresh chat before sending (background poller bypasses
               // delegate() which would also call newChat)
               await this.driver.newChat();
-              await this.driver.sendMessage(task.task);
+              await this.driver.sendMessage(this._taskWithProjectContext(task.task, task.projectPath));
               task.submittedToTrae = true;
               task.submittedAt = Date.now();
               this._syncTaskHistoryMirror(task);
