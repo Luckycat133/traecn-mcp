@@ -256,7 +256,7 @@ test('Gateway normalizes followup tasks from strings and objects', () => {
   ]);
   assert.deepStrictEqual(result, [
     { task: 'step 2', reviewRequired: true },
-    { task: 'step 3', reviewRequired: false, includeProcessText: true }
+    { task: 'step 3', reviewRequired: false, autoContinue: false, includeProcessText: true }
   ]);
 });
 
@@ -269,16 +269,57 @@ test('Gateway creates queued task with review workflow metadata', () => {
   };
   const task = gateway._createQueuedTask({
     task: 'review me',
+    projectPath: '/tmp/traecn-project',
     reviewRequired: true,
     followupTasks: ['next task'],
     notifyUrl: 'https://example.test/hook'
   }, { running: true, queueMessage: 'busy' });
   assert.strictEqual(task.taskId, 'task_test_1');
+  assert.strictEqual(task.projectPath, '/tmp/traecn-project');
   assert.strictEqual(task.reviewRequired, true);
+  assert.strictEqual(task.autoContinue, false);
   assert.strictEqual(task.followupTasks.length, 1);
   assert.strictEqual(task.queueState, 'running');
   assert.strictEqual(task.notifyUrl, 'https://example.test/hook');
   assert.ok(task.maxDeadline >= task.deadline);
+});
+
+asyncTest('Gateway auto-continues reviewable workflow followups without human review', async () => {
+  const gateway = new Gateway();
+  gateway.driver = { config: { queuePerTaskTimeoutMs: 1234 } };
+  gateway.taskHistoryStore = {
+    createTask: (() => {
+      let index = 0;
+      return () => `task_auto_${++index}`;
+    })(),
+    recordStep: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {},
+    ensureTask: () => {}
+  };
+  gateway._emitTaskNotification = async () => {};
+
+  const task = gateway._createQueuedTask({
+    task: 'Implement feature',
+    projectPath: '/tmp/auto-project',
+    autoContinue: true,
+    followupTasks: ['Run tests']
+  }, { queued: false });
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: 'Findings\nP2 src/app.js: implementation completed with enough detail to count as a reviewable stable result.',
+    stable: true,
+    elapsedMs: 1000
+  });
+
+  assert.strictEqual(task.status, 'done');
+  assert.strictEqual(task.nextTaskId, 'task_auto_2');
+  const nextTask = gateway.taskQueue.get('task_auto_2');
+  assert.ok(nextTask);
+  assert.strictEqual(nextTask.projectPath, '/tmp/auto-project');
+  assert.strictEqual(nextTask.autoContinue, true);
+  assert.strictEqual(nextTask.status, 'queued');
 });
 
 test('Gateway queued tasks wait indefinitely by default for external model queues', () => {
@@ -536,6 +577,10 @@ test('Gateway only treats stable non-timeout output as reviewable', () => {
   assert.strictEqual(gateway._isReviewableResult({ text: 'Agent\n手动终止输出', stable: true }), false);
   assert.strictEqual(gateway._isReviewableResult({ text: 'Agent\n异常打断', stable: true }), false);
   assert.strictEqual(gateway._isReviewableResult({ text: '0/9 已完成 探索项目结构 审查自动排队机制 Thought Let me now look at the key areas more closely. 思考中...'.repeat(2), stable: true }), false);
+  assert.strictEqual(gateway._isReviewableResult({
+    text: '0/5 已完成 Create files Thought npm test failed Thought fixed test Thought 所有测试通过！ 已完成。以下是创建的文件和运行说明：demo-output/project/package.json src/cli.js test/file.test.js。任务完成，交付说明完整。',
+    stable: true
+  }), true);
 });
 
 test('Gateway only treats stable non-error output as successful', () => {
@@ -793,6 +838,33 @@ asyncTest('Gateway keeps collecting short UI noise for review-required tasks', a
     text: '(parameter) res: any',
     stable: true,
     elapsedMs: 4033
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.submittedToTrae, true);
+  assert.strictEqual(task.attempts, 1);
+  assert.match(task.error, /collecting again/);
+});
+
+asyncTest('Gateway keeps collecting early auto-continue workflow progress text', async () => {
+  const gateway = new Gateway();
+  const task = {
+    taskId: 'task_retry_workflow_progress',
+    status: 'executing',
+    task: 'create demo project',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    attempts: 0,
+    reviewRequired: false,
+    autoContinue: true,
+    followupTasks: [{ task: 'run tests', reviewRequired: false, autoContinue: true }]
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: 'I will create the files now. 0/5 已完成 Create package.json Create src/slugify.js Create tests 思考中...',
+    stable: true,
+    elapsedMs: 1000
   });
 
   assert.strictEqual(task.status, 'executing');
@@ -1394,13 +1466,17 @@ asyncTest('Gateway delegate-async executes immediately when fallback probe finds
 asyncTest('Gateway sync delegate timeout converts submitted request to tracked background task', async () => {
   const gateway = new Gateway();
   let resolveDelegate;
+  let delegatedPrompt = '';
   const delegatePromise = new Promise((resolve) => {
     resolveDelegate = resolve;
   });
   gateway.driver = {
     config: { queuePerTaskTimeoutMs: 1000 },
     checkQueueStatus: async () => ({ queued: false, running: false, canSubmit: true, currentModel: 'DeepSeek-V4-Pro' }),
-    delegate: async () => delegatePromise
+    delegate: async (task) => {
+      delegatedPrompt = task;
+      return delegatePromise;
+    }
   };
   gateway._ensureConnection = async () => {};
   gateway._setTimeout = (callback) => setTimeout(callback, 0);
@@ -1424,7 +1500,7 @@ asyncTest('Gateway sync delegate timeout converts submitted request to tracked b
 
   const req = new Readable({
     read() {
-      this.push(JSON.stringify({ task: 'review repo', waitForQueue: true, reviewRequired: true }));
+      this.push(JSON.stringify({ task: 'review repo', projectPath: '/tmp/sync-project', waitForQueue: true, reviewRequired: true }));
       this.push(null);
     }
   });
@@ -1435,7 +1511,9 @@ asyncTest('Gateway sync delegate timeout converts submitted request to tracked b
   assert.strictEqual(responseData.status, 'executing');
   assert.strictEqual(responseData.submittedToTrae, true);
   assert.strictEqual(responseData.taskId, 'task_timeout_background');
+  assert.match(delegatedPrompt, /Project path: \/tmp\/sync-project/);
   assert.strictEqual(gateway.taskQueue.get('task_timeout_background').submittedToTrae, true);
+  assert.strictEqual(gateway.taskQueue.get('task_timeout_background').projectPath, '/tmp/sync-project');
 
   resolveDelegate({ text: 'Findings\nP2 src/http/gateway.js: concrete risk with enough detail to be actionable and reviewable by the caller.', stable: true, elapsedMs: 200000 });
   await new Promise(resolve => setImmediate(resolve));
@@ -1487,6 +1565,92 @@ asyncTest('Gateway sync delegate keeps collecting incomplete review output in ba
   assert.strictEqual(task.attempts, 1);
 });
 
+asyncTest('Gateway keeps collecting echoed task text instead of marking it done', async () => {
+  const gateway = new Gateway();
+  gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
+  gateway.taskHistoryStore = {
+    createTask: () => 'task_echo_guard',
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  const task = gateway._createQueuedTask({
+    task: 'Queue stress test. Create package.json, src/index.js, tests, run them, and report exact commands. Do not modify files outside demo-output/queue-lab.'
+  }, { queued: false });
+  task.status = 'executing';
+  task.submittedToTrae = true;
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '13:16 Queue stress test. Create package.json, src/index.js, tests, run them, and report exact commands. Do not modify files outside demo-output/queue-lab. Agent',
+    stable: true,
+    elapsedMs: 1000
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.attempts, 1);
+  assert.match(task.error, /incomplete/i);
+});
+
+asyncTest('Gateway accepts timed-out text when it contains strong completion evidence', async () => {
+  const gateway = new Gateway();
+  gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
+  gateway.taskHistoryStore = {
+    createTask: () => 'task_strong_completion',
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway._emitTaskNotification = async () => {};
+  const task = gateway._createQueuedTask({
+    task: 'Create a package, run tests, and report results.'
+  }, { queued: false });
+  task.status = 'executing';
+  task.submittedToTrae = true;
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '8/8 已完成. Final Report: Files created: package.json, src/index.js, test/index.test.js. Commands run: node --test test/index.test.js. All 47 tests pass. No files were modified outside the requested directory.',
+    stable: false,
+    timedOut: true,
+    elapsedMs: 600006
+  });
+
+  assert.strictEqual(task.status, 'done');
+});
+
+asyncTest('Gateway finalizes restored executing task when persisted result is complete', async () => {
+  const gateway = new Gateway();
+  gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
+  gateway.taskHistoryStore = {
+    createTask: () => 'task_restored_complete',
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway._emitTaskNotification = async () => {};
+  const task = gateway._createQueuedTask({
+    task: 'Create files, run tests, and report final status.'
+  }, { queued: false });
+  task.status = 'executing';
+  task.submittedToTrae = true;
+  task.result = {
+    text: 'Final Report: Created all requested files. Commands run: node --test test/text-metrics.test.js. All 47 tests pass. 8/8 已完成.',
+    stable: false,
+    timedOut: true,
+    elapsedMs: 600006
+  };
+
+  const finalized = await gateway._finalizePersistedResultIfComplete(task.taskId, task);
+
+  assert.strictEqual(finalized, true);
+  assert.strictEqual(task.status, 'done');
+});
+
 test('Gateway _clearAllTimers uses only clearTimeout (not redundant clearInterval)', () => {
   const gateway = new Gateway();
   const timer = gateway._setTimeout(() => {}, 10000);
@@ -1512,7 +1676,7 @@ test('Gateway _normalizeFollowupTasks handles already-normalized objects', () =>
     { task: 'step 1', reviewRequired: false, includeProcessText: true }
   ]);
   assert.deepStrictEqual(result, [
-    { task: 'step 1', reviewRequired: false, includeProcessText: true }
+    { task: 'step 1', reviewRequired: false, autoContinue: false, includeProcessText: true }
   ]);
 });
 
@@ -2181,6 +2345,48 @@ asyncTest('Gateway auto-recovery bails early when mockBridge is on', async () =>
     assert.strictEqual(captured.queueSize.tasks, 1);
     assert.strictEqual(captured.queueSize.batches, 1);
     assert.strictEqual(captured.cdp, 'disconnected');
+  });
+
+  test('Gateway constructs a CDPHealthWatcher (off by default)', () => {
+    const gateway = new Gateway();
+    assert.ok(gateway.healthWatcher, 'expected healthWatcher to be constructed');
+    assert.strictEqual(gateway.healthWatcher.enabled, false, 'auto-recovery should default to off');
+    assert.strictEqual(gateway.autoRecover, false, 'autoRecover flag should default to false');
+    const s = gateway.healthWatcher.state;
+    assert.strictEqual(s.probeIntervalMs, 30000);
+    assert.strictEqual(s.maxRecoveries, 5);
+  });
+
+  test('Gateway enables auto-recover when TRAECN_AUTO_RECOVER=1', () => {
+    const prev = process.env.TRAECN_AUTO_RECOVER;
+    process.env.TRAECN_AUTO_RECOVER = '1';
+    try {
+      const gateway = new Gateway();
+      assert.strictEqual(gateway.autoRecover, true, 'autoRecover flag should pick up env');
+      assert.strictEqual(gateway.healthWatcher.enabled, true, 'watcher should be enabled');
+    } finally {
+      if (prev === undefined) delete process.env.TRAECN_AUTO_RECOVER;
+      else process.env.TRAECN_AUTO_RECOVER = prev;
+    }
+  });
+
+  test('Gateway respects TRAECN_AUTO_RECOVER_PROBE_MS and TRAECN_AUTO_RECOVER_MAX', () => {
+    const prevProbe = process.env.TRAECN_AUTO_RECOVER_PROBE_MS;
+    const prevMax = process.env.TRAECN_AUTO_RECOVER_MAX;
+    process.env.TRAECN_AUTO_RECOVER_PROBE_MS = '7500';
+    process.env.TRAECN_AUTO_RECOVER_MAX = '9';
+    try {
+      const gateway = new Gateway();
+      assert.strictEqual(gateway.autoRecoverProbeMs, 7500);
+      assert.strictEqual(gateway.autoRecoverMax, 9);
+      assert.strictEqual(gateway.healthWatcher.probeIntervalMs, 7500);
+      assert.strictEqual(gateway.healthWatcher.maxRecoveries, 9);
+    } finally {
+      if (prevProbe === undefined) delete process.env.TRAECN_AUTO_RECOVER_PROBE_MS;
+      else process.env.TRAECN_AUTO_RECOVER_PROBE_MS = prevProbe;
+      if (prevMax === undefined) delete process.env.TRAECN_AUTO_RECOVER_MAX;
+      else process.env.TRAECN_AUTO_RECOVER_MAX = prevMax;
+    }
   });
 
   console.log(`\n[gateway.test.js] Results: ${passed} passed, ${failed} failed\n`);
