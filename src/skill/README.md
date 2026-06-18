@@ -21,7 +21,7 @@ const taskId = await queueTask('耗时的复杂任务');
 const status = await pollTask(taskId); // 检查进度
 
 // 切换模型
-await switchModel('GLM-5.1');
+await switchModel('GLM-5.2');
 
 // 切换模式
 await switchMode('ide'); // 'solo' or 'ide'
@@ -45,6 +45,7 @@ const result = await skill.run('任务描述');
 | `runTask(task, opts)` | 运行任务 | string (响应文本) |
 | `queueTask(task, opts)` | 队列任务 | string (taskId) |
 | `pollTask(taskId?)` | 轮询状态 | object |
+| `waitTask(taskId?, opts)` | 本地静默等待到终态/决策点 | object |
 | `cancelTask(taskId?)` | 取消任务 | object |
 | `checkStatus()` | 检查状态 | boolean |
 | `switchModel(name)` | 切换模型 | object |
@@ -125,12 +126,12 @@ skill._lastTaskId          // 最后任务 ID
 ## 可用模型
 
 ```javascript
-['Doubao-Seed-2.0-Code', 'Doubao-Seed-1.8', 'GLM-5.1', 
+['Doubao-Seed-2.0-Code', 'Doubao-Seed-1.8', 'GLM-5.2', 'GLM-5.1',
  'DeepSeek-V3.1-Terminus', 'MiniMax-M2.7', 'MiniMax-M2.5',
  'Kimi-K2.5', 'Qwen3.6-Plus', 'Qwen3.5-Plus']
 ```
 
-模糊匹配支持：`await switchModel('glm')` → 匹配 GLM-5.1
+模糊匹配支持：`await switchModel('glm')` → 匹配 GLM-5.2
 
 ## 设置别名
 
@@ -200,13 +201,14 @@ console.log(result);
 ### 队列模式
 
 ```javascript
-const { queueTask, pollTask } = require('./src/skill/simple-api');
+const { queueTask, pollTask, waitTask } = require('./src/skill/simple-api');
 
 // 1. 提交队列任务
 const taskId = await queueTask('耗时的代码审查任务');
 
-// 2. 稍后轮询
+// 2. 稍后轮询或让本地进程静默等待
 const status = await pollTask(taskId);
+const done = await waitTask(taskId, { pollMs: 30000, timeoutMs: 0 });
 if (status.status === 'done') {
   console.log(status.text);
 }

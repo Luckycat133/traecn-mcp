@@ -16,16 +16,16 @@ const result = await runTask('分析这个函数');
 console.log(result);
 ```
 
-## 🎯 5个核心函数（覆盖90%场景）
+## 🎯 6个核心函数（覆盖90%场景）
 
 ```javascript
-const { runTask, switchModel, checkStatus, pollTask, queueTask } = require('traecnclaw');
+const { runTask, switchModel, checkStatus, pollTask, waitTask, queueTask } = require('traecnclaw');
 
 // 检查连接
 await checkStatus();  // → boolean
 
 // 切换模型（模糊匹配）
-await switchModel('glm');      // → GLM-5.1
+await switchModel('glm');      // → GLM-5.2
 await switchModel('deepseek');  // → DeepSeek-V3.1-Terminus
 
 // 执行任务
@@ -34,6 +34,7 @@ await runTask('优化这段代码');  // → 响应文本
 // 队列任务（长时间任务）
 const taskId = await queueTask('复杂分析');
 await pollTask(taskId);  // → {ok, status, text}
+await waitTask(taskId, { pollMs: 30000, timeoutMs: 0 });  // 本地静默等待
 ```
 
 ## 📚 完整 API
@@ -113,6 +114,7 @@ openProject(path)       // 打开项目
 ```
 Doubao-Seed-2.0-Code
 Doubao-Seed-1.8
+GLM-5.2
 GLM-5.1
 DeepSeek-V3.1-Terminus
 MiniMax-M2.7
@@ -123,7 +125,7 @@ Qwen3.5-Plus
 ```
 
 **模糊匹配示例**：
-- `'glm'` → GLM-5.1
+- `'glm'` → GLM-5.2
 - `'deep'` → DeepSeek-V3.1-Terminus
 - `'doubao'` → Doubao-Seed-2.0-Code
 
@@ -156,10 +158,11 @@ Qwen3.5-Plus
 runTask      ← t
 queueTask    ← q
 pollTask     ← p
+waitTask     ← w
 checkStatus  ← s
 preflight    ← pf
 
-delegate_async + waitForQueue=true
+delegate_async + wait_task + waitForQueue=true
 - When Trae shows its own queue, the gateway keeps the task in the local
   background queue instead of pushing immediately.
 - Pair with reviewRequired=true to stop on result review before continuing any

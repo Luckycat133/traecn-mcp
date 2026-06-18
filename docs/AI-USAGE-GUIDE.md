@@ -14,7 +14,7 @@ const result = await runTask('分析项目代码结构');
 const review = await reviewCode({ instruction: '审查安全风险', diff });
 
 // 模型切换 - 模糊匹配支持
-await switchModel('glm');  // 自动匹配 GLM-5.1
+await switchModel('glm');  // 自动匹配 GLM-5.2
 await switchModel('deepseek');  // 自动匹配 DeepSeek-V3.1-Terminus
 
 // 状态检查
@@ -282,7 +282,7 @@ TraeCNSkill API（按功能分组）：
 - pollTask(taskId) → 检查任务状态
 
 【模型管理】
-- switchModel(name) → 模糊匹配，'glm' → GLM-5.1
+- switchModel(name) → 模糊匹配，'glm' → GLM-5.2
 - switchMode('solo'|'ide') → 切换模式
 
 【状态检查】

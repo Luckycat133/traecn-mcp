@@ -25,7 +25,7 @@ const COLORS = {
   gray: '\x1b[90m'
 };
 
-const CONFIG_FILE = path.join(os.homedir(), '.traecnrc');
+const CONFIG_FILE = process.env.TRAECN_CONFIG_FILE || path.join(os.homedir(), '.traecnrc');
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8788;
 
@@ -56,9 +56,9 @@ function loadConfig() {
     config = defaults;
   }
 
-  if (process.env.TRAECN_HOST) config.host = process.env.TRAECN_HOST;
-  if (process.env.TRAECN_PORT) config.port = parseInt(process.env.TRAECN_PORT, 10);
-  if (process.env.TRAECN_GATEWAY_TOKEN) config.token = process.env.TRAECN_GATEWAY_TOKEN;
+  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_HOST')) config.host = process.env.TRAECN_HOST;
+  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_PORT')) config.port = parseInt(process.env.TRAECN_PORT, 10);
+  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_GATEWAY_TOKEN')) config.token = process.env.TRAECN_GATEWAY_TOKEN;
 
   return config;
 }
@@ -1045,6 +1045,7 @@ module.exports = {
   apiRequest,
   loadConfig,
   saveConfig,
+  CONFIG_FILE,
   COLORS,
   parseCompletionChecksArg,
   addRequiredFileCheck,

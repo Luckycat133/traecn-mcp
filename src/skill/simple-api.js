@@ -34,6 +34,11 @@ async function pollTask(taskId = null) {
   return result;
 }
 
+async function waitTask(taskId = null, opts = {}) {
+  const skill = getSkill();
+  return await skill.wait(taskId, opts);
+}
+
 async function cancelTask(taskId = null) {
   const skill = getSkill();
   return await skill.cancel(taskId);
@@ -124,6 +129,7 @@ function reset() {
 const t = runTask;
 const q = queueTask;
 const p = pollTask;
+const w = waitTask;
 const s = checkStatus;
 const capabilities = getCapabilities;
 const plan = planOperation;
@@ -144,6 +150,7 @@ module.exports = {
   runTask,
   queueTask,
   pollTask,
+  waitTask,
   cancelTask,
   checkStatus,
   getCapabilities,
@@ -167,6 +174,7 @@ module.exports = {
   t,
   q,
   p,
+  w,
   s,
   capabilities,
   plan,

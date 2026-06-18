@@ -252,6 +252,29 @@ class TraeCNSkill {
   }
 
   /**
+   * 在本地等待任务直到终态或需要代码决策的停点。
+   * @param {string|null} [taskId=null] - 任务 ID（可选，默认为最后执行的任务）
+   * @param {object} [opts={}] - 等待选项
+   * @returns {Promise<object>} 等待结果
+   */
+  async wait(taskId = null, opts = {}) {
+    const id = taskId || this._lastTaskId;
+    if (!id) {
+      throw TraeCNSkillError.taskIdMissing();
+    }
+
+    try {
+      const result = await this.client.waitForTask(id, opts);
+      return {
+        ok: !['error', 'queue_timeout', 'review_rejected', 'not_found'].includes(String(result.status || '').toLowerCase()),
+        ...result
+      };
+    } catch (cause) {
+      throw TraeCNSkillError.taskFailed(cause, { taskId: id });
+    }
+  }
+
+  /**
    * 取消任务
    * @param {string|null} [taskId=null] - 任务 ID（可选，默认为最后执行的任务）
    * @returns {Promise<object>} 取消结果

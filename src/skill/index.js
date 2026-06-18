@@ -86,6 +86,18 @@ async function pollTask(taskId = null) {
   }
 }
 
+async function waitTask(taskId = null, opts = {}) {
+  const skill = getSkill();
+  try {
+    return await skill.wait(taskId, opts);
+  } catch (error) {
+    if (error.code === 'TASK_ID_MISSING') {
+      throw error; // 保留原始错误
+    }
+    throw TraeCNSkillError.taskFailed(`等待任务失败: ${error.message}`, { taskId });
+  }
+}
+
 async function reviewCode(input, opts = {}) {
   const skill = getSkill();
   try {
@@ -264,6 +276,7 @@ const aliases = {
   t: runTask,
   q: queueTask,
   p: pollTask,
+  w: waitTask,
   s: checkStatus,
   pf: preflight,
   model: switchModel,
@@ -292,6 +305,7 @@ module.exports = {
   checkStatus,
   queueTask,
   pollTask,
+  waitTask,
   reviewCode,
   preflight,
 
