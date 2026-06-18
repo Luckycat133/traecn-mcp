@@ -795,6 +795,77 @@ asyncTest('Gateway keeps submitted task executing when collected result times ou
   assert.match(task.error, /collecting again/);
 });
 
+asyncTest('Gateway keeps long submitted queue waits alive without consuming retry attempts', async () => {
+  const gateway = new Gateway();
+  const steps = [];
+  gateway.taskHistoryStore = {
+    recordStep: (taskId, action, details) => steps.push({ taskId, action, ...details }),
+    ensureTask: () => {}
+  };
+  gateway._persistActiveQueue = () => {};
+  const task = {
+    taskId: 'task_long_queue_collect',
+    status: 'executing',
+    task: 'review repo',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    attempts: 0,
+    reviewRequired: false,
+    followupTasks: [],
+    currentModel: 'GLM-5.2'
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '等待中 ... 排队提醒 当前模型请求量较高，您目前排在第 167 位。升级权益可获得速通次数，告别排队，立即生成答案。 升级方案',
+    stable: false,
+    timedOut: true,
+    elapsedMs: 600058
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.submittedToTrae, true);
+  assert.strictEqual(task.attempts, 0);
+  assert.strictEqual(task.error, null);
+  assert.strictEqual(task.queueState, 'queued');
+  assert.strictEqual(task.queuePosition, 167);
+  assert.strictEqual(task.queueMessage, '排在第 167 位');
+  assert.strictEqual(steps.at(-1).action, 'queue_wait_continues');
+});
+
+asyncTest('Gateway does not fail exhausted submitted tasks when collected result is still queued', async () => {
+  const gateway = new Gateway();
+  gateway.taskHistoryStore = {
+    recordStep: () => {},
+    ensureTask: () => {}
+  };
+  gateway._persistActiveQueue = () => {};
+  const task = {
+    taskId: 'task_long_queue_exhausted',
+    status: 'executing',
+    task: 'review repo',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    attempts: 3,
+    reviewRequired: false,
+    followupTasks: [],
+    currentModel: 'GLM-5.2'
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '排队提醒 当前模型请求量较高，您目前排在第 42 位。',
+    stable: false,
+    timedOut: true,
+    elapsedMs: 600000
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.attempts, 3);
+  assert.strictEqual(task.queuePosition, 42);
+  assert.strictEqual(task.error, null);
+});
+
 asyncTest('Gateway keeps collecting when result is only a role label', async () => {
   const gateway = new Gateway();
   const task = {
