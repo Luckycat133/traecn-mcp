@@ -334,11 +334,54 @@ test('CLI wait parser handles quiet indefinite evidence logging', () => {
   assert.strictEqual(parsed.outputFormat, 'json');
 });
 
+test('CLI wait parser handles detached screen options', () => {
+  clearModuleCache();
+  const { parseWaitArgs } = require('./traecn-cli');
+  const parsed = parseWaitArgs([
+    'task_abc',
+    '--detach',
+    '--session', 'traecn_wait_custom',
+    '--final', 'final.json',
+    '--stderr', 'wait.err'
+  ]);
+
+  assert.strictEqual(parsed.detach, true);
+  assert.strictEqual(parsed.sessionName, 'traecn_wait_custom');
+  assert.strictEqual(parsed.finalFile, 'final.json');
+  assert.strictEqual(parsed.stderrFile, 'wait.err');
+});
+
 test('CLI wait parser accepts auto dialog approval action', () => {
   clearModuleCache();
   const { parseWaitArgs } = require('./traecn-cli');
   const parsed = parseWaitArgs(['task_123', '--auto-approve-dialog', 'auto']);
   assert.strictEqual(parsed.autoApproveDialog, 'auto');
+});
+
+test('buildDetachedWaitCommand creates non-recursive screen command', () => {
+  clearModuleCache();
+  const { buildDetachedWaitCommand } = require('./traecn-cli');
+  const command = buildDetachedWaitCommand({
+    taskId: 'task:123',
+    pollMs: 30000,
+    timeoutMs: 0,
+    logFile: 'logs/wait.jsonl',
+    detach: true
+  }, '/tmp/project path');
+  const shellCommand = command.screenArgs[4];
+
+  assert.strictEqual(command.sessionName, 'traecn_wait_task_123');
+  assert.ok(command.finalFile.endsWith(path.join('logs', 'wait-final.json')));
+  assert.ok(command.stderrFile.endsWith(path.join('logs', 'wait.stderr')));
+  assert.ok(shellCommand.includes('/tmp/project path'));
+  assert.ok(shellCommand.includes("'wait'"));
+  assert.ok(!shellCommand.includes('--detach'));
+});
+
+test('defaultWaitSessionName sanitizes task ids for screen', () => {
+  clearModuleCache();
+  const { defaultWaitSessionName } = require('./traecn-cli');
+  assert.strictEqual(defaultWaitSessionName('task:abc/123'), 'traecn_wait_task_abc_123');
 });
 
 test('appendJsonLine writes machine-readable evidence', () => {

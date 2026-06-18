@@ -35,6 +35,9 @@ await runTask('优化这段代码');  // → 响应文本
 const taskId = await queueTask('复杂分析');
 await pollTask(taskId);  // → {ok, status, text}
 await waitTask(taskId, { pollMs: 30000, timeoutMs: 0 });  // 本地静默等待
+
+// CLI detached wait:
+// traecnclaw wait <taskId> --detach --log queue-evidence.jsonl
 ```
 
 ## 📚 完整 API
