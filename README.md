@@ -215,6 +215,15 @@ probe alternate models while the task waits. The agent can then release its
 context after receiving `taskId`; the local gateway persists the queue, refreshes
 `modelProbeResults`, and sends webhook/OpenClaw notifications when the task
 reaches review or completion.
+For a single local process that waits quietly until completion, use MCP/OpenClaw
+`wait_task` or the CLI. Add `--detach` when the wait should continue under a
+local `screen` session after the calling agent releases context:
+
+```sh
+traecnclaw wait task_123 --poll-ms 30000 --timeout-ms 0 --log queue-evidence.jsonl --quiet -o json
+traecnclaw wait task_123 --detach --log queue-evidence.jsonl
+```
+
 By default, external TraeCN model queues do not expire locally; set
 `maxQueueWaitMs` (or `queueMaxWaitMs`) only when a caller explicitly wants a
 queue timeout.

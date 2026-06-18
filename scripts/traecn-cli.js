@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const os = require('os');
+const { spawnSync } = require('child_process');
 const {
   TraeCNApiClient,
   DEFAULT_TASK_POLL_MS,
@@ -168,6 +169,10 @@ ${color('bold', 'OPTIONS:')}
   --poll-ms <ms>          Wait: task polling interval [default: ${DEFAULT_TASK_POLL_MS}]
   --timeout-ms <ms>       Wait: max local wait; 0 means forever [default: 0]
   --log <file>            Wait: append JSONL status evidence to file
+  --final <file>          Wait: write final JSON result to file in --detach mode
+  --stderr <file>         Wait: write wait errors to file in --detach mode
+  --detach                Wait: run locally in a detached screen session
+  --session <name>        Wait: screen session name for --detach
   --quiet                 Wait: only print final result
   --auto-approve-dialog [action] Wait: approve task dialog if one appears
 
@@ -177,6 +182,7 @@ ${color('bold', 'EXAMPLES:')}
   traecn vibe "Implement feature" --step "Run tests" --step "Fix failures"
   traecn vibe "Ship report" --check-file FINAL_REPORT.md --check-text WORKFLOW_STATUS.md:Follow-up
   traecn wait task_123 --poll-ms 30000 --timeout-ms 0 --log evidence.jsonl --quiet -o json
+  traecn wait task_123 --detach --log evidence.jsonl
   traecn status
   traecn capabilities
   traecn preflight delegate_async '{"task":"..."}'
@@ -255,6 +261,10 @@ function parseWaitArgs(args) {
     pollMs: DEFAULT_TASK_POLL_MS,
     timeoutMs: 0,
     logFile: null,
+    finalFile: null,
+    stderrFile: null,
+    detach: false,
+    sessionName: null,
     quiet: false,
     autoApproveDialog: null
   };
@@ -269,6 +279,14 @@ function parseWaitArgs(args) {
       options.timeoutMs = parsePositiveMs(args[++i], 0, { allowZero: true });
     } else if (arg === '--log') {
       options.logFile = args[++i] || null;
+    } else if (arg === '--final') {
+      options.finalFile = args[++i] || null;
+    } else if (arg === '--stderr') {
+      options.stderrFile = args[++i] || null;
+    } else if (arg === '--detach') {
+      options.detach = true;
+    } else if (arg === '--session') {
+      options.sessionName = args[++i] || null;
     } else if (arg === '--quiet') {
       options.quiet = true;
     } else if (arg === '--auto-approve-dialog') {
@@ -297,6 +315,59 @@ function appendJsonLine(filePath, value) {
   if (!filePath) return;
   fs.mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
   fs.appendFileSync(filePath, JSON.stringify(value) + '\n');
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function defaultWaitSessionName(taskId) {
+  return 'traecn_wait_' + String(taskId || 'task').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 80);
+}
+
+function defaultWaitOutputPath(logFile, filename) {
+  if (!logFile) return null;
+  return path.join(path.dirname(path.resolve(logFile)), filename);
+}
+
+function buildDetachedWaitCommand(options, cwd = process.cwd()) {
+  const logFile = options.logFile ? path.resolve(options.logFile) : null;
+  const sessionName = options.sessionName || defaultWaitSessionName(options.taskId);
+  const safeTaskName = String(options.taskId || 'task').replace(/[^a-zA-Z0-9_.-]/g, '_');
+  const finalFile = path.resolve(options.finalFile || defaultWaitOutputPath(logFile, 'wait-final.json') || `wait-${safeTaskName}-final.json`);
+  const stderrFile = path.resolve(options.stderrFile || defaultWaitOutputPath(logFile, 'wait.stderr') || `wait-${safeTaskName}.stderr`);
+  const args = [
+    process.execPath,
+    __filename,
+    'wait',
+    options.taskId,
+    '--poll-ms',
+    String(options.pollMs),
+    '--timeout-ms',
+    String(options.timeoutMs),
+    '--quiet',
+    '-o',
+    'json'
+  ];
+  if (logFile) args.push('--log', logFile);
+  if (options.autoApproveDialog) {
+    args.push('--auto-approve-dialog');
+    if (typeof options.autoApproveDialog === 'string') args.push(options.autoApproveDialog);
+  }
+
+  return {
+    sessionName,
+    logFile,
+    finalFile,
+    stderrFile,
+    screenArgs: [
+      '-dmS',
+      sessionName,
+      '/bin/zsh',
+      '-lc',
+      `cd ${shellQuote(cwd)} && ${args.map(shellQuote).join(' ')} > ${shellQuote(finalFile)} 2> ${shellQuote(stderrFile)}`
+    ]
+  };
 }
 
 async function cmdDelegate(args) {
@@ -465,6 +536,35 @@ async function cmdWait(args) {
     console.error(color('red', 'Error: taskId is required'));
     console.error(color('gray', 'Usage: traecn wait <taskId> [--poll-ms <ms>] [--timeout-ms <ms>] [--log <file>]'));
     process.exit(1);
+  }
+
+  if (options.detach) {
+    const detached = buildDetachedWaitCommand(options);
+    for (const filePath of [detached.logFile, detached.finalFile, detached.stderrFile]) {
+      if (filePath) fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    }
+    const started = spawnSync('screen', detached.screenArgs, { encoding: 'utf8' });
+    if (started.error || started.status !== 0) {
+      console.error(color('red', `Detach failed: ${started.error ? started.error.message : started.stderr || 'screen exited with status ' + started.status}`));
+      process.exit(1);
+    }
+    const payload = {
+      detached: true,
+      taskId: options.taskId,
+      sessionName: detached.sessionName,
+      logFile: detached.logFile,
+      finalFile: detached.finalFile,
+      stderrFile: detached.stderrFile
+    };
+    if (options.outputFormat === 'json') {
+      console.log(JSON.stringify(payload, null, 2));
+    } else {
+      console.log(color('green', `Detached wait started: ${detached.sessionName}`));
+      if (detached.logFile) console.log(color('dim', `Evidence log: ${detached.logFile}`));
+      console.log(color('dim', `Final JSON: ${detached.finalFile}`));
+      console.log(color('dim', `Errors: ${detached.stderrFile}`));
+    }
+    return;
   }
 
   const cfg = loadConfig();
@@ -1052,5 +1152,8 @@ module.exports = {
   addRequiredTextCheck,
   hasCompletionChecks,
   parseWaitArgs,
-  appendJsonLine
+  appendJsonLine,
+  shellQuote,
+  defaultWaitSessionName,
+  buildDetachedWaitCommand
 };
