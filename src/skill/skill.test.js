@@ -65,7 +65,7 @@ test('TraeCNSkill should export correct modules', () => {
 
 test('KNOWN_MODELS should contain expected models', () => {
   const { KNOWN_MODELS } = require('./traecn-skill');
-  const expected = ['Doubao-Seed-2.0-Code', 'GLM-5.1', 'DeepSeek-V3.1-Terminus'];
+  const expected = ['Doubao-Seed-2.0-Code', 'GLM-5.2', 'GLM-5.1', 'DeepSeek-V3.1-Terminus'];
   for (const model of expected) {
     expect(KNOWN_MODELS.includes(model)).toBeTruthy();
   }
@@ -100,6 +100,7 @@ test('Simple API should export all functions', () => {
   expect(typeof api.checkQueue).toBe('function');
   expect(typeof api.openProject).toBe('function');
   expect(typeof api.reviewCode).toBe('function');
+  expect(typeof api.vibeWorkflow).toBe('function');
   expect(typeof api.reset).toBe('function');
   expect(typeof api.getSkill).toBe('function');
   expect(typeof api.TraeCNSkill).toBe('function');
@@ -119,6 +120,7 @@ test('Simple API should export all functions', () => {
   expect(typeof api.open).toBe('function');
   expect(typeof api.cancel).toBe('function');
   expect(typeof api.review).toBe('function');
+  expect(typeof api.vibe).toBe('function');
   expect(typeof api.capabilities).toBe('function');
   expect(typeof api.plan).toBe('function');
   expect(typeof api.pf).toBe('function');
@@ -188,9 +190,10 @@ test('_normalizeModel should match known models', () => {
   const { TraeCNSkill } = require('./traecn-skill');
   const skill = new TraeCNSkill();
   
-  expect(skill._normalizeModel('glm')).toBe('GLM-5.1');
+  expect(skill._normalizeModel('glm')).toBe('GLM-5.2');
   expect(skill._normalizeModel('deepseek')).toBe('DeepSeek-V3.1-Terminus');
   expect(skill._normalizeModel('doubao')).toBe('Doubao-Seed-2.0-Code');
+  expect(skill._normalizeModel('GLM-5.2')).toBe('GLM-5.2');
   expect(skill._normalizeModel('GLM-5.1')).toBe('GLM-5.1');
   expect(skill._normalizeModel('unknown-model')).toBe(null);
   expect(skill._normalizeModel(null)).toBe(null);
@@ -331,6 +334,30 @@ test('reset() should clear singleton instance', () => {
   const api = require('./simple-api');
   api.reset();
   expect(true).toBe(true); // Just verify it doesn't throw
+});
+
+test('vibeWorkflow queues unattended follow-up workflow', async () => {
+  const { TraeCNSkill } = require('./traecn-skill');
+  const skill = new TraeCNSkill();
+  let captured = null;
+  skill.client.delegateAsync = async (task, opts) => {
+    captured = { task, opts };
+    return { data: { taskId: 'task_vibe_1', status: 'queued', queueDetails: { state: 'queued' } } };
+  };
+
+  const result = await skill.vibeWorkflow({
+    task: 'Implement feature',
+    projectPath: '/tmp/project',
+    steps: ['Run tests', { task: 'Fix failures', reviewRequired: false }]
+  });
+
+  expect(result.taskId).toBe('task_vibe_1');
+  expect(captured.task).toBe('Implement feature');
+  expect(captured.opts.projectPath).toBe('/tmp/project');
+  expect(captured.opts.background).toBe(true);
+  expect(captured.opts.autoContinue).toBe(true);
+  expect(captured.opts.followupTasks.length).toBe(2);
+  expect(captured.opts.followupTasks[0].autoContinue).toBe(true);
 });
 
 test('getSkill() should return same instance', () => {

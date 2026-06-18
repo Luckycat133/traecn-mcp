@@ -2,7 +2,14 @@
 
 const assert = require('assert');
 const http = require('http');
-const { TraeCNApiClient, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_TIMEOUT } = require('./traecnapi-client');
+const {
+  TraeCNApiClient,
+  DEFAULT_HOST,
+  DEFAULT_PORT,
+  DEFAULT_TIMEOUT,
+  DEFAULT_TASK_POLL_MS,
+  isTerminalTaskStatus
+} = require('./traecnapi-client');
 
 let passed = 0;
 let failed = 0;
@@ -43,6 +50,16 @@ test('DEFAULT_PORT is 8788', () => {
 
 test('DEFAULT_TIMEOUT is 120000', () => {
   assert.strictEqual(DEFAULT_TIMEOUT, 120000);
+});
+
+test('DEFAULT_TASK_POLL_MS is suitable for long local waits', () => {
+  assert.strictEqual(DEFAULT_TASK_POLL_MS, 30000);
+});
+
+test('isTerminalTaskStatus recognizes task wait stopping points', () => {
+  assert.strictEqual(isTerminalTaskStatus('done'), true);
+  assert.strictEqual(isTerminalTaskStatus('approval_required'), true);
+  assert.strictEqual(isTerminalTaskStatus('executing'), false);
 });
 
 test('TraeCNApiClient constructor uses defaults', () => {
@@ -192,6 +209,62 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('waitForTask polls until terminal status and reports attempts', async () => {
+    let calls = 0;
+    const snapshots = [];
+    const port = await createMockServer((req, res) => {
+      calls++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (calls === 1) {
+        res.end(JSON.stringify({ taskId: 'task_wait', status: 'queued' }));
+      } else {
+        res.end(JSON.stringify({ taskId: 'task_wait', status: 'done', result: { text: 'complete' } }));
+      }
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.waitForTask('task_wait', {
+      pollMs: 1,
+      onSnapshot: event => snapshots.push(event)
+    });
+    assert.strictEqual(result.status, 'done');
+    assert.strictEqual(result.result.text, 'complete');
+    assert.strictEqual(result.wait.attempts, 2);
+    assert.deepStrictEqual(snapshots.map(event => event.status), ['queued', 'done']);
+    server.close();
+  });
+
+  await asyncTest('waitForTask can approve a dialog before continuing', async () => {
+    let taskCalls = 0;
+    const urls = [];
+    const port = await createMockServer((req, res) => {
+      urls.push(req.url);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (req.url === '/api/dialog/status') {
+        res.end(JSON.stringify({ hasDialog: true, dialogType: 'review_scope_question' }));
+        return;
+      }
+      if (req.url === '/api/dialog/approve') {
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+      taskCalls++;
+      if (taskCalls === 1) {
+        res.end(JSON.stringify({ taskId: 'task_dialog', status: 'approval_required' }));
+        return;
+      }
+      res.end(JSON.stringify({ taskId: 'task_dialog', status: 'done', result: { text: 'approved' } }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.waitForTask('task_dialog', {
+      pollMs: 1,
+      autoApproveDialog: 'auto'
+    });
+    assert.strictEqual(result.status, 'done');
+    assert.ok(urls.includes('/api/dialog/status'));
+    assert.ok(urls.includes('/api/dialog/approve'));
+    server.close();
+  });
+
   await asyncTest('review gate helpers use /api/trae/review-gate', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -261,6 +334,32 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     assert.strictEqual(result.data.taskId, 'task_bg');
     assert.strictEqual(lastRequest.url, '/api/delegate-async');
     assert.strictEqual(lastRequest.body.background, true);
+    server.close();
+  });
+
+  await asyncTest('delegateAsync sends unattended workflow options', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task_workflow', status: 'queued' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.delegateAsync('implement feature', {
+      projectPath: '/tmp/project',
+      reviewRequired: false,
+      autoContinue: true,
+      followupTasks: [{ task: 'run tests', reviewRequired: false, autoContinue: true }],
+      completionChecks: { requiredFiles: ['FINAL_REPORT.md'] },
+      notifyUrl: 'https://example.test/hook',
+      maxQueueWaitMs: 600000
+    });
+    assert.strictEqual(result.data.taskId, 'task_workflow');
+    assert.strictEqual(lastRequest.url, '/api/delegate-async');
+    assert.strictEqual(lastRequest.body.projectPath, '/tmp/project');
+    assert.strictEqual(lastRequest.body.autoContinue, true);
+    assert.deepStrictEqual(lastRequest.body.followupTasks, [{ task: 'run tests', reviewRequired: false, autoContinue: true }]);
+    assert.deepStrictEqual(lastRequest.body.completionChecks, { requiredFiles: ['FINAL_REPORT.md'] });
+    assert.strictEqual(lastRequest.body.notifyUrl, 'https://example.test/hook');
+    assert.strictEqual(lastRequest.body.maxQueueWaitMs, 600000);
     server.close();
   });
 

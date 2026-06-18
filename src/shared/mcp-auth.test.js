@@ -30,6 +30,8 @@ test('requiredPermissionFor returns read for read-only tools', () => {
   assert.strictEqual(mcpAuth.requiredPermissionFor('check_queue'), 'read');
   assert.strictEqual(mcpAuth.requiredPermissionFor('get_settings'), 'read');
   assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_capabilities'), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('wait_task'), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('wait_task', { autoApproveDialog: 'auto' }), 'delegate');
 });
 
 test('requiredPermissionFor returns write for state-changing non-task tools', () => {
@@ -64,6 +66,11 @@ test('resolveCommandPermission defaults to delegate for unknown commands', () =>
 
 test('requiredPermissionFor on traecn_command infers from the command argument', () => {
   assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', { command: 'check_status' }), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', { command: 'wait_task' }), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', {
+    command: 'wait_task',
+    params: { autoApproveDialog: 'auto' }
+  }), 'delegate');
   assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', { command: 'approve_dialog' }), 'delegate');
 });
 

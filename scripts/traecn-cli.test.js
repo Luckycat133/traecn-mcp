@@ -269,6 +269,83 @@ test('CLI exposes preflight command in help and dispatcher', () => {
   assert.ok(source.includes('/api/preflight'));
 });
 
+test('CLI exposes vibe completion check flags', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'traecn-cli.js'), 'utf8');
+  assert.ok(source.includes('--check-file'));
+  assert.ok(source.includes('--check-text'));
+  assert.ok(source.includes('--completion-checks-json'));
+});
+
+test('CLI exposes quiet wait command for queued tasks', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'traecn-cli.js'), 'utf8');
+  assert.ok(source.includes("'wait'") || source.includes('"wait"'));
+  assert.ok(source.includes('cmdWait'));
+  assert.ok(source.includes('--poll-ms'));
+  assert.ok(source.includes('--timeout-ms'));
+  assert.ok(source.includes('--log'));
+});
+
+test('CLI completion check helpers build required files and text checks', () => {
+  clearModuleCache();
+  const {
+    addRequiredFileCheck,
+    addRequiredTextCheck,
+    hasCompletionChecks,
+    parseCompletionChecksArg
+  } = require('./traecn-cli');
+  const checks = {};
+
+  addRequiredFileCheck(checks, 'FINAL_REPORT.md');
+  addRequiredTextCheck(checks, 'WORKFLOW_STATUS.md:Follow-up 1');
+
+  assert.deepStrictEqual(checks.requiredFiles, ['FINAL_REPORT.md']);
+  assert.deepStrictEqual(checks.requiredText, [
+    { filePath: 'WORKFLOW_STATUS.md', includes: 'Follow-up 1' }
+  ]);
+  assert.strictEqual(hasCompletionChecks(checks), true);
+  assert.deepStrictEqual(
+    parseCompletionChecksArg('{"requiredFiles":["DONE.md"]}', 'test checks'),
+    { requiredFiles: ['DONE.md'] }
+  );
+});
+
+test('CLI wait parser handles quiet indefinite evidence logging', () => {
+  clearModuleCache();
+  const { parseWaitArgs } = require('./traecn-cli');
+  const parsed = parseWaitArgs([
+    'task_123',
+    '--poll-ms', '45000',
+    '--timeout-ms', '0',
+    '--log', 'evidence.jsonl',
+    '--quiet',
+    '-o', 'json'
+  ]);
+
+  assert.strictEqual(parsed.taskId, 'task_123');
+  assert.strictEqual(parsed.pollMs, 45000);
+  assert.strictEqual(parsed.timeoutMs, 0);
+  assert.strictEqual(parsed.logFile, 'evidence.jsonl');
+  assert.strictEqual(parsed.quiet, true);
+  assert.strictEqual(parsed.outputFormat, 'json');
+});
+
+test('CLI wait parser accepts auto dialog approval action', () => {
+  clearModuleCache();
+  const { parseWaitArgs } = require('./traecn-cli');
+  const parsed = parseWaitArgs(['task_123', '--auto-approve-dialog', 'auto']);
+  assert.strictEqual(parsed.autoApproveDialog, 'auto');
+});
+
+test('appendJsonLine writes machine-readable evidence', () => {
+  clearModuleCache();
+  const { appendJsonLine } = require('./traecn-cli');
+  const tmp = path.join(os.tmpdir(), `traecn-wait-${Date.now()}.jsonl`);
+  appendJsonLine(tmp, { taskId: 'task_123', status: 'queued' });
+  const lines = fs.readFileSync(tmp, 'utf8').trim().split('\n');
+  assert.deepStrictEqual(JSON.parse(lines[0]), { taskId: 'task_123', status: 'queued' });
+  fs.unlinkSync(tmp);
+});
+
 test('task string length validation', () => {
   const maxLength = 100000;
   const validTask = 'a'.repeat(maxLength);

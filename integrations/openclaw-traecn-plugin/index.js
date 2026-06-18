@@ -5,6 +5,76 @@ const { COMMAND_DEFINITIONS, executeCommand, listCommands, mapSettingsAction } =
 
 const PLUGIN_ID = 'traecnclaw';
 
+const COMPLETION_CHECKS_SCHEMA = {
+  type: 'object',
+  properties: {
+    requiredFiles: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Files that must exist before the gateway marks the task complete'
+    },
+    requiredText: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['filePath', 'includes'],
+        properties: {
+          filePath: { type: 'string' },
+          includes: {
+            oneOf: [
+              { type: 'string' },
+              { type: 'array', items: { type: 'string' } }
+            ]
+          }
+        }
+      },
+      description: 'File text assertions that must pass before completion'
+    }
+  }
+};
+
+const VIBE_WORKFLOW_PARAMETERS = {
+  type: 'object',
+  required: ['task'],
+  properties: {
+    task: { type: 'string', description: 'The initial vibe coding task to delegate to TraeCN' },
+    steps: {
+      type: 'array',
+      items: {
+        oneOf: [
+          { type: 'string' },
+          { type: 'object' }
+        ]
+      },
+      description: 'Follow-up workflow steps to auto-continue after the initial task'
+    },
+    followupTasks: {
+      type: 'array',
+      items: {
+        oneOf: [
+          { type: 'string' },
+          { type: 'object' }
+        ]
+      },
+      description: 'Alias for steps; included for compatibility with delegate_async workflow metadata'
+    },
+    completionChecks: COMPLETION_CHECKS_SCHEMA,
+    projectPath: { type: 'string', description: 'Project path TraeCN should work inside' },
+    chatId: { type: 'string', description: 'Optional OpenClaw chat id for notifications' },
+    includeProcessText: { type: 'boolean', description: 'Include TraeCN process text in collected results', default: false },
+    reviewRequired: { type: 'boolean', description: 'Mark workflow checkpoints reviewable while auto-continuing them', default: false },
+    fallbackModels: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Ordered fallback models to probe while the selected model is queued'
+    },
+    autoModelFallback: { type: 'boolean', description: 'Use gateway default fallback model list while queued', default: false },
+    modelProbeIntervalMs: { type: 'number', description: 'Minimum interval between fallback model probes' },
+    notifyUrl: { type: 'string', description: 'Webhook URL to notify when workflow state changes' },
+    maxQueueWaitMs: { type: 'number', description: 'Optional local queue wait cap; omit to wait indefinitely' }
+  }
+};
+
 const toolDefinitions = [
   {
     name: 'traecn_capabilities',
@@ -47,7 +117,7 @@ const toolDefinitions = [
   },
   {
     name: 'traecn_command',
-    description: 'Execute a preset TraeCN command through the local TraeCNclaw gateway. Use traecn_command_set to discover available commands. Core commands include status, readiness, restart_trae_debug, new_chat, delegate, delegate_async, task_status, adopt_current_task, cancel_task, stop_generation, review_gate_status, resolve_review_gate, switch_mode, switch_model, queue_status, open_project, settings_read, settings_read_all, settings_set, settings_navigate, settings_back, dialog_status, approve_dialog, dismiss_dialog, batch_submit, batch_status, batch_cancel, and review_code.',
+    description: 'Execute a preset TraeCN command through the local TraeCNclaw gateway. Use traecn_command_set to discover available commands. Core commands include status, readiness, restart_trae_debug, new_chat, delegate, delegate_async, vibe_workflow, task_status, adopt_current_task, cancel_task, stop_generation, review_gate_status, resolve_review_gate, switch_mode, switch_model, queue_status, open_project, settings_read, settings_read_all, settings_set, settings_navigate, settings_back, dialog_status, approve_dialog, dismiss_dialog, batch_submit, batch_status, batch_cancel, and review_code.',
     parameters: {
       type: 'object',
       required: ['command'],
@@ -66,6 +136,16 @@ const toolDefinitions = [
     handler: async (params, context) => {
       const client = new TraeCNApiClient(context);
       const result = await executeCommand(client, params.command, params.params || {});
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_vibe_workflow',
+    description: 'Run an unattended TraeCN vibe coding workflow: queue the initial task, auto-continue follow-up steps, survive model queues, and return a taskId for polling.',
+    parameters: VIBE_WORKFLOW_PARAMETERS,
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'vibe_workflow', params || {});
       return result.data || result;
     }
   },
@@ -222,10 +302,26 @@ const toolDefinitions = [
         task: { type: 'string', description: 'The task description to delegate to TraeCN' },
         projectPath: { type: 'string', description: 'Path to the project to open in TraeCN' },
         sessionId: { type: 'string', description: 'Existing session ID to use instead of creating a new one' },
+        chatId: { type: 'string', description: 'Optional OpenClaw chat id for notifications' },
         allowAutoStart: { type: 'boolean', description: 'Allow automatically starting TraeCN if not running', default: false },
         includeProcessText: { type: 'boolean', description: 'Include process/thinking information in the response', default: false },
         waitForQueue: { type: 'boolean', description: 'If true (default), queue the task when model is busy. If false, return queue info immediately without waiting.', default: true },
+        background: { type: 'boolean', description: 'Queue immediately in the gateway background worker', default: false },
         asyncPoll: { type: 'boolean', description: 'If true, always use async delegate path (returns taskId). Useful when you want to manage polling yourself.', default: false },
+        reviewRequired: { type: 'boolean', description: 'Return successful results as review checkpoints before finalizing', default: false },
+        autoContinue: { type: 'boolean', description: 'Automatically approve reviewable follow-up workflow checkpoints', default: false },
+        followupTasks: {
+          type: 'array',
+          items: {
+            oneOf: [
+              { type: 'string' },
+              { type: 'object' }
+            ]
+          },
+          description: 'Follow-up tasks for unattended workflow continuation'
+        },
+        completionChecks: COMPLETION_CHECKS_SCHEMA,
+        notifyUrl: { type: 'string', description: 'Webhook URL to notify when async task state changes' },
         fallbackModels: {
           type: 'array',
           items: { type: 'string' },
@@ -240,8 +336,16 @@ const toolDefinitions = [
 
       if (params.asyncPoll) {
         const result = await client.delegateAsync(params.task, {
+          projectPath: params.projectPath,
+          sessionId: params.sessionId,
+          chatId: params.chatId,
           includeProcessText: params.includeProcessText,
           waitForQueue: params.waitForQueue !== false,
+          background: params.background === true,
+          reviewRequired: params.reviewRequired === true,
+          autoContinue: params.autoContinue === true,
+          followupTasks: params.followupTasks,
+          notifyUrl: params.notifyUrl,
           fallbackModels: params.fallbackModels,
           autoModelFallback: params.autoModelFallback === true,
           modelProbeIntervalMs: params.modelProbeIntervalMs

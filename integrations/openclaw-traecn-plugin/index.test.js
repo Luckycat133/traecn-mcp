@@ -1,8 +1,12 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const { toolDefinitions, slashCommands, formatResult, PLUGIN_ID } = require('./index');
 const { listCommands, mapSettingsAction } = require('./lib/command-set');
+
+const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'openclaw.plugin.json'), 'utf8'));
 
 let passed = 0;
 let failed = 0;
@@ -46,6 +50,7 @@ test('required tools are present', () => {
   assert.ok(names.includes('traecn_plan_operation'), 'Missing traecn_plan_operation');
   assert.ok(names.includes('traecn_command_set'), 'Missing traecn_command_set');
   assert.ok(names.includes('traecn_command'), 'Missing traecn_command');
+  assert.ok(names.includes('traecn_vibe_workflow'), 'Missing traecn_vibe_workflow');
   assert.ok(names.includes('traecn_status'), 'Missing traecn_status');
   assert.ok(names.includes('traecn_delegate'), 'Missing traecn_delegate');
   assert.ok(names.includes('traecn_new_chat'), 'Missing traecn_new_chat');
@@ -72,12 +77,36 @@ test('preset command set includes core control commands', () => {
   assert.ok(commands.includes('approve_dialog'));
   assert.ok(commands.includes('batch_submit'));
   assert.ok(commands.includes('review_code'));
+  assert.ok(commands.includes('vibe_workflow'));
 });
 
 test('traecn_command enum stays aligned with preset command set', () => {
   const commandTool = toolDefinitions.find(t => t.name === 'traecn_command');
   const commandEnum = commandTool.parameters.properties.command.enum;
   assert.deepStrictEqual(commandEnum, listCommands().map(definition => definition.command));
+});
+
+test('manifest traecn_command enum stays aligned with preset command set', () => {
+  const commandTool = manifest.tools.find(t => t.name === 'traecn_command');
+  const commandEnum = commandTool.parameters.properties.command.enum;
+  assert.deepStrictEqual(commandEnum, listCommands().map(definition => definition.command));
+});
+
+test('manifest exposes direct unattended vibe workflow tool', () => {
+  const runtimeTool = toolDefinitions.find(t => t.name === 'traecn_vibe_workflow');
+  const manifestTool = manifest.tools.find(t => t.name === 'traecn_vibe_workflow');
+  assert.ok(runtimeTool, 'runtime vibe workflow tool missing');
+  assert.ok(manifestTool, 'manifest vibe workflow tool missing');
+  assert.ok(runtimeTool.parameters.required.includes('task'));
+  assert.ok(manifestTool.parameters.required.includes('task'));
+  assert.ok(runtimeTool.parameters.properties.steps);
+  assert.ok(runtimeTool.parameters.properties.followupTasks);
+  assert.ok(runtimeTool.parameters.properties.completionChecks);
+  assert.ok(runtimeTool.parameters.properties.fallbackModels);
+  assert.ok(manifestTool.parameters.properties.steps);
+  assert.ok(manifestTool.parameters.properties.followupTasks);
+  assert.ok(manifestTool.parameters.properties.completionChecks);
+  assert.ok(manifestTool.parameters.properties.fallbackModels);
 });
 
 test('mapSettingsAction routes to implemented settings commands', () => {
@@ -95,6 +124,36 @@ test('traecn_delegate has required task parameter', () => {
   const delegate = toolDefinitions.find(t => t.name === 'traecn_delegate');
   assert.ok(delegate.parameters.required.includes('task'));
   assert.ok(delegate.parameters.properties.task);
+  assert.ok(delegate.parameters.properties.projectPath);
+  assert.ok(delegate.parameters.properties.sessionId);
+  assert.ok(delegate.parameters.properties.chatId);
+  assert.ok(delegate.parameters.properties.waitForQueue);
+  assert.ok(delegate.parameters.properties.asyncPoll);
+  assert.ok(delegate.parameters.properties.background);
+  assert.ok(delegate.parameters.properties.reviewRequired);
+  assert.ok(delegate.parameters.properties.autoContinue);
+  assert.ok(delegate.parameters.properties.followupTasks);
+  assert.ok(delegate.parameters.properties.completionChecks);
+  assert.ok(delegate.parameters.properties.notifyUrl);
+  assert.ok(delegate.parameters.properties.fallbackModels);
+  assert.ok(delegate.parameters.properties.autoModelFallback);
+  assert.ok(delegate.parameters.properties.modelProbeIntervalMs);
+});
+
+test('manifest traecn_delegate exposes async workflow and queue options', () => {
+  const delegate = manifest.tools.find(t => t.name === 'traecn_delegate');
+  assert.ok(delegate.parameters.required.includes('task'));
+  assert.ok(delegate.parameters.properties.projectPath);
+  assert.ok(delegate.parameters.properties.sessionId);
+  assert.ok(delegate.parameters.properties.chatId);
+  assert.ok(delegate.parameters.properties.waitForQueue);
+  assert.ok(delegate.parameters.properties.asyncPoll);
+  assert.ok(delegate.parameters.properties.background);
+  assert.ok(delegate.parameters.properties.reviewRequired);
+  assert.ok(delegate.parameters.properties.autoContinue);
+  assert.ok(delegate.parameters.properties.followupTasks);
+  assert.ok(delegate.parameters.properties.completionChecks);
+  assert.ok(delegate.parameters.properties.notifyUrl);
   assert.ok(delegate.parameters.properties.fallbackModels);
   assert.ok(delegate.parameters.properties.autoModelFallback);
   assert.ok(delegate.parameters.properties.modelProbeIntervalMs);

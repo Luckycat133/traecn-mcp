@@ -5,6 +5,11 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const os = require('os');
+const {
+  TraeCNApiClient,
+  DEFAULT_TASK_POLL_MS,
+  isTerminalTaskStatus
+} = require('../integrations/openclaw-traecn-plugin/lib/traecnapi-client');
 
 const COLORS = {
   reset: '\x1b[0m',
@@ -133,6 +138,8 @@ ${color('bold', 'USAGE:')}
 ${color('bold', 'COMMANDS:')}
   ${color('green', 'delegate')} <task>      Execute a task
   ${color('green', 'delegate')} -f <file>    Execute task from file
+  ${color('green', 'vibe')} <task>          Start unattended vibe coding workflow
+  ${color('green', 'wait')} <taskId>        Wait locally for a queued task to finish
   ${color('green', 'status')}                Show gateway status
   ${color('green', 'capabilities')}          Show compact agent capability catalog
   ${color('green', 'preflight')} [cmd] [json] One-call readiness/queue/dialog preflight
@@ -155,10 +162,21 @@ ${color('bold', 'OPTIONS:')}
   -s, --strategy <mode>   Batch strategy: parallel, sequential, priority
   -c, --concurrency <n>   Max concurrent tasks for batch [default: 5]
   --callback <url>        Callback URL for batch completion
+  --check-file <path>     Vibe: require file before marking complete
+  --check-text <f:t>      Vibe: require text t in file f before marking complete
+  --completion-checks-json <json> Vibe: raw completionChecks object
+  --poll-ms <ms>          Wait: task polling interval [default: ${DEFAULT_TASK_POLL_MS}]
+  --timeout-ms <ms>       Wait: max local wait; 0 means forever [default: 0]
+  --log <file>            Wait: append JSONL status evidence to file
+  --quiet                 Wait: only print final result
+  --auto-approve-dialog [action] Wait: approve task dialog if one appears
 
 ${color('bold', 'EXAMPLES:')}
   traecn delegate "Write a hello world program"
   traecn delegate -f task.txt
+  traecn vibe "Implement feature" --step "Run tests" --step "Fix failures"
+  traecn vibe "Ship report" --check-file FINAL_REPORT.md --check-text WORKFLOW_STATUS.md:Follow-up
+  traecn wait task_123 --poll-ms 30000 --timeout-ms 0 --log evidence.jsonl --quiet -o json
   traecn status
   traecn capabilities
   traecn preflight delegate_async '{"task":"..."}'
@@ -187,6 +205,98 @@ function parseJsonArg(raw, label) {
     console.error(color('red', `Error: ${label} must be valid JSON`));
     process.exit(1);
   }
+}
+
+function parseCompletionChecksArg(raw, label = 'completion checks') {
+  const parsed = parseJsonArg(raw, label);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    console.error(color('red', `Error: ${label} must be a JSON object`));
+    process.exit(1);
+  }
+  return parsed;
+}
+
+function addRequiredFileCheck(completionChecks, filePath) {
+  if (!filePath) return;
+  if (!Array.isArray(completionChecks.requiredFiles)) completionChecks.requiredFiles = [];
+  completionChecks.requiredFiles.push(filePath);
+}
+
+function addRequiredTextCheck(completionChecks, spec) {
+  if (!spec) return;
+  const separator = spec.indexOf(':');
+  if (separator <= 0 || separator === spec.length - 1) {
+    console.error(color('red', 'Error: --check-text must be in filePath:required text format'));
+    process.exit(1);
+  }
+  const filePath = spec.slice(0, separator);
+  const includes = spec.slice(separator + 1);
+  if (!Array.isArray(completionChecks.requiredText)) completionChecks.requiredText = [];
+  completionChecks.requiredText.push({ filePath, includes });
+}
+
+function hasCompletionChecks(completionChecks) {
+  return (Array.isArray(completionChecks.requiredFiles) && completionChecks.requiredFiles.length > 0)
+    || (Array.isArray(completionChecks.requiredText) && completionChecks.requiredText.length > 0);
+}
+
+function parsePositiveMs(raw, fallback, { allowZero = false } = {}) {
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (allowZero && parsed === 0) return 0;
+  return parsed > 0 ? parsed : fallback;
+}
+
+function parseWaitArgs(args) {
+  const options = {
+    taskId: '',
+    outputFormat: 'text',
+    pollMs: DEFAULT_TASK_POLL_MS,
+    timeoutMs: 0,
+    logFile: null,
+    quiet: false,
+    autoApproveDialog: null
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '-o' || arg === '--output') {
+      options.outputFormat = args[++i] || 'text';
+    } else if (arg === '--poll-ms') {
+      options.pollMs = parsePositiveMs(args[++i], DEFAULT_TASK_POLL_MS);
+    } else if (arg === '--timeout-ms') {
+      options.timeoutMs = parsePositiveMs(args[++i], 0, { allowZero: true });
+    } else if (arg === '--log') {
+      options.logFile = args[++i] || null;
+    } else if (arg === '--quiet') {
+      options.quiet = true;
+    } else if (arg === '--auto-approve-dialog') {
+      const next = args[i + 1];
+      if (next && !next.startsWith('-')) {
+        options.autoApproveDialog = next;
+        i++;
+      } else {
+        options.autoApproveDialog = true;
+      }
+    } else if (!arg.startsWith('-') && !options.taskId) {
+      options.taskId = arg;
+    } else if (!arg.startsWith('-')) {
+      // Ignore extra positional text so shell completion or copied notes do not
+      // accidentally change the task being waited on.
+    } else {
+      console.error(color('red', `Error: Unknown wait option ${arg}`));
+      process.exit(1);
+    }
+  }
+
+  return options;
+}
+
+function appendJsonLine(filePath, value) {
+  if (!filePath) return;
+  fs.mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
+  fs.appendFileSync(filePath, JSON.stringify(value) + '\n');
 }
 
 async function cmdDelegate(args) {
@@ -269,6 +379,147 @@ async function cmdDelegate(args) {
     }
   } catch (err) {
     console.error(color('red', `Request failed: ${err.message}`));
+    process.exit(1);
+  }
+}
+
+async function cmdVibe(args) {
+  let task = '';
+  let projectPath = null;
+  let outputFormat = 'text';
+  const steps = [];
+  let completionChecks = {};
+  const positional = [];
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '-f' || args[i] === '--file') {
+      const filePath = args[++i];
+      try {
+        task = fs.readFileSync(filePath, 'utf8');
+      } catch {
+        console.error(color('red', `Error: Cannot read file ${filePath}`));
+        process.exit(1);
+      }
+    } else if (args[i] === '--step') {
+      const step = args[++i];
+      if (step) steps.push(step);
+    } else if (args[i] === '--check-file') {
+      addRequiredFileCheck(completionChecks, args[++i]);
+    } else if (args[i] === '--check-text') {
+      addRequiredTextCheck(completionChecks, args[++i]);
+    } else if (args[i] === '--completion-checks-json') {
+      completionChecks = parseCompletionChecksArg(args[++i], '--completion-checks-json');
+    } else if (args[i] === '--project' || args[i] === '--project-path') {
+      projectPath = args[++i] || null;
+    } else if (args[i] === '-o' || args[i] === '--output') {
+      outputFormat = args[++i] || 'text';
+    } else if (!args[i].startsWith('-')) {
+      positional.push(args[i]);
+    }
+  }
+
+  if (!task && positional.length > 0) {
+    task = positional.join(' ');
+  }
+
+  if (!task.trim()) {
+    console.error(color('red', 'Error: Task is required'));
+    console.error(color('gray', 'Usage: traecn vibe <task> [--step <task>] [--project <path>]'));
+    process.exit(1);
+  }
+
+  try {
+    const result = await apiRequest('POST', '/api/delegate-async', {
+      task,
+      projectPath,
+      background: true,
+      autoContinue: true,
+      followupTasks: steps.map(step => ({ task: step, reviewRequired: false, autoContinue: true })),
+      completionChecks: hasCompletionChecks(completionChecks) ? completionChecks : undefined,
+      waitForQueue: true
+    });
+
+    if (![200, 202].includes(result.status)) {
+      console.error(color('red', `Error: ${result.data.error || 'Workflow submission failed'}`));
+      if (outputFormat === 'json') console.log(JSON.stringify(result.data, null, 2));
+      process.exit(1);
+    }
+
+    if (outputFormat === 'json') {
+      console.log(JSON.stringify(result.data, null, 2));
+      return;
+    }
+
+    console.log(color('green', '✓ Vibe workflow submitted'));
+    console.log(color('dim', `Task ID: ${result.data.taskId || '(completed immediately)'}`));
+    console.log(color('dim', `Follow-up steps: ${steps.length}`));
+  } catch (err) {
+    console.error(color('red', `Request failed: ${err.message}`));
+    process.exit(1);
+  }
+}
+
+async function cmdWait(args) {
+  const options = parseWaitArgs(args);
+  if (!options.taskId) {
+    console.error(color('red', 'Error: taskId is required'));
+    console.error(color('gray', 'Usage: traecn wait <taskId> [--poll-ms <ms>] [--timeout-ms <ms>] [--log <file>]'));
+    process.exit(1);
+  }
+
+  const cfg = loadConfig();
+  const client = new TraeCNApiClient({
+    host: cfg.host,
+    port: cfg.port,
+    token: cfg.token,
+    timeout: Math.max(60000, options.pollMs + 30000)
+  });
+
+  try {
+    const result = await client.waitForTask(options.taskId, {
+      pollMs: options.pollMs,
+      timeoutMs: options.timeoutMs,
+      autoApproveDialog: options.autoApproveDialog,
+      onSnapshot: async event => {
+        appendJsonLine(options.logFile, event);
+        if (options.quiet || options.outputFormat === 'json') return;
+        if (event.type === 'task_status') {
+          const queue = event.data && event.data.queueDetails ? event.data.queueDetails : {};
+          const queueText = queue.queuePosition ? ` queue=${queue.queuePosition}` : '';
+          console.log(color('dim', `[${event.at}] ${event.taskId} ${event.status}${queueText}`));
+        } else if (event.type === 'dialog_status') {
+          console.log(color('yellow', `[${event.at}] dialog detected while waiting`));
+        } else if (event.type === 'dialog_approval') {
+          console.log(color('yellow', `[${event.at}] dialog approval sent: ${event.action}`));
+        }
+      }
+    });
+
+    if (options.outputFormat === 'json') {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      const wait = result.wait || {};
+      const status = result.status || 'unknown';
+      const statusColor = status === 'done' ? 'green' : isTerminalTaskStatus(status) ? 'yellow' : 'cyan';
+      console.log(color(statusColor, `Task ${options.taskId} ended at status: ${status}`));
+      console.log(color('dim', `Attempts: ${wait.attempts || 0}, elapsed: ${wait.elapsedMs || 0}ms`));
+      if (options.logFile) console.log(color('dim', `Evidence log: ${path.resolve(options.logFile)}`));
+      const text = result.result && result.result.text ? result.result.text : result.text;
+      if (text) {
+        console.log('');
+        console.log(color('white', text));
+      }
+      if (result.error) {
+        console.error(color('red', result.error));
+      }
+    }
+
+    if (result.wait && result.wait.timedOut) process.exit(2);
+    if (['error', 'queue_timeout', 'review_rejected', 'not_found'].includes(String(result.status || '').toLowerCase())) {
+      process.exit(1);
+    }
+  } catch (err) {
+    console.error(color('red', `Wait failed: ${err.message}`));
     process.exit(1);
   }
 }
@@ -743,6 +994,14 @@ async function main() {
       case 'delegate':
         await cmdDelegate(args.slice(1));
         break;
+      case 'vibe':
+      case 'vibe-workflow':
+        await cmdVibe(args.slice(1));
+        break;
+      case 'wait':
+      case 'wait-task':
+        await cmdWait(args.slice(1));
+        break;
       case 'status':
         await cmdStatus();
         break;
@@ -782,4 +1041,15 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { apiRequest, loadConfig, saveConfig, COLORS };
+module.exports = {
+  apiRequest,
+  loadConfig,
+  saveConfig,
+  COLORS,
+  parseCompletionChecksArg,
+  addRequiredFileCheck,
+  addRequiredTextCheck,
+  hasCompletionChecks,
+  parseWaitArgs,
+  appendJsonLine
+};

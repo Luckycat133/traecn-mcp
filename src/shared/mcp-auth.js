@@ -37,6 +37,7 @@ const TOOL_PERMISSIONS = Object.freeze({
   switch_mode: WRITE_PERMISSION,
   new_chat: WRITE_PERMISSION,
   poll_task: READ_PERMISSION,
+  wait_task: READ_PERMISSION,
   adopt_current_task: DELEGATE_PERMISSION,
   cancel_task: DELEGATE_PERMISSION,
   stop_generation: DELEGATE_PERMISSION,
@@ -46,6 +47,7 @@ const TOOL_PERMISSIONS = Object.freeze({
   resolve_review_gate: DELEGATE_PERMISSION,
   run_task: DELEGATE_PERMISSION,
   queue_task: DELEGATE_PERMISSION,
+  vibe_workflow: DELEGATE_PERMISSION,
   review_code: DELEGATE_PERMISSION,
   set_setting: ADMIN_PERMISSION,
   approve_dialog: DELEGATE_PERMISSION,
@@ -70,7 +72,13 @@ function resolveCommandPermission(command) {
 
 function requiredPermissionFor(toolName, args = {}) {
   if (toolName === 'traecn_command') {
+    if (args && args.command === 'wait_task') {
+      return args.params && args.params.autoApproveDialog ? DELEGATE_PERMISSION : READ_PERMISSION;
+    }
     return resolveCommandPermission(args && args.command);
+  }
+  if (toolName === 'wait_task' && args && args.autoApproveDialog) {
+    return DELEGATE_PERMISSION;
   }
   return TOOL_PERMISSIONS[toolName] || READ_PERMISSION;
 }

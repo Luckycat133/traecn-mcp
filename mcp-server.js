@@ -25,6 +25,46 @@ function schema(properties = {}, required = []) {
   return { type: 'object', properties, required };
 }
 
+const COMPLETION_CHECKS_SCHEMA = Object.freeze({
+  type: 'object',
+  properties: {
+    requiredFiles: { type: 'array', items: { type: 'string' } },
+    requiredText: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['filePath', 'includes'],
+        properties: {
+          filePath: { type: 'string' },
+          includes: {
+            anyOf: [
+              { type: 'string' },
+              { type: 'array', items: { type: 'string' } }
+            ]
+          }
+        }
+      }
+    }
+  }
+});
+
+const WORKFLOW_STEP_SCHEMA = Object.freeze({
+  anyOf: [
+    { type: 'string' },
+    {
+      type: 'object',
+      required: ['task'],
+      properties: {
+        task: { type: 'string' },
+        reviewRequired: { type: 'boolean' },
+        autoContinue: { type: 'boolean' },
+        includeProcessText: { type: 'boolean' },
+        completionChecks: COMPLETION_CHECKS_SCHEMA
+      }
+    }
+  ]
+});
+
 const MCP_TOOLS = Object.freeze([
   {
     name: 'traecn_capabilities',
@@ -71,6 +111,11 @@ const MCP_TOOLS = Object.freeze([
       includeProcess: { type: 'boolean' },
       autoWait: { type: 'boolean', default: true },
       mode: { type: 'string', enum: ['solo', 'ide'] },
+      reviewRequired: { type: 'boolean' },
+      autoContinue: { type: 'boolean' },
+      followupTasks: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
+      completionChecks: COMPLETION_CHECKS_SCHEMA,
+      notifyUrl: { type: 'string' },
       fallbackModels: { type: 'array', items: { type: 'string' } },
       autoModelFallback: { type: 'boolean' },
       modelProbeIntervalMs: { type: 'number' }
@@ -82,6 +127,11 @@ const MCP_TOOLS = Object.freeze([
     inputSchema: schema({
       task: { type: 'string' },
       projectPath: { type: 'string' },
+      reviewRequired: { type: 'boolean' },
+      autoContinue: { type: 'boolean' },
+      followupTasks: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
+      completionChecks: COMPLETION_CHECKS_SCHEMA,
+      notifyUrl: { type: 'string' },
       fallbackModels: { type: 'array', items: { type: 'string' } },
       autoModelFallback: { type: 'boolean' },
       modelProbeIntervalMs: { type: 'number' }
@@ -93,11 +143,36 @@ const MCP_TOOLS = Object.freeze([
     inputSchema: schema({ taskId: { type: 'string' } })
   },
   {
+    name: 'wait_task',
+    description: 'Wait locally for a queued TraeCN task to reach a terminal or decision-required state.',
+    inputSchema: schema({
+      taskId: { type: 'string' },
+      pollMs: { type: 'number' },
+      timeoutMs: { type: 'number' },
+      autoApproveDialog: {
+        anyOf: [
+          { type: 'boolean' },
+          { type: 'string' }
+        ]
+      }
+    }, ['taskId'])
+  },
+  {
     name: 'adopt_current_task',
     description: 'Recover tracking for the currently queued/running TraeCN request without resending the prompt.',
     inputSchema: schema({
       task: { type: 'string' },
       reviewRequired: { type: 'boolean' },
+      autoContinue: { type: 'boolean' },
+      followupTasks: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
+      completionChecks: COMPLETION_CHECKS_SCHEMA,
+      chatId: { type: 'string' },
+      includeProcessText: { type: 'boolean' },
+      notifyUrl: { type: 'string' },
+      fallbackModels: { type: 'array', items: { type: 'string' } },
+      autoModelFallback: { type: 'boolean' },
+      modelProbeIntervalMs: { type: 'number' },
+      submittedAt: { type: 'number' },
       force: { type: 'boolean' }
     })
   },
@@ -147,6 +222,16 @@ const MCP_TOOLS = Object.freeze([
       code: { type: 'string' },
       diff: { type: 'string' },
       queue: { type: 'boolean' },
+      projectPath: { type: 'string' },
+      sessionId: { type: 'string' },
+      includeProcessText: { type: 'boolean' },
+      waitForQueue: { type: 'boolean' },
+      background: { type: 'boolean' },
+      reviewRequired: { type: 'boolean' },
+      autoContinue: { type: 'boolean' },
+      followupTasks: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
+      completionChecks: COMPLETION_CHECKS_SCHEMA,
+      notifyUrl: { type: 'string' },
       fallbackModels: { type: 'array', items: { type: 'string' } },
       autoModelFallback: { type: 'boolean' },
       modelProbeIntervalMs: { type: 'number' }
@@ -206,46 +291,24 @@ const MCP_TOOLS = Object.freeze([
     inputSchema: schema({ projectPath: { type: 'string' } }, ['projectPath'])
   },
   {
-    name: 'adopt_current_task',
-    description: 'Adopt an existing TraeCN queued/running request without re-sending the prompt.',
+    name: 'vibe_workflow',
+    description: 'Start an unattended vibe coding workflow: initial task plus auto-continued follow-up tasks.',
     inputSchema: schema({
       task: { type: 'string' },
-      reviewRequired: { type: 'boolean' },
-      followupTasks: { type: 'array', items: { type: 'object' } },
+      steps: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
+      followupTasks: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
+      projectPath: { type: 'string' },
       chatId: { type: 'string' },
+      reviewRequired: { type: 'boolean' },
+      autoContinue: { type: 'boolean' },
       includeProcessText: { type: 'boolean' },
+      completionChecks: COMPLETION_CHECKS_SCHEMA,
       notifyUrl: { type: 'string' },
       fallbackModels: { type: 'array', items: { type: 'string' } },
       autoModelFallback: { type: 'boolean' },
       modelProbeIntervalMs: { type: 'number' },
-      submittedAt: { type: 'number' },
-      force: { type: 'boolean' }
-    })
-  },
-  {
-    name: 'cancel_task',
-    description: 'Cancel a queued or awaiting-review TraeCN task.',
-    inputSchema: schema({ taskId: { type: 'string' } }, ['taskId'])
-  },
-  {
-    name: 'stop_generation',
-    description: 'Stop the current TraeCN generation or queued request.',
-    inputSchema: schema()
-  },
-  {
-    name: 'review_gate_status',
-    description: 'Check whether TraeCN is showing an internal review gate (keep/revert changes).',
-    inputSchema: schema()
-  },
-  {
-    name: 'resolve_review_gate',
-    description: 'Resolve the TraeCN internal review gate (keep_all or revert_all).',
-    inputSchema: schema({ action: { type: 'string', enum: ['keep_all', 'revert_all'] } }, ['action'])
-  },
-  {
-    name: 'dismiss_dialog',
-    description: 'Dismiss the current TraeCN dialog without approving.',
-    inputSchema: schema()
+      maxQueueWaitMs: { type: 'number' }
+    }, ['task'])
   }
 ]);
 
@@ -299,6 +362,10 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       return asMcpContent(await skill.queue(args.task, args));
     case 'poll_task':
       return asMcpContent(await skill.poll(args.taskId || null));
+    case 'wait_task': {
+      const client = new TraeCNApiClient(context);
+      return asMcpContent(await client.waitForTask(args.taskId, args));
+    }
     case 'adopt_current_task': {
       const client = new TraeCNApiClient(context);
       const result = await client.adoptCurrentTask(args);
@@ -356,6 +423,8 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       return asMcpContent(await skill.queueStatus());
     case 'open_project':
       return asMcpContent(await skill.openProject(args.projectPath));
+    case 'vibe_workflow':
+      return asMcpContent(await skill.vibeWorkflow(args));
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

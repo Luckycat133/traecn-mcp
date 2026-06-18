@@ -2,6 +2,29 @@
 
 const packageInfo = require('../../package.json');
 
+const completionChecksSchema = {
+  type: 'object',
+  properties: {
+    requiredFiles: { type: 'array', items: { type: 'string' } },
+    requiredText: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['filePath', 'includes'],
+        properties: {
+          filePath: { type: 'string' },
+          includes: {
+            oneOf: [
+              { type: 'string' },
+              { type: 'array', items: { type: 'string' } }
+            ]
+          }
+        }
+      }
+    }
+  }
+};
+
 function generateOpenAPISpec() {
   const spec = {
     openapi: '3.0.3',
@@ -347,8 +370,10 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string', description: 'The task to delegate', maxLength: 100000 },
+                    projectPath: { type: 'string', description: 'Optional local project path TraeCN should work in' },
                     chatId: { type: 'string', description: 'Optional chat ID for notification callback' },
                     waitForQueue: { type: 'boolean', default: true },
+                    background: { type: 'boolean', default: false },
                     includeProcessText: { type: 'boolean', default: false },
                     fallbackModels: {
                       type: 'array',
@@ -358,6 +383,8 @@ function generateOpenAPISpec() {
                     autoModelFallback: { type: 'boolean', default: false },
                     modelProbeIntervalMs: { type: 'number', default: 60000 },
                     reviewRequired: { type: 'boolean', default: false },
+                    autoContinue: { type: 'boolean', default: false, description: 'Automatically approve stable review checkpoints and continue follow-up tasks.' },
+                    completionChecks: completionChecksSchema,
                     notifyUrl: { type: 'string', description: 'Optional webhook URL for task lifecycle notifications' },
                     followupTasks: {
                       type: 'array',
@@ -370,7 +397,9 @@ function generateOpenAPISpec() {
                             properties: {
                               task: { type: 'string' },
                               reviewRequired: { type: 'boolean' },
-                              includeProcessText: { type: 'boolean' }
+                              autoContinue: { type: 'boolean' },
+                              includeProcessText: { type: 'boolean' },
+                              completionChecks: completionChecksSchema
                             }
                           }
                         ]

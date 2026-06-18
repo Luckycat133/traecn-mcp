@@ -54,6 +54,7 @@ const DEFAULT_HTML_HEADERS = {
 // rejected and replaced with a server-generated id.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
+const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
 
 function sanitizeLog(obj) {
   if (!obj || typeof obj !== 'object') return obj;
@@ -568,14 +569,75 @@ class Gateway {
           return { task: item, reviewRequired: true };
         }
         if (!item || typeof item !== 'object' || typeof item.task !== 'string') return null;
-        return {
+        const completionChecks = this._normalizeCompletionChecks(item.completionChecks || item);
+        const normalized = {
           task: item.task,
           reviewRequired: item.reviewRequired !== false,
           autoContinue: item.autoContinue === true,
           includeProcessText: item.includeProcessText === true
         };
+        if (this._hasCompletionChecks(completionChecks)) normalized.completionChecks = completionChecks;
+        return normalized;
       })
       .filter(item => item && item.task && item.task.length <= 100000);
+  }
+
+  _normalizeCompletionChecks(input = {}) {
+    const source = input && typeof input === 'object' ? input : {};
+    const checks = source.completionChecks && typeof source.completionChecks === 'object'
+      ? source.completionChecks
+      : source;
+    const requiredFiles = Array.isArray(checks.requiredFiles)
+      ? checks.requiredFiles.filter(filePath => typeof filePath === 'string' && filePath.trim()).map(filePath => filePath.trim()).slice(0, 50)
+      : [];
+    const requiredText = Array.isArray(checks.requiredText)
+      ? checks.requiredText.map(item => {
+        if (!item || typeof item !== 'object' || typeof item.filePath !== 'string') return null;
+        const includes = Array.isArray(item.includes) ? item.includes : [item.includes];
+        const normalizedIncludes = includes.filter(value => typeof value === 'string' && value.length > 0).slice(0, 20);
+        if (!item.filePath.trim() || normalizedIncludes.length === 0) return null;
+        return { filePath: item.filePath.trim(), includes: normalizedIncludes };
+      }).filter(Boolean).slice(0, 50)
+      : [];
+    return { requiredFiles, requiredText };
+  }
+
+  _hasCompletionChecks(checks) {
+    return !!checks
+      && ((Array.isArray(checks.requiredFiles) && checks.requiredFiles.length > 0)
+        || (Array.isArray(checks.requiredText) && checks.requiredText.length > 0));
+  }
+
+  _resolveCompletionCheckPath(task, filePath) {
+    if (path.isAbsolute(filePath)) return path.normalize(filePath);
+    return path.resolve(task.projectPath || process.cwd(), filePath);
+  }
+
+  _validateCompletionChecks(task) {
+    const checks = task?.completionChecks;
+    if (!this._hasCompletionChecks(checks)) return { ok: true, missingFiles: [], missingText: [] };
+    const missingFiles = [];
+    const missingText = [];
+
+    for (const filePath of checks.requiredFiles || []) {
+      const resolved = this._resolveCompletionCheckPath(task, filePath);
+      if (!fs.existsSync(resolved)) missingFiles.push(filePath);
+    }
+
+    for (const check of checks.requiredText || []) {
+      const resolved = this._resolveCompletionCheckPath(task, check.filePath);
+      let content = '';
+      try {
+        content = fs.readFileSync(resolved, 'utf8');
+      } catch {
+        missingText.push({ filePath: check.filePath, includes: check.includes });
+        continue;
+      }
+      const absent = check.includes.filter(value => !content.includes(value));
+      if (absent.length > 0) missingText.push({ filePath: check.filePath, includes: absent });
+    }
+
+    return { ok: missingFiles.length === 0 && missingText.length === 0, missingFiles, missingText };
   }
 
   _taskWithProjectContext(taskText, projectPath) {
@@ -621,6 +683,7 @@ class Gateway {
     const reviewRequired = body.reviewRequired === true;
     const autoContinue = body.autoContinue === true;
     const followupTasks = this._normalizeFollowupTasks(body.followupTasks);
+    const completionChecks = this._normalizeCompletionChecks(body.completionChecks || body);
     const fallbackModels = this._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
     const modelProbeIntervalMs = this._modelProbeIntervalMs(body.modelProbeIntervalMs);
     const projectPath = typeof body.projectPath === 'string' && body.projectPath.trim()
@@ -658,6 +721,7 @@ class Gateway {
       reviewRequired,
       autoContinue,
       followupTasks,
+      completionChecks,
       notifyUrl: typeof body.notifyUrl === 'string' ? body.notifyUrl : null,
       submittedToTrae: false,
       submittedAt: null,
@@ -685,6 +749,7 @@ class Gateway {
         fallbackModels,
         reviewRequired,
         autoContinue,
+        completionChecks: this._hasCompletionChecks(completionChecks),
         followupCount: followupTasks.length
       }
     });
@@ -717,12 +782,52 @@ class Gateway {
   }
 
   _updateQueuedTaskSnapshot(task, queueStatus = {}) {
-    task.queueState = queueStatus.running ? 'running' : (queueStatus.queued ? 'queued' : task.queueState);
-    task.queuePosition = queueStatus.queuePosition || queueStatus.position || null;
+    const queueActive = queueStatus.running === true || queueStatus.queued === true;
+    if (queueActive) {
+      task.lastQueueSeenAt = Date.now();
+    }
+
+    const keepRecentQueue = !queueActive && this._hasRecentSubmittedQueueSnapshot(task);
+    task.queueState = queueStatus.running ? 'running' : (queueStatus.queued || keepRecentQueue ? 'queued' : 'ready');
+    task.queuePosition = (queueActive || keepRecentQueue) ? (queueStatus.queuePosition || queueStatus.position || task.queuePosition || null) : null;
     task.currentModel = queueStatus.currentModel || task.currentModel || null;
-    task.queueEstimatedWait = queueStatus.queueEstimatedWait || null;
-    task.queueMessage = queueStatus.queueMessage || queueStatus.message || task.queueMessage || null;
-    task.queueCanSubmit = queueStatus.canSubmit === true;
+    task.queueEstimatedWait = (queueActive || keepRecentQueue) ? (queueStatus.queueEstimatedWait || task.queueEstimatedWait || null) : null;
+    task.queueMessage = (queueActive || keepRecentQueue) ? (queueStatus.queueMessage || queueStatus.message || task.queueMessage || null) : null;
+    task.queueCanSubmit = keepRecentQueue ? false : queueStatus.canSubmit === true;
+  }
+
+  _queueFlickerGraceMs() {
+    const configured = this.driver?.config?.queueFlickerGraceMs
+      ?? getEnvWithFallback('TRAECN_QUEUE_FLICKER_GRACE_MS', 'TRAE_QUEUE_FLICKER_GRACE_MS', DEFAULT_QUEUE_FLICKER_GRACE_MS);
+    return parsePositiveInt(configured, DEFAULT_QUEUE_FLICKER_GRACE_MS);
+  }
+
+  _hasRecentSubmittedQueueSnapshot(task, now = Date.now()) {
+    if (!task || task.status !== 'executing' || task.submittedToTrae !== true) return false;
+    if (task.queueState !== 'queued') return false;
+    if (!task.lastQueueSeenAt) return false;
+    return now - task.lastQueueSeenAt <= this._queueFlickerGraceMs();
+  }
+
+  _applyRecentQueueSnapshot(status = {}) {
+    if (status.queued === true || status.running === true) return status;
+    const task = Array.from(this.taskQueue.values())
+      .find(candidate => this._hasRecentSubmittedQueueSnapshot(candidate));
+    if (!task) return status;
+    const message = task.queueMessage || status.queueMessage || status.message || null;
+    return {
+      ...status,
+      queued: true,
+      running: false,
+      canSubmit: false,
+      currentModel: task.currentModel || status.currentModel || null,
+      queuePosition: task.queuePosition || null,
+      position: task.queuePosition || status.position || null,
+      queueEstimatedWait: task.queueEstimatedWait || status.queueEstimatedWait || null,
+      queueMessage: message,
+      message,
+      queueSnapshotSource: 'recent_submitted_task'
+    };
   }
 
   _queueDetailsFromStatus(queueStatus = {}, fallbackModel = null) {
@@ -921,7 +1026,7 @@ class Gateway {
       const text = panelText || 'Trae 已生成结果，但当前停在内部审查闸口，等待审查决定。';
       return {
         text,
-        stable: false,
+        stable: true,
         elapsedMs: Date.now() - task.createdAt,
         timedOut: false,
         needsApproval: false,
@@ -973,12 +1078,17 @@ class Gateway {
   }
 
   _isReviewableTaskResult(result, task = null) {
+    if (!result || result.streaming || result.truncated || result.modelError) return false;
+    if (result.reviewGatePending && result.stable !== true) return false;
+    if (result.stable !== true && result.timedOut !== true) return false;
     return (this._isReviewableResult(result) || this._hasStrongCompletionEvidence(result?.text))
       && !this._isFailedResultText(result?.text || '')
       && !this._isEchoedTaskResult(result, task);
   }
 
   _isSuccessfulTaskResult(result, task = null) {
+    if (!result || result.reviewGatePending || result.streaming || result.truncated || result.modelError) return false;
+    if (result.stable !== true && result.timedOut !== true) return false;
     return (this._isSuccessfulResult(result) || this._hasStrongCompletionEvidence(result?.text))
       && !this._isFailedResultText(result?.text || '')
       && !this._isEchoedTaskResult(result, task);
@@ -1117,6 +1227,7 @@ class Gateway {
       reviewRequired: nextSpec.reviewRequired !== false,
       autoContinue: task.autoContinue === true || nextSpec.autoContinue === true,
       followupTasks: task.followupTasks,
+      completionChecks: nextSpec.completionChecks,
       notifyUrl: task.notifyUrl,
       chatId: task.chatId,
       fallbackModels: task.fallbackModels || [],
@@ -1885,7 +1996,7 @@ class Gateway {
       : { name: 'dialog', ok: false, error: connectionProbe.error, code: connectionProbe.code };
 
     const readiness = readinessProbe.ok ? this._compactReadiness(readinessProbe.value) : null;
-    const queue = queueProbe.ok ? this._compactQueue(queueProbe.value) : null;
+    const queue = queueProbe.ok ? this._compactQueue(this._applyRecentQueueSnapshot(queueProbe.value)) : null;
     const dialog = dialogProbe.ok ? this._compactDialog({
       hasDialog: dialogProbe.value.needsApproval,
       dialogType: dialogProbe.value.dialogType,
@@ -2404,7 +2515,7 @@ class Gateway {
 
   async _handleQueueStatus(req, res) {
     await this._ensureConnection();
-    const status = await this.driver.checkQueueStatus();
+    const status = this._applyRecentQueueSnapshot(await this.driver.checkQueueStatus());
     this._json(req, res, status);
   }
 
@@ -3618,6 +3729,61 @@ class Gateway {
     this._json(req, res, { tasks });
   }
 
+  _formatCompletionCheckFailure(validation = {}) {
+    const parts = [];
+    if (Array.isArray(validation.missingFiles) && validation.missingFiles.length > 0) {
+      parts.push('missing files: ' + validation.missingFiles.join(', '));
+    }
+    if (Array.isArray(validation.missingText) && validation.missingText.length > 0) {
+      const details = validation.missingText.map(item => `${item.filePath} missing ${item.includes.join(', ')}`);
+      parts.push('missing text: ' + details.join('; '));
+    }
+    return parts.length > 0 ? 'Completion checks failed: ' + parts.join('; ') : 'Completion checks failed';
+  }
+
+  _taskWithCompletionCheckFeedback(taskText, validation) {
+    const feedback = [
+      '',
+      '',
+      'Completion checks failed after the previous attempt.',
+      this._formatCompletionCheckFailure(validation),
+      'Fix these missing deliverables before reporting completion.'
+    ].join('\n');
+    const base = String(taskText || '').replace(/\n\nCompletion checks failed after the previous attempt\.[\s\S]*$/m, '');
+    return (base + feedback).slice(0, 100000);
+  }
+
+  async _retryBackgroundTaskAfterCompletionCheckFailure(taskId, task, result, validation, options = {}) {
+    const maxAttempts = Number.isFinite(Number(options.maxAttempts))
+      ? Number(options.maxAttempts)
+      : Number(process.env.TRAECN_BACKGROUND_MAX_RETRIES || 3);
+    const attempts = Number(task.attempts || 0);
+    if (attempts >= maxAttempts) return false;
+
+    task.attempts = attempts + 1;
+    task.error = this._formatCompletionCheckFailure(validation);
+    task.result = result;
+    task.task = this._taskWithCompletionCheckFeedback(task.task, validation);
+    task.status = 'queued';
+    task.submittedToTrae = false;
+    task.submittedAt = null;
+    task.queueState = 'queued';
+    task.queueMessage = 'retry scheduled after failed completion checks';
+
+    this.taskHistoryStore.recordStep(taskId, 'completion_check_failed', {
+      success: false,
+      details: {
+        attempts: task.attempts,
+        maxAttempts,
+        missingFiles: validation.missingFiles,
+        missingText: validation.missingText
+      }
+    });
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+    return true;
+  }
+
   async _finalizeCollectedBackgroundResult(taskId, task, result) {
     task.result = result;
 
@@ -3627,6 +3793,15 @@ class Gateway {
       });
     } else if (task.reviewRequired || (task.followupTasks && task.followupTasks.length > 0)) {
       if (this._isReviewableTaskResult(result, task)) {
+        const validation = this._validateCompletionChecks(task);
+        if (!validation.ok) {
+          if (await this._retryBackgroundTaskAfterCompletionCheckFailure(taskId, task, result, validation)) return;
+          await this._finalizeBackgroundTask(taskId, task, 'error', {
+            result,
+            error: this._formatCompletionCheckFailure(validation)
+          });
+          return;
+        }
         if (task.autoContinue === true) {
           task.result = result;
           await this._continueReviewedTask(taskId, task, 'approve', 'autoContinue');
@@ -3645,6 +3820,15 @@ class Gateway {
         });
       }
     } else if (this._isSuccessfulTaskResult(result, task)) {
+      const validation = this._validateCompletionChecks(task);
+      if (!validation.ok) {
+        if (await this._retryBackgroundTaskAfterCompletionCheckFailure(taskId, task, result, validation)) return;
+        await this._finalizeBackgroundTask(taskId, task, 'error', {
+          result,
+          error: this._formatCompletionCheckFailure(validation)
+        });
+        return;
+      }
       await this._finalizeBackgroundTask(taskId, task, 'done', {
         result
       });
@@ -3758,6 +3942,18 @@ class Gateway {
     this._persistActiveQueue();
 
     const result = await this.driver.collectResponse();
+    if (this._isTerminalTaskStatus(task.status)) {
+      this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
+        success: true,
+        details: {
+          status: task.status,
+          reason: 'task already reached a terminal state before collectResponse returned'
+        }
+      });
+      this._syncTaskHistoryMirror(task);
+      this._persistActiveQueue();
+      return result;
+    }
     await this._finalizeCollectedBackgroundResult(taskId, task, result);
     return result;
   }
@@ -3980,6 +4176,18 @@ class Gateway {
               this._syncTaskHistoryMirror(task);
               this._persistActiveQueue();
               const result = await this.driver.collectResponse();
+              if (this._isTerminalTaskStatus(task.status)) {
+                this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
+                  success: true,
+                  details: {
+                    status: task.status,
+                    reason: 'task already reached a terminal state before collectResponse returned'
+                  }
+                });
+                this._syncTaskHistoryMirror(task);
+                this._persistActiveQueue();
+                continue;
+              }
               await this._finalizeCollectedBackgroundResult(taskId, task, result);
             } catch (e) {
               console.error('[Queue] Task', taskId, 'execution error:', e.message);

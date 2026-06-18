@@ -5,7 +5,35 @@ const http = require('http');
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8788;
 const DEFAULT_TIMEOUT = 120000;
+const DEFAULT_TASK_POLL_MS = 30000;
+const DEFAULT_TASK_WAIT_TIMEOUT_MS = 0;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const TERMINAL_TASK_STATUSES = Object.freeze([
+  'done',
+  'error',
+  'cancelled',
+  'queue_timeout',
+  'review_rejected',
+  'awaiting_review',
+  'approval_required',
+  'not_found'
+]);
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizeWaitMs(value, fallback, { allowZero = false } = {}) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (parsed === 0 && allowZero) return 0;
+  return parsed > 0 ? parsed : fallback;
+}
+
+function isTerminalTaskStatus(status) {
+  return TERMINAL_TASK_STATUSES.includes(String(status || '').toLowerCase());
+}
 
 class TraeCNApiClient {
   constructor(options = {}) {
@@ -115,6 +143,11 @@ class TraeCNApiClient {
     if (options.waitForQueue !== undefined) body.waitForQueue = options.waitForQueue;
     if (options.background === true) body.background = true;
     if (options.forceBackground === true) body.forceBackground = true;
+    if (options.reviewRequired === true) body.reviewRequired = true;
+    if (options.autoContinue === true) body.autoContinue = true;
+    if (Array.isArray(options.followupTasks)) body.followupTasks = options.followupTasks;
+    if (options.completionChecks && typeof options.completionChecks === 'object') body.completionChecks = options.completionChecks;
+    if (options.notifyUrl) body.notifyUrl = options.notifyUrl;
     if (Array.isArray(options.fallbackModels)) body.fallbackModels = options.fallbackModels;
     if (options.autoModelFallback === true) body.autoModelFallback = true;
     if (options.modelProbeIntervalMs !== undefined) body.modelProbeIntervalMs = options.modelProbeIntervalMs;
@@ -126,11 +159,20 @@ class TraeCNApiClient {
 
   async delegateAsync(task, options = {}) {
     const body = { task };
+    if (options.projectPath) body.projectPath = options.projectPath;
+    if (options.sessionId) body.sessionId = options.sessionId;
     if (options.chatId) body.chatId = options.chatId;
     if (options.includeProcessText) body.includeProcessText = true;
     if (options.waitForQueue !== undefined) body.waitForQueue = options.waitForQueue;
     if (options.background === true) body.background = true;
     if (options.forceBackground === true) body.forceBackground = true;
+    if (options.reviewRequired === true) body.reviewRequired = true;
+    if (options.autoContinue === true) body.autoContinue = true;
+    if (Array.isArray(options.followupTasks)) body.followupTasks = options.followupTasks;
+    if (options.completionChecks && typeof options.completionChecks === 'object') body.completionChecks = options.completionChecks;
+    if (options.notifyUrl) body.notifyUrl = options.notifyUrl;
+    if (options.maxQueueWaitMs !== undefined) body.maxQueueWaitMs = options.maxQueueWaitMs;
+    if (options.queueMaxWaitMs !== undefined) body.queueMaxWaitMs = options.queueMaxWaitMs;
     if (Array.isArray(options.fallbackModels)) body.fallbackModels = options.fallbackModels;
     if (options.autoModelFallback === true) body.autoModelFallback = true;
     if (options.modelProbeIntervalMs !== undefined) body.modelProbeIntervalMs = options.modelProbeIntervalMs;
@@ -139,6 +181,118 @@ class TraeCNApiClient {
 
   async getTaskStatus(taskId) {
     return this._request('GET', '/api/task/' + encodeURIComponent(taskId));
+  }
+
+  async waitForTask(taskId, options = {}) {
+    if (!taskId) {
+      throw new Error('taskId is required');
+    }
+
+    const pollMs = normalizeWaitMs(options.pollMs || options.pollIntervalMs, DEFAULT_TASK_POLL_MS);
+    const timeoutMs = normalizeWaitMs(
+      options.timeoutMs || options.waitTimeoutMs,
+      DEFAULT_TASK_WAIT_TIMEOUT_MS,
+      { allowZero: true }
+    );
+    const startedAt = Date.now();
+    const deadline = timeoutMs > 0 ? startedAt + timeoutMs : 0;
+    const autoApproveDialog = options.autoApproveDialog || options.approveDialogAction || null;
+    let attempts = 0;
+    let lastSnapshot = null;
+
+    while (true) {
+      attempts++;
+      const response = await this.getTaskStatus(taskId);
+      const data = response.data || {};
+      const status = response.status === 404 ? 'not_found' : (data.status || 'unknown');
+      const elapsedMs = Date.now() - startedAt;
+      lastSnapshot = data;
+
+      if (typeof options.onSnapshot === 'function') {
+        await options.onSnapshot({
+          type: 'task_status',
+          at: new Date().toISOString(),
+          taskId,
+          status,
+          httpStatus: response.status,
+          attempt: attempts,
+          elapsedMs,
+          data
+        });
+      }
+
+      if (status === 'approval_required' && autoApproveDialog) {
+        const dialogResponse = await this.dialogStatus();
+        if (typeof options.onSnapshot === 'function') {
+          await options.onSnapshot({
+            type: 'dialog_status',
+            at: new Date().toISOString(),
+            taskId,
+            status,
+            httpStatus: dialogResponse.status,
+            attempt: attempts,
+            elapsedMs: Date.now() - startedAt,
+            data: dialogResponse.data || {}
+          });
+        }
+
+        const dialog = dialogResponse.data || {};
+        if (dialog.hasDialog) {
+          const action = typeof autoApproveDialog === 'string' ? autoApproveDialog : 'auto';
+          const approvalResponse = await this.approveDialog(action);
+          if (typeof options.onSnapshot === 'function') {
+            await options.onSnapshot({
+              type: 'dialog_approval',
+              at: new Date().toISOString(),
+              taskId,
+              status,
+              action,
+              httpStatus: approvalResponse.status,
+              attempt: attempts,
+              elapsedMs: Date.now() - startedAt,
+              data: approvalResponse.data || {}
+            });
+          }
+          await sleep(Math.min(pollMs, 3000));
+          continue;
+        }
+      }
+
+      if (isTerminalTaskStatus(status)) {
+        return {
+          ...data,
+          taskId: data.taskId || taskId,
+          status,
+          wait: {
+            terminal: true,
+            timedOut: false,
+            attempts,
+            elapsedMs,
+            pollMs,
+            timeoutMs
+          }
+        };
+      }
+
+      if (deadline && Date.now() >= deadline) {
+        return {
+          taskId,
+          status,
+          wait: {
+            terminal: false,
+            timedOut: true,
+            attempts,
+            elapsedMs: Date.now() - startedAt,
+            pollMs,
+            timeoutMs
+          },
+          lastSnapshot
+        };
+      }
+
+      const remainingMs = deadline ? Math.max(0, deadline - Date.now()) : pollMs;
+      await sleep(deadline ? Math.min(pollMs, remainingMs) : pollMs);
+    }
   }
 
   async adoptCurrentTask(options = {}) {
@@ -288,4 +442,12 @@ class TraeCNApiClient {
   }
 }
 
-module.exports = { TraeCNApiClient, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_TIMEOUT };
+module.exports = {
+  TraeCNApiClient,
+  DEFAULT_HOST,
+  DEFAULT_PORT,
+  DEFAULT_TIMEOUT,
+  DEFAULT_TASK_POLL_MS,
+  TERMINAL_TASK_STATUSES,
+  isTerminalTaskStatus
+};
