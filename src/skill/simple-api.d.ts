@@ -20,7 +20,9 @@ import {
   ReviewInput,
   VibeWorkflowOptions,
   OperationPlan,
-  PreflightResult
+  PreflightResult,
+  WaitTaskOptions,
+  WaitResult
 } from './traecn-skill';
 
 // 导出 TraeCNSkill
@@ -58,6 +60,13 @@ export declare function queueTask(task: string, opts?: RunTaskOptions): Promise<
  * @param taskId - 任务 ID（可选）
  */
 export declare function pollTask(taskId?: string | null): Promise<PollResult>;
+
+/**
+ * 本地等待任务直到终态或需要代码决策的停点
+ * @param taskId - 任务 ID（可选）
+ * @param opts - 等待选项
+ */
+export declare function waitTask(taskId?: string | null, opts?: WaitTaskOptions): Promise<WaitResult>;
 
 /**
  * 取消任务
@@ -173,6 +182,11 @@ export declare const q: typeof queueTask;
  * 轮询任务（p = pollTask）
  */
 export declare const p: typeof pollTask;
+
+/**
+ * 等待任务（w = waitTask）
+ */
+export declare const w: typeof waitTask;
 
 /**
  * 取消任务

@@ -21,7 +21,7 @@ async function basicExample() {
   }
 
   // 切换模型（模糊匹配）
-  await switchModel('glm');  // 自动匹配 GLM-5.1
+  await switchModel('glm');  // 自动匹配 GLM-5.2
 
   // 执行任务
   const result = await runTask('分析这个函数的性能');

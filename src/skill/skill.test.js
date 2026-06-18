@@ -85,6 +85,7 @@ test('Simple API should export all functions', () => {
   expect(typeof api.runTask).toBe('function');
   expect(typeof api.queueTask).toBe('function');
   expect(typeof api.pollTask).toBe('function');
+  expect(typeof api.waitTask).toBe('function');
   expect(typeof api.cancelTask).toBe('function');
   expect(typeof api.checkStatus).toBe('function');
   expect(typeof api.getCapabilities).toBe('function');
@@ -109,6 +110,7 @@ test('Simple API should export all functions', () => {
   expect(typeof api.t).toBe('function');
   expect(typeof api.q).toBe('function');
   expect(typeof api.p).toBe('function');
+  expect(typeof api.w).toBe('function');
   expect(typeof api.s).toBe('function');
   expect(typeof api.model).toBe('function');
   expect(typeof api.mode).toBe('function');
@@ -318,6 +320,23 @@ test('_normalizePollResult should handle errors', () => {
   expect(result.ok).toBe(false);
   expect(result.status).toBe('error');
   expect(result.error).toBe('Something went wrong');
+});
+
+test('wait should use local task waiter and keep last task fallback', async () => {
+  const { TraeCNSkill } = require('./traecn-skill');
+  const skill = new TraeCNSkill();
+  skill._lastTaskId = 'task_wait';
+  let captured = null;
+  skill.client.waitForTask = async (taskId, opts) => {
+    captured = { taskId, opts };
+    return { taskId, status: 'done', wait: { terminal: true, timedOut: false, attempts: 1 } };
+  };
+
+  const result = await skill.wait(null, { pollMs: 1 });
+  expect(result.ok).toBe(true);
+  expect(result.status).toBe('done');
+  expect(captured.taskId).toBe('task_wait');
+  expect(captured.opts.pollMs).toBe(1);
 });
 
 test('Skill instance should initialize correctly', () => {

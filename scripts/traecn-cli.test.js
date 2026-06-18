@@ -5,6 +5,12 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+const TEST_CONFIG_FILE = path.join(os.tmpdir(), `traecn-cli-test-${process.pid}.json`);
+process.env.TRAECN_CONFIG_FILE = TEST_CONFIG_FILE;
+try {
+  fs.unlinkSync(TEST_CONFIG_FILE);
+} catch {}
+
 let passed = 0;
 let failed = 0;
 
@@ -256,10 +262,9 @@ test('progress bar at 100%', () => {
 
 test('config file path uses home directory', () => {
   clearModuleCache();
-  const { COLORS } = require('./traecn-cli');
+  const { COLORS, CONFIG_FILE } = require('./traecn-cli');
   assert.ok(COLORS !== undefined);
-  const expectedPath = path.join(os.homedir(), '.traecnrc');
-  assert.ok(expectedPath.endsWith('.traecnrc'));
+  assert.strictEqual(CONFIG_FILE, TEST_CONFIG_FILE);
 });
 
 test('CLI exposes preflight command in help and dispatcher', () => {

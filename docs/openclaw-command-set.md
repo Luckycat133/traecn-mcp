@@ -101,7 +101,7 @@ recovery command:
     "task": "全面审查当前仓库并输出 findings-first 结果",
     "reviewRequired": true,
     "waitForQueue": true,
-    "fallbackModels": ["GLM-5.1", "Kimi-K2.6", "DeepSeek-V4-Flash"]
+    "fallbackModels": ["GLM-5.2", "Kimi-K2.6", "DeepSeek-V4-Flash"]
   }
 }
 ```
@@ -112,7 +112,7 @@ recovery command:
   "params": {
     "section": "模型",
     "label": "默认模型",
-    "value": "GLM-5.1"
+    "value": "GLM-5.2"
   }
 }
 ```
@@ -135,7 +135,8 @@ recovery command:
 
 - Start with `preflight` before sending tasks to a live TraeCN UI; fall back to
   `status` and `readiness` only when debugging a specific probe.
-- Use `delegate_async` plus `task_status` for long-running or queued work.
+- Use `delegate_async` plus `wait_task` for long-running or queued work; use
+  `task_status` only for one-off checks.
 - Add `fallbackModels` or `autoModelFallback=true` when OpenClaw should let the
   gateway probe alternate models in the background instead of keeping the caller
   in a token-consuming wait loop.

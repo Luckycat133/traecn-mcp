@@ -44,6 +44,15 @@ export interface RunTaskOptions {
   diff?: string;
 }
 
+export interface WaitTaskOptions {
+  pollMs?: number;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+  waitTimeoutMs?: number;
+  autoApproveDialog?: boolean | string;
+  approveDialogAction?: string;
+}
+
 export interface CompletionChecks {
   requiredFiles?: string[];
   requiredText?: Array<{
@@ -110,6 +119,23 @@ export interface PollResult {
   text?: string;
   elapsed?: number;
   error?: string;
+}
+
+export interface WaitResult {
+  ok: boolean;
+  taskId: string;
+  status: string;
+  wait: {
+    terminal: boolean;
+    timedOut: boolean;
+    attempts: number;
+    elapsedMs: number;
+    pollMs: number;
+    timeoutMs: number;
+  };
+  result?: any;
+  error?: string;
+  lastSnapshot?: any;
 }
 
 // 取消结果
@@ -242,6 +268,13 @@ export declare class TraeCNSkill {
    * @param taskId - 任务 ID（可选，默认为最后执行的任务）
    */
   poll(taskId?: string | null): Promise<PollResult>;
+
+  /**
+   * 本地等待任务直到终态或需要代码决策的停点
+   * @param taskId - 任务 ID（可选，默认为最后执行的任务）
+   * @param opts - 等待选项
+   */
+  wait(taskId?: string | null, opts?: WaitTaskOptions): Promise<WaitResult>;
 
   /**
    * 取消任务

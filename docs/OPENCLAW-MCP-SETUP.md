@@ -354,7 +354,7 @@ curl -s http://127.0.0.1:8788/api/capabilities | jq .
   },
   "commands": [...],
   "mcpTools": [...],
-  "models": ["Doubao-Seed-2.0-Code", "GLM-5.1", "DeepSeek-V3.1-Terminus", ...],
+  "models": ["Doubao-Seed-2.0-Code", "GLM-5.2", "GLM-5.1", "DeepSeek-V3.1-Terminus", ...],
   "settings": ["general", "account", "agents", "mcp", "flow", "model", "context", "rules", "beta", "about"],
   "apiFamilies": {
     "discovery":   ["/api/capabilities", "/api/preflight", "/api/status"],
