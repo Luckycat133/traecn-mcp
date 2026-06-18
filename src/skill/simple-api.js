@@ -111,6 +111,12 @@ async function reviewCode(input, opts = {}) {
   return opts.queue === true ? result.taskId : result.text;
 }
 
+async function vibeWorkflow(input, opts = {}) {
+  const skill = getSkill();
+  const result = await skill.vibeWorkflow({ ...input, ...opts });
+  return result.taskId;
+}
+
 function reset() {
   _instance = null;
 }
@@ -132,6 +138,7 @@ const queueCheck = checkQueue;
 const open = openProject;
 const cancel = cancelTask;
 const review = reviewCode;
+const vibe = vibeWorkflow;
 
 module.exports = {
   runTask,
@@ -152,6 +159,7 @@ module.exports = {
   checkQueue,
   openProject,
   reviewCode,
+  vibeWorkflow,
   reset,
   getSkill,
   TraeCNSkill,
@@ -173,5 +181,6 @@ module.exports = {
   open,
   cancel,
   review,
+  vibe,
   promptLayers
 };

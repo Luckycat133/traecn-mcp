@@ -18,14 +18,51 @@ export interface SkillOptions {
 // 运行任务选项
 export interface RunTaskOptions {
   projectPath?: string;
+  sessionId?: string;
+  chatId?: string;
   includeProcess?: boolean;
+  includeProcessText?: boolean;
   autoWait?: boolean;
   mode?: string;
   queue?: boolean;
+  waitForQueue?: boolean;
+  background?: boolean;
+  forceBackground?: boolean;
+  reviewRequired?: boolean;
+  autoContinue?: boolean;
+  followupTasks?: WorkflowStep[];
+  completionChecks?: CompletionChecks;
+  notifyUrl?: string;
+  fallbackModels?: string[];
+  autoModelFallback?: boolean;
+  modelProbeIntervalMs?: number;
+  maxQueueWaitMs?: number;
+  queueMaxWaitMs?: number;
   files?: string[];
   focus?: string[];
   code?: string;
   diff?: string;
+}
+
+export interface CompletionChecks {
+  requiredFiles?: string[];
+  requiredText?: Array<{
+    filePath: string;
+    includes: string | string[];
+  }>;
+}
+
+export interface WorkflowStep {
+  task: string;
+  reviewRequired?: boolean;
+  autoContinue?: boolean;
+  includeProcessText?: boolean;
+  completionChecks?: CompletionChecks;
+}
+
+export interface VibeWorkflowOptions extends RunTaskOptions {
+  task: string;
+  steps?: Array<string | WorkflowStep>;
 }
 
 // 代码审查输入
@@ -198,7 +235,7 @@ export declare class TraeCNSkill {
    * @param task - 任务描述
    * @param opts - 运行选项
    */
-  queue(task: string, opts?: { projectPath?: string }): Promise<QueueResult>;
+  queue(task: string, opts?: RunTaskOptions): Promise<QueueResult>;
 
   /**
    * 轮询任务状态
@@ -272,4 +309,9 @@ export declare class TraeCNSkill {
    * @param opts - 运行或队列选项
    */
   reviewCode(input: string | ReviewInput, opts?: RunTaskOptions): Promise<RunResult | QueueResult>;
+
+  /**
+   * 启动无人值守 vibe coding 工作流
+   */
+  vibeWorkflow(input: VibeWorkflowOptions): Promise<QueueResult>;
 }

@@ -25,6 +25,7 @@ const OPERATION_HINTS = Object.freeze({
   delegate: 'Best for one-off work where the caller can wait.',
   delegate_async: 'Best for token-efficient background delegation.',
   task_status: 'Poll async work without re-sending task context.',
+  wait_task: 'Wait locally until terminal state after receiving taskId, avoiding repeated agent turns during long queues.',
   adopt_current_task: 'Recover tracking for a Trae request that is already queued/running without resending prompt content.',
   review_task: 'Approve or reject a completed background result before continuing follow-up work.',
   queue_status: 'Check model busy/queue state before sending expensive work.',
@@ -32,6 +33,7 @@ const OPERATION_HINTS = Object.freeze({
   review_gate_status: 'Inspect whether Trae is waiting on its internal keep/revert review gate.',
   resolve_review_gate: 'Resolve Trae internal keep/revert gate so automation can continue.',
   review_code: 'Ask Trae CN for findings-first code review of code or diff.',
+  vibe_workflow: 'Run an unattended initial task plus follow-up tasks with auto-continue checkpoints.',
   approve_dialog: 'Handle permission, restricted-mode, or confirmation prompts explicitly.'
 });
 
@@ -93,7 +95,7 @@ function buildCapabilities(options = {}) {
     version: packageInfo.version,
     contractVersion: 1,
     tokenStrategy: {
-      prefer: ['traecn_capabilities', 'preflight', 'delegate_async', 'task_status'],
+      prefer: ['traecn_capabilities', 'preflight', 'delegate_async', 'wait_task', 'task_status'],
       preflight: 'Call preflight once before side-effecting work instead of separate status/readiness/queue/dialog checks.',
       avoid: 'Fetch /openapi.json only when schema detail is needed.',
       maxTaskBytes: 100000,
@@ -111,6 +113,7 @@ function buildCapabilities(options = {}) {
       modelAndModeControl: true,
       projectOpening: true,
       historyReplay: true,
+      unattendedVibeWorkflow: true,
       fullSchema: '/openapi.json'
     },
     apiFamilies: API_FAMILIES,

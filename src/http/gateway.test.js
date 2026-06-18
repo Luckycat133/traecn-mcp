@@ -900,6 +900,79 @@ asyncTest('Gateway keeps collecting incomplete review-gate process text', async 
   assert.match(task.error, /collecting again/);
 });
 
+asyncTest('Gateway does not auto-continue workflow from review-gate prompt echo', async () => {
+  const gateway = new Gateway();
+  const task = {
+    taskId: 'task_retry_final_report_echo',
+    status: 'executing',
+    task: 'Final unattended workflow pass. Create FINAL_REPORT.md and append Follow-up 2.',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    attempts: 0,
+    reviewRequired: false,
+    autoContinue: true,
+    followupTasks: [{ task: 'next step', reviewRequired: false, autoContinue: true }]
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: 'Final unattended workflow pass. Create FINAL_REPORT.md containing a checklist. Agent思考过程 0/8 已完成 Create files WORKFLOW_STATUS.md 正在生成...',
+    stable: false,
+    elapsedMs: 17258,
+    timedOut: false,
+    needsApproval: false,
+    reviewGatePending: true
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.submittedToTrae, true);
+  assert.strictEqual(task.attempts, 1);
+  assert.match(task.error, /collecting again/);
+});
+
+asyncTest('Gateway resubmits completed-looking task when completion checks fail', async () => {
+  const gateway = new Gateway();
+  gateway.taskHistoryStore = {
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway._emitTaskNotification = async () => {};
+  const task = {
+    taskId: 'task_completion_check_retry',
+    status: 'executing',
+    task: 'Create FINAL_REPORT.md and report completion.',
+    projectPath: '/tmp/traecnclaw-missing-completion-check',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    submittedAt: Date.now() - 4000,
+    attempts: 0,
+    reviewRequired: false,
+    autoContinue: false,
+    followupTasks: [],
+    completionChecks: {
+      requiredFiles: ['FINAL_REPORT.md'],
+      requiredText: [{ filePath: 'WORKFLOW_STATUS.md', includes: ['Follow-up 1'] }]
+    }
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: 'Final Report: All files created. All tests pass. No human interaction was needed.',
+    stable: true,
+    elapsedMs: 1234
+  });
+
+  assert.strictEqual(task.status, 'queued');
+  assert.strictEqual(task.submittedToTrae, false);
+  assert.strictEqual(task.attempts, 1);
+  assert.match(task.error, /Completion checks failed/);
+  assert.match(task.task, /FINAL_REPORT.md/);
+  assert.match(task.task, /Follow-up 1/);
+});
+
 asyncTest('Gateway resubmits background task when Trae returns failed text', async () => {
   const gateway = new Gateway();
   const task = {
@@ -1012,6 +1085,46 @@ asyncTest('Gateway task cancel stops submitted executing task', async () => {
   assert.strictEqual(gateway.taskLocks.has(task.taskId), false);
   assert.strictEqual(responseData.status, 'cancelled');
   assert.strictEqual(responseData.stopResult.success, true);
+});
+
+asyncTest('Gateway ignores collected result after submitted task is cancelled', async () => {
+  const gateway = new Gateway();
+  const task = {
+    taskId: 'task_cancel_collect_race',
+    status: 'executing',
+    task: 'long task',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    queueState: 'running'
+  };
+  gateway.taskQueue.set(task.taskId, task);
+  gateway.taskHistoryStore = {
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => { throw new Error('cancelled task must not be completed'); },
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway._ensureConnection = async () => {};
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway._persistActiveQueue = () => {};
+  gateway.driver = {
+    checkQueueStatus: async () => ({ queued: false, running: true }),
+    collectResponse: async () => {
+      task.status = 'cancelled';
+      return {
+        text: '任务完成',
+        stable: true,
+        elapsedMs: 1000
+      };
+    }
+  };
+
+  const result = await gateway._collectSubmittedBackgroundTask(task.taskId, task);
+
+  assert.strictEqual(result.stable, true);
+  assert.strictEqual(task.status, 'cancelled');
+  assert.strictEqual(task.result, undefined);
 });
 
 asyncTest('Gateway adopts current queued Trae request as submitted background task', async () => {
@@ -1331,6 +1444,95 @@ test('Gateway updates queued task snapshot from live queue status', () => {
   assert.strictEqual(task.queueEstimatedWait, '9m');
   assert.strictEqual(task.queueMessage, '排在第 128 位');
   assert.strictEqual(task.currentModel, 'DeepSeek-V4-Pro');
+});
+
+test('Gateway clears stale queued task snapshot after live queue drains', () => {
+  const gateway = new Gateway();
+  const task = {
+    status: 'executing',
+    submittedToTrae: true,
+    queueState: 'queued',
+    queuePosition: 87,
+    queueEstimatedWait: '3m',
+    queueMessage: '排在第 87 位',
+    currentModel: 'DeepSeek-V4-Pro'
+  };
+
+  gateway._updateQueuedTaskSnapshot(task, {
+    queued: false,
+    running: false,
+    canSubmit: false,
+    currentModel: 'DeepSeek-V4-Pro'
+  });
+
+  assert.strictEqual(task.queueState, 'ready');
+  assert.strictEqual(task.queuePosition, null);
+  assert.strictEqual(task.queueEstimatedWait, null);
+  assert.strictEqual(task.queueMessage, null);
+  assert.strictEqual(task.currentModel, 'DeepSeek-V4-Pro');
+});
+
+test('Gateway preserves recent submitted queue snapshot during brief queue flicker', () => {
+  const gateway = new Gateway();
+  const task = {
+    status: 'executing',
+    submittedToTrae: true,
+    queueState: 'queued',
+    queuePosition: 36,
+    queueEstimatedWait: null,
+    queueMessage: '排在第 36 位',
+    currentModel: 'DeepSeek-V4-Pro',
+    lastQueueSeenAt: Date.now() - 1000
+  };
+
+  gateway._updateQueuedTaskSnapshot(task, {
+    queued: false,
+    running: false,
+    canSubmit: false,
+    currentModel: 'DeepSeek-V4-Pro'
+  });
+
+  assert.strictEqual(task.queueState, 'queued');
+  assert.strictEqual(task.queuePosition, 36);
+  assert.strictEqual(task.queueMessage, '排在第 36 位');
+  assert.strictEqual(task.queueCanSubmit, false);
+});
+
+asyncTest('Gateway queue status uses recent submitted task snapshot during queue flicker', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.set('task_live_flicker', {
+    status: 'executing',
+    submittedToTrae: true,
+    queueState: 'queued',
+    queuePosition: 40,
+    queueEstimatedWait: null,
+    queueMessage: '排在第 40 位',
+    currentModel: 'DeepSeek-V4-Pro',
+    lastQueueSeenAt: Date.now() - 1000
+  });
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    checkQueueStatus: async () => ({
+      queued: false,
+      running: false,
+      canSubmit: false,
+      currentModel: 'DeepSeek-V4-Pro'
+    })
+  };
+
+  let responseData = null;
+  gateway._json = (req, res, data) => {
+    responseData = data;
+    return data;
+  };
+
+  await gateway._handleQueueStatus({}, {});
+  assert.strictEqual(responseData.queued, true);
+  assert.strictEqual(responseData.running, false);
+  assert.strictEqual(responseData.canSubmit, false);
+  assert.strictEqual(responseData.queuePosition, 40);
+  assert.strictEqual(responseData.queueMessage, '排在第 40 位');
+  assert.strictEqual(responseData.queueSnapshotSource, 'recent_submitted_task');
 });
 
 test('Gateway normalizes fallback model candidates with auto defaults', () => {

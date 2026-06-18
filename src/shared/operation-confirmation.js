@@ -16,6 +16,7 @@ const MEDIUM_RISK_COMMANDS = new Set([
   'delegate',
   'delegate_async',
   'review_code',
+  'vibe_workflow',
   'switch_mode',
   'switch_model',
   'new_chat',
@@ -59,7 +60,7 @@ function classifyCommand(command) {
 function buildChecklist(command, params = {}) {
   const checklist = ['Confirm gateway target host/port and token scope.'];
 
-  if (['delegate', 'delegate_async', 'review_code', 'batch_submit'].includes(command)) {
+  if (['delegate', 'delegate_async', 'review_code', 'vibe_workflow', 'batch_submit'].includes(command)) {
     checklist.push('Check readiness and queue status before sending task content.');
     checklist.push('Prefer async delegation plus polling for long-running work.');
   }
@@ -122,6 +123,7 @@ function describeSideEffects(command, params) {
     case 'delegate':
     case 'delegate_async':
     case 'review_code':
+    case 'vibe_workflow':
       return ['Sends task content to Trae CN and may cause generated code or tool actions inside the app.'];
     case 'open_project':
       return [`May open local project ${JSON.stringify(params.projectPath || '')} in Trae CN.`];
@@ -147,7 +149,7 @@ function describeSideEffects(command, params) {
 function buildRecommendedFlow(command, risk, requiresConfirmation) {
   const flow = ['traecn_capabilities'];
   if (risk !== 'low') flow.push('check_status', 'readiness');
-  if (['delegate', 'delegate_async', 'review_code', 'batch_submit'].includes(command)) flow.push('check_queue');
+  if (['delegate', 'delegate_async', 'review_code', 'vibe_workflow', 'batch_submit'].includes(command)) flow.push('check_queue');
   if (command === 'approve_dialog' || command === 'dismiss_dialog') flow.push('check_dialog');
   if (command === 'resolve_review_gate') flow.push('review_gate_status');
   if (command === 'settings_set') flow.push('get_settings');

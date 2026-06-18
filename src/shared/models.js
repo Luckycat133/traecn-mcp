@@ -4,6 +4,7 @@ const KNOWN_MODELS = [
   'Doubao-Seed-2.0-Code',
   'Doubao-Seed-Code',
   'Doubao-Seed-1.8',
+  'GLM-5.2',
   'GLM-5.1',
   'DeepSeek-V3.1-Terminus',
   'DeepSeek-V4-Flash',

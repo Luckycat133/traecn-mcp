@@ -32,6 +32,7 @@ async function test(name, fn) {
     assert.ok(names.includes('preflight'));
     assert.ok(names.includes('run_task'));
     assert.ok(names.includes('queue_task'));
+    assert.ok(names.includes('wait_task'));
     assert.ok(names.includes('adopt_current_task'));
     assert.ok(names.includes('cancel_task'));
     assert.ok(names.includes('stop_generation'));
@@ -40,7 +41,13 @@ async function test(name, fn) {
     assert.ok(names.includes('review_gate_status'));
     assert.ok(names.includes('resolve_review_gate'));
     assert.ok(names.includes('review_code'));
+    assert.ok(names.includes('vibe_workflow'));
     assert.ok(names.includes('traecn_command'));
+  });
+
+  await test('MCP tool names are unique for reliable agent discovery', () => {
+    const names = MCP_TOOLS.map(tool => tool.name);
+    assert.strictEqual(new Set(names).size, names.length);
   });
 
   await test('initialize returns server capabilities', async () => {
@@ -58,6 +65,21 @@ async function test(name, fn) {
     assert.ok(Array.isArray(result.tools));
     const runTask = result.tools.find(tool => tool.name === 'run_task');
     assert.deepStrictEqual(runTask.inputSchema.required, ['task']);
+  });
+
+  await test('MCP workflow tools expose completion checks', async () => {
+    const handlers = createMcpHandlers({ test: true });
+    const result = await handlers.handle({ method: 'tools/list' });
+    const tools = Object.fromEntries(result.tools.map(tool => [tool.name, tool]));
+
+    assert.ok(tools.run_task.inputSchema.properties.completionChecks);
+    assert.ok(tools.queue_task.inputSchema.properties.completionChecks);
+    assert.ok(tools.wait_task.inputSchema.properties.pollMs);
+    assert.ok(tools.adopt_current_task.inputSchema.properties.completionChecks);
+    assert.ok(tools.review_code.inputSchema.properties.completionChecks);
+    assert.ok(tools.vibe_workflow.inputSchema.properties.completionChecks);
+    assert.ok(tools.vibe_workflow.inputSchema.properties.steps.items.anyOf);
+    assert.ok(tools.vibe_workflow.inputSchema.properties.followupTasks.items.anyOf);
   });
 
   await test('prompts and resources proxy prompt layer helpers', async () => {
@@ -87,7 +109,9 @@ async function test(name, fn) {
     const payload = JSON.parse(result.content[0].text);
     assert.strictEqual(payload.name, 'traecnclaw');
     assert.ok(payload.commands.some(command => command.command === 'delegate_async'));
+    assert.ok(payload.commands.some(command => command.command === 'vibe_workflow'));
     assert.ok(payload.mcp.tools.some(tool => tool.name === 'traecn_capabilities'));
+    assert.ok(payload.mcp.tools.some(tool => tool.name === 'vibe_workflow'));
   });
 
   await test('tools/call returns operation confirmation plan without gateway access', async () => {

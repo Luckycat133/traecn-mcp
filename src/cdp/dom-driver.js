@@ -2943,7 +2943,7 @@ class DomDriver {
   static KNOWN_MODELS = [
     'Doubao-Seed-2.0-Code', 'Doubao-Seed-1.8', 'Doubao-Seed-Code',
     'MiniMax-M2.7', 'MiniMax-M2.5',
-    'GLM-5.1', 'GLM-5V-Turbo', 'GLM-5',
+    'GLM-5.2', 'GLM-5.1', 'GLM-5V-Turbo', 'GLM-5',
     'DeepSeek-V4-Pro', 'DeepSeek-V4-Flash',
     'Kimi-K2.6', 'Kimi-K2.5',
     'Qwen3.6-Plus', 'Qwen3.5-Plus'
@@ -2980,16 +2980,24 @@ class DomDriver {
               .map((el) => {
                 const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
                 if (!text || text.length > 240) return null;
+                if (/\\[Queue\\]\\s*polling error/i.test(text)) return null;
+                if (el.closest('.monaco-editor,.view-line,[class*="terminal"],[class*="xterm"],[class*="editor"]')) return null;
                 const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
                 const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
                 const visible = !!(rect && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight && style && style.visibility !== 'hidden' && style.display !== 'none');
                 if (!visible) return null;
+                const queueSurface = el.getAttribute('role') === 'alert' ||
+                  /queue|toast|notice|alert/i.test(String(el.className || '')) ||
+                  !!el.closest('[role="alert"],[class*="queue"],[class*="toast"],[class*="notice"],[class*="alert"]');
                 const positionMatch = text.match(/排在第\\s*(\\d+)\\s*位/);
                 const notice = text.includes('排队提醒') ||
                   text.includes('请求量较高') ||
                   text.includes('当前使用人数较多') ||
                   text.includes('模型繁忙') ||
-                  /\\b(queue|queued|busy)\\b/i.test(text);
+                  (queueSurface && (
+                    /\\b(model|request|server|service)\\b.{0,80}\\b(queue|queued|busy)\\b/i.test(text) ||
+                    /\\b(queue|queued|busy)\\b.{0,80}\\b(model|request|server|service)\\b/i.test(text)
+                  ));
                 if (!positionMatch && !notice) return null;
                 return { text, position: positionMatch ? Number(positionMatch[1]) : null, y: rect.top };
               })

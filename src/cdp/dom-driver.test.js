@@ -82,10 +82,12 @@ test('getConfig sendTrigger defaults to button', () => {
 });
 
 test('checkQueueStatus ignores historical queue text without visible queue notice', async () => {
+  let expression = '';
   const fakeClient = {
     async send(method, payload) {
       assert.strictEqual(method, 'Runtime.evaluate');
-      assert.ok((payload.expression || '').includes('queueCandidates'));
+      expression = payload.expression || '';
+      assert.ok(expression.includes('queueCandidates'));
       return {
         result: {
           value: {
@@ -103,6 +105,10 @@ test('checkQueueStatus ignores historical queue text without visible queue notic
   const driver = new DomDriver(fakeClient, getConfig());
   const result = await driver.checkQueueStatus();
   assert.strictEqual(result.queued, false);
+  assert.ok(expression.includes('polling error'));
+  assert.ok(expression.includes('monaco-editor'));
+  assert.ok(expression.includes('queueSurface'));
+  assert.ok(expression.includes('model|request|server|service'));
 });
 
 test('sanitizeActivityText removes Chinese thinking indicators', () => {

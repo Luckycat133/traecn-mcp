@@ -92,6 +92,7 @@
               "delegate",
               "delegate_async",
               "task_status",
+              "wait_task",
               "adopt_current_task",
               "cancel_task",
               "stop_generation",
@@ -113,6 +114,7 @@
               "batch_status",
               "batch_cancel",
               "review_code",
+              "vibe_workflow",
               "editor",
               "file",
               "terminal",
@@ -128,6 +130,105 @@
           "params": {
             "type": "object",
             "description": "Command parameters. See traecn_command_set for required and optional keys."
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_vibe_workflow",
+      "description": "Run an unattended TraeCN vibe coding workflow with background queue tracking and auto-continued follow-up steps.",
+      "parameters": {
+        "type": "object",
+        "required": ["task"],
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "The initial vibe coding task to delegate to TraeCN"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "object" }
+              ]
+            },
+            "description": "Follow-up workflow steps to auto-continue after the initial task"
+          },
+          "followupTasks": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "object" }
+              ]
+            },
+            "description": "Alias for steps; included for delegate_async workflow compatibility"
+          },
+          "completionChecks": {
+            "type": "object",
+            "properties": {
+              "requiredFiles": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "requiredText": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["filePath", "includes"],
+                  "properties": {
+                    "filePath": { "type": "string" },
+                    "includes": {
+                      "oneOf": [
+                        { "type": "string" },
+                        { "type": "array", "items": { "type": "string" } }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Project path TraeCN should work inside"
+          },
+          "chatId": {
+            "type": "string",
+            "description": "Optional OpenClaw chat id for notifications"
+          },
+          "includeProcessText": {
+            "type": "boolean",
+            "description": "Include process/thinking information in collected results",
+            "default": false
+          },
+          "reviewRequired": {
+            "type": "boolean",
+            "description": "Mark workflow checkpoints reviewable while auto-continuing them",
+            "default": false
+          },
+          "fallbackModels": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Ordered fallback models to probe while the selected model is queued"
+          },
+          "autoModelFallback": {
+            "type": "boolean",
+            "description": "Use gateway default fallback model list while queued",
+            "default": false
+          },
+          "modelProbeIntervalMs": {
+            "type": "number",
+            "description": "Minimum interval between fallback model probes"
+          },
+          "notifyUrl": {
+            "type": "string",
+            "description": "Webhook URL to notify when workflow state changes"
+          },
+          "maxQueueWaitMs": {
+            "type": "number",
+            "description": "Optional local queue wait cap; omit to wait indefinitely"
           }
         }
       }
@@ -201,6 +302,10 @@
             "type": "string",
             "description": "Existing session ID to use instead of creating a new one"
           },
+          "chatId": {
+            "type": "string",
+            "description": "Optional OpenClaw chat id for notifications"
+          },
           "allowAutoStart": {
             "type": "boolean",
             "description": "Allow automatically starting TraeCN if not running",
@@ -210,6 +315,84 @@
             "type": "boolean",
             "description": "Include process/thinking information in the response",
             "default": false
+          },
+          "waitForQueue": {
+            "type": "boolean",
+            "description": "If true, queue the task when the model is busy; if false, return queue info immediately",
+            "default": true
+          },
+          "background": {
+            "type": "boolean",
+            "description": "Queue immediately in the gateway background worker",
+            "default": false
+          },
+          "asyncPoll": {
+            "type": "boolean",
+            "description": "Always use async delegate path and return taskId for caller-managed polling",
+            "default": false
+          },
+          "reviewRequired": {
+            "type": "boolean",
+            "description": "Return successful results as review checkpoints before finalizing",
+            "default": false
+          },
+          "autoContinue": {
+            "type": "boolean",
+            "description": "Automatically approve reviewable follow-up workflow checkpoints",
+            "default": false
+          },
+          "followupTasks": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "object" }
+              ]
+            },
+            "description": "Follow-up tasks for unattended workflow continuation"
+          },
+          "completionChecks": {
+            "type": "object",
+            "properties": {
+              "requiredFiles": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "requiredText": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["filePath", "includes"],
+                  "properties": {
+                    "filePath": { "type": "string" },
+                    "includes": {
+                      "oneOf": [
+                        { "type": "string" },
+                        { "type": "array", "items": { "type": "string" } }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "notifyUrl": {
+            "type": "string",
+            "description": "Webhook URL to notify when async task state changes"
+          },
+          "fallbackModels": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Ordered model candidates to probe while queued"
+          },
+          "autoModelFallback": {
+            "type": "boolean",
+            "description": "Use gateway default fallback model list while queued",
+            "default": false
+          },
+          "modelProbeIntervalMs": {
+            "type": "number",
+            "description": "Minimum interval between background fallback model probes"
           }
         }
       }

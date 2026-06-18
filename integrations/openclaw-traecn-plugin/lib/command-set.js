@@ -16,6 +16,7 @@ const COMMANDS = Object.freeze({
   DELEGATE: 'delegate',
   DELEGATE_ASYNC: 'delegate_async',
   TASK_STATUS: 'task_status',
+  WAIT_TASK: 'wait_task',
   ADOPT_CURRENT_TASK: 'adopt_current_task',
   CANCEL_TASK: 'cancel_task',
   STOP_GENERATION: 'stop_generation',
@@ -37,6 +38,7 @@ const COMMANDS = Object.freeze({
   BATCH_STATUS: 'batch_status',
   BATCH_CANCEL: 'batch_cancel',
   REVIEW_CODE: 'review_code',
+  VIBE_WORKFLOW: 'vibe_workflow',
   // v0.4.0 — new driver-level commands. Each takes an `action` param that
   // routes to a specific method on the corresponding driver.
   EDITOR: 'editor',
@@ -103,13 +105,19 @@ const COMMAND_DEFINITIONS = Object.freeze([
     command: COMMANDS.DELEGATE_ASYNC,
     summary: '向 TraeCN 提交异步任务，返回 taskId 或直接返回结果',
     required: ['task'],
-    optional: ['chatId', 'includeProcessText', 'waitForQueue', 'background', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
+    optional: ['projectPath', 'chatId', 'includeProcessText', 'waitForQueue', 'background', 'reviewRequired', 'autoContinue', 'followupTasks', 'completionChecks', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
   },
   {
     command: COMMANDS.TASK_STATUS,
     summary: '查询异步任务状态',
     required: ['taskId'],
     optional: []
+  },
+  {
+    command: COMMANDS.WAIT_TASK,
+    summary: '在本地等待异步任务直到终态或需要代码决策的停点，适合长队列期间释放 agent 上下文',
+    required: ['taskId'],
+    optional: ['pollMs', 'timeoutMs', 'autoApproveDialog']
   },
   {
     command: COMMANDS.ADOPT_CURRENT_TASK,
@@ -236,6 +244,12 @@ const COMMAND_DEFINITIONS = Object.freeze([
     summary: '将代码、diff 或审查说明委派给 TraeCN 执行结构化代码审查',
     required: ['instruction'],
     optional: ['files', 'focus', 'code', 'diff', 'queue', 'projectPath', 'sessionId', 'includeProcessText', 'waitForQueue', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
+  },
+  {
+    command: COMMANDS.VIBE_WORKFLOW,
+    summary: '启动无人值守 vibe coding 工作流：提交初始任务并自动继续后续步骤，不需要人工审查推进',
+    required: ['task'],
+    optional: ['steps', 'followupTasks', 'completionChecks', 'projectPath', 'chatId', 'includeProcessText', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'notifyUrl', 'maxQueueWaitMs']
   },
   {
     command: COMMANDS.EDITOR,
@@ -379,6 +393,11 @@ async function executeCommand(client, command, params = {}) {
         includeProcessText: params.includeProcessText === true,
         waitForQueue: params.waitForQueue !== false,
         background: params.background === true,
+        reviewRequired: params.reviewRequired === true,
+        autoContinue: params.autoContinue === true,
+        followupTasks: params.followupTasks,
+        completionChecks: params.completionChecks,
+        notifyUrl: params.notifyUrl,
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
         modelProbeIntervalMs: params.modelProbeIntervalMs
@@ -386,10 +405,17 @@ async function executeCommand(client, command, params = {}) {
     case COMMANDS.DELEGATE_ASYNC:
       requireParam(params, 'task');
       return client.delegateAsync(withLayeredTask(command, params).task, {
+        projectPath: params.projectPath,
+        sessionId: params.sessionId,
         chatId: params.chatId,
         includeProcessText: params.includeProcessText === true,
         waitForQueue: params.waitForQueue !== false,
         background: params.background === true,
+        reviewRequired: params.reviewRequired === true,
+        autoContinue: params.autoContinue === true,
+        followupTasks: params.followupTasks,
+        completionChecks: params.completionChecks,
+        notifyUrl: params.notifyUrl,
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
         modelProbeIntervalMs: params.modelProbeIntervalMs
@@ -397,6 +423,16 @@ async function executeCommand(client, command, params = {}) {
     case COMMANDS.TASK_STATUS:
       requireParam(params, 'taskId');
       return client.getTaskStatus(params.taskId);
+    case COMMANDS.WAIT_TASK:
+      requireParam(params, 'taskId');
+      return {
+        status: 200,
+        data: await client.waitForTask(params.taskId, {
+          pollMs: params.pollMs,
+          timeoutMs: params.timeoutMs,
+          autoApproveDialog: params.autoApproveDialog
+        })
+      };
     case COMMANDS.ADOPT_CURRENT_TASK:
       return client.adoptCurrentTask({
         task: params.task,
@@ -479,10 +515,17 @@ async function executeCommand(client, command, params = {}) {
       const task = buildCodeReviewTask(params);
       if (params.queue === true) {
         return client.delegateAsync(task, {
+          projectPath: params.projectPath,
+          sessionId: params.sessionId,
           chatId: params.chatId,
           includeProcessText: params.includeProcessText === true,
           waitForQueue: params.waitForQueue !== false,
           background: params.background === true,
+          reviewRequired: params.reviewRequired === true,
+          autoContinue: params.autoContinue === true,
+          followupTasks: params.followupTasks,
+          completionChecks: params.completionChecks,
+          notifyUrl: params.notifyUrl,
           fallbackModels: params.fallbackModels,
           autoModelFallback: params.autoModelFallback === true,
           modelProbeIntervalMs: params.modelProbeIntervalMs
@@ -493,9 +536,41 @@ async function executeCommand(client, command, params = {}) {
         sessionId: params.sessionId,
         includeProcessText: params.includeProcessText === true,
         waitForQueue: params.waitForQueue !== false,
+        completionChecks: params.completionChecks,
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
         modelProbeIntervalMs: params.modelProbeIntervalMs
+      });
+    }
+    case COMMANDS.VIBE_WORKFLOW: {
+      requireParam(params, 'task');
+      const steps = Array.isArray(params.steps) ? params.steps : (Array.isArray(params.followupTasks) ? params.followupTasks : []);
+      const followupTasks = steps.map(step => {
+        if (typeof step === 'string') {
+          return { task: step, reviewRequired: params.reviewRequired === true, autoContinue: true };
+        }
+        return {
+          ...step,
+          reviewRequired: step.reviewRequired === true || params.reviewRequired === true,
+          autoContinue: true
+        };
+      });
+      return client.delegateAsync(withLayeredTask(command, params).task, {
+        projectPath: params.projectPath,
+        chatId: params.chatId,
+        includeProcessText: params.includeProcessText === true,
+        waitForQueue: params.waitForQueue !== false,
+        background: true,
+        forceBackground: params.forceBackground === true,
+        reviewRequired: params.reviewRequired === true,
+        autoContinue: true,
+        followupTasks,
+        completionChecks: params.completionChecks,
+        notifyUrl: params.notifyUrl,
+        fallbackModels: params.fallbackModels,
+        autoModelFallback: params.autoModelFallback === true,
+        modelProbeIntervalMs: params.modelProbeIntervalMs,
+        maxQueueWaitMs: params.maxQueueWaitMs
       });
     }
     default:

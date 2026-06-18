@@ -18,6 +18,7 @@ import {
   SkillOptions,
   RunTaskOptions,
   ReviewInput,
+  VibeWorkflowOptions,
   OperationPlan,
   PreflightResult
 } from './traecn-skill';
@@ -50,7 +51,7 @@ export declare function runTask(task: string, opts?: RunTaskOptions): Promise<st
  * @param task - 任务描述
  * @param opts - 运行选项
  */
-export declare function queueTask(task: string, opts?: { projectPath?: string }): Promise<string>;
+export declare function queueTask(task: string, opts?: RunTaskOptions): Promise<string>;
 
 /**
  * 轮询任务状态
@@ -149,6 +150,13 @@ export declare function openProject(path: string): Promise<any>;
  */
 export declare function reviewCode(input: string | ReviewInput, opts?: RunTaskOptions): Promise<string>;
 
+/**
+ * 启动无人值守 vibe coding 工作流，返回后台 taskId
+ * @param input - 初始任务、项目路径和后续步骤
+ * @param opts - 额外运行选项
+ */
+export declare function vibeWorkflow(input: VibeWorkflowOptions, opts?: RunTaskOptions): Promise<string>;
+
 // ==================== 单字母函数别名（向后兼容）====================
 
 /**
@@ -235,3 +243,8 @@ export declare const open: typeof openProject;
  * 代码审查辅助
  */
 export declare const review: typeof reviewCode;
+
+/**
+ * 无人值守工作流（vibe = vibeWorkflow）
+ */
+export declare const vibe: typeof vibeWorkflow;

@@ -108,6 +108,11 @@ class TraeCNSkill {
       includeProcess,
       autoWait = true,
       mode = null,
+      reviewRequired,
+      autoContinue,
+      followupTasks,
+      completionChecks,
+      notifyUrl,
       fallbackModels,
       autoModelFallback,
       modelProbeIntervalMs
@@ -134,6 +139,11 @@ class TraeCNSkill {
           projectPath, 
           sessionId: this._sessionId, 
           includeProcess,
+          reviewRequired,
+          autoContinue,
+          followupTasks,
+          completionChecks,
+          notifyUrl,
           fallbackModels,
           autoModelFallback,
           modelProbeIntervalMs
@@ -143,6 +153,11 @@ class TraeCNSkill {
           projectPath,
           sessionId: this._sessionId,
           includeProcessText: includeProcess,
+          reviewRequired,
+          autoContinue,
+          followupTasks,
+          completionChecks,
+          notifyUrl,
           fallbackModels,
           autoModelFallback,
           modelProbeIntervalMs
@@ -167,16 +182,46 @@ class TraeCNSkill {
    * @returns {Promise<object>} 队列结果
    */
   async queue(task, opts = {}) {
-    const { projectPath, fallbackModels, autoModelFallback, modelProbeIntervalMs } = opts;
+    const {
+      projectPath,
+      sessionId,
+      chatId,
+      includeProcessText,
+      includeProcess,
+      waitForQueue = true,
+      background,
+      forceBackground,
+      reviewRequired,
+      autoContinue,
+      followupTasks,
+      completionChecks,
+      notifyUrl,
+      fallbackModels,
+      autoModelFallback,
+      modelProbeIntervalMs,
+      maxQueueWaitMs,
+      queueMaxWaitMs
+    } = opts;
     
     try {
       const result = await this.client.delegateAsync(task, {
         projectPath,
-        sessionId: this._sessionId,
-        waitForQueue: true,
+        sessionId: sessionId || this._sessionId,
+        chatId,
+        includeProcessText: includeProcessText === true || includeProcess === true,
+        waitForQueue,
+        background,
+        forceBackground,
+        reviewRequired,
+        autoContinue,
+        followupTasks,
+        completionChecks,
+        notifyUrl,
         fallbackModels,
         autoModelFallback,
-        modelProbeIntervalMs
+        modelProbeIntervalMs,
+        maxQueueWaitMs,
+        queueMaxWaitMs
       });
 
       this._lastTaskId = result.taskId || result.data?.taskId;
@@ -337,6 +382,38 @@ class TraeCNSkill {
       return this.queue(task, opts);
     }
     return this.run(task, opts);
+  }
+
+  /**
+   * 启动无人值守 vibe coding 工作流：初始任务完成后自动继续 follow-up。
+   * @param {object} input - { task, steps?, projectPath?, reviewRequired? }
+   * @returns {Promise<object>} 队列结果
+   */
+  async vibeWorkflow(input = {}) {
+    if (!input || typeof input.task !== 'string' || !input.task.trim()) {
+      throw TraeCNSkillError.taskFailed(new Error('task is required'), { action: 'vibeWorkflow' });
+    }
+    const steps = Array.isArray(input.steps)
+      ? input.steps
+      : (Array.isArray(input.followupTasks) ? input.followupTasks : []);
+    const followupTasks = steps.map(step => {
+      if (typeof step === 'string') {
+        return { task: step, reviewRequired: input.reviewRequired === true, autoContinue: true };
+      }
+      return {
+        ...step,
+        reviewRequired: step.reviewRequired === true || input.reviewRequired === true,
+        autoContinue: true
+      };
+    });
+    return this.queue(input.task, {
+      ...input,
+      background: input.background !== false,
+      forceBackground: input.forceBackground === true,
+      reviewRequired: input.reviewRequired === true,
+      autoContinue: true,
+      followupTasks
+    });
   }
 
   /**
@@ -561,12 +638,29 @@ class TraeCNSkill {
    * @returns {Promise<any>} 任务结果
    */
   async _delegateWithPoll(task, opts) {
-    const { projectPath, sessionId, includeProcess, fallbackModels, autoModelFallback, modelProbeIntervalMs } = opts;
+    const {
+      projectPath,
+      sessionId,
+      includeProcess,
+      reviewRequired,
+      autoContinue,
+      followupTasks,
+      completionChecks,
+      notifyUrl,
+      fallbackModels,
+      autoModelFallback,
+      modelProbeIntervalMs
+    } = opts;
 
     let result = await this.client.delegate(task, {
       projectPath,
       sessionId,
       includeProcessText: includeProcess,
+      reviewRequired,
+      autoContinue,
+      followupTasks,
+      completionChecks,
+      notifyUrl,
       fallbackModels,
       autoModelFallback,
       modelProbeIntervalMs
