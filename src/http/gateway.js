@@ -1136,6 +1136,67 @@ class Gateway {
     ].some(pattern => value.toLowerCase().includes(pattern.toLowerCase()));
   }
 
+  _parseQueuePositionFromText(text) {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    const match = value.match(/排在第\s*(\d+)\s*位|queue\s*(?:position|#)?\s*:?\s*(\d+)/i);
+    if (!match) return null;
+    const parsed = Number(match[1] || match[2]);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  _looksLikeQueueNotice(text) {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return false;
+    return [
+      /排队提醒/,
+      /当前模型请求量较高/,
+      /排在第\s*\d+\s*位/,
+      /升级权益.*速通/,
+      /\bqueue\s+position\b/i,
+      /\byou(?:'re| are)?\s+(?:still\s+)?in\s+(?:the\s+)?queue\b/i
+    ].some(pattern => pattern.test(value));
+  }
+
+  _isQueuedTaskResult(result) {
+    if (!result || result.needsApproval || result.modelError) return false;
+    if (result.queued === true) return true;
+    const text = typeof result.text === 'string' ? result.text : '';
+    return result.timedOut === true && result.stable !== true && this._looksLikeQueueNotice(text);
+  }
+
+  _keepSubmittedTaskWaitingInQueue(taskId, task, result = {}) {
+    const text = typeof result.text === 'string' ? result.text : '';
+    const queuePosition = result.queuePosition || this._parseQueuePositionFromText(text);
+    task.status = 'executing';
+    task.submittedToTrae = true;
+    task.queueState = 'queued';
+    task.queuePosition = queuePosition || task.queuePosition || null;
+    task.queueEstimatedWait = result.queueEstimatedWait || task.queueEstimatedWait || null;
+    task.queueMessage = result.queueMessage
+      || (queuePosition ? `排在第 ${queuePosition} 位` : task.queueMessage)
+      || 'Trae request is still queued';
+    task.currentModel = result.currentModel || task.currentModel || null;
+    task.queueCanSubmit = false;
+    task.lastQueueSeenAt = Date.now();
+    task.error = null;
+
+    this.taskHistoryStore.recordStep(taskId, 'queue_wait_continues', {
+      success: true,
+      details: {
+        queuePosition: task.queuePosition,
+        queueMessage: task.queueMessage,
+        currentModel: task.currentModel,
+        elapsedMs: result.elapsedMs || null,
+        timedOut: result.timedOut === true
+      }
+    });
+    if (this.wsHandler) {
+      this.wsHandler.notifyTaskStatusChange(taskId, task);
+    }
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+  }
+
   _isIncompleteReviewText(text) {
     const value = String(text || '').replace(/\s+/g, ' ').trim();
     if (!value) return true;
@@ -3787,7 +3848,9 @@ class Gateway {
   async _finalizeCollectedBackgroundResult(taskId, task, result) {
     task.result = result;
 
-    if (result.needsApproval) {
+    if (this._isQueuedTaskResult(result)) {
+      this._keepSubmittedTaskWaitingInQueue(taskId, task, result);
+    } else if (result.needsApproval) {
       await this._finalizeBackgroundTask(taskId, task, 'approval_required', {
         result
       });
