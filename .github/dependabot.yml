@@ -17,3 +17,13 @@ updates:
       # Pin Node engine separately; keep ws major stable.
       - dependency-name: 'ws'
         update-types: ['version-update:semver-major']
+  - package-ecosystem: 'pip'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 5
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 5
