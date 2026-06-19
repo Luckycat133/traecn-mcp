@@ -12,6 +12,18 @@ const WS_MAX_PAYLOAD_BYTES = parseInt(
   (typeof process !== 'undefined' && process.env && process.env.TRAECN_WS_MAX_PAYLOAD_BYTES) || '65536',
   10
 );
+const WS_MAX_CLIENTS = parseInt(
+  (typeof process !== 'undefined' && process.env && process.env.TRAECN_WS_MAX_CLIENTS) || '100',
+  10
+);
+const WS_RATE_LIMIT_WINDOW_MS = parseInt(
+  (typeof process !== 'undefined' && process.env && process.env.TRAECN_WS_RATE_LIMIT_WINDOW_MS) || '60000',
+  10
+);
+const WS_MAX_UPGRADES_PER_WINDOW = parseInt(
+  (typeof process !== 'undefined' && process.env && process.env.TRAECN_WS_MAX_UPGRADES_PER_WINDOW) || '60',
+  10
+);
 
 class WebSocketHandler {
   constructor(gateway) {
@@ -21,6 +33,7 @@ class WebSocketHandler {
     this.globalEventListeners = new Set();
     this.heartbeatTimers = new Map();
     this.clients = new Set();
+    this.upgradeAttempts = new Map();
   }
 
   initialize(server) {
@@ -42,6 +55,14 @@ class WebSocketHandler {
       const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
 
       if (!pathname.startsWith('/ws')) {
+        socket.destroy();
+        return;
+      }
+
+      const rateCheck = this._checkUpgradeRateLimit(request);
+      if (!rateCheck.allowed) {
+        const status = rateCheck.reason === 'too_many_clients' ? '503 Service Unavailable' : '429 Too Many Requests';
+        socket.write(`HTTP/1.1 ${status}\r\nRetry-After: 60\r\n\r\n`);
         socket.destroy();
         return;
       }
@@ -90,12 +111,45 @@ class WebSocketHandler {
   }
 
   _checkOrigin(request) {
-    if (!this.gateway.allowedOrigins) return true;
+    if (this.gateway && typeof this.gateway._checkOrigin === 'function') {
+      return this.gateway._checkOrigin(request);
+    }
     const origin = request.headers.origin;
     if (!origin) return true;
 
     const allowed = this.gateway.allowedOrigins.split(',').map(o => o.trim()).filter(Boolean);
+    if (!allowed.length) {
+      try {
+        return new URL(origin).host.toLowerCase() === String(request.headers.host || '').toLowerCase();
+      } catch {
+        return false;
+      }
+    }
     return allowed.includes(origin) || allowed.includes('*');
+  }
+
+  _checkUpgradeRateLimit(request) {
+    const maxClients = Number.isFinite(WS_MAX_CLIENTS) && WS_MAX_CLIENTS > 0 ? WS_MAX_CLIENTS : 100;
+    if (this.clients.size >= maxClients) {
+      return { allowed: false, reason: 'too_many_clients' };
+    }
+
+    const maxUpgrades = Number.isFinite(WS_MAX_UPGRADES_PER_WINDOW) && WS_MAX_UPGRADES_PER_WINDOW > 0
+      ? WS_MAX_UPGRADES_PER_WINDOW
+      : 60;
+    const windowMs = Number.isFinite(WS_RATE_LIMIT_WINDOW_MS) && WS_RATE_LIMIT_WINDOW_MS > 0
+      ? WS_RATE_LIMIT_WINDOW_MS
+      : 60000;
+    const key = request.socket?.remoteAddress || request.headers['x-forwarded-for'] || 'unknown';
+    const now = Date.now();
+    const recent = (this.upgradeAttempts.get(key) || []).filter(timestamp => now - timestamp < windowMs);
+    if (recent.length >= maxUpgrades) {
+      this.upgradeAttempts.set(key, recent);
+      return { allowed: false, reason: 'rate_limited' };
+    }
+    recent.push(now);
+    this.upgradeAttempts.set(key, recent);
+    return { allowed: true };
   }
 
   _secureCompare(left, right) {
@@ -525,4 +579,12 @@ class WebSocketHandler {
   }
 }
 
-module.exports = { WebSocketHandler, WS_MAX_PAYLOAD_BYTES, WS_HEARTBEAT_INTERVAL, WS_HEARTBEAT_TIMEOUT };
+module.exports = {
+  WebSocketHandler,
+  WS_MAX_PAYLOAD_BYTES,
+  WS_HEARTBEAT_INTERVAL,
+  WS_HEARTBEAT_TIMEOUT,
+  WS_MAX_CLIENTS,
+  WS_RATE_LIMIT_WINDOW_MS,
+  WS_MAX_UPGRADES_PER_WINDOW
+};

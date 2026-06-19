@@ -94,6 +94,9 @@ test('Simple API should export all functions', () => {
   expect(typeof api.switchModel).toBe('function');
   expect(typeof api.switchMode).toBe('function');
   expect(typeof api.newChat).toBe('function');
+  expect(typeof api.listSoloChats).toBe('function');
+  expect(typeof api.switchSoloChat).toBe('function');
+  expect(typeof api.submitSoloChatTask).toBe('function');
   expect(typeof api.getSettings).toBe('function');
   expect(typeof api.setSetting).toBe('function');
   expect(typeof api.approveDialog).toBe('function');
@@ -114,6 +117,9 @@ test('Simple API should export all functions', () => {
   expect(typeof api.s).toBe('function');
   expect(typeof api.model).toBe('function');
   expect(typeof api.mode).toBe('function');
+  expect(typeof api.soloChats).toBe('function');
+  expect(typeof api.soloSwitch).toBe('function');
+  expect(typeof api.soloSubmit).toBe('function');
   expect(typeof api.settings).toBe('function');
   expect(typeof api.set).toBe('function');
   expect(typeof api.approve).toBe('function');
@@ -127,6 +133,19 @@ test('Simple API should export all functions', () => {
   expect(typeof api.plan).toBe('function');
   expect(typeof api.pf).toBe('function');
   expect(typeof api.promptLayers.composeTraeCNPrompt).toBe('function');
+});
+
+test('Advanced skill index should expose Solo chat helpers', () => {
+  const skillIndex = require('./index');
+  expect(typeof skillIndex.listSoloChats).toBe('function');
+  expect(typeof skillIndex.switchSoloChat).toBe('function');
+  expect(typeof skillIndex.submitSoloChatTask).toBe('function');
+  expect(typeof skillIndex.advanced.listSoloChats).toBe('function');
+  expect(typeof skillIndex.advanced.switchSoloChat).toBe('function');
+  expect(typeof skillIndex.advanced.submitSoloChatTask).toBe('function');
+  expect(typeof skillIndex.soloChats).toBe('function');
+  expect(typeof skillIndex.soloSwitch).toBe('function');
+  expect(typeof skillIndex.soloSubmit).toBe('function');
 });
 
 test('buildCodeReviewTask creates findings-first review prompt', () => {
@@ -375,8 +394,54 @@ test('vibeWorkflow queues unattended follow-up workflow', async () => {
   expect(captured.opts.projectPath).toBe('/tmp/project');
   expect(captured.opts.background).toBe(true);
   expect(captured.opts.autoContinue).toBe(true);
+  expect(captured.opts.autoApproveDialog).toBe('auto');
   expect(captured.opts.followupTasks.length).toBe(2);
   expect(captured.opts.followupTasks[0].autoContinue).toBe(true);
+});
+
+test('listSoloChats should forward to client', async () => {
+  const { TraeCNSkill } = require('./traecn-skill');
+  const skill = new TraeCNSkill();
+  let called = false;
+  skill.client.listSoloChats = async () => {
+    called = true;
+    return { data: { mode: 'solo', count: 1 } };
+  };
+
+  const result = await skill.listSoloChats();
+  expect(called).toBe(true);
+  expect(result.data.mode).toBe('solo');
+});
+
+test('switchSoloChat should forward criteria to client', async () => {
+  const { TraeCNSkill } = require('./traecn-skill');
+  const skill = new TraeCNSkill();
+  let captured = null;
+  skill.client.switchSoloChat = async (criteria) => {
+    captured = criteria;
+    return { data: { success: true, index: 1 } };
+  };
+
+  const result = await skill.switchSoloChat({ index: 1, textIncludes: 'Target' });
+  expect(result.data.success).toBe(true);
+  expect(captured.index).toBe(1);
+  expect(captured.textIncludes).toBe('Target');
+});
+
+test('submitSoloChatTask should forward options to client and remember task id', async () => {
+  const { TraeCNSkill } = require('./traecn-skill');
+  const skill = new TraeCNSkill();
+  let captured = null;
+  skill.client.submitSoloChatTask = async (task, opts) => {
+    captured = { task, opts };
+    return { data: { taskId: 'task_solo_1', status: 'executing' } };
+  };
+
+  const result = await skill.submitSoloChatTask('Build feature', { soloChatTitleIncludes: 'Feature chat' });
+  expect(result.taskId).toBe('task_solo_1');
+  expect(skill._lastTaskId).toBe('task_solo_1');
+  expect(captured.task).toBe('Build feature');
+  expect(captured.opts.soloChatTitleIncludes).toBe('Feature chat');
 });
 
 test('getSkill() should return same instance', () => {

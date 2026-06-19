@@ -16,8 +16,17 @@ const SOLO_MODE_TABS = ['编辑器', '设置', '智能体', 'MCP'];
  * The SOLO mode bar has tabs: 编辑器 / 设置 / 智能体 / MCP
  */
 async function _goToSettingsTab(client) {
+  await _ensureClickHelper(client);
   await client.send('Runtime.evaluate', {
     expression: `(function() {
+      var buttons = document.querySelectorAll('.icube-settings-wrapper, .icube-settings-button, .codicon-icube-Settings');
+      for (var i = 0; i < buttons.length; i++) {
+        var rect = buttons[i].getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          window.__radixClick(buttons[i]);
+          return 'clicked settings button';
+        }
+      }
       var tabs = document.querySelectorAll('.icube-solo-mode-tab-item');
       for (var i = 0; i < tabs.length; i++) {
         if ((tabs[i].innerText || '').trim() === '设置') {
@@ -36,7 +45,7 @@ async function _goToSettingsTab(client) {
  * Click a sidebar item in the Settings panel.
  * Must be called while on the Settings tab.
  */
-async function _clickSidebarItem(client, sectionName) {
+async function _clickSidebarItem(client, sectionName, waitMs = 5000) {
   const safeName = safeJsValue(sectionName);
   await _ensureClickHelper(client);
   const result = await client.send('Runtime.evaluate', {
@@ -72,8 +81,53 @@ async function _clickSidebarItem(client, sectionName) {
     `,
     returnByValue: true
   });
-  await _waitForContent(client, 5000);  // Wait up to 5s for new content to render
-  return result.result?.value || 'unknown';
+  const value = result.result?.value || 'unknown';
+  if (String(value).startsWith('clicked:')) {
+    await _waitForContent(client, waitMs);
+  }
+  return value;
+}
+
+async function _listSettingsSidebarSections(client) {
+  const result = await client.send('Runtime.evaluate', {
+    expression: `
+      (function() {
+        var selectors = [
+          '.settings-sidebar-menu-item',
+          '[class*="settings-sidebar"] [class*="menu-item"]',
+          '[class*="settings"] [class*="sidebar"] [role="button"]',
+          '[class*="settings"] [class*="sidebar"] button'
+        ];
+        var seen = Object.create(null);
+        var sections = [];
+        function add(text) {
+          text = String(text || '').replace(/\\s+/g, ' ').trim();
+          if (!text || text.length > 40 || seen[text]) return;
+          seen[text] = true;
+          sections.push(text);
+        }
+        for (var s = 0; s < selectors.length; s++) {
+          var items = document.querySelectorAll(selectors[s]);
+          for (var i = 0; i < items.length; i++) {
+            var item = items[i];
+            var textEl = item.querySelector('.text');
+            add(textEl ? textEl.textContent : (item.textContent || item.getAttribute('aria-label')));
+          }
+          if (sections.length > 0) break;
+        }
+        return JSON.stringify(sections);
+      })()
+    `,
+    returnByValue: true
+  });
+  const rawValue = result.result?.value;
+  if (typeof rawValue !== 'string') return [];
+  try {
+    const sections = JSON.parse(rawValue);
+    return Array.isArray(sections) ? sections.filter(Boolean) : [];
+  } catch(e) {
+    return [];
+  }
 }
 
 /**
@@ -129,7 +183,7 @@ async function _waitForContent(client, maxWait = 8000) {
  * Read all visible setting items in the current section.
  * Returns structured data with labels, descriptions, toggle/dropdown state, and current values.
  */
-async function _readSettingsContent(client) {
+async function _readSettingsContent(client, waitMs = 8000) {
   // CDP page-level WS may lose array/object return values (result.value becomes null).
   // Workaround: use JSON.stringify inside the page, return a string, parse in Node.js.
   const result = await client.send('Runtime.evaluate', {
@@ -213,7 +267,7 @@ async function _readSettingsContent(client) {
   // For standard items, wait up to 8s for async content. Skip for model tables
   // (which load synchronously from the DOM above).
   if (parsed.type !== 'model-table') {
-    const waitedItems = await _waitForContent(client, 8000);
+    const waitedItems = await _waitForContent(client, waitMs);
     return { sections: [], items: waitedItems };
   }
 
@@ -380,7 +434,7 @@ class SettingsDriver {
     const settingsOpen = await this.client.send('Runtime.evaluate', {
       expression: `
         (function() {
-          var s = document.querySelector('[class*="settings"], .icb-setting-item-container');
+          var s = document.querySelector('.settings-sidebar-menu-item, .icb-setting-item-container, .part.solo_settings, [class*="settings-sidebar"]');
           if (s && s.offsetParent !== null) return true;
           return false;
         })()
@@ -431,24 +485,81 @@ class SettingsDriver {
 
   /**
    * Read ALL settings sections and return a complete snapshot.
+   * Hard upper-bound: ~30s worst case, even with 13 sections and slow DOM.
+   * Missing/historical sidebar items are skipped without waiting.
+   *
    * @returns {Object} Full settings snapshot keyed by section name
    */
   async readAll() {
     const result = {};
+    const sectionPerSectionWaitMs = 1200;
+    const sectionPostClickSleepMs = 250;
+    const overallHardLimitMs = 30000;
+    const startedAt = Date.now();
 
     // Go to Settings first
     await this.switchTab();
 
-    for (const section of SETTINGS_SECTIONS) {
-      await _clickSidebarItem(this.client, section);
-      await sleep(800);  // Wait for content to render
-      const data = await _readSettingsContent(this.client);
+    let sections;
+    try {
+      const discoveredSections = await _listSettingsSidebarSections(this.client);
+      sections = discoveredSections.length > 0 ? discoveredSections : SETTINGS_SECTIONS;
+    } catch (e) {
+      sections = SETTINGS_SECTIONS;
+    }
 
-      const seen = new Set();
+    // De-dupe while preserving order, in case the sidebar DOM returns dupes
+    const seenSection = new Set();
+    const orderedSections = [];
+    for (const s of sections) {
+      const key = String(s || '').trim();
+      if (!key || seenSection.has(key)) continue;
+      seenSection.add(key);
+      orderedSections.push(key);
+    }
+
+    for (const section of orderedSections) {
+      if (Date.now() - startedAt >= overallHardLimitMs) {
+        result[section] = {
+          sections: [],
+          items: [],
+          skipped: true,
+          reason: 'overall_timeout'
+        };
+        continue;
+      }
+
+      let clickResult;
+      try {
+        clickResult = await _clickSidebarItem(this.client, section, sectionPerSectionWaitMs);
+      } catch (e) {
+        clickResult = 'error: ' + e.message;
+      }
+
+      if (!String(clickResult).startsWith('clicked:')) {
+        result[section] = {
+          sections: [],
+          items: [],
+          skipped: true,
+          reason: 'section_not_found'
+        };
+        continue;
+      }
+
+      await sleep(sectionPostClickSleepMs);
+
+      let data;
+      try {
+        data = await _readSettingsContent(this.client, sectionPerSectionWaitMs);
+      } catch (e) {
+        data = { sections: [], items: [], error: e.message };
+      }
+
+      const seenItem = new Set();
       const items = [];
       for (const item of (data.items || [])) {
-        if (!item.label || seen.has(item.label)) continue;
-        seen.add(item.label);
+        if (!item.label || seenItem.has(item.label)) continue;
+        seenItem.add(item.label);
         items.push(item);
       }
 
@@ -626,5 +737,8 @@ class SettingsDriver {
 module.exports = {
   SettingsDriver,
   SETTINGS_SECTIONS,
-  SOLO_MODE_TABS
+  SOLO_MODE_TABS,
+  _clickSidebarItem,
+  _listSettingsSidebarSections,
+  _readSettingsContent
 };

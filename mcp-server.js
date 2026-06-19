@@ -115,6 +115,12 @@ const MCP_TOOLS = Object.freeze([
       autoContinue: { type: 'boolean' },
       followupTasks: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
       completionChecks: COMPLETION_CHECKS_SCHEMA,
+      autoApproveDialog: {
+        anyOf: [
+          { type: 'boolean' },
+          { type: 'string' }
+        ]
+      },
       notifyUrl: { type: 'string' },
       fallbackModels: { type: 'array', items: { type: 'string' } },
       autoModelFallback: { type: 'boolean' },
@@ -131,6 +137,12 @@ const MCP_TOOLS = Object.freeze([
       autoContinue: { type: 'boolean' },
       followupTasks: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
       completionChecks: COMPLETION_CHECKS_SCHEMA,
+      autoApproveDialog: {
+        anyOf: [
+          { type: 'boolean' },
+          { type: 'string' }
+        ]
+      },
       notifyUrl: { type: 'string' },
       fallbackModels: { type: 'array', items: { type: 'string' } },
       autoModelFallback: { type: 'boolean' },
@@ -168,6 +180,12 @@ const MCP_TOOLS = Object.freeze([
       completionChecks: COMPLETION_CHECKS_SCHEMA,
       chatId: { type: 'string' },
       includeProcessText: { type: 'boolean' },
+      autoApproveDialog: {
+        anyOf: [
+          { type: 'boolean' },
+          { type: 'string' }
+        ]
+      },
       notifyUrl: { type: 'string' },
       fallbackModels: { type: 'array', items: { type: 'string' } },
       autoModelFallback: { type: 'boolean' },
@@ -261,6 +279,56 @@ const MCP_TOOLS = Object.freeze([
     inputSchema: schema()
   },
   {
+    name: 'list_solo_chats',
+    description: 'List real Solo-mode TraeCN conversations from the Solo sidebar.',
+    inputSchema: schema()
+  },
+  {
+    name: 'switch_solo_chat',
+    description: 'Switch to a real Solo-mode TraeCN conversation by index or visible text.',
+    inputSchema: schema({
+      index: { type: 'number' },
+      titleIncludes: { type: 'string' },
+      textIncludes: { type: 'string' }
+    })
+  },
+  {
+    name: 'submit_solo_chat_task',
+    description: 'Submit a task into a real Solo conversation and return a taskId; background polling switches back to that conversation to collect queued results.',
+    inputSchema: schema({
+      task: { type: 'string' },
+      projectPath: { type: 'string' },
+      soloChat: {
+        type: 'object',
+        properties: {
+          index: { type: 'number' },
+          titleIncludes: { type: 'string' },
+          textIncludes: { type: 'string' }
+        }
+      },
+      soloChatIndex: { type: 'number' },
+      soloChatTitleIncludes: { type: 'string' },
+      soloChatTextIncludes: { type: 'string' },
+      newChat: { type: 'boolean' },
+      includeProcessText: { type: 'boolean' },
+      reviewRequired: { type: 'boolean' },
+      autoContinue: { type: 'boolean' },
+      followupTasks: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
+      completionChecks: COMPLETION_CHECKS_SCHEMA,
+      autoApproveDialog: {
+        anyOf: [
+          { type: 'boolean' },
+          { type: 'string' }
+        ]
+      },
+      notifyUrl: { type: 'string' },
+      fallbackModels: { type: 'array', items: { type: 'string' } },
+      autoModelFallback: { type: 'boolean' },
+      modelProbeIntervalMs: { type: 'number' },
+      maxQueueWaitMs: { type: 'number' }
+    }, ['task'])
+  },
+  {
     name: 'get_settings',
     description: 'Read TraeCN settings from the current or named section.',
     inputSchema: schema({ section: { type: 'string' } })
@@ -303,6 +371,12 @@ const MCP_TOOLS = Object.freeze([
       autoContinue: { type: 'boolean' },
       includeProcessText: { type: 'boolean' },
       completionChecks: COMPLETION_CHECKS_SCHEMA,
+      autoApproveDialog: {
+        anyOf: [
+          { type: 'boolean' },
+          { type: 'string' }
+        ]
+      },
       notifyUrl: { type: 'string' },
       fallbackModels: { type: 'array', items: { type: 'string' } },
       autoModelFallback: { type: 'boolean' },
@@ -411,6 +485,21 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       return asMcpContent(await skill.switchMode(args.mode));
     case 'new_chat':
       return asMcpContent(await skill.newChat());
+    case 'list_solo_chats': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.listSoloChats();
+      return asMcpContent(result.data || result);
+    }
+    case 'switch_solo_chat': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.switchSoloChat(args);
+      return asMcpContent(result.data || result);
+    }
+    case 'submit_solo_chat_task': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.submitSoloChatTask(args.task, args);
+      return asMcpContent(result.data || result);
+    }
     case 'get_settings':
       return asMcpContent(await skill.getSettings(args.section || null));
     case 'set_setting':

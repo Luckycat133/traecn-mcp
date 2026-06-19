@@ -42,6 +42,9 @@ async function test(name, fn) {
     assert.ok(names.includes('resolve_review_gate'));
     assert.ok(names.includes('review_code'));
     assert.ok(names.includes('vibe_workflow'));
+    assert.ok(names.includes('list_solo_chats'));
+    assert.ok(names.includes('switch_solo_chat'));
+    assert.ok(names.includes('submit_solo_chat_task'));
     assert.ok(names.includes('traecn_command'));
   });
 
@@ -65,6 +68,15 @@ async function test(name, fn) {
     assert.ok(Array.isArray(result.tools));
     const runTask = result.tools.find(tool => tool.name === 'run_task');
     assert.deepStrictEqual(runTask.inputSchema.required, ['task']);
+    const switchSoloChat = result.tools.find(tool => tool.name === 'switch_solo_chat');
+    assert.ok(switchSoloChat);
+    assert.ok(switchSoloChat.inputSchema.properties.index);
+    assert.ok(switchSoloChat.inputSchema.properties.titleIncludes);
+    assert.ok(switchSoloChat.inputSchema.properties.textIncludes);
+    const submitSolo = result.tools.find(tool => tool.name === 'submit_solo_chat_task');
+    assert.ok(submitSolo);
+    assert.deepStrictEqual(submitSolo.inputSchema.required, ['task']);
+    assert.ok(submitSolo.inputSchema.properties.soloChat);
   });
 
   await test('MCP workflow tools expose completion checks', async () => {
@@ -110,8 +122,13 @@ async function test(name, fn) {
     assert.strictEqual(payload.name, 'traecnclaw');
     assert.ok(payload.commands.some(command => command.command === 'delegate_async'));
     assert.ok(payload.commands.some(command => command.command === 'vibe_workflow'));
+    assert.ok(payload.commands.some(command => command.command === 'list_solo_chats'));
+    assert.ok(payload.commands.some(command => command.command === 'switch_solo_chat'));
+    assert.ok(payload.commands.some(command => command.command === 'submit_solo_chat_task'));
     assert.ok(payload.mcp.tools.some(tool => tool.name === 'traecn_capabilities'));
     assert.ok(payload.mcp.tools.some(tool => tool.name === 'vibe_workflow'));
+    assert.ok(payload.mcp.tools.some(tool => tool.name === 'list_solo_chats'));
+    assert.ok(payload.mcp.tools.some(tool => tool.name === 'submit_solo_chat_task'));
   });
 
   await test('tools/call returns operation confirmation plan without gateway access', async () => {

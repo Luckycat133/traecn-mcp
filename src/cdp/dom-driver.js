@@ -37,8 +37,66 @@ function hasCompletionMarker(text) {
   return markers.some(m => text.includes(m));
 }
 
+const FINAL_ASSISTANT_RESULT_MARKERS = [
+  /TRAECNclaw\s+Code\s+Review\s*[—-]\s*Findings\s+First/i,
+  /Code\s+Review\s*[—-]\s*Findings\s+First/i,
+  /(^|\n)\s*Findings\s*\(ordered\s+by\s+severity\)/i,
+  /(^|\n)\s*1\.\s+Findings\b/i,
+  /(^|\n)\s*Findings\s*[:：]/i
+];
+
+function findLastMarkerIndex(value, pattern) {
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  let lastIndex = -1;
+  let match;
+  while ((match = globalPattern.exec(value)) !== null) {
+    lastIndex = match.index;
+    if (match[0] && match[0].startsWith('\n')) {
+      lastIndex += 1;
+    }
+    if (match[0] === '') {
+      globalPattern.lastIndex += 1;
+    }
+  }
+  return lastIndex;
+}
+
+function extractFinalAssistantResultText(text) {
+  const value = String(text || '').trim();
+  if (!value) return '';
+
+  const lower = value.toLowerCase();
+  const hasProcessTranscript = (
+    value.length > 1000 ||
+    value.includes('调用技能') ||
+    value.includes('思考过程') ||
+    value.includes('任务完成') ||
+    lower.includes('thought') ||
+    lower.includes('tool') ||
+    lower.includes('review complete')
+  );
+  if (!hasProcessTranscript) return value;
+
+  let markerIndex = -1;
+  for (const marker of FINAL_ASSISTANT_RESULT_MARKERS) {
+    const foundIndex = findLastMarkerIndex(value, marker);
+    if (foundIndex < 0) continue;
+    if (markerIndex < 0 || foundIndex > markerIndex + 80) {
+      markerIndex = foundIndex;
+    } else if (foundIndex >= markerIndex) {
+      markerIndex = Math.min(markerIndex, foundIndex);
+    }
+  }
+
+  if (markerIndex > 0) {
+    return value.slice(markerIndex).trim();
+  }
+  return value;
+}
+
 function cleanAssistantResultText(text) {
-  let value = String(text || '').trim();
+  let value = extractFinalAssistantResultText(text);
   if (!value) return '';
   return value
     .replace(/^(Agent|Assistant)\s*(Thought|思考过程)\s*/i, '')
@@ -2822,6 +2880,145 @@ class DomDriver {
     return true;
   }
 
+  async listSoloChats() {
+    const result = await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var sidebar = document.querySelector('.soloaisidebar');
+          if (!sidebar || sidebar.offsetParent === null) {
+            return { mode: 'not_solo', chats: [], count: 0, reason: 'solo_sidebar_not_visible' };
+          }
+          var nodes = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
+            .filter(function(el) {
+              if (!el || el.offsetParent === null) return false;
+              var cls = (el.className || '').toString();
+              if (/task-items-list|task-item-info|task-item-title|task-item-desc/i.test(cls)) return false;
+              var rect = el.getBoundingClientRect();
+              if (rect.width < 40 || rect.height < 20) return false;
+              var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+              if (!text) return false;
+              if (/^\\s*(新任务|New Task|New Chat|新对话)/i.test(text) && text.length < 30) return false;
+              return true;
+            });
+          var seen = new Set();
+          var chats = [];
+          for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!text || seen.has(text)) continue;
+            seen.add(text);
+            var cls = (el.className || '').toString();
+            var active = /active|selected|current|focus/i.test(cls) || el.getAttribute('aria-selected') === 'true';
+            var status = text.includes('进行中') || text.includes('思考中') ? 'running'
+              : (text.includes('任务完成') || text.includes('已完成') ? 'done' : 'unknown');
+            chats.push({
+              index: chats.length,
+              text: text.slice(0, 500),
+              title: text.slice(0, 120),
+              status: status,
+              active: active,
+              className: cls.slice(0, 200)
+            });
+          }
+          return { mode: 'solo', chats: chats, count: chats.length };
+        })()
+      `,
+      returnByValue: true
+    });
+    return result.result?.value || { mode: 'unknown', chats: [], count: 0 };
+  }
+
+  async getActiveSoloChat() {
+    const result = await this.listSoloChats();
+    if (!result || result.mode !== 'solo' || !Array.isArray(result.chats)) {
+      return { mode: result?.mode || 'unknown', active: null, reason: result?.reason || 'solo_chats_unavailable' };
+    }
+    const active = result.chats.find(chat => chat.active) || null;
+    return {
+      mode: 'solo',
+      active,
+      count: result.count || result.chats.length
+    };
+  }
+
+  async switchSoloChat(criteria = {}) {
+    const index = Number.isInteger(criteria.index) ? criteria.index : null;
+    const textIncludes = typeof criteria.textIncludes === 'string' ? criteria.textIncludes.trim() : '';
+    const titleIncludes = typeof criteria.titleIncludes === 'string' ? criteria.titleIncludes.trim() : '';
+    if (index === null && !textIncludes && !titleIncludes) {
+      throw new Error('switchSoloChat requires index, textIncludes, or titleIncludes');
+    }
+
+    const result = await this.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          var targetIndex = ${index === null ? 'null' : String(index)};
+          var textIncludes = ${safeJsValue(textIncludes)};
+          var titleIncludes = ${safeJsValue(titleIncludes)};
+          var sidebar = document.querySelector('.soloaisidebar');
+          if (!sidebar || sidebar.offsetParent === null) {
+            return { success: false, reason: 'solo_sidebar_not_visible' };
+          }
+          var nodes = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
+            .filter(function(el) {
+              if (!el || el.offsetParent === null) return false;
+              var cls = (el.className || '').toString();
+              if (/task-items-list|task-item-info|task-item-title|task-item-desc/i.test(cls)) return false;
+              var rect = el.getBoundingClientRect();
+              if (rect.width < 40 || rect.height < 20) return false;
+              var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+              if (!text) return false;
+              if (/^\\s*(新任务|New Task|New Chat|新对话)/i.test(text) && text.length < 30) return false;
+              return true;
+            });
+          var items = [];
+          var seen = new Set();
+          for (var i = 0; i < nodes.length; i++) {
+            var text = (nodes[i].innerText || nodes[i].textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!text || seen.has(text)) continue;
+            seen.add(text);
+            items.push({ el: nodes[i], text: text, index: items.length });
+          }
+          var match = null;
+          if (targetIndex !== null) {
+            match = items.find(function(item) { return item.index === targetIndex; });
+          } else if (textIncludes) {
+            match = items.find(function(item) { return item.text.includes(textIncludes); });
+          } else if (titleIncludes) {
+            match = items.find(function(item) { return item.text.slice(0, 120).includes(titleIncludes); });
+          }
+          if (!match) {
+            return { success: false, reason: 'chat_not_found', count: items.length };
+          }
+          var el = match.el;
+          var rect = el.getBoundingClientRect();
+          var x = rect.x + rect.width / 2;
+          var y = rect.y + rect.height / 2;
+          el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0, buttons: 1, pointerType: 'mouse' }));
+          el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+          el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+          el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+          if (typeof el.click === 'function') el.click();
+          return {
+            success: true,
+            index: match.index,
+            title: match.text.slice(0, 120),
+            text: match.text.slice(0, 500)
+          };
+        })()
+      `,
+      returnByValue: true
+    });
+    const value = result.result?.value || { success: false, reason: 'unknown' };
+    if (value.success) {
+      await sleep(this.config.postActionDelayMs || 500);
+      this._lastTaskText = '';
+      this._pendingUserTask = '';
+      this._preSendSnapshot = '';
+    }
+    return value;
+  }
+
   /**
    * Mode-aware switchMode.
    * Finds mode tabs by text content (not hardcoded index), clicks the matching tab,
@@ -3113,14 +3310,35 @@ class DomDriver {
 
     const busyCheck = await this.client.send('Runtime.evaluate', {
       expression: `(() => {
-        var body = document.body?.textContent || '';
-        if (body.includes('AI \\u751f\\u6210\\u4e2d\\uff0c\\u65e0\\u6cd5\\u5207\\u6362')) {
+        function visible(el) {
+          if (!el || !el.getBoundingClientRect) return false;
+          var rect = el.getBoundingClientRect();
+          return rect.width > 4 && rect.height > 4;
+        }
+        function textOf(el) {
+          return (el && (el.innerText || el.textContent) || '').replace(/\\s+/g, ' ').trim();
+        }
+        var stopIcon = Array.from(document.querySelectorAll('.codicon-stop-circle,[class*="stop-circle"]'))
+          .find(function(el) { return visible(el); });
+        if (stopIcon) {
+          return { busy: true, reason: 'generating' };
+        }
+        var stopButton = Array.from(document.querySelectorAll('button,[role="button"],.chat-input-v2-send-button'))
+          .find(function(el) {
+            if (!visible(el)) return false;
+            var text = textOf(el);
+            var label = el.getAttribute('aria-label') || el.getAttribute('title') || '';
+            var className = String(el.className || '');
+            return /\\u505c\\u6b62|stop/i.test(text + ' ' + label + ' ' + className) &&
+              /chat-input|send|stop/i.test(className + ' ' + label);
+          });
+        if (stopButton) {
           return { busy: true, reason: 'generating' };
         }
         var trigger = document.querySelector('.chat-model-label');
         if (trigger) {
-          var triggerArea = trigger.closest('[class*=input]') || trigger.parentElement;
-          if (triggerArea && triggerArea.textContent.includes('\\u751f\\u6210\\u4e2d')) {
+          var triggerArea = trigger.closest('[class*=chat-input], [class*=input]') || trigger.parentElement;
+          if (visible(triggerArea) && textOf(triggerArea).includes('\\u751f\\u6210\\u4e2d')) {
             return { busy: true, reason: 'generating' };
           }
         }

@@ -1,11 +1,19 @@
 'use strict';
 
+const path = require('path');
 const { getEnvWithFallback, parseSelectors, parsePositiveInt } = require('../shared/utils');
 
 function parseOptionalPositiveInt(value) {
   if (value === undefined || value === null || value === '') return null;
   const parsed = parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parsePathList(value) {
+  return String(value || '')
+    .split(path.delimiter)
+    .map(item => item.trim())
+    .filter(Boolean);
 }
 
 const DEFAULT_COMPOSER_SELECTORS = [
@@ -173,6 +181,12 @@ const DEFAULT_SOLO_INDICATOR_SELECTORS = [
 ];
 
 function getConfig() {
+  const projectPath = getEnvWithFallback('TRAECN_PROJECT_PATH', 'TRAE_PROJECT_PATH', '');
+  const configuredFileRoots = parsePathList(getEnvWithFallback('TRAECN_FILE_ALLOWED_ROOTS', 'TRAE_FILE_ALLOWED_ROOTS', ''));
+  const fileAllowedRoots = configuredFileRoots.length > 0
+    ? configuredFileRoots
+    : [projectPath, process.cwd()].filter(Boolean);
+
   return {
     composerSelectors: parseSelectors(
       getEnvWithFallback('TRAECN_COMPOSER_SELECTORS', 'TRAE_COMPOSER_SELECTORS'),
@@ -235,6 +249,8 @@ function getConfig() {
     queuePerTaskTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_PER_TASK_TIMEOUT_MS', 'TRAE_QUEUE_PER_TASK_TIMEOUT_MS', '600000'), 600000),
     queueTimeoutExtensionMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_TIMEOUT_EXTENSION_MS', 'TRAE_QUEUE_TIMEOUT_EXTENSION_MS', '600000'), 600000),
     queueMaxWaitMs: parseOptionalPositiveInt(getEnvWithFallback('TRAECN_QUEUE_MAX_WAIT_MS', 'TRAE_QUEUE_MAX_WAIT_MS')),
+    fileAllowedRoots,
+    allowUnsafeDiskAccess: getEnvWithFallback('TRAECN_FILE_ALLOW_UNSAFE_DISK_ACCESS', 'TRAE_FILE_ALLOW_UNSAFE_DISK_ACCESS', '0') === '1',
     // Approval / dialog handling
     approvalTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_APPROVAL_TIMEOUT_MS', 'TRAE_APPROVAL_TIMEOUT_MS', '120000'), 120000),
     approvalPollIntervalMs: parsePositiveInt(getEnvWithFallback('TRAECN_APPROVAL_POLL_INTERVAL_MS', 'TRAE_APPROVAL_POLL_INTERVAL_MS', '3000'), 3000)

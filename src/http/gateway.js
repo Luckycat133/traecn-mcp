@@ -277,6 +277,7 @@ class Gateway {
     this.batchTasks = new Map();
     this.pollingTimer = null;
     this.isPolling = false;
+    this.uiActionChain = Promise.resolve();
     this.taskLocks = new Set();
     this.activeTimers = new Set();
     this.autoStartTrae = getEnvWithFallback('TRAECN_AUTO_START_TRAE', 'TRAE_AUTO_START_TRAE', '1') !== '0';
@@ -342,6 +343,18 @@ class Gateway {
   _clearTimeout(timer) {
     clearTimeout(timer);
     this.activeTimers.delete(timer);
+  }
+
+  async _withUiActionLock(action) {
+    const previous = this.uiActionChain || Promise.resolve();
+    let release;
+    this.uiActionChain = new Promise(resolve => { release = resolve; });
+    await previous.catch(() => {});
+    try {
+      return await action();
+    } finally {
+      release();
+    }
   }
 
   _setInterval(callback, interval) {
@@ -416,12 +429,14 @@ class Gateway {
         autoContinue: task.autoContinue === true,
         followupCount: Array.isArray(task.followupTasks) ? task.followupTasks.length : 0,
         notifyUrl: task.notifyUrl || null,
+        autoApproveDialog: task.autoApproveDialog || null,
         queueState: task.queueState || null,
         currentModel: task.currentModel || null,
         fallbackModels: Array.isArray(task.fallbackModels) ? task.fallbackModels : [],
         lastModelProbeAt: task.lastModelProbeAt || null,
         submittedToTrae: task.submittedToTrae === true,
-        submittedAt: task.submittedAt || null
+        submittedAt: task.submittedAt || null,
+        soloChat: task.soloChat || null
       }
     });
   }
@@ -576,10 +591,19 @@ class Gateway {
           autoContinue: item.autoContinue === true,
           includeProcessText: item.includeProcessText === true
         };
+        const autoApproveDialog = this._normalizeAutoApproveDialog(item.autoApproveDialog);
+        if (autoApproveDialog !== null) normalized.autoApproveDialog = autoApproveDialog;
         if (this._hasCompletionChecks(completionChecks)) normalized.completionChecks = completionChecks;
         return normalized;
       })
       .filter(item => item && item.task && item.task.length <= 100000);
+  }
+
+  _normalizeAutoApproveDialog(value) {
+    if (value === true) return 'auto';
+    if (value === false || value === null || value === undefined || value === '') return null;
+    if (typeof value === 'string') return value.trim() || null;
+    return null;
   }
 
   _normalizeCompletionChecks(input = {}) {
@@ -686,6 +710,7 @@ class Gateway {
     const completionChecks = this._normalizeCompletionChecks(body.completionChecks || body);
     const fallbackModels = this._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
     const modelProbeIntervalMs = this._modelProbeIntervalMs(body.modelProbeIntervalMs);
+    const autoApproveDialog = this._normalizeAutoApproveDialog(body.autoApproveDialog);
     const projectPath = typeof body.projectPath === 'string' && body.projectPath.trim()
       ? body.projectPath.trim()
       : null;
@@ -697,6 +722,7 @@ class Gateway {
         autoContinue,
         followupCount: followupTasks.length,
         notifyUrl: body.notifyUrl || null,
+        autoApproveDialog,
         fallbackModels
       }
     });
@@ -709,6 +735,11 @@ class Gateway {
     const task = {
       taskId: historyTaskId,
       chatId: body.chatId || null,
+      soloChat: this._normalizeSoloChatTarget(body.soloChat || body.soloChatTarget || {
+        index: body.soloChatIndex,
+        titleIncludes: body.soloChatTitleIncludes,
+        textIncludes: body.soloChatTextIncludes
+      }),
       task: body.task,
       projectPath,
       status: 'queued',
@@ -722,6 +753,7 @@ class Gateway {
       autoContinue,
       followupTasks,
       completionChecks,
+      autoApproveDialog,
       notifyUrl: typeof body.notifyUrl === 'string' ? body.notifyUrl : null,
       submittedToTrae: false,
       submittedAt: null,
@@ -749,6 +781,7 @@ class Gateway {
         fallbackModels,
         reviewRequired,
         autoContinue,
+        autoApproveDialog,
         completionChecks: this._hasCompletionChecks(completionChecks),
         followupCount: followupTasks.length
       }
@@ -1044,6 +1077,7 @@ class Gateway {
     const text = typeof result.text === 'string' ? result.text.trim() : '';
     if (!text) return false;
     if (text.length < 80) return false;
+    if (this._isWorkbenchChromeResultText(text)) return false;
     if (this._isFailedResultText(text)) return false;
     if (this._isIncompleteReviewText(text)) return false;
     if (/^solo\s*agent\s*思考中/i.test(text)) return false;
@@ -1110,7 +1144,7 @@ class Gateway {
     if (!result || result.needsApproval) return false;
     if (result.timedOut || result.truncated || result.streaming || result.modelError) return false;
     const text = typeof result.text === 'string' ? result.text.trim() : '';
-    if (!this._hasMeaningfulResultText(text) || this._isFailedResultText(text) || this._isIncompleteReviewText(text)) return false;
+    if (!this._hasMeaningfulResultText(text) || this._isWorkbenchChromeResultText(text) || this._isFailedResultText(text) || this._isIncompleteReviewText(text)) return false;
     return result.stable === true;
   }
 
@@ -1134,6 +1168,18 @@ class Gateway {
       'cancelled output',
       'generation stopped'
     ].some(pattern => value.toLowerCase().includes(pattern.toLowerCase()));
+  }
+
+  _isWorkbenchChromeResultText(text) {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return false;
+    const hasWorkbenchChrome = /^SOLO\s+IDE\s+搜索\b/i.test(value)
+      || (value.includes('资源管理器 文件') && value.includes('TRAE 与 Agent 协作'))
+      || (value.includes('Claude Code 与 AI 对话') && value.includes('Editor 内 AI 编码'))
+      || (value.includes('历史记录') && value.includes('速通') && value.includes('main*'));
+    if (!hasWorkbenchChrome) return false;
+    const hasAssistantResultSignal = /TRAECNclaw\s+Code\s+Review|(^|\s)Findings[:\s]|任务完成|最终报告|final report|\bP[0-3]\b|问题[:：]|建议[:：]|测试通过|completed successfully/i.test(value);
+    return !hasAssistantResultSignal;
   }
 
   _parseQueuePositionFromText(text) {
@@ -1197,9 +1243,104 @@ class Gateway {
     this._persistActiveQueue();
   }
 
+  _defaultQuestionDialogAnswer(result = {}, action = 'auto') {
+    if (action && !['auto', 'trust', 'allow', 'confirm', 'approve'].includes(String(action).toLowerCase())) {
+      return String(action).replace(/^answer:/i, '').trim();
+    }
+    const options = Array.isArray(result.options) ? result.options : [];
+    const labels = options
+      .map(option => typeof option === 'string' ? option : (option.label || option.description || ''))
+      .filter(Boolean);
+    return labels.find(label => /current|workspace|uncommitted|staged|工作区|未提交/i.test(label))
+      || labels[0]
+      || 'Current workspace changes';
+  }
+
+  async _tryAutoApproveTaskDialog(taskId, task, result = {}) {
+    const action = this._normalizeAutoApproveDialog(task.autoApproveDialog);
+    if (!action || !this.driver) return false;
+
+    let approvalResult;
+    let selectedAction = action;
+    try {
+      const isQuestion = result.dialogType === 'review_scope_question'
+        || /review scope|what would you like me to review/i.test(result.question || '');
+      if (isQuestion && typeof this.driver.answerQuestionDialog === 'function') {
+        selectedAction = 'answer';
+        const answer = this._defaultQuestionDialogAnswer(result, action);
+        approvalResult = await this.driver.answerQuestionDialog(answer);
+      } else {
+        const dialog = await this.driver.checkForApprovalDialog();
+        if (!dialog.needsApproval) return false;
+        selectedAction = action === 'auto'
+          ? (dialog.canAutoApprove ? 'trust' : 'allow')
+          : action;
+        approvalResult = await this.driver.approveDialog(selectedAction);
+      }
+    } catch (err) {
+      this.taskHistoryStore.recordStep(taskId, 'dialog_auto_approval_failed', {
+        success: false,
+        error: err.message,
+        details: {
+          action,
+          dialogType: result.dialogType || null
+        }
+      });
+      this._syncTaskHistoryMirror(task);
+      this._persistActiveQueue();
+      return false;
+    }
+
+    if (!approvalResult || approvalResult.success !== true) {
+      this.taskHistoryStore.recordStep(taskId, 'dialog_auto_approval_failed', {
+        success: false,
+        error: approvalResult?.error || 'Dialog auto approval failed',
+        details: {
+          action: selectedAction,
+          dialogType: result.dialogType || null,
+          selectedOption: approvalResult?.selectedOption || null,
+          buttonClicked: approvalResult?.buttonClicked || null
+        }
+      });
+      this._syncTaskHistoryMirror(task);
+      this._persistActiveQueue();
+      return false;
+    }
+
+    task.status = 'executing';
+    task.submittedToTrae = true;
+    task.submittedAt = task.submittedAt || Date.now();
+    task.queueState = 'running';
+    task.queueMessage = 'dialog auto-approved; waiting for Trae result';
+    task.error = null;
+    task.result = null;
+    task.answeredDialog = {
+      action: selectedAction,
+      autoApproveDialog: action,
+      dialogType: result.dialogType || null,
+      question: result.question || null,
+      selectedOption: approvalResult.selectedOption || null,
+      buttonClicked: approvalResult.buttonClicked || null,
+      answeredAt: Date.now()
+    };
+    this.taskHistoryStore.recordStep(taskId, 'dialog_auto_approved', {
+      success: true,
+      details: task.answeredDialog
+    });
+    if (this.wsHandler) {
+      this.wsHandler.notifyTaskStatusChange(taskId, task);
+    }
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+    return true;
+  }
+
   _isIncompleteReviewText(text) {
     const value = String(text || '').replace(/\s+/g, ' ').trim();
     if (!value) return true;
+    const hasStructuredReportMarker = /^(?:TRAECNclaw\s+)?Code\s+Review\s*[—-]\s*Findings\s+First\b/i.test(value)
+      || (/\b1\.\s*Findings\s*\(ordered by severity\)/i.test(value) && /\b(?:final verdict|review complete)\b/i.test(value));
+    if (hasStructuredReportMarker && value.length >= 120) return false;
     const hasCompletionMarker = /任务完成|所有测试通过|测试已通过|已完成。以下是|已完成，以下是|completed successfully|all tests pass(?:ed)?|delivery summary|final report/i.test(value);
     if (hasCompletionMarker && value.length >= 120) return false;
     return [
@@ -1280,17 +1421,19 @@ class Gateway {
       return { taskId, status: task.status, reviewDecision: decision };
     }
 
-    const nextSpec = task.followupTasks.shift();
+    const [nextSpec, ...remainingFollowups] = task.followupTasks;
     const nextTask = this._createQueuedTask({
       task: nextSpec.task,
       projectPath: task.projectPath || null,
       includeProcessText: nextSpec.includeProcessText === true,
       reviewRequired: nextSpec.reviewRequired !== false,
       autoContinue: task.autoContinue === true || nextSpec.autoContinue === true,
-      followupTasks: task.followupTasks,
+      followupTasks: remainingFollowups,
       completionChecks: nextSpec.completionChecks,
+      autoApproveDialog: nextSpec.autoApproveDialog || task.autoApproveDialog || null,
       notifyUrl: task.notifyUrl,
       chatId: task.chatId,
+      soloChat: task.soloChat,
       fallbackModels: task.fallbackModels || [],
       modelProbeIntervalMs: task.modelProbeIntervalMs
     }, { queued: true, queueMessage: '等待上一审查通过后继续执行' });
@@ -1326,10 +1469,13 @@ class Gateway {
 
   _corsHeaders(req) {
     const origin = req.headers.origin;
-    if (!this.allowedOrigins) {
-      return { 'Access-Control-Allow-Origin': '*' };
-    }
     const allowed = this.allowedOrigins.split(',').map(o => o.trim()).filter(Boolean);
+    if (!allowed.length) {
+      if (origin && this._isSameGatewayOrigin(req, origin)) {
+        return { 'Access-Control-Allow-Origin': origin, 'Vary': 'Origin' };
+      }
+      return {};
+    }
     if (allowed.includes('*')) {
       return { 'Access-Control-Allow-Origin': '*' };
     }
@@ -1364,12 +1510,23 @@ class Gateway {
   }
 
   _checkOrigin(req) {
-    if (!this.allowedOrigins) return true;
     const origin = req.headers.origin;
     if (!origin) return true;
 
     const allowed = this.allowedOrigins.split(',').map(o => o.trim()).filter(Boolean);
+    if (!allowed.length) return this._isSameGatewayOrigin(req, origin);
     return allowed.includes(origin) || allowed.includes('*');
+  }
+
+  _isSameGatewayOrigin(req, origin) {
+    try {
+      const parsed = new URL(origin);
+      const host = String(req.headers.host || '').toLowerCase();
+      if (!host) return false;
+      return parsed.host.toLowerCase() === host;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1716,6 +1873,15 @@ class Gateway {
       }
       if (pathname === '/api/new-chat' && method === 'POST') {
         return await this._handleNewChat(req, res);
+      }
+      if (pathname === '/api/solo/chats' && method === 'GET') {
+        return await this._handleListSoloChats(req, res);
+      }
+      if (pathname === '/api/solo/chats/switch' && method === 'POST') {
+        return await this._handleSwitchSoloChat(req, res);
+      }
+      if (pathname === '/api/solo/chats/submit' && method === 'POST') {
+        return await this._handleSubmitSoloChatTask(req, res);
       }
       if (pathname === '/api/trae/stop-generation' && method === 'POST') {
         return await this._handleStopGeneration(req, res);
@@ -2331,6 +2497,46 @@ class Gateway {
       session.messages.push({ role: 'user', content: body.task, timestamp: new Date().toISOString() });
     }
 
+    const queueStatus = typeof this.driver.checkQueueStatus === 'function'
+      ? await this.driver.checkQueueStatus()
+      : { queued: false, running: false, canSubmit: true };
+    const waitForQueue = body.waitForQueue !== false;
+    const queueVisible = queueStatus.queued === true;
+    const queueBlocked = queueStatus.running === true || (queueVisible && queueStatus.canSubmit !== true);
+    if (queueBlocked || (waitForQueue && queueVisible)) {
+      if (!waitForQueue) {
+        return this._json(req, res, {
+          status: queueStatus.queued ? 'queued' : 'running',
+          queueDetails: this._queueDetailsFromStatus(queueStatus),
+          message: queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'
+        }, 202);
+      }
+
+      const task = this._createQueuedTask({
+        task: body.task,
+        projectPath: body.projectPath,
+        reviewRequired: body.reviewRequired === true,
+        autoContinue: body.autoContinue === true,
+        followupTasks: body.followupTasks,
+        completionChecks: body.completionChecks,
+        autoApproveDialog: body.autoApproveDialog,
+        includeProcessText: body.includeProcessText === true,
+        notifyUrl: body.notifyUrl,
+        chatId: body.chatId
+      }, queueStatus);
+      this._ensureBackgroundPolling();
+      return this._json(req, res, {
+        taskId: task.taskId,
+        status: 'queued',
+        queueDetails: this._queueDetailsFromStatus(queueStatus, task.currentModel),
+        reviewRequired: task.reviewRequired,
+        autoContinue: task.autoContinue === true,
+        followupCount: task.followupTasks.length,
+        message: '模型排队中，任务已加入后台。用 traecn_task_status 查询进度',
+        model: queueStatus.currentModel || null
+      }, 202);
+    }
+
     const result = await this.driver.delegate(this._taskWithProjectContext(body.task, body.projectPath));
 
     if (session) {
@@ -2358,6 +2564,300 @@ class Gateway {
     this._json(req, res, { success });
   }
 
+  async _handleListSoloChats(req, res) {
+    await this._ensureConnection();
+    const result = typeof this.driver.listSoloChats === 'function'
+      ? await this.driver.listSoloChats()
+      : { mode: 'unsupported', chats: [], count: 0, reason: 'driver_does_not_support_solo_chats' };
+    this._json(req, res, result);
+  }
+
+  async _handleSwitchSoloChat(req, res) {
+    const body = await parseBody(req);
+    await this._ensureConnection();
+    const result = typeof this.driver.switchSoloChat === 'function'
+      ? await this.driver.switchSoloChat({
+        index: Number.isInteger(body.index) ? body.index : null,
+        textIncludes: body.textIncludes,
+        titleIncludes: body.titleIncludes
+      })
+      : { success: false, reason: 'driver_does_not_support_solo_chats' };
+    this._json(req, res, result, result.success === false ? 404 : 200);
+  }
+
+  _normalizeSoloChatTarget(value = {}) {
+    if (!value || typeof value !== 'object') return null;
+    const target = {};
+    if (Number.isInteger(value.index)) target.index = value.index;
+    if (typeof value.titleIncludes === 'string' && value.titleIncludes.trim()) {
+      target.titleIncludes = value.titleIncludes.trim();
+    }
+    if (typeof value.textIncludes === 'string' && value.textIncludes.trim()) {
+      target.textIncludes = value.textIncludes.trim();
+    }
+    if (typeof value.title === 'string' && value.title.trim() && !target.titleIncludes) {
+      target.titleIncludes = value.title.trim();
+    }
+    if (typeof value.text === 'string' && value.text.trim() && !target.textIncludes) {
+      target.textIncludes = value.text.trim();
+    }
+    if (Array.isArray(value.candidates)) {
+      target.candidates = Array.from(new Set(value.candidates
+        .filter(item => typeof item === 'string')
+        .map(item => item.replace(/\s+/g, ' ').trim())
+        .filter(item => item.length >= 3)))
+        .slice(0, 8);
+    }
+    return Object.keys(target).length > 0 ? target : null;
+  }
+
+  _soloChatSwitchCriteria(soloChat) {
+    const target = this._normalizeSoloChatTarget(soloChat);
+    if (!target) return null;
+    if (target.titleIncludes || target.textIncludes) {
+      return {
+        titleIncludes: target.titleIncludes,
+        textIncludes: target.textIncludes
+      };
+    }
+    return { index: target.index };
+  }
+
+  _soloChatCandidateTexts(...values) {
+    const candidates = [];
+    const genericTokens = new Set([
+      'project', 'Project', 'path', 'Users', 'Shared', 'projects', 'Work',
+      'only', 'unless', 'explicitly', 'otherwise', 'current', 'workspace',
+      'TRAECNclaw'
+    ]);
+    const addCandidate = (value) => {
+      const candidate = String(value || '').replace(/\s+/g, ' ').trim();
+      if (candidate.length < 3 || candidate.length > 180) return;
+      if (genericTokens.has(candidate)) return;
+      candidates.push(candidate);
+    };
+    const add = (value) => {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+      addCandidate(text);
+      const withoutState = text
+        .replace(/\b\d{1,2}:\d{2}\b/g, ' ')
+        .replace(/\d{1,2}月\d{1,2}日/g, ' ')
+        .replace(/任务完成|进行中|思考中|生成中|排队中|已完成/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      addCandidate(withoutState);
+      for (const signal of text.match(/(?:src\/[A-Za-z0-9_./-]+|[A-Za-z0-9_.-]+\.js|settings\/read-all|readAll|read-all|TRAECN[A-Za-z0-9_:-]{6,})/g) || []) {
+        addCandidate(signal);
+      }
+      for (const token of text.match(/[A-Za-z0-9_:-]{6,}/g) || []) {
+        if (token.length >= 10 || /[_:-]/.test(token)) addCandidate(token);
+      }
+      const colonParts = text.split(/[：:]/).map(part => part.trim()).filter(part => part.length >= 3);
+      colonParts.forEach(addCandidate);
+    };
+    values.forEach(add);
+    return Array.from(new Set(candidates)).slice(0, 12);
+  }
+
+  _taskOwnershipSignals(task) {
+    const values = [
+      task?.task,
+      task?.soloChat?.titleIncludes,
+      task?.soloChat?.textIncludes,
+      ...(Array.isArray(task?.soloChat?.candidates) ? task.soloChat.candidates : [])
+    ];
+    const signals = [];
+    const add = (value, strong = false) => {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+      if (text.length < 6 || text.length > 180) return;
+      signals.push({ text, strong });
+    };
+    for (const value of values) {
+      const text = String(value || '');
+      for (const token of text.match(/TRAECN[A-Za-z0-9_:-]{6,}/g) || []) {
+        add(token, true);
+      }
+      for (const pathLike of text.match(/(?:src\/[A-Za-z0-9_./-]+|[A-Za-z0-9_.-]+\.js|settings\/read-all|readAll|read-all)/g) || []) {
+        add(pathLike, false);
+      }
+    }
+    return Array.from(new Map(signals.map(signal => [signal.text, signal])).values());
+  }
+
+  _resultBelongsToSubmittedTask(result, task) {
+    if (!task || task.submittedToTrae !== true) return true;
+    const text = String(result?.text || '');
+    if (!text.trim()) return true;
+    const signals = this._taskOwnershipSignals(task);
+    const strongSignals = signals.filter(signal => signal.strong);
+    const requiredSignals = strongSignals.length > 0 ? strongSignals : [];
+    if (requiredSignals.length === 0) return true;
+    return requiredSignals.some(signal => text.includes(signal.text));
+  }
+
+  _keepSubmittedTaskWaitingForOwnedResult(taskId, task, result, reason) {
+    task.result = result;
+    task.status = 'executing';
+    task.submittedToTrae = true;
+    task.queueState = task.queueState || 'running';
+    task.queueMessage = reason || 'waiting for result from the submitted Solo chat';
+    task.error = null;
+    this.taskHistoryStore.recordStep(taskId, 'submitted_task_result_not_owned', {
+      success: true,
+      details: {
+        reason,
+        ownershipSignals: this._taskOwnershipSignals(task).map(signal => signal.text).slice(0, 8),
+        resultPreview: String(result?.text || '').slice(0, 240)
+      }
+    });
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+    if (this.wsHandler) {
+      this.wsHandler.notifyTaskStatusChange(taskId, task);
+    }
+  }
+
+  async _switchToTaskSoloChat(task, action = 'operate') {
+    if (!task?.soloChat) return { skipped: true, reason: 'no_solo_chat_target' };
+    if (!this.driver || typeof this.driver.switchSoloChat !== 'function') {
+      return { success: false, reason: 'driver_does_not_support_solo_chats' };
+    }
+    const criteriaList = [];
+    const primary = this._soloChatSwitchCriteria(task.soloChat);
+    if (primary) criteriaList.push(primary);
+    for (const candidate of task.soloChat.candidates || []) {
+      criteriaList.push({ titleIncludes: candidate });
+      criteriaList.push({ textIncludes: candidate });
+    }
+    if (Number.isInteger(task.soloChat.index)) {
+      criteriaList.push({ index: task.soloChat.index });
+    }
+    if (criteriaList.length === 0) return { skipped: true, reason: 'invalid_solo_chat_target' };
+    let result = null;
+    let criteria = null;
+    for (const item of criteriaList) {
+      criteria = item;
+      result = await this.driver.switchSoloChat(item);
+      if (result.success !== false) break;
+    }
+    this.taskHistoryStore.recordStep(task.taskId, 'solo_chat_switch', {
+      success: result.success !== false,
+      details: {
+        action,
+        criteria,
+        result
+      }
+    });
+    if (result.success === false) {
+      throw new Error(`Failed to switch Solo chat for ${action}: ${result.reason || 'unknown'}`);
+    }
+    return result;
+  }
+
+  async _captureTaskSoloChat(task) {
+    if (!task || !this.driver || typeof this.driver.getActiveSoloChat !== 'function') return null;
+    const snapshot = await this.driver.getActiveSoloChat();
+    const active = snapshot?.active || null;
+    if (!active) return null;
+    const candidates = this._soloChatCandidateTexts(task.task, active.title, active.text);
+    const activeCandidates = this._soloChatCandidateTexts(active.title, active.text);
+    const primary = activeCandidates[0] || candidates[0] || active.title || active.text;
+    const soloChat = this._normalizeSoloChatTarget({
+      titleIncludes: primary,
+      textIncludes: primary,
+      index: active.index,
+      candidates
+    });
+    if (!soloChat) return null;
+    task.soloChat = soloChat;
+    this.taskHistoryStore.recordStep(task.taskId, 'solo_chat_captured', {
+      success: true,
+      details: {
+        soloChat,
+        active
+      }
+    });
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+    return soloChat;
+  }
+
+  async _handleSubmitSoloChatTask(req, res) {
+    const body = await parseBody(req);
+    if (!body.task) {
+      return this._json(req, res, { error: 'task is required' }, 400);
+    }
+    if (typeof body.task !== 'string' || body.task.length > 100000) {
+      return this._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
+    }
+
+    return await this._withUiActionLock(async () => {
+      await this._ensureConnection();
+      if (typeof this.driver.switchMode === 'function') {
+        await this.driver.switchMode('solo');
+      }
+      if (typeof this.driver.sendMessage !== 'function') {
+        return this._json(req, res, { error: 'driver does not support message submission' }, 501);
+      }
+
+      const requestedSoloChat = this._normalizeSoloChatTarget(body.soloChat || body.soloChatTarget || {
+        index: body.soloChatIndex,
+        titleIncludes: body.soloChatTitleIncludes,
+        textIncludes: body.soloChatTextIncludes
+      });
+
+      if (requestedSoloChat) {
+        if (typeof this.driver.switchSoloChat !== 'function') {
+          return this._json(req, res, { success: false, reason: 'driver_does_not_support_solo_chats' }, 501);
+        }
+        const switchResult = await this.driver.switchSoloChat(this._soloChatSwitchCriteria(requestedSoloChat));
+        if (switchResult.success === false) {
+          return this._json(req, res, switchResult, 404);
+        }
+      } else if (body.newChat !== false) {
+        if (typeof this.driver.newChat !== 'function') {
+          return this._json(req, res, { error: 'driver does not support new chat creation' }, 501);
+        }
+        await this.driver.newChat();
+      }
+
+      await this.driver.sendMessage(this._taskWithProjectContext(body.task, body.projectPath));
+      const queueStatus = typeof this.driver.checkQueueStatus === 'function'
+        ? await this.driver.checkQueueStatus()
+        : { queued: true, running: false, canSubmit: false };
+      const task = this._createQueuedTask({
+        ...body,
+        soloChat: requestedSoloChat,
+        includeProcessText: body.includeProcessText === true
+      }, {
+        ...queueStatus,
+        queued: queueStatus.queued !== false,
+        queueMessage: queueStatus.queueMessage || queueStatus.message || 'submitted to Solo chat'
+      });
+      task.status = 'executing';
+      task.submittedToTrae = true;
+      task.submittedAt = Date.now();
+      task.queueState = queueStatus.running ? 'running' : (queueStatus.queued ? 'queued' : 'submitted');
+      task.queueMessage = queueStatus.queueMessage || queueStatus.message || 'submitted to Solo chat';
+      await this._captureTaskSoloChat(task);
+      this._syncTaskHistoryMirror(task);
+      this._persistActiveQueue();
+      this._ensureBackgroundPolling();
+
+      return this._json(req, res, {
+        taskId: task.taskId,
+        status: task.status,
+        submittedToTrae: true,
+        soloChat: task.soloChat || null,
+        queueDetails: this._queueDetailsFromStatus(queueStatus, task.currentModel),
+        reviewRequired: task.reviewRequired,
+        autoContinue: task.autoContinue === true,
+        followupCount: task.followupTasks.length,
+        message: '任务已提交到 Solo 对话，后台会切回该对话收集结果'
+      }, 202);
+    });
+  }
+
   async _handleStopGeneration(req, res) {
     await this._ensureConnection();
     const result = typeof this.driver.stopGeneration === 'function'
@@ -2381,7 +2881,6 @@ class Gateway {
     if (!confirmed) {
       return this._json(req, res, {
         error: 'Explicit confirmation required before restarting Trae CN',
-        confirmationPhrase: expectedPhrase,
         confirmationId: plan.confirmationId,
         plan
       }, 409);
@@ -2738,8 +3237,25 @@ class Gateway {
 
   async _handleSettingsReadAll(req, res) {
     await this._ensureConnection();
-    const data = await this.driver.settings.readAll();
-    this._json(req, res, { sections: SETTINGS_SECTIONS, data });
+    const hardLimitMs = 35000;
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = this._setTimeout(
+        () => reject(new Error('settings/read-all hard limit (' + hardLimitMs + 'ms)')),
+        hardLimitMs
+      );
+    });
+    try {
+      const data = await Promise.race([
+        this._withUiActionLock(() => this.driver.settings.readAll()),
+        timeoutPromise
+      ]);
+      this._json(req, res, { sections: Object.keys(data || {}), data });
+    } catch (e) {
+      this._json(req, res, { error: e.message, sections: [], data: {} }, 504);
+    } finally {
+      if (timeoutId) this._clearTimeout(timeoutId);
+    }
   }
 
   async _handleSettingsRead(req, res) {
@@ -3157,6 +3673,7 @@ class Gateway {
           reviewRequired: body.reviewRequired === true,
           autoContinue: body.autoContinue === true,
           followupTasks: normalizedFollowups,
+          autoApproveDialog: body.autoApproveDialog,
           chatId,
           includeProcessText,
           notifyUrl: body.notifyUrl
@@ -3170,6 +3687,7 @@ class Gateway {
         task.submittedAt = Date.now();
         task.error = null;
         this.taskLocks.add(task.taskId);
+        await this._captureTaskSoloChat(task);
         this._syncTaskHistoryMirror(task);
         this._persistActiveQueue();
 
@@ -3205,6 +3723,7 @@ class Gateway {
       const recoveredResult = await this._recoverAwaitingReviewFromGate({
         createdAt: Date.now(),
         followupTasks: this._normalizeFollowupTasks(body.followupTasks),
+        autoApproveDialog: body.autoApproveDialog,
         reviewRequired: body.reviewRequired === true,
         autoContinue: body.autoContinue === true
       });
@@ -3216,6 +3735,7 @@ class Gateway {
           reviewRequired: body.reviewRequired === true,
           autoContinue: body.autoContinue === true,
           followupTasks: normalizedFollowups,
+          autoApproveDialog: body.autoApproveDialog,
           chatId,
           includeProcessText,
           notifyUrl: body.notifyUrl
@@ -3258,6 +3778,7 @@ class Gateway {
         reviewRequired: body.reviewRequired === true,
         autoContinue: body.autoContinue === true,
         followupTasks: normalizedFollowups,
+        autoApproveDialog: body.autoApproveDialog,
         chatId,
         includeProcessText,
         notifyUrl: body.notifyUrl
@@ -3850,7 +4371,10 @@ class Gateway {
 
     if (this._isQueuedTaskResult(result)) {
       this._keepSubmittedTaskWaitingInQueue(taskId, task, result);
+    } else if (!this._resultBelongsToSubmittedTask(result, task)) {
+      this._keepSubmittedTaskWaitingForOwnedResult(taskId, task, result, 'collected result did not include a task ownership token');
     } else if (result.needsApproval) {
+      if (await this._tryAutoApproveTaskDialog(taskId, task, result)) return;
       await this._finalizeBackgroundTask(taskId, task, 'approval_required', {
         result
       });
@@ -3998,27 +4522,59 @@ class Gateway {
   }
 
   async _collectSubmittedBackgroundTask(taskId, task) {
-    await this._ensureConnection();
-    const queueStatus = await this.driver.checkQueueStatus();
-    this._updateQueuedTaskSnapshot(task, queueStatus);
-    this._syncTaskHistoryMirror(task);
-    this._persistActiveQueue();
-
-    const result = await this.driver.collectResponse();
-    if (this._isTerminalTaskStatus(task.status)) {
-      this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
-        success: true,
-        details: {
-          status: task.status,
-          reason: 'task already reached a terminal state before collectResponse returned'
+    return await this._withUiActionLock(async () => {
+      await this._ensureConnection();
+      await this._switchToTaskSoloChat(task, 'collect_result');
+      if (this.driver && typeof this.driver.getActiveSoloChat === 'function') {
+        const activeSnapshot = await this.driver.getActiveSoloChat();
+        const activeChat = activeSnapshot?.active || null;
+        if (activeChat?.status === 'running') {
+          task.queueState = 'running';
+          task.queueMessage = activeChat.title || activeChat.text || 'submitted Solo chat is still running';
+          this.taskHistoryStore.recordStep(taskId, 'submitted_solo_chat_still_running', {
+            success: true,
+            details: { active: activeChat }
+          });
+          this._syncTaskHistoryMirror(task);
+          this._persistActiveQueue();
+          if (this.wsHandler) {
+            this.wsHandler.notifyTaskStatusChange(taskId, task);
+          }
+          return { text: '', stable: false, elapsedMs: 0, running: true };
         }
-      });
+      }
+      const queueStatus = await this.driver.checkQueueStatus();
+      this._updateQueuedTaskSnapshot(task, queueStatus);
       this._syncTaskHistoryMirror(task);
       this._persistActiveQueue();
+
+      if (queueStatus.running === true || queueStatus.queued === true) {
+        this.taskHistoryStore.recordStep(taskId, 'submitted_task_still_active', {
+          success: true,
+          details: this._queueDetailsFromStatus(queueStatus, task.currentModel)
+        });
+        if (this.wsHandler) {
+          this.wsHandler.notifyTaskStatusChange(taskId, task);
+        }
+        return { text: '', stable: false, elapsedMs: 0, queued: queueStatus.queued === true, running: queueStatus.running === true };
+      }
+
+      const result = await this.driver.collectResponse();
+      if (this._isTerminalTaskStatus(task.status)) {
+        this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
+          success: true,
+          details: {
+            status: task.status,
+            reason: 'task already reached a terminal state before collectResponse returned'
+          }
+        });
+        this._syncTaskHistoryMirror(task);
+        this._persistActiveQueue();
+        return result;
+      }
+      await this._finalizeCollectedBackgroundResult(taskId, task, result);
       return result;
-    }
-    await this._finalizeCollectedBackgroundResult(taskId, task, result);
-    return result;
+    });
   }
 
   _resumeApprovalRequiredTasksAfterDialogAnswer(answer, result = {}) {
@@ -4088,6 +4644,7 @@ class Gateway {
       reviewRequired: body.reviewRequired === true,
       autoContinue: body.autoContinue === true,
       followupTasks: this._normalizeFollowupTasks(body.followupTasks),
+      autoApproveDialog: body.autoApproveDialog,
       chatId: body.chatId || null,
       includeProcessText: body.includeProcessText === true,
       notifyUrl: body.notifyUrl,
@@ -4103,6 +4660,7 @@ class Gateway {
     task.submittedToTrae = true;
     task.submittedAt = Number.isFinite(Number(body.submittedAt)) ? Number(body.submittedAt) : Date.now();
     task.queueMessage = queueStatus.queueMessage || queueStatus.message || 'adopted existing Trae request';
+    await this._captureTaskSoloChat(task);
     this._syncTaskHistoryMirror(task);
     this._persistActiveQueue();
     this._ensureBackgroundPolling();
@@ -4139,11 +4697,12 @@ class Gateway {
       this.isPolling = true;
 
       try {
-        // 定期清理机制：清理超过一定时间的非排队状态任务
+        // 定期清理机制：只清理超过一定时间的终态任务。
+        // Paused or running workflow state must remain recoverable for long queues.
         const now = Date.now();
         const maxTaskAge = 3600000; // 1小时
         for (const [taskId, task] of this.taskQueue) {
-          if (task.status !== 'queued' && now - task.createdAt > maxTaskAge) {
+          if (this._isTerminalTaskStatus(task.status) && now - task.createdAt > maxTaskAge) {
             console.log('[Queue] Cleaning up old task', taskId, 'with status', task.status);
             this.taskQueue.delete(taskId);
             this.taskLocks.delete(taskId);
@@ -4230,28 +4789,37 @@ class Gateway {
             }
 
             try {
-              // Create a fresh chat before sending (background poller bypasses
-              // delegate() which would also call newChat)
-              await this.driver.newChat();
-              await this.driver.sendMessage(this._taskWithProjectContext(task.task, task.projectPath));
-              task.submittedToTrae = true;
-              task.submittedAt = Date.now();
-              this._syncTaskHistoryMirror(task);
-              this._persistActiveQueue();
-              const result = await this.driver.collectResponse();
-              if (this._isTerminalTaskStatus(task.status)) {
-                this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
-                  success: true,
-                  details: {
-                    status: task.status,
-                    reason: 'task already reached a terminal state before collectResponse returned'
-                  }
-                });
+              await this._withUiActionLock(async () => {
+                // Create a fresh chat before sending (background poller bypasses
+                // delegate() which would also call newChat)
+                if (task.soloChat) {
+                  await this._switchToTaskSoloChat(task, 'send_task');
+                } else {
+                  await this.driver.newChat();
+                }
+                await this.driver.sendMessage(this._taskWithProjectContext(task.task, task.projectPath));
+                task.submittedToTrae = true;
+                task.submittedAt = Date.now();
+                if (!task.soloChat) {
+                  await this._captureTaskSoloChat(task);
+                }
                 this._syncTaskHistoryMirror(task);
                 this._persistActiveQueue();
-                continue;
-              }
-              await this._finalizeCollectedBackgroundResult(taskId, task, result);
+                const result = await this.driver.collectResponse();
+                if (this._isTerminalTaskStatus(task.status)) {
+                  this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
+                    success: true,
+                    details: {
+                      status: task.status,
+                      reason: 'task already reached a terminal state before collectResponse returned'
+                    }
+                  });
+                  this._syncTaskHistoryMirror(task);
+                  this._persistActiveQueue();
+                  return;
+                }
+                await this._finalizeCollectedBackgroundResult(taskId, task, result);
+              });
             } catch (e) {
               console.error('[Queue] Task', taskId, 'execution error:', e.message);
               if (/review gate/i.test(e.message || '')) {

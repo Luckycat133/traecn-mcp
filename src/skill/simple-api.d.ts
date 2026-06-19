@@ -116,6 +116,21 @@ export declare function switchMode(mode: string): Promise<any>;
 export declare function newChat(): Promise<any>;
 
 /**
+ * 列出 Solo 模式侧边栏中的真实 TraeCN 对话
+ */
+export declare function listSoloChats(): Promise<any>;
+
+/**
+ * 切换到 Solo 模式侧边栏中的指定真实对话
+ */
+export declare function switchSoloChat(criteria?: { index?: number; titleIncludes?: string; textIncludes?: string }): Promise<any>;
+
+/**
+ * 提交任务到真实 Solo 对话，返回后台 taskId
+ */
+export declare function submitSoloChatTask(task: string, opts?: RunTaskOptions): Promise<string>;
+
+/**
  * 获取设置
  * @param section - 设置区域（可选）
  */
@@ -222,6 +237,21 @@ export declare const model: typeof switchModel;
  * 切换模式
  */
 export declare const mode: typeof switchMode;
+
+/**
+ * 列出 Solo 对话
+ */
+export declare const soloChats: typeof listSoloChats;
+
+/**
+ * 切换 Solo 对话
+ */
+export declare const soloSwitch: typeof switchSoloChat;
+
+/**
+ * 提交 Solo 对话任务
+ */
+export declare const soloSubmit: typeof submitSoloChatTask;
 
 /**
  * 获取设置

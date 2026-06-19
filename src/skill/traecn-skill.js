@@ -112,6 +112,7 @@ class TraeCNSkill {
       autoContinue,
       followupTasks,
       completionChecks,
+      autoApproveDialog,
       notifyUrl,
       fallbackModels,
       autoModelFallback,
@@ -195,12 +196,18 @@ class TraeCNSkill {
       autoContinue,
       followupTasks,
       completionChecks,
+      autoApproveDialog,
       notifyUrl,
       fallbackModels,
       autoModelFallback,
       modelProbeIntervalMs,
       maxQueueWaitMs,
-      queueMaxWaitMs
+      queueMaxWaitMs,
+      soloChat,
+      soloChatIndex,
+      soloChatTitleIncludes,
+      soloChatTextIncludes,
+      newChat
     } = opts;
     
     try {
@@ -216,12 +223,18 @@ class TraeCNSkill {
         autoContinue,
         followupTasks,
         completionChecks,
+        autoApproveDialog,
         notifyUrl,
         fallbackModels,
         autoModelFallback,
         modelProbeIntervalMs,
         maxQueueWaitMs,
-        queueMaxWaitMs
+        queueMaxWaitMs,
+        soloChat,
+        soloChatIndex,
+        soloChatTitleIncludes,
+        soloChatTextIncludes,
+        newChat
       });
 
       this._lastTaskId = result.taskId || result.data?.taskId;
@@ -302,6 +315,24 @@ class TraeCNSkill {
     const result = await this.client.newChat();
     this._sessionId = null;
     return result;
+  }
+
+  async listSoloChats() {
+    return await this.client.listSoloChats();
+  }
+
+  async switchSoloChat(criteria = {}) {
+    return await this.client.switchSoloChat(criteria);
+  }
+
+  async submitSoloChatTask(task, opts = {}) {
+    try {
+      const result = await this.client.submitSoloChatTask(task, opts);
+      this._lastTaskId = result.taskId || result.data?.taskId;
+      return this._normalizeQueueResult(result);
+    } catch (cause) {
+      throw TraeCNSkillError.taskFailed(cause, { task });
+    }
   }
 
   /**
@@ -435,6 +466,7 @@ class TraeCNSkill {
       forceBackground: input.forceBackground === true,
       reviewRequired: input.reviewRequired === true,
       autoContinue: true,
+      autoApproveDialog: input.autoApproveDialog === undefined ? 'auto' : input.autoApproveDialog,
       followupTasks
     });
   }

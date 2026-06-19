@@ -1,7 +1,14 @@
 'use strict';
 
 const assert = require('assert');
-const { WebSocketHandler, WS_MAX_PAYLOAD_BYTES, WS_HEARTBEAT_INTERVAL, WS_HEARTBEAT_TIMEOUT } = require('./websocket-handler');
+const {
+  WebSocketHandler,
+  WS_MAX_PAYLOAD_BYTES,
+  WS_HEARTBEAT_INTERVAL,
+  WS_HEARTBEAT_TIMEOUT,
+  WS_MAX_CLIENTS,
+  WS_MAX_UPGRADES_PER_WINDOW
+} = require('./websocket-handler');
 const http = require('http');
 const { WebSocket } = require('ws');
 
@@ -269,6 +276,42 @@ test('WebSocketHandler handles _checkOrigin with no allowed origins', () => {
   const request = { headers: {} };
 
   assert.strictEqual(handler._checkOrigin(request), true);
+});
+
+test('WebSocketHandler default origin policy only allows same gateway origin', () => {
+  const handler = new WebSocketHandler({ allowedOrigins: '' });
+
+  assert.strictEqual(
+    handler._checkOrigin({ headers: { origin: 'http://127.0.0.1:8788', host: '127.0.0.1:8788' } }),
+    true
+  );
+  assert.strictEqual(
+    handler._checkOrigin({ headers: { origin: 'https://example.com', host: '127.0.0.1:8788' } }),
+    false
+  );
+});
+
+test('WebSocketHandler limits upgrade attempts per remote address', () => {
+  const handler = new WebSocketHandler({ allowedOrigins: '' });
+  const request = { headers: {}, socket: { remoteAddress: '127.0.0.1' } };
+
+  for (let i = 0; i < WS_MAX_UPGRADES_PER_WINDOW; i++) {
+    assert.strictEqual(handler._checkUpgradeRateLimit(request).allowed, true);
+  }
+  const limited = handler._checkUpgradeRateLimit(request);
+  assert.strictEqual(limited.allowed, false);
+  assert.strictEqual(limited.reason, 'rate_limited');
+});
+
+test('WebSocketHandler refuses upgrades when client cap is reached', () => {
+  const handler = new WebSocketHandler({ allowedOrigins: '' });
+  for (let i = 0; i < WS_MAX_CLIENTS; i++) {
+    handler.clients.add({ id: i });
+  }
+
+  const limited = handler._checkUpgradeRateLimit({ headers: {}, socket: { remoteAddress: '127.0.0.1' } });
+  assert.strictEqual(limited.allowed, false);
+  assert.strictEqual(limited.reason, 'too_many_clients');
 });
 
 test('WebSocketHandler handles _checkOrigin with matching origin', () => {

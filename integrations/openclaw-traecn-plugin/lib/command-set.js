@@ -13,6 +13,9 @@ const COMMANDS = Object.freeze({
   STATUS: 'status',
   READINESS: 'readiness',
   NEW_CHAT: 'new_chat',
+  LIST_SOLO_CHATS: 'list_solo_chats',
+  SWITCH_SOLO_CHAT: 'switch_solo_chat',
+  SUBMIT_SOLO_CHAT_TASK: 'submit_solo_chat_task',
   DELEGATE: 'delegate',
   DELEGATE_ASYNC: 'delegate_async',
   TASK_STATUS: 'task_status',
@@ -96,16 +99,34 @@ const COMMAND_DEFINITIONS = Object.freeze([
     optional: ['allowAutoStart']
   },
   {
+    command: COMMANDS.LIST_SOLO_CHATS,
+    summary: '列出 Solo 模式侧边栏中的真实 TraeCN 对话/任务项',
+    required: [],
+    optional: []
+  },
+  {
+    command: COMMANDS.SWITCH_SOLO_CHAT,
+    summary: '在 Solo 模式下按 index、标题片段或文本片段切换到指定真实对话',
+    required: [],
+    optional: ['index', 'titleIncludes', 'textIncludes']
+  },
+  {
+    command: COMMANDS.SUBMIT_SOLO_CHAT_TASK,
+    summary: '提交任务到一个真实 Solo 对话并立即返回 taskId；后台会切回该对话收集排队后的结果',
+    required: ['task'],
+    optional: ['projectPath', 'chatId', 'soloChat', 'soloChatIndex', 'soloChatTitleIncludes', 'soloChatTextIncludes', 'newChat', 'includeProcessText', 'reviewRequired', 'autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'maxQueueWaitMs']
+  },
+  {
     command: COMMANDS.DELEGATE,
     summary: '向 TraeCN 发送任务并等待最终响应',
     required: ['task'],
-    optional: ['projectPath', 'sessionId', 'allowAutoStart', 'includeProcessText', 'waitForQueue', 'background', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
+    optional: ['projectPath', 'sessionId', 'allowAutoStart', 'includeProcessText', 'waitForQueue', 'background', 'autoApproveDialog', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
   },
   {
     command: COMMANDS.DELEGATE_ASYNC,
     summary: '向 TraeCN 提交异步任务，返回 taskId 或直接返回结果',
     required: ['task'],
-    optional: ['projectPath', 'chatId', 'includeProcessText', 'waitForQueue', 'background', 'reviewRequired', 'autoContinue', 'followupTasks', 'completionChecks', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
+    optional: ['projectPath', 'chatId', 'soloChat', 'soloChatIndex', 'soloChatTitleIncludes', 'soloChatTextIncludes', 'newChat', 'includeProcessText', 'waitForQueue', 'background', 'reviewRequired', 'autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
   },
   {
     command: COMMANDS.TASK_STATUS,
@@ -123,7 +144,7 @@ const COMMAND_DEFINITIONS = Object.freeze([
     command: COMMANDS.ADOPT_CURRENT_TASK,
     summary: '接管 TraeCN 当前已经提交但本地丢失追踪的排队/生成请求，只等待并收集现有结果，不重新发送任务',
     required: [],
-    optional: ['task', 'reviewRequired', 'followupTasks', 'chatId', 'includeProcessText', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'submittedAt', 'force']
+    optional: ['task', 'reviewRequired', 'followupTasks', 'chatId', 'includeProcessText', 'autoApproveDialog', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'submittedAt', 'force']
   },
   {
     command: COMMANDS.CANCEL_TASK,
@@ -384,6 +405,36 @@ async function executeCommand(client, command, params = {}) {
       return client.getReadiness();
     case COMMANDS.NEW_CHAT:
       return client.newChat(params.allowAutoStart === true);
+    case COMMANDS.LIST_SOLO_CHATS:
+      return client.listSoloChats();
+    case COMMANDS.SWITCH_SOLO_CHAT:
+      return client.switchSoloChat({
+        index: params.index,
+        titleIncludes: params.titleIncludes,
+        textIncludes: params.textIncludes
+      });
+    case COMMANDS.SUBMIT_SOLO_CHAT_TASK:
+      requireParam(params, 'task');
+      return client.submitSoloChatTask(withLayeredTask(command, params).task, {
+        projectPath: params.projectPath,
+        chatId: params.chatId,
+        soloChat: params.soloChat,
+        soloChatIndex: params.soloChatIndex,
+        soloChatTitleIncludes: params.soloChatTitleIncludes,
+        soloChatTextIncludes: params.soloChatTextIncludes,
+        newChat: params.newChat,
+        includeProcessText: params.includeProcessText === true,
+        reviewRequired: params.reviewRequired === true,
+        autoContinue: params.autoContinue === true,
+        followupTasks: params.followupTasks,
+        completionChecks: params.completionChecks,
+        autoApproveDialog: params.autoApproveDialog,
+        notifyUrl: params.notifyUrl,
+        fallbackModels: params.fallbackModels,
+        autoModelFallback: params.autoModelFallback === true,
+        modelProbeIntervalMs: params.modelProbeIntervalMs,
+        maxQueueWaitMs: params.maxQueueWaitMs
+      });
     case COMMANDS.DELEGATE:
       requireParam(params, 'task');
       return client.delegate(withLayeredTask(command, params).task, {
@@ -397,6 +448,7 @@ async function executeCommand(client, command, params = {}) {
         autoContinue: params.autoContinue === true,
         followupTasks: params.followupTasks,
         completionChecks: params.completionChecks,
+        autoApproveDialog: params.autoApproveDialog,
         notifyUrl: params.notifyUrl,
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
@@ -408,6 +460,11 @@ async function executeCommand(client, command, params = {}) {
         projectPath: params.projectPath,
         sessionId: params.sessionId,
         chatId: params.chatId,
+        soloChat: params.soloChat,
+        soloChatIndex: params.soloChatIndex,
+        soloChatTitleIncludes: params.soloChatTitleIncludes,
+        soloChatTextIncludes: params.soloChatTextIncludes,
+        newChat: params.newChat,
         includeProcessText: params.includeProcessText === true,
         waitForQueue: params.waitForQueue !== false,
         background: params.background === true,
@@ -415,6 +472,7 @@ async function executeCommand(client, command, params = {}) {
         autoContinue: params.autoContinue === true,
         followupTasks: params.followupTasks,
         completionChecks: params.completionChecks,
+        autoApproveDialog: params.autoApproveDialog,
         notifyUrl: params.notifyUrl,
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
@@ -438,6 +496,7 @@ async function executeCommand(client, command, params = {}) {
         task: params.task,
         reviewRequired: params.reviewRequired === true,
         followupTasks: params.followupTasks,
+        autoApproveDialog: params.autoApproveDialog,
         chatId: params.chatId,
         includeProcessText: params.includeProcessText === true,
         notifyUrl: params.notifyUrl,
@@ -525,6 +584,7 @@ async function executeCommand(client, command, params = {}) {
           autoContinue: params.autoContinue === true,
           followupTasks: params.followupTasks,
           completionChecks: params.completionChecks,
+          autoApproveDialog: params.autoApproveDialog,
           notifyUrl: params.notifyUrl,
           fallbackModels: params.fallbackModels,
           autoModelFallback: params.autoModelFallback === true,
@@ -566,6 +626,7 @@ async function executeCommand(client, command, params = {}) {
         autoContinue: true,
         followupTasks,
         completionChecks: params.completionChecks,
+        autoApproveDialog: params.autoApproveDialog === undefined ? 'auto' : params.autoApproveDialog,
         notifyUrl: params.notifyUrl,
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
