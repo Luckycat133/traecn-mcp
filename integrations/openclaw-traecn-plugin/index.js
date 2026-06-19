@@ -63,6 +63,10 @@ const VIBE_WORKFLOW_PARAMETERS = {
     chatId: { type: 'string', description: 'Optional OpenClaw chat id for notifications' },
     includeProcessText: { type: 'boolean', description: 'Include TraeCN process text in collected results', default: false },
     reviewRequired: { type: 'boolean', description: 'Mark workflow checkpoints reviewable while auto-continuing them', default: false },
+    autoApproveDialog: {
+      oneOf: [{ type: 'boolean' }, { type: 'string' }],
+      description: 'Automatically handle code-answerable TraeCN dialogs during unattended workflow steps. Defaults to auto for vibe workflows.'
+    },
     fallbackModels: {
       type: 'array',
       items: { type: 'string' },
@@ -321,6 +325,10 @@ const toolDefinitions = [
           description: 'Follow-up tasks for unattended workflow continuation'
         },
         completionChecks: COMPLETION_CHECKS_SCHEMA,
+        autoApproveDialog: {
+          oneOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Automatically handle code-answerable dialogs while the delegated task is running.'
+        },
         notifyUrl: { type: 'string', description: 'Webhook URL to notify when async task state changes' },
         fallbackModels: {
           type: 'array',
@@ -345,6 +353,7 @@ const toolDefinitions = [
           reviewRequired: params.reviewRequired === true,
           autoContinue: params.autoContinue === true,
           followupTasks: params.followupTasks,
+          autoApproveDialog: params.autoApproveDialog,
           notifyUrl: params.notifyUrl,
           fallbackModels: params.fallbackModels,
           autoModelFallback: params.autoModelFallback === true,
@@ -360,6 +369,7 @@ const toolDefinitions = [
         allowAutoStart: params.allowAutoStart,
         includeProcessText: params.includeProcessText,
         waitForQueue: params.waitForQueue,
+        autoApproveDialog: params.autoApproveDialog,
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
         modelProbeIntervalMs: params.modelProbeIntervalMs

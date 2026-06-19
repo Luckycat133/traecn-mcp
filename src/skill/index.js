@@ -148,6 +148,33 @@ const advanced = {
     }
   },
 
+  async listSoloChats() {
+    const skill = getSkill();
+    try {
+      return await skill.listSoloChats();
+    } catch (error) {
+      throw TraeCNSkillError.taskFailed(`列出 Solo 对话失败: ${error.message}`);
+    }
+  },
+
+  async switchSoloChat(criteria = {}) {
+    const skill = getSkill();
+    try {
+      return await skill.switchSoloChat(criteria);
+    } catch (error) {
+      throw TraeCNSkillError.taskFailed(`切换 Solo 对话失败: ${error.message}`, criteria);
+    }
+  },
+
+  async submitSoloChatTask(task, opts = {}) {
+    const skill = getSkill();
+    try {
+      return await skill.submitSoloChatTask(task, opts);
+    } catch (error) {
+      throw TraeCNSkillError.taskFailed(`提交 Solo 对话任务失败: ${error.message}`, { task });
+    }
+  },
+
   async openProject(projectPath) {
     const skill = getSkill();
     try {
@@ -287,7 +314,10 @@ const aliases = {
   dlg: dialog.checkDialog,
   queue: dialog.checkQueue,
   open: advanced.openProject,
-  cancel: advanced.cancelTask
+  cancel: advanced.cancelTask,
+  soloChats: advanced.listSoloChats,
+  soloSwitch: advanced.switchSoloChat,
+  soloSubmit: advanced.submitSoloChatTask
 };
 
 // ============ 导出 ============
@@ -308,6 +338,9 @@ module.exports = {
   waitTask,
   reviewCode,
   preflight,
+  listSoloChats: advanced.listSoloChats,
+  switchSoloChat: advanced.switchSoloChat,
+  submitSoloChatTask: advanced.submitSoloChatTask,
 
   // 进阶层 (按需导入)
   advanced,

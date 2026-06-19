@@ -323,6 +323,10 @@ function generateOpenAPISpec() {
                     sessionId: { type: 'string' },
                     includeProcessText: { type: 'boolean', default: false },
                     waitForQueue: { type: 'boolean', default: true },
+                    autoApproveDialog: {
+                      oneOf: [{ type: 'boolean' }, { type: 'string' }],
+                      description: 'Automatically handle code-answerable dialogs if the task is tracked in the background.'
+                    },
                     fallbackModels: {
                       type: 'array',
                       items: { type: 'string' },
@@ -384,6 +388,10 @@ function generateOpenAPISpec() {
                     modelProbeIntervalMs: { type: 'number', default: 60000 },
                     reviewRequired: { type: 'boolean', default: false },
                     autoContinue: { type: 'boolean', default: false, description: 'Automatically approve stable review checkpoints and continue follow-up tasks.' },
+                    autoApproveDialog: {
+                      oneOf: [{ type: 'boolean' }, { type: 'string' }],
+                      description: 'Automatically handle code-answerable dialogs while this task is running.'
+                    },
                     completionChecks: completionChecksSchema,
                     notifyUrl: { type: 'string', description: 'Optional webhook URL for task lifecycle notifications' },
                     followupTasks: {
@@ -399,6 +407,9 @@ function generateOpenAPISpec() {
                               reviewRequired: { type: 'boolean' },
                               autoContinue: { type: 'boolean' },
                               includeProcessText: { type: 'boolean' },
+                              autoApproveDialog: {
+                                oneOf: [{ type: 'boolean' }, { type: 'string' }]
+                              },
                               completionChecks: completionChecksSchema
                             }
                           }
@@ -445,6 +456,119 @@ function generateOpenAPISpec() {
                 }
               }
             }
+          }
+        }
+      },
+      '/api/solo/chats': {
+        get: {
+          summary: 'List real Solo-mode conversations from the TraeCN sidebar',
+          operationId: 'listSoloChats',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': {
+              description: 'Solo conversation list',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      mode: { type: 'string' },
+                      count: { type: 'number' },
+                      reason: { type: 'string' },
+                      chats: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            index: { type: 'number' },
+                            title: { type: 'string' },
+                            text: { type: 'string' },
+                            status: { type: 'string' },
+                            active: { type: 'boolean' }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/solo/chats/switch': {
+        post: {
+          summary: 'Switch to a real Solo-mode conversation by index or visible text',
+          operationId: 'switchSoloChat',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    index: { type: 'number' },
+                    titleIncludes: { type: 'string' },
+                    textIncludes: { type: 'string' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Switch result' },
+            '404': { description: 'Solo chat not found or Solo sidebar unavailable' }
+          }
+        }
+      },
+      '/api/solo/chats/submit': {
+        post: {
+          summary: 'Submit a task into a real Solo-mode conversation and track it for queued-result collection',
+          operationId: 'submitSoloChatTask',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['task'],
+                  properties: {
+                    task: { type: 'string' },
+                    projectPath: { type: 'string' },
+                    soloChat: {
+                      type: 'object',
+                      properties: {
+                        index: { type: 'number' },
+                        titleIncludes: { type: 'string' },
+                        textIncludes: { type: 'string' }
+                      }
+                    },
+                    soloChatIndex: { type: 'number' },
+                    soloChatTitleIncludes: { type: 'string' },
+                    soloChatTextIncludes: { type: 'string' },
+                    newChat: { type: 'boolean' },
+                    includeProcessText: { type: 'boolean' },
+                    reviewRequired: { type: 'boolean' },
+                    autoContinue: { type: 'boolean' },
+                    followupTasks: { type: 'array' },
+                    completionChecks: { type: 'object' },
+                    autoApproveDialog: { oneOf: [{ type: 'boolean' }, { type: 'string' }] },
+                    notifyUrl: { type: 'string' },
+                    fallbackModels: { type: 'array', items: { type: 'string' } },
+                    autoModelFallback: { type: 'boolean' },
+                    modelProbeIntervalMs: { type: 'number' },
+                    maxQueueWaitMs: { type: 'number' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '202': { description: 'Submitted task tracking result' },
+            '400': { description: 'Invalid task payload' },
+            '404': { description: 'Requested Solo chat not found' }
           }
         }
       },
@@ -595,6 +719,10 @@ function generateOpenAPISpec() {
                     followupTasks: { type: 'array', items: { type: 'object' } },
                     chatId: { type: 'string' },
                     includeProcessText: { type: 'boolean' },
+                    autoApproveDialog: {
+                      oneOf: [{ type: 'boolean' }, { type: 'string' }],
+                      description: 'Automatically handle code-answerable dialogs while the adopted task is running.'
+                    },
                     notifyUrl: { type: 'string' },
                     fallbackModels: { type: 'array', items: { type: 'string' } },
                     autoModelFallback: { type: 'boolean' },

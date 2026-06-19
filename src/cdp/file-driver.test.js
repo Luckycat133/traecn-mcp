@@ -39,6 +39,12 @@ function mockClient() {
   };
 }
 
+async function makeTempRoot(prefix) {
+  const root = path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await fs.mkdir(root, { recursive: true });
+  return root;
+}
+
 console.log('\n[file-driver.test.js] Running tests...\n');
 
 test('constructor: takes client + config + palette', () => {
@@ -69,8 +75,9 @@ test('save / saveAll / saveAs route to palette', () => {
 });
 
 test('readDisk / writeDisk / deleteDisk on a real temp file', async () => {
-  const tmp = path.join(os.tmpdir(), `filedriver-test-${Date.now()}.txt`);
-  const d = new FileDriver(mockClient(), {});
+  const root = await makeTempRoot('filedriver-test');
+  const tmp = path.join(root, 'sample.txt');
+  const d = new FileDriver(mockClient(), { fileAllowedRoots: [root] });
   const w = await d.writeDisk(tmp, 'hello world');
   assert.strictEqual(w.ok, true);
   const r = await d.readDisk(tmp);
@@ -80,24 +87,26 @@ test('readDisk / writeDisk / deleteDisk on a real temp file', async () => {
   assert.strictEqual(del.ok, true);
   const r2 = await d.readDisk(tmp);
   assert.strictEqual(r2.ok, false);
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 test('mkdirDisk creates a nested directory', async () => {
-  const tmp = path.join(os.tmpdir(), `filedriver-mkdir-${Date.now()}`, 'a', 'b', 'c');
-  const d = new FileDriver(mockClient(), {});
+  const root = await makeTempRoot('filedriver-mkdir');
+  const tmp = path.join(root, 'a', 'b', 'c');
+  const d = new FileDriver(mockClient(), { fileAllowedRoots: [root] });
   const m = await d.mkdirDisk(tmp);
   assert.strictEqual(m.ok, true);
   const stat = await fs.stat(tmp);
   assert.strictEqual(stat.isDirectory(), true);
-  await fs.rm(path.join(os.tmpdir(), `filedriver-mkdir-${Date.now()}`), { recursive: true, force: true });
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 test('listTreeDisk returns dir + file entries', async () => {
-  const root = path.join(os.tmpdir(), `filedriver-tree-${Date.now()}`);
+  const root = await makeTempRoot('filedriver-tree');
   await fs.mkdir(path.join(root, 'sub'), { recursive: true });
   await fs.writeFile(path.join(root, 'a.txt'), 'a');
   await fs.writeFile(path.join(root, 'sub', 'b.txt'), 'b');
-  const d = new FileDriver(mockClient(), {});
+  const d = new FileDriver(mockClient(), { fileAllowedRoots: [root] });
   const r = await d.listTreeDisk(root, { maxDepth: 3 });
   assert.strictEqual(r.ok, true);
   assert.ok(r.entries.length >= 3);
@@ -105,15 +114,27 @@ test('listTreeDisk returns dir + file entries', async () => {
 });
 
 test('renameDisk renames a file', async () => {
-  const a = path.join(os.tmpdir(), `filedriver-rename-a-${Date.now()}.txt`);
-  const b = path.join(os.tmpdir(), `filedriver-rename-b-${Date.now()}.txt`);
-  const d = new FileDriver(mockClient(), {});
+  const root = await makeTempRoot('filedriver-rename');
+  const a = path.join(root, 'a.txt');
+  const b = path.join(root, 'b.txt');
+  const d = new FileDriver(mockClient(), { fileAllowedRoots: [root] });
   await d.writeDisk(a, 'x');
   const r = await d.renameDisk(a, b);
   assert.strictEqual(r.ok, true);
   const r2 = await d.readDisk(b);
   assert.strictEqual(r2.content, 'x');
   await d.deleteDisk(b);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test('disk writes outside allowed roots are rejected', async () => {
+  const root = await makeTempRoot('filedriver-allowed');
+  const outside = path.join(os.tmpdir(), `filedriver-outside-${Date.now()}.txt`);
+  const d = new FileDriver(mockClient(), { fileAllowedRoots: [root] });
+  const result = await d.writeDisk(outside, 'nope');
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.code, 'PATH_OUTSIDE_ALLOWED_ROOTS');
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 Promise.all(asyncTests).then(() => {

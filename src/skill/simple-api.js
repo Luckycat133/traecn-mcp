@@ -80,6 +80,22 @@ async function newChat() {
   return await skill.newChat();
 }
 
+async function listSoloChats() {
+  const skill = getSkill();
+  return await skill.listSoloChats();
+}
+
+async function switchSoloChat(criteria = {}) {
+  const skill = getSkill();
+  return await skill.switchSoloChat(criteria);
+}
+
+async function submitSoloChatTask(task, opts = {}) {
+  const skill = getSkill();
+  const result = await skill.submitSoloChatTask(task, opts);
+  return result.taskId;
+}
+
 async function getSettings(section = null) {
   const skill = getSkill();
   return await skill.getSettings(section);
@@ -136,6 +152,9 @@ const plan = planOperation;
 const pf = preflight;
 const model = switchModel;
 const mode = switchMode;
+const soloChats = listSoloChats;
+const soloSwitch = switchSoloChat;
+const soloSubmit = submitSoloChatTask;
 const settings = getSettings;
 const set = setSetting;
 const approve = approveDialog;
@@ -159,6 +178,9 @@ module.exports = {
   switchModel,
   switchMode,
   newChat,
+  listSoloChats,
+  switchSoloChat,
+  submitSoloChatTask,
   getSettings,
   setSetting,
   approveDialog,
@@ -181,6 +203,9 @@ module.exports = {
   pf,
   model,
   mode,
+  soloChats,
+  soloSwitch,
+  soloSubmit,
   settings,
   set,
   approve,

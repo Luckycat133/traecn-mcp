@@ -42,6 +42,43 @@ function asyncTest(name, fn) {
   pendingAsyncTests.push({ name, fn });
 }
 
+function makeReqRes(headers = {}, url = '/api/status', method = 'GET', body = null) {
+  const payload = body === null || body === undefined ? '' : JSON.stringify(body);
+  const req = new Readable({
+    read() {
+      if (payload) this.push(payload);
+      this.push(null);
+    }
+  });
+  req.method = method;
+  req.url = url;
+  req.headers = {
+    host: '127.0.0.1',
+    ...(payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}),
+    ...headers
+  };
+  req.socket = { remoteAddress: '127.0.0.1' };
+
+  const resHeaders = {};
+  const res = {
+    statusCode: 200,
+    _writtenHead: null,
+    _body: null,
+    setHeader(name, value) { resHeaders[name.toLowerCase()] = value; },
+    getHeader(name) { return resHeaders[name.toLowerCase()]; },
+    removeHeader(name) { delete resHeaders[name.toLowerCase()]; },
+    writeHead(code, h) {
+      res.statusCode = code;
+      res._writtenHead = { ...resHeaders, ...h };
+    },
+    end(responseBody) {
+      res._body = responseBody;
+      res._ended = true;
+    }
+  };
+  return { req, res, resHeaders };
+}
+
 console.log('\n[gateway.test.js] Running RateLimiter and sanitizeLog tests...\n');
 
 test('RateLimiter allows requests within limit', () => {
@@ -247,6 +284,20 @@ test('Gateway computes CORS headers for allowed origins', () => {
   assert.strictEqual(headers.Vary, 'Origin');
 });
 
+test('Gateway default CORS only allows same gateway origin', () => {
+  const gateway = new Gateway();
+  gateway.allowedOrigins = '';
+
+  const sameOrigin = gateway._corsHeaders({ headers: { origin: 'http://127.0.0.1:8788', host: '127.0.0.1:8788' } });
+  assert.strictEqual(sameOrigin['Access-Control-Allow-Origin'], 'http://127.0.0.1:8788');
+  assert.strictEqual(sameOrigin.Vary, 'Origin');
+
+  const crossOrigin = gateway._corsHeaders({ headers: { origin: 'https://example.com', host: '127.0.0.1:8788' } });
+  assert.deepStrictEqual(crossOrigin, {});
+  assert.strictEqual(gateway._checkOrigin({ headers: { origin: 'https://example.com', host: '127.0.0.1:8788' } }), false);
+  assert.strictEqual(gateway._checkOrigin({ headers: { origin: 'http://127.0.0.1:8788', host: '127.0.0.1:8788' } }), true);
+});
+
 test('Gateway normalizes followup tasks from strings and objects', () => {
   const gateway = new Gateway();
   const result = gateway._normalizeFollowupTasks([
@@ -304,6 +355,7 @@ asyncTest('Gateway auto-continues reviewable workflow followups without human re
     task: 'Implement feature',
     projectPath: '/tmp/auto-project',
     autoContinue: true,
+    soloChat: { titleIncludes: 'Workflow Solo Chat' },
     followupTasks: ['Run tests']
   }, { queued: false });
 
@@ -320,6 +372,108 @@ asyncTest('Gateway auto-continues reviewable workflow followups without human re
   assert.strictEqual(nextTask.projectPath, '/tmp/auto-project');
   assert.strictEqual(nextTask.autoContinue, true);
   assert.strictEqual(nextTask.status, 'queued');
+  assert.strictEqual(nextTask.soloChat.titleIncludes, 'Workflow Solo Chat');
+});
+
+asyncTest('Gateway lists real Solo chats through the driver', async () => {
+  const gateway = new Gateway();
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    listSoloChats: async () => ({
+      mode: 'solo',
+      chats: [{ index: 0, title: 'Feature A' }],
+      count: 1
+    })
+  };
+  const { req, res } = makeReqRes({}, '/api/solo/chats', 'GET');
+
+  await gateway.handleRequest(req, res);
+
+  const payload = JSON.parse(res._body);
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(payload.mode, 'solo');
+  assert.strictEqual(payload.count, 1);
+  assert.strictEqual(payload.chats[0].title, 'Feature A');
+});
+
+asyncTest('Gateway switches real Solo chat by criteria through the driver', async () => {
+  const gateway = new Gateway();
+  let captured = null;
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    switchSoloChat: async (criteria) => {
+      captured = criteria;
+      return { success: true, index: 2, title: 'Target chat' };
+    }
+  };
+  const { req, res } = makeReqRes({}, '/api/solo/chats/switch', 'POST', { index: 2, textIncludes: 'Target' });
+
+  await gateway.handleRequest(req, res);
+
+  const payload = JSON.parse(res._body);
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(payload.success, true);
+  assert.strictEqual(captured.index, 2);
+  assert.strictEqual(captured.textIncludes, 'Target');
+});
+
+asyncTest('Gateway returns 404 when Solo chat switch target is not found', async () => {
+  const gateway = new Gateway();
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    switchSoloChat: async () => ({ success: false, reason: 'chat_not_found', count: 1 })
+  };
+  const { req, res } = makeReqRes({}, '/api/solo/chats/switch', 'POST', { titleIncludes: 'Missing' });
+
+  await gateway.handleRequest(req, res);
+
+  const payload = JSON.parse(res._body);
+  assert.strictEqual(res.statusCode, 404);
+  assert.strictEqual(payload.success, false);
+  assert.strictEqual(payload.reason, 'chat_not_found');
+});
+
+asyncTest('Gateway submits Solo chat task and captures chat target for result collection', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  gateway._ensureConnection = async () => {};
+  gateway._ensureBackgroundPolling = () => {};
+  gateway.taskHistoryStore = {
+    createTask: () => 'task_solo_submit',
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway.driver = {
+    config: { queuePerTaskTimeoutMs: 1000 },
+    switchMode: async (mode) => calls.push(['switchMode', mode]),
+    newChat: async () => calls.push(['newChat']),
+    sendMessage: async (task) => calls.push(['sendMessage', task]),
+    checkQueueStatus: async () => ({ queued: true, running: false, queuePosition: 3, queueMessage: '排队中' }),
+    getActiveSoloChat: async () => ({
+      mode: 'solo',
+      active: { index: 4, title: 'Solo queued task', text: 'Solo queued task 12:00' },
+      count: 5
+    })
+  };
+  const { req, res } = makeReqRes({}, '/api/solo/chats/submit', 'POST', {
+    task: 'Implement isolated feature',
+    projectPath: '/tmp/solo-project'
+  });
+
+  await gateway.handleRequest(req, res);
+
+  const payload = JSON.parse(res._body);
+  const task = gateway.taskQueue.get('task_solo_submit');
+  assert.strictEqual(res.statusCode, 202);
+  assert.strictEqual(payload.taskId, 'task_solo_submit');
+  assert.strictEqual(payload.submittedToTrae, true);
+  assert.strictEqual(task.submittedToTrae, true);
+  assert.strictEqual(task.soloChat.titleIncludes, 'Solo queued task');
+  assert.ok(calls.some(call => call[0] === 'newChat'));
+  assert.ok(calls.some(call => call[0] === 'sendMessage' && call[1].includes('/tmp/solo-project')));
 });
 
 test('Gateway queued tasks wait indefinitely by default for external model queues', () => {
@@ -590,6 +744,23 @@ test('Gateway only treats stable non-error output as successful', () => {
   assert.strictEqual(gateway._isSuccessfulResult({ text: 'Agent\n手动终止输出', stable: true }), false);
   assert.strictEqual(gateway._isSuccessfulResult({ text: 'Agent', stable: true }), false);
   assert.strictEqual(gateway._isSuccessfulResult({ text: 'partial', stable: false, streaming: true }), false);
+  assert.strictEqual(gateway._isSuccessfulResult({
+    text: 'SOLO IDE 搜索 14 资源管理器 文件 demo-output queue-lab docs Claude Code 与 AI 对话 Editor 内 AI 编码 TRAE 与 Agent 协作 历史记录 Review TRAECNclaw Repository 速通 GLM-5.2 main* 0 0 CUE',
+    stable: true
+  }), false);
+  assert.strictEqual(gateway._isSuccessfulResult({
+    text: [
+      'TRAECNclaw Code Review — Findings First',
+      'Model: GLM-5.2 · Scope: working tree + core automation surfaces',
+      '1. Findings (ordered by severity)',
+      'Severity 1 — Critical',
+      'F1.1 Background polling cannot auto-approve non-command dialogs',
+      'Evidence: the final report quotes process text such as Thought and Let me now look at the queue handling.',
+      '4. Final verdict',
+      'Review complete. The report above is findings-first and read-only.'
+    ].join('\n'),
+    stable: true
+  }), true);
 });
 
 asyncTest('Gateway task status exposes queued task queue details snapshot', async () => {
@@ -663,7 +834,7 @@ asyncTest('Gateway collects submitted executing task without resending prompt', 
   gateway._ensureConnection = async () => {};
   gateway.driver = {
     checkQueueStatus: async () => ({
-      queued: true,
+      queued: false,
       running: false,
       canSubmit: true,
       queuePosition: 7,
@@ -688,8 +859,191 @@ asyncTest('Gateway collects submitted executing task without resending prompt', 
 
   assert.strictEqual(sendCalled, false);
   assert.strictEqual(task.status, 'awaiting_review');
-  assert.strictEqual(task.queuePosition, 7);
   assert.ok(task.result.text.includes('Findings'));
+});
+
+asyncTest('Gateway switches to submitted Solo chat before collecting result', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  const task = {
+    taskId: 'task_submitted_solo',
+    status: 'executing',
+    task: 'review repo',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    submittedAt: Date.now() - 4000,
+    reviewRequired: false,
+    followupTasks: [],
+    queueState: 'submitted',
+    soloChat: { titleIncludes: 'Target Solo Chat' }
+  };
+  gateway.taskQueue.set(task.taskId, task);
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    switchSoloChat: async (criteria) => {
+      calls.push(['switchSoloChat', criteria]);
+      return { success: true, index: 1, title: 'Target Solo Chat' };
+    },
+    checkQueueStatus: async () => ({ queued: false, running: false, canSubmit: true }),
+    collectResponse: async () => {
+      calls.push(['collectResponse']);
+      return { text: '任务完成: all good', stable: true, elapsedMs: 1234 };
+    }
+  };
+
+  await gateway._collectSubmittedBackgroundTask(task.taskId, task);
+
+  assert.deepStrictEqual(calls[0], ['switchSoloChat', { titleIncludes: 'Target Solo Chat', textIncludes: undefined }]);
+  assert.strictEqual(calls[1][0], 'collectResponse');
+  assert.strictEqual(task.status, 'done');
+});
+
+asyncTest('Gateway falls back to stable Solo chat candidates when title changes after completion', async () => {
+  const gateway = new Gateway();
+  const attempts = [];
+  const task = {
+    taskId: 'task_submitted_solo_title_changed',
+    status: 'executing',
+    task: '请只回复一行：TRAECN_SOLO_SUBMIT_OK',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    submittedAt: Date.now() - 4000,
+    reviewRequired: false,
+    followupTasks: [],
+    queueState: 'submitted',
+    soloChat: {
+      titleIncludes: '请只回复一行：TRAECN_SOLO_SUBMIT_OK 进行中 10:25',
+      candidates: ['TRAECN_SOLO_SUBMIT_OK']
+    }
+  };
+  gateway.taskQueue.set(task.taskId, task);
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    switchSoloChat: async (criteria) => {
+      attempts.push(criteria);
+      if (criteria.titleIncludes === 'TRAECN_SOLO_SUBMIT_OK') {
+        return { success: true, index: 0, title: 'TRAECN_SOLO_SUBMIT_OK 任务完成 10:25' };
+      }
+      return { success: false, reason: 'chat_not_found' };
+    },
+    checkQueueStatus: async () => ({ queued: false, running: false, canSubmit: true }),
+    collectResponse: async () => ({ text: 'TRAECN_SOLO_SUBMIT_OK', stable: true, elapsedMs: 1000 })
+  };
+
+  await gateway._collectSubmittedBackgroundTask(task.taskId, task);
+
+  assert.ok(attempts.some(criteria => criteria.titleIncludes === 'TRAECN_SOLO_SUBMIT_OK'));
+  assert.strictEqual(task.status, 'done');
+});
+
+asyncTest('Gateway captures task-specific Solo chat candidates before generic project path text', async () => {
+  const gateway = new Gateway();
+  const task = {
+    taskId: 'task_submitted_project_path_title',
+    task: '请修复 settings/read-all 超时问题，重点文件 src/cdp/settings-driver.js',
+    status: 'executing',
+    followupTasks: []
+  };
+  gateway._persistActiveQueue = () => {};
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.driver = {
+    getActiveSoloChat: async () => ({
+      active: {
+        index: 0,
+        title: 'Project path: /Users/Shared/projects/TRAECNclaw Work only in this project path unless the user explicitly says otherwise',
+        text: 'Project path: /Users/Shared/projects/TRAECNclaw Work only in this project path unless the user explicitly says otherwise'
+      }
+    })
+  };
+
+  const soloChat = await gateway._captureTaskSoloChat(task);
+
+  assert.ok(soloChat.candidates.includes('settings/read-all'));
+  assert.ok(soloChat.candidates.includes('src/cdp/settings-driver.js'));
+  assert.ok(!soloChat.candidates.includes('Project'));
+  assert.ok(soloChat.candidates.indexOf('settings/read-all') < soloChat.candidates.findIndex(item => item.startsWith('Project path:')));
+});
+
+asyncTest('Gateway skips collectResponse while submitted Solo chat is still queued', async () => {
+  const gateway = new Gateway();
+  let collectCalled = false;
+  const task = {
+    taskId: 'task_submitted_solo_queued',
+    status: 'executing',
+    task: 'review repo',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    submittedAt: Date.now() - 4000,
+    reviewRequired: false,
+    followupTasks: [],
+    queueState: 'queued',
+    soloChat: { titleIncludes: 'Queued Solo Chat' }
+  };
+  gateway.taskQueue.set(task.taskId, task);
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    switchSoloChat: async () => ({ success: true }),
+    checkQueueStatus: async () => ({ queued: true, running: false, canSubmit: false, queuePosition: 9 }),
+    collectResponse: async () => {
+      collectCalled = true;
+      throw new Error('collectResponse must not run while queued');
+    }
+  };
+
+  const result = await gateway._collectSubmittedBackgroundTask(task.taskId, task);
+
+  assert.strictEqual(collectCalled, false);
+  assert.strictEqual(result.queued, true);
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.queuePosition, 9);
+});
+
+asyncTest('Gateway skips collectResponse while submitted Solo chat is still running', async () => {
+  const gateway = new Gateway();
+  let collectCalled = false;
+  const task = {
+    taskId: 'task_submitted_solo_running',
+    status: 'executing',
+    task: 'TRAECN_GLM52_LONG_QUEUE_TEST verify unattended flow',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    submittedAt: Date.now() - 4000,
+    reviewRequired: false,
+    followupTasks: [],
+    queueState: 'submitted',
+    soloChat: {
+      candidates: ['TRAECN_GLM52_LONG_QUEUE_TEST'],
+      index: 0
+    }
+  };
+  gateway.taskQueue.set(task.taskId, task);
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    switchSoloChat: async () => ({ success: true, index: 0, title: 'Verify TraeCN Solo Automation 进行中' }),
+    getActiveSoloChat: async () => ({
+      active: {
+        index: 0,
+        title: 'Verify TraeCN Solo Automation 进行中',
+        text: 'Verify TraeCN Solo Automation 进行中',
+        status: 'running'
+      }
+    }),
+    checkQueueStatus: async () => {
+      throw new Error('checkQueueStatus should not run while active Solo chat is visibly running');
+    },
+    collectResponse: async () => {
+      collectCalled = true;
+      throw new Error('collectResponse must not run while target Solo chat is running');
+    }
+  };
+
+  const result = await gateway._collectSubmittedBackgroundTask(task.taskId, task);
+
+  assert.strictEqual(collectCalled, false);
+  assert.strictEqual(result.running, true);
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.queueState, 'running');
+  assert.match(task.queueMessage, /Verify TraeCN Solo Automation/);
 });
 
 asyncTest('Gateway schedules retry instead of final error for transient background failures', async () => {
@@ -795,6 +1149,36 @@ asyncTest('Gateway keeps submitted task executing when collected result times ou
   assert.match(task.error, /collecting again/);
 });
 
+asyncTest('Gateway keeps submitted task executing when collected result lacks ownership token', async () => {
+  const gateway = new Gateway();
+  const task = {
+    taskId: 'task_unowned_result',
+    status: 'executing',
+    task: 'TRAECN_GLM52_LONG_QUEUE_TEST verify unattended flow',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    attempts: 0,
+    reviewRequired: false,
+    followupTasks: [],
+    soloChat: {
+      candidates: ['TRAECN_GLM52_LONG_QUEUE_TEST']
+    }
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '任务完成: stale settings-driver review output from another Solo chat',
+    stable: true,
+    elapsedMs: 1200
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.submittedToTrae, true);
+  assert.strictEqual(task.attempts, 0);
+  assert.strictEqual(task.error, null);
+  assert.match(task.queueMessage, /ownership token/);
+});
+
 asyncTest('Gateway keeps long submitted queue waits alive without consuming retry attempts', async () => {
   const gateway = new Gateway();
   const steps = [];
@@ -864,6 +1248,125 @@ asyncTest('Gateway does not fail exhausted submitted tasks when collected result
   assert.strictEqual(task.attempts, 3);
   assert.strictEqual(task.queuePosition, 42);
   assert.strictEqual(task.error, null);
+});
+
+asyncTest('Gateway auto-answers code-answerable dialogs for unattended background tasks', async () => {
+  const gateway = new Gateway();
+  const steps = [];
+  gateway.taskHistoryStore = {
+    recordStep: (taskId, action, details) => steps.push({ taskId, action, ...details }),
+    ensureTask: () => {}
+  };
+  gateway._persistActiveQueue = () => {};
+  gateway.driver = {
+    answerQuestionDialog: async answer => ({
+      success: true,
+      selectedOption: answer,
+      buttonClicked: 'Current workspace changes'
+    })
+  };
+  const task = {
+    taskId: 'task_auto_dialog',
+    status: 'executing',
+    task: 'review current workspace',
+    createdAt: Date.now() - 5000,
+    submittedToTrae: true,
+    attempts: 0,
+    reviewRequired: false,
+    followupTasks: [],
+    autoApproveDialog: 'auto'
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '',
+    stable: false,
+    needsApproval: true,
+    question: 'What would you like me to review?',
+    dialogType: 'review_scope_question',
+    options: [
+      { label: 'Specific files' },
+      { label: 'Current workspace changes' }
+    ]
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.strictEqual(task.error, null);
+  assert.strictEqual(task.answeredDialog.action, 'answer');
+  assert.strictEqual(task.answeredDialog.selectedOption, 'Current workspace changes');
+  assert.strictEqual(steps.at(-1).action, 'dialog_auto_approved');
+});
+
+asyncTest('Gateway continues workflow without mutating parent followup list', async () => {
+  const gateway = new Gateway();
+  let idCounter = 0;
+  gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
+  gateway.taskHistoryStore = {
+    createTask: () => `task_followup_${++idCounter}`,
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway._persistActiveQueue = () => {};
+  gateway._ensureBackgroundPolling = () => {};
+
+  const parent = {
+    taskId: 'task_parent_followups',
+    status: 'awaiting_review',
+    task: 'initial task',
+    createdAt: Date.now(),
+    result: { text: 'done', stable: true },
+    followupTasks: [
+      { task: 'followup 1', reviewRequired: true },
+      { task: 'followup 2', reviewRequired: false }
+    ],
+    autoContinue: true
+  };
+  gateway.taskQueue.set(parent.taskId, parent);
+
+  const continued = await gateway._continueReviewedTask(parent.taskId, parent, 'approve', 'test');
+  const nextTask = gateway.taskQueue.get(continued.nextTaskId);
+
+  assert.strictEqual(parent.followupTasks.length, 2);
+  assert.strictEqual(parent.followupTasks[0].task, 'followup 1');
+  assert.strictEqual(nextTask.task, 'followup 1');
+  assert.strictEqual(nextTask.followupTasks.length, 1);
+  assert.strictEqual(nextTask.followupTasks[0].task, 'followup 2');
+});
+
+asyncTest('Gateway background cleanup preserves old paused tasks', async () => {
+  const gateway = new Gateway();
+  let pollOnce = null;
+  gateway._setInterval = (fn) => {
+    pollOnce = fn;
+    return { id: 'timer' };
+  };
+  gateway._clearInterval = () => {};
+  gateway._persistActiveQueue = () => {};
+
+  const oldCreatedAt = Date.now() - 7200000;
+  gateway.taskQueue.set('task_old_approval', {
+    taskId: 'task_old_approval',
+    status: 'approval_required',
+    task: 'needs answer',
+    createdAt: oldCreatedAt,
+    followupTasks: []
+  });
+  gateway.taskQueue.set('task_old_done', {
+    taskId: 'task_old_done',
+    status: 'done',
+    task: 'finished',
+    createdAt: oldCreatedAt,
+    followupTasks: []
+  });
+
+  gateway._ensureBackgroundPolling();
+  await pollOnce();
+
+  assert.strictEqual(gateway.taskQueue.has('task_old_approval'), true);
+  assert.strictEqual(gateway.taskQueue.has('task_old_done'), false);
 });
 
 asyncTest('Gateway keeps collecting when result is only a role label', async () => {
@@ -1180,7 +1683,7 @@ asyncTest('Gateway ignores collected result after submitted task is cancelled', 
   gateway._syncTaskHistoryMirror = () => {};
   gateway._persistActiveQueue = () => {};
   gateway.driver = {
-    checkQueueStatus: async () => ({ queued: false, running: true }),
+    checkQueueStatus: async () => ({ queued: false, running: false }),
     collectResponse: async () => {
       task.status = 'cancelled';
       return {
@@ -1336,7 +1839,8 @@ asyncTest('Gateway restart-debug requires explicit confirmation before quitting 
 
   await gateway._handleRestartTraeDebug(req, {});
   assert.strictEqual(responseStatus, 409);
-  assert.strictEqual(responseData.confirmationPhrase, 'restart-trae-cn-with-debug-existing-profile');
+  assert.strictEqual(responseData.confirmationPhrase, undefined);
+  assert.ok(responseData.confirmationId);
   assert.strictEqual(responseData.plan.command, 'restart_trae_debug');
 });
 
@@ -1734,6 +2238,55 @@ asyncTest('Gateway delegate-async executes immediately when fallback probe finds
   assert.strictEqual(responseStatus, 200);
   assert.strictEqual(responseData.status, 'done');
   assert.strictEqual(responseData.text, 'review done');
+});
+
+asyncTest('Gateway sync delegate returns background task immediately when model is queued', async () => {
+  const gateway = new Gateway();
+  gateway.driver = {
+    config: { queuePerTaskTimeoutMs: 1000 },
+    checkQueueStatus: async () => ({
+      queued: true,
+      running: false,
+      canSubmit: false,
+      currentModel: 'GLM-5.2',
+      queuePosition: 88,
+      queueMessage: '排在第 88 位'
+    }),
+    delegate: async () => {
+      throw new Error('delegate should not run while queue is blocked');
+    }
+  };
+  gateway._ensureConnection = async () => {};
+  gateway._ensureBackgroundPolling = () => {};
+  gateway.taskHistoryStore = {
+    createTask: () => 'task_sync_queue_fast_return',
+    recordStep: () => {},
+    ensureTask: () => {}
+  };
+  gateway._persistActiveQueue = () => {};
+
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+
+  const req = new Readable({
+    read() {
+      this.push(JSON.stringify({ task: 'review repo', projectPath: '/tmp/sync-project' }));
+      this.push(null);
+    }
+  });
+  req.headers = { 'content-type': 'application/json' };
+
+  await gateway._handleDelegate(req, {}, null);
+  assert.strictEqual(responseStatus, 202);
+  assert.strictEqual(responseData.taskId, 'task_sync_queue_fast_return');
+  assert.strictEqual(responseData.status, 'queued');
+  assert.strictEqual(responseData.queueDetails.queuePosition, 88);
+  assert.strictEqual(gateway.taskQueue.get('task_sync_queue_fast_return').status, 'queued');
 });
 
 asyncTest('Gateway sync delegate timeout converts submitted request to tracked background task', async () => {

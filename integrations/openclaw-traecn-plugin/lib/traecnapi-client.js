@@ -134,6 +134,42 @@ class TraeCNApiClient {
     return this._request('POST', '/api/new-chat', { allowAutoStart });
   }
 
+  async listSoloChats() {
+    return this._request('GET', '/api/solo/chats');
+  }
+
+  async switchSoloChat(options = {}) {
+    const body = {};
+    if (Number.isInteger(options.index)) body.index = options.index;
+    if (options.titleIncludes) body.titleIncludes = options.titleIncludes;
+    if (options.textIncludes) body.textIncludes = options.textIncludes;
+    return this._request('POST', '/api/solo/chats/switch', body);
+  }
+
+  async submitSoloChatTask(task, options = {}) {
+    const body = { task };
+    if (options.projectPath) body.projectPath = options.projectPath;
+    if (options.chatId) body.chatId = options.chatId;
+    if (options.soloChat && typeof options.soloChat === 'object') body.soloChat = options.soloChat;
+    if (Number.isInteger(options.soloChatIndex)) body.soloChatIndex = options.soloChatIndex;
+    if (options.soloChatTitleIncludes) body.soloChatTitleIncludes = options.soloChatTitleIncludes;
+    if (options.soloChatTextIncludes) body.soloChatTextIncludes = options.soloChatTextIncludes;
+    if (options.newChat === false) body.newChat = false;
+    if (options.includeProcessText) body.includeProcessText = true;
+    if (options.reviewRequired === true) body.reviewRequired = true;
+    if (options.autoContinue === true) body.autoContinue = true;
+    if (Array.isArray(options.followupTasks)) body.followupTasks = options.followupTasks;
+    if (options.completionChecks && typeof options.completionChecks === 'object') body.completionChecks = options.completionChecks;
+    if (options.autoApproveDialog !== undefined) body.autoApproveDialog = options.autoApproveDialog;
+    if (options.notifyUrl) body.notifyUrl = options.notifyUrl;
+    if (Array.isArray(options.fallbackModels)) body.fallbackModels = options.fallbackModels;
+    if (options.autoModelFallback === true) body.autoModelFallback = true;
+    if (options.modelProbeIntervalMs !== undefined) body.modelProbeIntervalMs = options.modelProbeIntervalMs;
+    if (options.maxQueueWaitMs !== undefined) body.maxQueueWaitMs = options.maxQueueWaitMs;
+    if (options.queueMaxWaitMs !== undefined) body.queueMaxWaitMs = options.queueMaxWaitMs;
+    return this._request('POST', '/api/solo/chats/submit', body);
+  }
+
   async delegate(task, options = {}) {
     const body = { task };
     if (options.projectPath) body.projectPath = options.projectPath;
@@ -147,6 +183,7 @@ class TraeCNApiClient {
     if (options.autoContinue === true) body.autoContinue = true;
     if (Array.isArray(options.followupTasks)) body.followupTasks = options.followupTasks;
     if (options.completionChecks && typeof options.completionChecks === 'object') body.completionChecks = options.completionChecks;
+    if (options.autoApproveDialog !== undefined) body.autoApproveDialog = options.autoApproveDialog;
     if (options.notifyUrl) body.notifyUrl = options.notifyUrl;
     if (Array.isArray(options.fallbackModels)) body.fallbackModels = options.fallbackModels;
     if (options.autoModelFallback === true) body.autoModelFallback = true;
@@ -162,6 +199,11 @@ class TraeCNApiClient {
     if (options.projectPath) body.projectPath = options.projectPath;
     if (options.sessionId) body.sessionId = options.sessionId;
     if (options.chatId) body.chatId = options.chatId;
+    if (options.soloChat && typeof options.soloChat === 'object') body.soloChat = options.soloChat;
+    if (Number.isInteger(options.soloChatIndex)) body.soloChatIndex = options.soloChatIndex;
+    if (options.soloChatTitleIncludes) body.soloChatTitleIncludes = options.soloChatTitleIncludes;
+    if (options.soloChatTextIncludes) body.soloChatTextIncludes = options.soloChatTextIncludes;
+    if (options.newChat === false) body.newChat = false;
     if (options.includeProcessText) body.includeProcessText = true;
     if (options.waitForQueue !== undefined) body.waitForQueue = options.waitForQueue;
     if (options.background === true) body.background = true;
@@ -170,6 +212,7 @@ class TraeCNApiClient {
     if (options.autoContinue === true) body.autoContinue = true;
     if (Array.isArray(options.followupTasks)) body.followupTasks = options.followupTasks;
     if (options.completionChecks && typeof options.completionChecks === 'object') body.completionChecks = options.completionChecks;
+    if (options.autoApproveDialog !== undefined) body.autoApproveDialog = options.autoApproveDialog;
     if (options.notifyUrl) body.notifyUrl = options.notifyUrl;
     if (options.maxQueueWaitMs !== undefined) body.maxQueueWaitMs = options.maxQueueWaitMs;
     if (options.queueMaxWaitMs !== undefined) body.queueMaxWaitMs = options.queueMaxWaitMs;
@@ -303,6 +346,7 @@ class TraeCNApiClient {
     if (options.chatId) body.chatId = options.chatId;
     if (options.includeProcessText === true) body.includeProcessText = true;
     if (options.notifyUrl) body.notifyUrl = options.notifyUrl;
+    if (options.autoApproveDialog !== undefined) body.autoApproveDialog = options.autoApproveDialog;
     if (Array.isArray(options.fallbackModels)) body.fallbackModels = options.fallbackModels;
     if (options.autoModelFallback === true) body.autoModelFallback = true;
     if (options.modelProbeIntervalMs !== undefined) body.modelProbeIntervalMs = options.modelProbeIntervalMs;

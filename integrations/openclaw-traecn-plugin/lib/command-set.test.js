@@ -51,6 +51,80 @@ async function test(name, fn) {
     assert.strictEqual(captured.options.timeoutMs, 5);
   });
 
+  await test('solo chat commands are exposed for real Solo sidebar control', async () => {
+    const commands = listCommands();
+    const list = commands.find(command => command.command === 'list_solo_chats');
+    const switchChat = commands.find(command => command.command === 'switch_solo_chat');
+    const submit = commands.find(command => command.command === 'submit_solo_chat_task');
+
+    assert.ok(list);
+    assert.deepStrictEqual(list.required, []);
+    assert.ok(switchChat);
+    assert.ok(switchChat.optional.includes('index'));
+    assert.ok(switchChat.optional.includes('titleIncludes'));
+    assert.ok(switchChat.optional.includes('textIncludes'));
+    assert.ok(submit);
+    assert.deepStrictEqual(submit.required, ['task']);
+    assert.ok(submit.optional.includes('soloChat'));
+    assert.ok(submit.optional.includes('soloChatTitleIncludes'));
+  });
+
+  await test('list_solo_chats delegates to client listSoloChats', async () => {
+    let called = false;
+    const client = {
+      listSoloChats: async () => {
+        called = true;
+        return { status: 200, data: { mode: 'solo', count: 1 } };
+      }
+    };
+
+    const result = await executeCommand(client, 'list_solo_chats', {});
+    assert.strictEqual(called, true);
+    assert.strictEqual(result.data.mode, 'solo');
+  });
+
+  await test('switch_solo_chat delegates criteria to client switchSoloChat', async () => {
+    let captured = null;
+    const client = {
+      switchSoloChat: async (criteria) => {
+        captured = criteria;
+        return { status: 200, data: { success: true, index: 3 } };
+      }
+    };
+
+    const result = await executeCommand(client, 'switch_solo_chat', {
+      index: 3,
+      titleIncludes: 'Build report',
+      ignored: 'not forwarded'
+    });
+    assert.strictEqual(result.data.success, true);
+    assert.strictEqual(captured.index, 3);
+    assert.strictEqual(captured.titleIncludes, 'Build report');
+    assert.strictEqual(captured.textIncludes, undefined);
+    assert.strictEqual(captured.ignored, undefined);
+  });
+
+  await test('submit_solo_chat_task delegates task and Solo criteria to client', async () => {
+    let captured = null;
+    const client = {
+      submitSoloChatTask: async (task, options) => {
+        captured = { task, options };
+        return { status: 202, data: { taskId: 'task_solo_1', status: 'executing' } };
+      }
+    };
+
+    const result = await executeCommand(client, 'submit_solo_chat_task', {
+      task: 'Implement feature',
+      soloChatTitleIncludes: 'Feature chat',
+      includeProcessText: true
+    });
+
+    assert.strictEqual(result.data.taskId, 'task_solo_1');
+    assert.ok(captured.task.includes('Implement feature'));
+    assert.strictEqual(captured.options.soloChatTitleIncludes, 'Feature chat');
+    assert.strictEqual(captured.options.includeProcessText, true);
+  });
+
   await test('review_code forwards completion checks for queued reviews', async () => {
     let captured = null;
     const client = {

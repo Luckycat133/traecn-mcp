@@ -712,6 +712,51 @@ test('collectResponse strips IDE role and completion wrappers', async () => {
   assert.strictEqual(result.text, 'TRAECN_REAL_UAT_OK_20260612B');
 });
 
+test('collectResponse extracts final report from completed GLM process transcript', async () => {
+  const config = getConfig();
+  config.timeoutMs = 200;
+  config.pollIntervalMs = 10;
+  config.approvalPollIntervalMs = 0;
+  const driver = new DomDriver({
+    send: async () => {},
+    on: () => {},
+    off: () => {}
+  }, config);
+  driver.detectMode = async () => ({ mode: 'ide', confidence: 0.9, indicators: ['ide'] });
+  driver._pollResponseState = async () => ({
+    taskComplete: true,
+    taskText: [
+      'Agent',
+      '思考过程',
+      '调用技能: TRAE-code-review',
+      'ThoughtNow I have the code review skill loaded. Let me start by exploring the project structure.',
+      'Command: rg -n "collectResponse|dialog|queue"',
+      'Review complete. I have enough evidence to produce the final report.',
+      '',
+      'TRAECNclaw Code Review — Findings First',
+      '',
+      'Findings:',
+      '[P1] src/cdp/dom-driver.js: completed process transcript was misread as incomplete',
+      '问题: final report was present but hidden behind process logs.',
+      '建议: extract the final report marker before incomplete-response checks.',
+      '',
+      '任务完成'
+    ].join('\n'),
+    taskInProgress: true,
+    responseText: 'Use GLM-5.2 to review TRAECNclaw and return Findings First.'
+  });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, taskCompleted: false });
+  driver.checkForApprovalDialog = async () => ({ needsApproval: false });
+
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.stable, true);
+  assert.ok(result.text.startsWith('TRAECNclaw Code Review — Findings First'));
+  assert.ok(result.text.includes('[P1] src/cdp/dom-driver.js'));
+  assert.ok(!result.text.includes('调用技能'));
+  assert.ok(!result.text.includes('ThoughtNow'));
+  assert.ok(!result.text.endsWith('任务完成'));
+});
+
 test('collectResponse waits past IDE prompt echo before final assistant text', async () => {
   const config = getConfig();
   config.timeoutMs = 500;
@@ -760,6 +805,55 @@ test('stopGeneration clicks visible stop button', async () => {
   const result = await driver.stopGeneration();
   assert.strictEqual(result.success, true);
   assert.strictEqual(result.reason, 'clicked_stop_button');
+});
+
+test('switchModel busy guard ignores stale body-only generating text', async () => {
+  let currentModelCalls = 0;
+  let busyExpression = '';
+  const driver = new DomDriver({
+    send: async (method, params) => {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (params.expression.includes('stopIcon')) {
+        busyExpression = params.expression;
+        return { result: { value: { busy: false } } };
+      }
+      if (params.expression.includes('var all = Array.from')) {
+        return { result: { value: 1 } };
+      }
+      if (params.expression.includes('modeItem')) {
+        return { result: { value: 'auto mode already off' } };
+      }
+      if (params.expression.includes('targetName')) {
+        return { result: { value: 'clicked: GLM-5.2 at index 0' } };
+      }
+      throw new Error('Unexpected Runtime.evaluate expression');
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+  driver.getCurrentModel = async () => {
+    currentModelCalls++;
+    return currentModelCalls === 1 ? 'Doubao-1.5' : 'GLM-5.2';
+  };
+
+  const result = await driver.switchModel('GLM-5.2');
+  assert.strictEqual(result.success, true);
+  assert.ok(busyExpression.includes('stopIcon'));
+  assert.ok(!busyExpression.includes('document.body'));
+});
+
+test('switchModel busy guard blocks when live stop state is visible', async () => {
+  const driver = new DomDriver({
+    send: async (method, params) => {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      assert.ok(params.expression.includes('stopIcon'));
+      return { result: { value: { busy: true, reason: 'generating' } } };
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+  driver.getCurrentModel = async () => 'Doubao-1.5';
+
+  const result = await driver.switchModel('GLM-5.2');
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.switchResult, 'model_switch_blocked: generating');
+  assert.strictEqual(result.error, 'generating');
 });
 
 test('checkReadiness reports login blocker when composer is unavailable', async () => {
@@ -816,6 +910,73 @@ test('checkReadiness accepts runtime-visible composer with disabled empty send b
   assert.strictEqual(readiness.composer.runtimeFallback, true);
   assert.strictEqual(readiness.sendButton.runtimeFallback, true);
   assert.strictEqual(readiness.sendButton.disabled, true);
+});
+
+test('listSoloChats returns Solo sidebar conversations from runtime evaluation', async () => {
+  let expression = '';
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      expression = payload.expression || '';
+      return {
+        result: {
+          value: {
+            mode: 'solo',
+            chats: [
+              { index: 0, title: 'Implement feature', text: 'Implement feature 任务完成', active: true, status: 'done' }
+            ],
+            count: 1
+          }
+        }
+      };
+    }
+  }, getConfig());
+
+  const result = await driver.listSoloChats();
+  assert.strictEqual(result.mode, 'solo');
+  assert.strictEqual(result.count, 1);
+  assert.strictEqual(result.chats[0].title, 'Implement feature');
+  assert.ok(expression.includes('.soloaisidebar'));
+  assert.ok(expression.includes('conversation-item'));
+  assert.ok(expression.includes('task-items-list'));
+  assert.ok(expression.includes('task-item-info'));
+});
+
+test('switchSoloChat clicks matching Solo conversation and clears task state', async () => {
+  let expression = '';
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      expression = payload.expression || '';
+      return {
+        result: {
+          value: {
+            success: true,
+            index: 1,
+            title: 'Second chat',
+            text: 'Second chat details'
+          }
+        }
+      };
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+  driver._lastTaskText = 'old task';
+  driver._pendingUserTask = 'pending task';
+  driver._preSendSnapshot = 'snapshot';
+
+  const result = await driver.switchSoloChat({ index: 1 });
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.index, 1);
+  assert.ok(expression.includes('var targetIndex = 1'));
+  assert.ok(expression.includes('dispatchEvent'));
+  assert.strictEqual(driver._lastTaskText, '');
+  assert.strictEqual(driver._pendingUserTask, '');
+  assert.strictEqual(driver._preSendSnapshot, '');
+});
+
+test('switchSoloChat requires a selection criterion', async () => {
+  const driver = new DomDriver({ send: async () => ({ result: { value: {} } }) }, getConfig());
+  await assert.rejects(() => driver.switchSoloChat({}), /requires index, textIncludes, or titleIncludes/);
 });
 
 test('getConfig respects TRAECN_COMPOSER_SELECTORS env var', () => {

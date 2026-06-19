@@ -32,12 +32,18 @@ export interface RunTaskOptions {
   autoContinue?: boolean;
   followupTasks?: WorkflowStep[];
   completionChecks?: CompletionChecks;
+  autoApproveDialog?: boolean | string;
   notifyUrl?: string;
   fallbackModels?: string[];
   autoModelFallback?: boolean;
   modelProbeIntervalMs?: number;
   maxQueueWaitMs?: number;
   queueMaxWaitMs?: number;
+  soloChat?: { index?: number; titleIncludes?: string; textIncludes?: string };
+  soloChatIndex?: number;
+  soloChatTitleIncludes?: string;
+  soloChatTextIncludes?: string;
+  newChat?: boolean;
   files?: string[];
   focus?: string[];
   code?: string;
@@ -286,6 +292,12 @@ export declare class TraeCNSkill {
    * 创建新对话
    */
   newChat(): Promise<any>;
+
+  listSoloChats(): Promise<any>;
+
+  switchSoloChat(criteria?: { index?: number; titleIncludes?: string; textIncludes?: string }): Promise<any>;
+
+  submitSoloChatTask(task: string, opts?: RunTaskOptions): Promise<QueueResult>;
 
   /**
    * 切换模式

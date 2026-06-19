@@ -189,6 +189,55 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('listSoloChats sends GET to /api/solo/chats', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ mode: 'solo', chats: [], count: 0 }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.listSoloChats();
+    assert.strictEqual(result.data.mode, 'solo');
+    assert.strictEqual(lastRequest.method, 'GET');
+    assert.strictEqual(lastRequest.url, '/api/solo/chats');
+    server.close();
+  });
+
+  await asyncTest('switchSoloChat sends POST to /api/solo/chats/switch', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, index: 1 }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.switchSoloChat({ index: 1, titleIncludes: 'Feature' });
+    assert.strictEqual(result.data.success, true);
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/solo/chats/switch');
+    assert.strictEqual(lastRequest.body.index, 1);
+    assert.strictEqual(lastRequest.body.titleIncludes, 'Feature');
+    server.close();
+  });
+
+  await asyncTest('submitSoloChatTask sends POST to /api/solo/chats/submit', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task_solo_1', status: 'executing' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.submitSoloChatTask('Build feature', {
+      projectPath: '/tmp/project',
+      soloChat: { titleIncludes: 'Feature chat' },
+      includeProcessText: true
+    });
+    assert.strictEqual(result.data.taskId, 'task_solo_1');
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/solo/chats/submit');
+    assert.strictEqual(lastRequest.body.task, 'Build feature');
+    assert.strictEqual(lastRequest.body.projectPath, '/tmp/project');
+    assert.strictEqual(lastRequest.body.soloChat.titleIncludes, 'Feature chat');
+    assert.strictEqual(lastRequest.body.includeProcessText, true);
+    server.close();
+  });
+
   await asyncTest('adoptCurrentTask sends POST to /api/task/adopt-current', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(202, { 'Content-Type': 'application/json' });
@@ -349,6 +398,7 @@ test('TraeCNApiClient constructor accepts custom options', () => {
       autoContinue: true,
       followupTasks: [{ task: 'run tests', reviewRequired: false, autoContinue: true }],
       completionChecks: { requiredFiles: ['FINAL_REPORT.md'] },
+      autoApproveDialog: 'auto',
       notifyUrl: 'https://example.test/hook',
       maxQueueWaitMs: 600000
     });
@@ -358,8 +408,25 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     assert.strictEqual(lastRequest.body.autoContinue, true);
     assert.deepStrictEqual(lastRequest.body.followupTasks, [{ task: 'run tests', reviewRequired: false, autoContinue: true }]);
     assert.deepStrictEqual(lastRequest.body.completionChecks, { requiredFiles: ['FINAL_REPORT.md'] });
+    assert.strictEqual(lastRequest.body.autoApproveDialog, 'auto');
     assert.strictEqual(lastRequest.body.notifyUrl, 'https://example.test/hook');
     assert.strictEqual(lastRequest.body.maxQueueWaitMs, 600000);
+    server.close();
+  });
+
+  await asyncTest('delegateAsync forwards Solo chat targeting options', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task_solo_targeted', status: 'queued' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    await client.delegateAsync('Target Solo task', {
+      soloChatTitleIncludes: 'Feature chat',
+      newChat: false
+    });
+    assert.strictEqual(lastRequest.url, '/api/delegate-async');
+    assert.strictEqual(lastRequest.body.soloChatTitleIncludes, 'Feature chat');
+    assert.strictEqual(lastRequest.body.newChat, false);
     server.close();
   });
 

@@ -2,6 +2,7 @@
 
 const { sleep, safeJsValue } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
+const nodeFs = require('fs');
 
 /**
  * FileDriver — file system operations against the open TraeCN workspace.
@@ -23,6 +24,8 @@ class FileDriver {
     this.palette = deps.palette || null;
     this.fs = deps.fs || require('fs').promises; // optional injected for test
     this.path = deps.path || require('path');
+    this.allowUnsafeDiskAccess = config.allowUnsafeDiskAccess === true;
+    this.allowedRoots = this._normalizeAllowedRoots(config.fileAllowedRoots || config.diskAllowedRoots);
   }
 
   setPalette(palette) {
@@ -134,16 +137,91 @@ class FileDriver {
 
   // ── Direct disk read/write (side-channel) ───────────────────────────
 
+  _normalizeAllowedRoots(rawRoots) {
+    const values = Array.isArray(rawRoots)
+      ? rawRoots
+      : (typeof rawRoots === 'string' ? rawRoots.split(this.path.delimiter) : []);
+    const roots = values
+      .map(root => String(root || '').trim())
+      .filter(Boolean);
+
+    if (roots.length === 0) {
+      roots.push(process.cwd());
+    }
+
+    const normalized = [];
+    for (const root of roots) {
+      const resolved = this.path.resolve(root);
+      let real = resolved;
+      try {
+        real = nodeFs.realpathSync.native(resolved);
+      } catch (_) {}
+      if (!normalized.includes(real)) normalized.push(real);
+    }
+    return normalized;
+  }
+
+  _pathInsideRoot(candidate, root) {
+    const relative = this.path.relative(root, candidate);
+    return relative === '' || (!!relative && !relative.startsWith('..') && !this.path.isAbsolute(relative));
+  }
+
+  async _realPathForAccess(targetPath) {
+    if (this.fs && typeof this.fs.realpath === 'function') {
+      try {
+        return await this.fs.realpath(targetPath);
+      } catch (_) {}
+    }
+
+    let parent = this.path.dirname(targetPath);
+    while (parent && parent !== this.path.dirname(parent)) {
+      if (this.fs && typeof this.fs.realpath === 'function') {
+        try {
+          const realParent = await this.fs.realpath(parent);
+          return this.path.join(realParent, this.path.relative(parent, targetPath));
+        } catch (_) {}
+      }
+      parent = this.path.dirname(parent);
+    }
+    return null;
+  }
+
+  async _resolveDiskPath(inputPath, paramName = 'filePath') {
+    if (typeof inputPath !== 'string' || !inputPath.trim()) {
+      throw new TraeCNAutomationError(`${paramName} must be a non-empty string`, 'INVALID_PATH', { paramName });
+    }
+
+    if (this.allowUnsafeDiskAccess) return inputPath;
+
+    const base = this.allowedRoots[0] || process.cwd();
+    const resolved = this.path.resolve(this.path.isAbsolute(inputPath) ? inputPath : this.path.join(base, inputPath));
+    const realCandidate = await this._realPathForAccess(resolved);
+    const candidateForCheck = realCandidate || resolved;
+    const allowed = this.allowedRoots.some(root =>
+      this._pathInsideRoot(candidateForCheck, root) || this._pathInsideRoot(resolved, root)
+    );
+    if (!allowed) {
+      throw new TraeCNAutomationError(
+        'Disk path is outside allowed roots',
+        'PATH_OUTSIDE_ALLOWED_ROOTS',
+        { path: resolved, allowedRoots: this.allowedRoots }
+      );
+    }
+    return resolved;
+  }
+
   /**
    * Read a file from the local filesystem. Path can be absolute.
    * Useful for headless: agent reads / writes files outside the IDE workflow.
    */
   async readDisk(filePath) {
+    let resolvedPath;
     try {
-      const data = await this.fs.readFile(filePath, 'utf8');
-      return { ok: true, path: filePath, content: data };
+      resolvedPath = await this._resolveDiskPath(filePath);
+      const data = await this.fs.readFile(resolvedPath, 'utf8');
+      return { ok: true, path: resolvedPath, content: data };
     } catch (err) {
-      return { ok: false, path: filePath, error: err.message };
+      return { ok: false, path: resolvedPath || filePath, error: err.message, code: err.code };
     }
   }
 
@@ -151,11 +229,13 @@ class FileDriver {
    * Write a file to the local filesystem. Creates or overwrites.
    */
   async writeDisk(filePath, content) {
+    let resolvedPath;
     try {
-      await this.fs.writeFile(filePath, content, 'utf8');
-      return { ok: true, path: filePath, length: content.length };
+      resolvedPath = await this._resolveDiskPath(filePath);
+      await this.fs.writeFile(resolvedPath, content, 'utf8');
+      return { ok: true, path: resolvedPath, length: content.length };
     } catch (err) {
-      return { ok: false, path: filePath, error: err.message };
+      return { ok: false, path: resolvedPath || filePath, error: err.message, code: err.code };
     }
   }
 
@@ -163,11 +243,13 @@ class FileDriver {
    * Delete a file from the local filesystem.
    */
   async deleteDisk(filePath) {
+    let resolvedPath;
     try {
-      await this.fs.unlink(filePath);
-      return { ok: true, path: filePath };
+      resolvedPath = await this._resolveDiskPath(filePath);
+      await this.fs.unlink(resolvedPath);
+      return { ok: true, path: resolvedPath };
     } catch (err) {
-      return { ok: false, path: filePath, error: err.message };
+      return { ok: false, path: resolvedPath || filePath, error: err.message, code: err.code };
     }
   }
 
@@ -175,11 +257,13 @@ class FileDriver {
    * Create a directory recursively.
    */
   async mkdirDisk(dirPath) {
+    let resolvedPath;
     try {
-      await this.fs.mkdir(dirPath, { recursive: true });
-      return { ok: true, path: dirPath };
+      resolvedPath = await this._resolveDiskPath(dirPath, 'dirPath');
+      await this.fs.mkdir(resolvedPath, { recursive: true });
+      return { ok: true, path: resolvedPath };
     } catch (err) {
-      return { ok: false, path: dirPath, error: err.message };
+      return { ok: false, path: resolvedPath || dirPath, error: err.message, code: err.code };
     }
   }
 
@@ -187,6 +271,7 @@ class FileDriver {
    * Recursively list a directory tree (depth-limited).
    */
   async listTreeDisk(rootPath, opts = {}) {
+    let resolvedRoot;
     const maxDepth = opts.maxDepth || 4;
     const ignore = opts.ignore || ['node_modules', '.git', 'dist', 'build', '.cache', 'coverage', '.next', 'out'];
     const out = [];
@@ -211,10 +296,11 @@ class FileDriver {
       }
     }
     try {
-      await walk(rootPath, 0);
-      return { ok: true, root: rootPath, entries: out, count: out.length };
+      resolvedRoot = await this._resolveDiskPath(rootPath, 'rootPath');
+      await walk(resolvedRoot, 0);
+      return { ok: true, root: resolvedRoot, entries: out, count: out.length };
     } catch (err) {
-      return { ok: false, root: rootPath, error: err.message };
+      return { ok: false, root: resolvedRoot || rootPath, error: err.message, code: err.code };
     }
   }
 
@@ -222,11 +308,15 @@ class FileDriver {
    * Rename or move a file or directory.
    */
   async renameDisk(oldPath, newPath) {
+    let resolvedOldPath;
+    let resolvedNewPath;
     try {
-      await this.fs.rename(oldPath, newPath);
-      return { ok: true, from: oldPath, to: newPath };
+      resolvedOldPath = await this._resolveDiskPath(oldPath, 'oldPath');
+      resolvedNewPath = await this._resolveDiskPath(newPath, 'newPath');
+      await this.fs.rename(resolvedOldPath, resolvedNewPath);
+      return { ok: true, from: resolvedOldPath, to: resolvedNewPath };
     } catch (err) {
-      return { ok: false, from: oldPath, to: newPath, error: err.message };
+      return { ok: false, from: resolvedOldPath || oldPath, to: resolvedNewPath || newPath, error: err.message, code: err.code };
     }
   }
 }
