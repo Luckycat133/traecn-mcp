@@ -16,7 +16,7 @@ const { DriverRouter, DRIVER_SPEC } = require('./driver-router');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
-const { getEnvWithFallback, parsePositiveInt } = require('../shared/utils');
+const { getEnvWithFallback, parsePositiveInt, sanitizeLog } = require('../shared/utils');
 const { ConfigManager } = require('../shared/config-manager');
 const { getGlobalStore } = require('../shared/task-history');
 const { buildCapabilities } = require('../shared/capabilities');
@@ -52,6 +52,10 @@ function _redactUrl(rawUrl) {
 }
 
 const SENSITIVE_KEYS = ['token', 'password', 'secret', 'credential', 'authorization'];
+// SENSITIVE_KEYS is kept as a thin local re-export of utils.SENSITIVE_LOG_KEYS
+// so anyone grepping for this name (older code, third-party callers) still
+// finds something sensible. Update both lists together.
+Object.freeze(SENSITIVE_KEYS);
 const DEFAULT_JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'no-store',
@@ -71,20 +75,9 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
 const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
 
-function sanitizeLog(obj) {
-  if (!obj || typeof obj !== 'object') return obj;
-  const sanitized = Array.isArray(obj) ? [] : {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (SENSITIVE_KEYS.some(k => key.toLowerCase().includes(k))) {
-      sanitized[key] = '[REDACTED]';
-    } else if (typeof value === 'object' && value !== null) {
-      sanitized[key] = sanitizeLog(value);
-    } else {
-      sanitized[key] = value;
-    }
-  }
-  return sanitized;
-}
+// sanitizeLog is imported from ../shared/utils so audit-logger can share it.
+// SENSITIVE_KEYS remains here for the legacy local-alias used inside other
+// helpers; both lists stay in sync via shared/utils.SENSITIVE_LOG_KEYS.
 
 function secureCompare(left, right) {
   if (typeof left !== 'string' || typeof right !== 'string') return false;

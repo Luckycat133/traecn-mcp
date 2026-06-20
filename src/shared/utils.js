@@ -82,6 +82,59 @@ async function safeClose(resource) {
   }
 }
 
+// Substring-based redaction keys used by both sanitizeLog (general purpose)
+// and audit-logger. Listed longest-first so prefixes ('authorization' before
+// 'auth' before 'token') don't accidentally over-match.
+const SENSITIVE_LOG_KEYS = Object.freeze([
+  'authorization',
+  'set-cookie',
+  'apikey',       // matches apiKey, APIKey, apikey
+  'api_key',
+  'cookie',
+  'credential',
+  'password',
+  'secret',
+  'token',
+]);
+
+/**
+ * Recursively replace values for any key whose lowercased name contains a
+ * sensitive substring. Arrays are walked; non-object primitives are returned
+ * unchanged. Safe to call on anything; returns primitives as-is.
+ */
+function sanitizeLog(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const sanitized = Array.isArray(obj) ? [] : {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (SENSITIVE_LOG_KEYS.some(k => key.toLowerCase().includes(k))) {
+      sanitized[key] = '[REDACTED]';
+    } else if (typeof value === 'object' && value !== null) {
+      sanitized[key] = sanitizeLog(value);
+    } else {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+}
+
+/**
+ * Build the standard { host, port, token, timeout } client context from
+ * environment variables, honouring both TRAECN_* and legacy TRAE_* keys.
+ * Pure function: takes an env-like object so tests can inject values.
+ */
+function getGatewayContext(env = process.env) {
+  const portStr = env.TRAECN_GATEWAY_PORT ?? env.TRAE_GATEWAY_PORT ?? '8787';
+  const host = env.TRAECN_GATEWAY_HOST ?? env.TRAE_GATEWAY_HOST ?? '127.0.0.1';
+  const token = env.TRAECN_GATEWAY_TOKEN ?? env.TRAE_GATEWAY_TOKEN ?? '';
+  const timeoutStr = env.TRAECN_GATEWAY_TIMEOUT_MS ?? env.TRAE_GATEWAY_TIMEOUT_MS ?? '30000';
+  return {
+    host,
+    port: parsePositiveInt(portStr, 8787),
+    token,
+    timeout: parsePositiveInt(timeoutStr, 30000)
+  };
+}
+
 module.exports = {
   getEnvWithFallback,
   parseSelectors,
@@ -89,5 +142,8 @@ module.exports = {
   sleep,
   escapeJsString,
   safeJsValue,
-  safeClose
+  safeClose,
+  sanitizeLog,
+  getGatewayContext,
+  SENSITIVE_LOG_KEYS
 };

@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getEnvWithFallback } = require('./utils');
+const { getEnvWithFallback, SENSITIVE_LOG_KEYS } = require('./utils');
 
 const SENSITIVE_ACTIONS = [
   'key.create',
@@ -14,22 +14,10 @@ const SENSITIVE_ACTIONS = [
   'delegate'
 ];
 
-// Match is substring-based (`key.toLowerCase().includes(token)`), so order the
-// list longest-first when a name is a prefix of another (e.g. 'authorization'
-// would otherwise also match any key containing 'auth'). The current set has
-// no such prefixes, so lexicographic order is fine.
-const SENSITIVE_PARAMS = [
-  'authorization',
-  'apiKey',
-  'api_key',
-  'cookie',
-  'credential',
-  'key',
-  'password',
-  'secret',
-  'set-cookie',
-  'token',
-];
+// Match is substring-based (`key.toLowerCase().includes(token)`). The list
+// lives in shared/utils.js so sanitizeLog() uses the exact same set; both
+// redaction surfaces must agree or one of them will leak.
+const SENSITIVE_PARAMS = SENSITIVE_LOG_KEYS;
 
 class AuditLogger {
   constructor(options = {}) {
