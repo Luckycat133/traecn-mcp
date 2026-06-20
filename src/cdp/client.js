@@ -1,6 +1,7 @@
 'use strict';
 
 const ws = require('ws');
+const { TraeCNAutomationError } = require('./errors');
 
 // 共享常量
 const DEFAULT_TIMEOUT = 30000;
@@ -52,7 +53,7 @@ class BaseCDPClient {
       setTimeout(() => {
         if (this._pending.has(id)) {
           this._pending.delete(id);
-          reject(new Error(`CDP method ${method} timed out`));
+          reject(TraeCNAutomationError.cdpTimeout(method, this._defaultTimeout));
         }
       }, timeout);
     });
@@ -70,7 +71,9 @@ class BaseCDPClient {
 
     try {
       if (msg.error) {
-        reject(new Error(`CDP error ${msg.error.code}: ${msg.error.message}`));
+        // CDP-level RPC errors map to SEND_FAILED (502). The upstream code+message
+        // are preserved so callers can inspect msg.error.code if they need to.
+        reject(TraeCNAutomationError.sendFailed(`${msg.error.code}: ${msg.error.message}`));
       } else {
         resolve(msg.result);
       }
@@ -97,7 +100,7 @@ class BaseCDPClient {
    */
   _clearPending(reason = 'WebSocket closed') {
     for (const [, { reject }] of this._pending) {
-      reject(new Error(reason));
+      reject(TraeCNAutomationError.cdpDisconnected(reason));
     }
     this._pending.clear();
   }
@@ -154,7 +157,7 @@ class CDPClient extends BaseCDPClient {
       const onClose = () => {
         this._ws.removeListener('open', onOpen);
         this._ws.removeListener('error', onError);
-        reject(new Error('CDP websocket closed before open'));
+        reject(TraeCNAutomationError.cdpDisconnected('websocket closed before open'));
       };
 
       this._ws = new (getWebSocket())(this.wsUrl);
@@ -213,7 +216,7 @@ class CDPClient extends BaseCDPClient {
 
   send(method, params = {}) {
     if (!this.isConnected) {
-      throw new Error('CDP client not connected');
+      throw TraeCNAutomationError.cdpNotConnected();
     }
     return this._sendCommand(
       (msg) => this._ws.send(msg),
@@ -315,7 +318,7 @@ class BrowserCDPClient extends BaseCDPClient {
       const onClose = () => {
         this._ws.removeListener('open', onOpen);
         this._ws.removeListener('error', onError);
-        reject(new Error('CDP browser websocket closed before open'));
+        reject(TraeCNAutomationError.cdpDisconnected('websocket closed before open'));
       };
 
       this._ws = new (getWebSocket())(this.wsUrl);
@@ -408,7 +411,7 @@ class BrowserCDPClient extends BaseCDPClient {
 
   send(method, params = {}) {
     if (!this.isConnected) {
-      throw new Error('CDP browser client is not connected');
+      throw TraeCNAutomationError.cdpNotConnected();
     }
     return this._sendCommand(
       (msg) => this._ws.send(msg),

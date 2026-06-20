@@ -89,5 +89,45 @@ test('TraeCNAutomationError name is set correctly', () => {
   assert.strictEqual(err.name, 'TraeCNAutomationError');
 });
 
+// ── Newly classified factories (stage-2) ────────────────────────────────
+
+test('TraeCNAutomationError.invalidInput carries field/value/reason', () => {
+  const err = TraeCNAutomationError.invalidInput('label', '', 'must be non-empty');
+  assert.strictEqual(err.code, 'INVALID_INPUT');
+  assert.deepStrictEqual(err.details, { field: 'label', value: '', reason: 'must be non-empty' });
+});
+
+test('TraeCNAutomationError.reviewGateBlocked wraps reason', () => {
+  const err = TraeCNAutomationError.reviewGateBlocked('awaiting human');
+  assert.strictEqual(err.code, 'REVIEW_GATE_BLOCKED');
+  assert.strictEqual(err.message, 'Review gate blocked action: awaiting human');
+});
+
+test('TraeCNAutomationError.composerFocusFailed records cause', () => {
+  const err = TraeCNAutomationError.composerFocusFailed('no editable');
+  assert.strictEqual(err.code, 'COMPOSER_FOCUS_FAILED');
+  assert.strictEqual(err.details.cause, 'no editable');
+});
+
+test('TraeCNAutomationError.cdpTimeout includes timeoutMs', () => {
+  const err = TraeCNAutomationError.cdpTimeout('Runtime.evaluate', 30000);
+  assert.strictEqual(err.code, 'CDP_TIMEOUT');
+  assert.strictEqual(err.details.timeoutMs, 30000);
+});
+
+test('TraeCNAutomationError.cdpDisconnected preserves reason', () => {
+  const err = TraeCNAutomationError.cdpDisconnected('socket hangup');
+  assert.strictEqual(err.code, 'CDP_DISCONNECTED');
+  assert.strictEqual(err.message, 'CDP connection lost: socket hangup');
+});
+
+test('TraeCNAutomationError.webhookFailed truncates long bodies', () => {
+  const long = 'x'.repeat(4096);
+  const err = TraeCNAutomationError.webhookFailed('http://localhost/cb', 500, long);
+  assert.strictEqual(err.code, 'WEBHOOK_FAILED');
+  assert.strictEqual(err.details.statusCode, 500);
+  assert.ok(err.details.body.length <= 1024, 'body should be truncated to <= 1024 chars');
+});
+
 console.log(`\n[errors.test.js] Results: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);

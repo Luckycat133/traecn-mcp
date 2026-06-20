@@ -1338,7 +1338,7 @@ class DomDriver {
     if (existingReviewGate.awaitingReview && existingReviewGate.reviewCount !== 0) {
       const gateResolution = await this.resolveTaskReviewGate('keep_all');
       if (!gateResolution.success) {
-        throw new Error(`Task review gate blocked message send: ${gateResolution.reason || gateResolution.error || 'unknown'}`);
+        throw TraeCNAutomationError.reviewGateBlocked(`message send blocked: ${gateResolution.reason || gateResolution.error || 'unknown'}`);
       }
       await sleep(this.config.postActionDelayMs * 2);
     }
@@ -1358,7 +1358,7 @@ class DomDriver {
     });
     const focusInfo = focusResult.result?.value || {};
     if (!focusInfo.ok) {
-      throw new Error(`Failed to focus composer: ${focusInfo.reason || 'unknown'}`);
+      throw TraeCNAutomationError.composerFocusFailed(focusInfo.reason || 'unknown');
     }
 
     await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 4 });
@@ -1406,7 +1406,7 @@ class DomDriver {
       inputInfo = inputResult.result?.value || {};
     }
     if (!inputInfo.ok) {
-      throw new Error(`Failed to set composer text: ${inputInfo.normalized || inputInfo.text || 'unknown'}`);
+      throw TraeCNAutomationError.composerInputFailed(inputInfo.normalized || inputInfo.text || 'unknown');
     }
     await sleep(this.config.postActionDelayMs * 2);
 
@@ -2822,7 +2822,7 @@ class DomDriver {
     if (existingReviewGate.awaitingReview && existingReviewGate.reviewCount !== 0) {
       const gateResolution = await this.resolveTaskReviewGate('keep_all');
       if (!gateResolution.success) {
-        throw new Error(`Task review gate blocked new chat: ${gateResolution.reason || gateResolution.error || 'unknown'}`);
+        throw TraeCNAutomationError.reviewGateBlocked(`new chat blocked: ${gateResolution.reason || gateResolution.error || 'unknown'}`);
       }
       await sleep(this.config.postActionDelayMs * 2);
     }
@@ -2871,7 +2871,7 @@ class DomDriver {
     }
 
     if (!panelChanged && previousPanelText) {
-      throw new Error('Failed to open a fresh chat while an existing task was still active');
+      throw TraeCNAutomationError.freshChatFailed('existing task still active');
     }
 
     this._lastTaskText = '';
@@ -2946,7 +2946,7 @@ class DomDriver {
     const textIncludes = typeof criteria.textIncludes === 'string' ? criteria.textIncludes.trim() : '';
     const titleIncludes = typeof criteria.titleIncludes === 'string' ? criteria.titleIncludes.trim() : '';
     if (index === null && !textIncludes && !titleIncludes) {
-      throw new Error('switchSoloChat requires index, textIncludes, or titleIncludes');
+      throw TraeCNAutomationError.soloChatQueryInvalid('switchSoloChat requires index, textIncludes, or titleIncludes');
     }
 
     const result = await this.client.send('Runtime.evaluate', {
