@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString, safeClose } = require('../shared/utils');
+const { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString, safeClose, sanitizeLog, getGatewayContext } = require('../shared/utils');
 
 let passed = 0;
 let failed = 0;
@@ -124,6 +124,52 @@ test('escapeJsString handles string with no special chars', () => {
     await safeClose(null);
     await safeClose({});
     await safeClose({ close: async () => { throw new Error('boom'); } });
+  });
+
+  test('sanitizeLog redacts known sensitive keys at top level', () => {
+    assert.deepStrictEqual(
+      sanitizeLog({ token: 'abc', password: 'p', name: 'ok' }),
+      { token: '[REDACTED]', password: '[REDACTED]', name: 'ok' }
+    );
+  });
+
+  test('sanitizeLog walks nested objects and arrays', () => {
+    const out = sanitizeLog({ a: { authorization: 'Bearer x', b: { api_key: 'k' } }, list: [{ token: 't' }, 'safe'] });
+    assert.strictEqual(out.a.authorization, '[REDACTED]');
+    assert.strictEqual(out.a.b.api_key, '[REDACTED]');
+    assert.strictEqual(out.list[0].token, '[REDACTED]');
+    assert.strictEqual(out.list[1], 'safe');
+  });
+
+  test('sanitizeLog leaves primitives alone', () => {
+    assert.strictEqual(sanitizeLog(null), null);
+    assert.strictEqual(sanitizeLog('hello'), 'hello');
+    assert.strictEqual(sanitizeLog(42), 42);
+  });
+
+  test('getGatewayContext reads TRAECN_* with TRAE_* fallback and defaults', () => {
+    const empty = getGatewayContext({});
+    assert.strictEqual(empty.host, '127.0.0.1');
+    assert.strictEqual(empty.port, 8787);
+    assert.strictEqual(empty.token, '');
+    assert.strictEqual(empty.timeout, 30000);
+
+    const full = getGatewayContext({
+      TRAECN_GATEWAY_HOST: 'remote.local',
+      TRAE_GATEWAY_PORT: '9999',
+      TRAECN_GATEWAY_TOKEN: 'tok',
+      TRAECN_GATEWAY_TIMEOUT_MS: '5000',
+    });
+    assert.strictEqual(full.host, 'remote.local');
+    assert.strictEqual(full.port, 9999);
+    assert.strictEqual(full.token, 'tok');
+    assert.strictEqual(full.timeout, 5000);
+  });
+
+  test('getGatewayContext tolerates non-numeric port and timeout', () => {
+    const ctx = getGatewayContext({ TRAECN_GATEWAY_PORT: 'oops', TRAECN_GATEWAY_TIMEOUT_MS: 'NaN' });
+    assert.strictEqual(ctx.port, 8787);
+    assert.strictEqual(ctx.timeout, 30000);
   });
 
   console.log(`\n[utils.test.js] Results: ${passed} passed, ${failed} failed\n`);
