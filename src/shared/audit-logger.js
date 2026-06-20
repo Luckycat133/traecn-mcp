@@ -14,7 +14,22 @@ const SENSITIVE_ACTIONS = [
   'delegate'
 ];
 
-const SENSITIVE_PARAMS = ['token', 'password', 'secret', 'key', 'credential', 'authorization', 'apiKey', 'api_key'];
+// Match is substring-based (`key.toLowerCase().includes(token)`), so order the
+// list longest-first when a name is a prefix of another (e.g. 'authorization'
+// would otherwise also match any key containing 'auth'). The current set has
+// no such prefixes, so lexicographic order is fine.
+const SENSITIVE_PARAMS = [
+  'authorization',
+  'apiKey',
+  'api_key',
+  'cookie',
+  'credential',
+  'key',
+  'password',
+  'secret',
+  'set-cookie',
+  'token',
+];
 
 class AuditLogger {
   constructor(options = {}) {
