@@ -387,6 +387,106 @@ async function _setToggle(client, labelText, checked) {
 }
 
 /**
+ * Find a setting item by label text and type `text` into its associated
+ * <input>/<textarea>. Uses native InputEvent so React/controlled components
+ * pick up the change. Falls back to .value assignment if React's native
+ * setter is unavailable.
+ *
+ * Returns a status string: "typed: <text>" / "input not found: <label>" /
+ * "label not found: <label>".
+ */
+async function _typeIntoInput(client, labelText, text) {
+  const safeLabel = safeJsValue(labelText);
+  const safeText = safeJsValue(text);
+
+  const result = await client.send('Runtime.evaluate', {
+    expression: `
+      (function() {
+        var allLabels = document.querySelectorAll('.icb-setting-item-label');
+        var found = null;
+        var inputEl = null;
+        for (var i = 0; i < allLabels.length; i++) {
+          var el = allLabels[i];
+          if ((el.innerText || '').trim() === ${safeLabel}) {
+            found = el;
+            var container = el.closest('.icb-setting-item-container');
+            if (container) inputEl = container.querySelector('input[type="text"], input:not([type]), textarea, input[type="search"], input[type="number"]');
+            break;
+          }
+        }
+        if (!found) return 'label not found: ' + ${safeLabel};
+        if (!inputEl) return 'input not found: ' + ${safeLabel};
+
+        // Drive React/controlled inputs by using the native value setter then
+        // dispatching a bubbling 'input' event.
+        var proto = Object.getPrototypeOf(inputEl);
+        var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (desc && desc.set) {
+          desc.set.call(inputEl, ${safeText});
+        } else {
+          inputEl.value = ${safeText};
+        }
+        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+        return 'typed: ' + ${safeText};
+      })()
+    `,
+    returnByValue: true
+  });
+  await sleep(200);
+  return result.result?.value || 'unknown';
+}
+
+/**
+ * Read every visible <table> in the settings content area. Returns an array
+ * of { headers: string[], rows: string[][] }. Caller serialises as needed.
+ */
+async function _readTableContent(client) {
+  const result = await client.send('Runtime.evaluate', {
+    expression: `
+      (function() {
+        var roots = document.querySelectorAll('.icb-settings-container, .part.solo_settings, [class*="settings-content"]');
+        var tables = [];
+        var seen = new Set();
+        for (var r = 0; r < roots.length; r++) {
+          var found = roots[r].querySelectorAll('table');
+          for (var i = 0; i < found.length; i++) {
+            var tbl = found[i];
+            if (seen.has(tbl)) continue;
+            seen.add(tbl);
+            var headers = [];
+            var headerCells = tbl.querySelectorAll('thead th, thead td');
+            for (var h = 0; h < headerCells.length; h++) {
+              headers.push((headerCells[h].innerText || '').trim());
+            }
+            var rows = [];
+            var bodyRows = tbl.querySelectorAll('tbody tr');
+            for (var b = 0; b < bodyRows.length; b++) {
+              var cells = bodyRows[b].querySelectorAll('td, th');
+              var row = [];
+              for (var c = 0; c < cells.length; c++) {
+                row.push((cells[c].innerText || '').trim());
+              }
+              rows.push(row);
+            }
+            tables.push({ headers: headers, rows: rows });
+          }
+        }
+        return JSON.stringify(tables);
+      })()
+    `,
+    returnByValue: true
+  });
+  const raw = result.result?.value;
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Inject __radixClick helper into the page if not already present.
  * Radix UI components only respond to pointerdown, not synthetic MouseEvent('click').
  */

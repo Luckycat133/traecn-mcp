@@ -36,6 +36,21 @@ function normalizeUrl(rawUrl) {
   });
 }
 
+// Strip any sensitive query params (token/authorization/key/secret/password) from
+// a URL before it lands in a log line. Returns the path + redacted query, or
+// the original string if parsing fails.
+function _redactUrl(rawUrl) {
+  if (!rawUrl || rawUrl.indexOf('?') === -1) return rawUrl;
+  const qIdx = rawUrl.indexOf('?');
+  const path = rawUrl.slice(0, qIdx);
+  const query = rawUrl.slice(qIdx + 1);
+  const redacted = query.replace(
+    /(^|&)(token|authorization|api[_-]?key|secret|password)(=)/gi,
+    (_match, sep, _key, eq) => `${sep}${_key}=[REDACTED]`
+  );
+  return path + '?' + redacted;
+}
+
 const SENSITIVE_KEYS = ['token', 'password', 'secret', 'credential', 'authorization'];
 const DEFAULT_JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
@@ -1722,7 +1737,7 @@ class Gateway {
       const stream = (statusCode >= 500) ? process.stderr : process.stdout;
       try {
         stream.write(
-          `[Gateway] ${req.method} ${req.url} -> ${statusCode} [requestId=${requestId}] [duration=${duration}ms]\n`
+          `[Gateway] ${req.method} ${_redactUrl(req.url)} -> ${statusCode} [requestId=${requestId}] [duration=${duration}ms]\n`
         );
       } catch { /* ignore */ }
     }
@@ -2077,8 +2092,19 @@ class Gateway {
       cdpReachable = true;
       try {
         surface = describeCDPSurface(await fetchCDPTargets(endpoint.host, endpoint.port));
-      } catch {}
-    } catch {}
+      } catch (e) {
+        // The targets endpoint is optional metadata; we still report
+        // cdpReachable=true based on /json/version succeeding. Log so an
+        // operator can spot broken WS URLs without losing the snapshot.
+        console.warn('[Gateway] CDP target discovery failed:', e.message);
+      }
+    } catch (e) {
+      // No CDP at all — this is the normal "TraeCN not running" state for a
+      // fresh launch. Don't spam the log; use debug.
+      if (process.env.DEBUG || process.env.TRAECN_DEBUG) {
+        console.warn('[Gateway] CDP endpoint not reachable:', e.message);
+      }
+    }
 
     return {
       status: (this.mockBridge || (this.client && this.client.isConnected)) ? 'connected' : 'disconnected',
@@ -4862,48 +4888,94 @@ class Gateway {
   }
 
   async gracefulShutdown() {
-    console.log('[Gateway] Starting graceful shutdown...');
-    
-    this._stopBackgroundPolling();
-    this._clearAllTimers();
-    this._persistActiveQueue();
-    
-    const taskCount = this.taskQueue.size;
-    this.taskQueue.clear();
-    this.taskLocks.clear();
-    console.log(`[Gateway] Cleared ${taskCount} tasks from queue`);
-    
-    const batchCount = this.batchTasks.size;
-    this.batchTasks.clear();
-    console.log(`[Gateway] Cleared ${batchCount} batch tasks`);
-
-    if (this.taskHistoryStore) {
-      this.taskHistoryStore.shutdown();
-      console.log('[Gateway] Task history store shut down');
+    if (this._shutdownInProgress) {
+      // Idempotent: a second call (e.g. SIGTERM after SIGINT, or test cleanup
+      // racing with server.on('close')) returns the original promise.
+      return this._shutdownInProgress;
     }
+    this._shutdownInProgress = (async () => {
+      console.log('[Gateway] Starting graceful shutdown...');
 
-    if (this.client) {
-      try {
-        await this.client.close();
-        console.log('[Gateway] CDP client closed');
-      } catch (e) {
-        console.error('[Gateway] Error closing CDP client:', e.message);
+      this._stopBackgroundPolling();
+      this._clearAllTimers();
+      this._persistActiveQueue();
+
+      const taskCount = this.taskQueue.size;
+      this.taskQueue.clear();
+      this.taskLocks.clear();
+      console.log(`[Gateway] Cleared ${taskCount} tasks from queue`);
+
+      const batchCount = this.batchTasks.size;
+      this.batchTasks.clear();
+      console.log(`[Gateway] Cleared ${batchCount} batch tasks`);
+
+      if (this.taskHistoryStore) {
+        this.taskHistoryStore.shutdown();
+        console.log('[Gateway] Task history store shut down');
       }
-      this.client = null;
-      this.driver = null;
-    }
-    
-    if (this.server) {
-      return new Promise((resolve) => {
-        this.server.close(() => {
-          console.log('[Gateway] HTTP server closed');
-          this.server = null;
-          resolve();
+
+      // Stop the CDP health watcher BEFORE closing the CDP client so any
+      // in-flight probe sees `_stopped = true` and exits cleanly instead of
+      // racing against a half-closed websocket.
+      if (this.healthWatcher && typeof this.healthWatcher.stop === 'function') {
+        try {
+          this.healthWatcher.stop();
+          console.log('[Gateway] CDP health watcher stopped');
+        } catch (e) {
+          console.error('[Gateway] Error stopping health watcher:', e.message);
+        }
+      }
+
+      // Tear down WS server + heartbeat interval BEFORE the HTTP server's
+      // close() runs, so upgrade requests don't try to attach to a dying wss.
+      if (this.wsHandler && typeof this.wsHandler.close === 'function') {
+        try {
+          this.wsHandler.close();
+          console.log('[Gateway] WebSocket handler closed');
+        } catch (e) {
+          console.error('[Gateway] Error closing WebSocket handler:', e.message);
+        }
+        this.wsHandler = null;
+      }
+
+      if (this.client) {
+        try {
+          await this.client.close();
+          console.log('[Gateway] CDP client closed');
+        } catch (e) {
+          console.error('[Gateway] Error closing CDP client:', e.message);
+        }
+        this.client = null;
+        this.driver = null;
+      }
+
+      if (this.server) {
+        await new Promise((resolve) => {
+          this.server.close(() => {
+            console.log('[Gateway] HTTP server closed');
+            this.server = null;
+            resolve();
+          });
         });
-      });
+      }
+
+      console.log('[Gateway] Graceful shutdown completed');
+    })();
+
+    try {
+      await this._shutdownInProgress;
+    } finally {
+      // Keep `_shutdownInProgress` truthy so repeat callers still see the
+      // resolved promise; clear no state.
     }
-    
-    console.log('[Gateway] Graceful shutdown completed');
+  }
+
+  /**
+   * Alias kept for callers (tests, embedders) that prefer the conventional
+   * `close()` name. Equivalent to `gracefulShutdown()`.
+   */
+  close() {
+    return this.gracefulShutdown();
   }
 }
 
@@ -4933,7 +5005,9 @@ async function startGateway(options = {}) {
       gateway.wsHandler = new WebSocketHandler(gateway);
       gateway.wsHandler.initialize(server);
       gateway._ensureBackgroundPolling();
-      resolve({ server, gateway });
+      // `close` is the canonical embed/test handle. `gateway.gracefulShutdown()`
+      // remains available for callers already wired to it.
+      resolve({ server, gateway, close: () => gateway.gracefulShutdown() });
     });
     server.on('error', reject);
   });
