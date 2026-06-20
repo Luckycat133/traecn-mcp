@@ -17,6 +17,7 @@ const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
 const { getEnvWithFallback, parsePositiveInt, sanitizeLog } = require('../shared/utils');
+const { errorToHttpStatus, errorToBody } = require('./error-mapping');
 const { ConfigManager } = require('../shared/config-manager');
 const { getGlobalStore } = require('../shared/task-history');
 const { buildCapabilities } = require('../shared/capabilities');
@@ -246,7 +247,7 @@ async function sendTaskWebhook(url, payload) {
     signal: AbortSignal.timeout(5000)
   });
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    throw TraeCNAutomationError.webhookFailed(url, response.status, response.statusText);
   }
   await response.text().catch(() => {});
 }
@@ -2015,10 +2016,10 @@ class Gateway {
       this._finishRequestLog(req, res, 404);
       return this._json(req, res, { error: 'Not found' }, 404);
     } catch (err) {
-      console.error('[Gateway] Error:', sanitizeLog({ message: err.message, code: err.code }));
-      const statusCode = err instanceof HttpError ? err.statusCode : (err instanceof TraeCNAutomationError ? 502 : 500);
+      console.error('[Gateway] Error:', sanitizeLog({ message: err.message, code: err.code, name: err.name }));
+      const statusCode = errorToHttpStatus(err);
       this._finishRequestLog(req, res, statusCode);
-      return this._json(req, res, { error: err.message, code: err.code || 'INTERNAL_ERROR' }, statusCode);
+      return this._json(req, res, errorToBody(err), statusCode);
     }
   }
 
@@ -2768,7 +2769,7 @@ class Gateway {
       }
     });
     if (result.success === false) {
-      throw new Error(`Failed to switch Solo chat for ${action}: ${result.reason || 'unknown'}`);
+      throw TraeCNAutomationError.soloChatSwitchFailed(`action=${action}: ${result.reason || 'unknown'}`);
     }
     return result;
   }
