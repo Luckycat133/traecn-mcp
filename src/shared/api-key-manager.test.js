@@ -2,21 +2,9 @@
 
 const assert = require('assert');
 const { ApiKeyManager } = require('../shared/api-key-manager');
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const { createRunner } = require('./test-runner');
+const runner = createRunner('api-key-manager.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 
 console.log('\n[api-key-manager.test.js] Running tests...\n');
 
@@ -305,5 +293,5 @@ test('ApiKeyManager disabled by default', () => {
   assert.strictEqual(manager.enabled, false);
 });
 
-console.log(`\n[api-key-manager.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+if (runner.failed > 0) process.exit(1);

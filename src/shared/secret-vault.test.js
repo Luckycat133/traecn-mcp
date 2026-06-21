@@ -5,21 +5,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const secretVault = require('./secret-vault');
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const { createRunner } = require('./test-runner');
+const runner = createRunner('secret-vault.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 
 console.log('\n[secret-vault.test.js] Running tests...\n');
 
@@ -123,5 +111,5 @@ test('encryptString requires passphrase', () => {
   assert.throws(() => secretVault.encryptString('x', { passphrase: '' }), /passphrase/);
 });
 
-console.log(`\n[secret-vault.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+if (runner.failed > 0) process.exit(1);
