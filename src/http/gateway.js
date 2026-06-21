@@ -36,6 +36,8 @@ const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
 const { redactUrl: _redactUrl } = require('./request-gate');
 const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, RateLimiter, HttpError } = require('./request-gate');
 const { TaskQueueService } = require('./task-queue-service');
+const { TraeControl } = require('../cdp/trae-control');
+const { ROUTES, matchRoute, resolveHandler } = require('./route-table');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -167,6 +169,15 @@ class Gateway {
       probeTimeoutMs: this.autoRecoverProbeTimeoutMs,
       logger: console,
       label: 'Gateway'
+    });
+    this.traeControl = new TraeControl({
+      configManager: this.configManager,
+      isMockBridge: () => this.mockBridge,
+      autoStartTrae: this.autoStartTrae,
+      recoveryCooldownMs: this.traeRecoveryCooldownMs,
+      recoveryWaitMs: this.traeRecoveryWaitMs,
+      logger: console,
+      setTimeoutImpl: (cb, delay) => this._setTimeout(cb, delay),
     });
     this.activeQueuePersistencePath = this._resolveActiveQueuePersistencePath();
     this.taskQueueService = new TaskQueueService({
@@ -352,91 +363,14 @@ class Gateway {
   }
 
   async _attemptTraeRecovery(reason) {
-    if (this.mockBridge || !this.autoStartTrae) return false;
-
-    const now = Date.now();
-    if (now - this.lastTraeRecoveryAt < this.traeRecoveryCooldownMs) {
-      return false;
+    // Delegate to TraeControl but mirror `lastTraeRecoveryAt` on Gateway so
+    // existing tests + observability that read this.lastTraeRecoveryAt keep
+    // working unchanged.
+    const result = await this.traeControl.attemptRecovery(reason);
+    if (result || this.traeControl.lastRecoveryAt) {
+      this.lastTraeRecoveryAt = this.traeControl.lastRecoveryAt;
     }
-    this.lastTraeRecoveryAt = now;
-
-    const binPath = findTraeCNBinary();
-    if (!binPath) {
-      console.warn('[Gateway] Trae recovery skipped: binary not found');
-      return false;
-    }
-
-    const quickstart = getQuickstartConfig();
-    const requestedPort = getEnvWithFallback(
-      'TRAECN_REMOTE_DEBUGGING_PORT',
-      'TRAE_REMOTE_DEBUGGING_PORT',
-      quickstart.remoteDebuggingPort || '9334'
-    );
-    process.env.TRAECN_REMOTE_DEBUGGING_PORT = requestedPort;
-
-    try {
-      const running = isTraeCNRunning();
-      const recoveryNewInstance = getEnvWithFallback(
-        'TRAECN_TRAE_RECOVERY_NEW_INSTANCE',
-        'TRAE_TRAE_RECOVERY_NEW_INSTANCE',
-        '0'
-      ) === '1';
-      // TRAECN_RECOVERY_KILL_RUNNING=1: aggressively kill the existing
-      // TraeCN and relaunch with the debug port. Off by default so we
-      // never trample an interactive user session; opt in for unattended
-      // automation where lost session state is acceptable.
-      const killRunning = getEnvWithFallback(
-        'TRAECN_RECOVERY_KILL_RUNNING',
-        'TRAE_RECOVERY_KILL_RUNNING',
-        '0'
-      ) === '1';
-
-      if (running && !recoveryNewInstance && !killRunning) {
-        console.warn('[Gateway] Trae recovery skipped: normal Trae is already running without a reachable CDP endpoint; restart Trae CN with remote debugging enabled and existing profile.');
-        return false;
-      }
-
-      let launched = null;
-      let quit = null;
-      if (killRunning && running) {
-        // Use the canonical quit + relaunch path so the new instance
-        // reuses the same profile and CDP port — no zombie process.
-        const result = await restartTraeCNWithDebug({ binPath });
-        quit = result.quit;
-        launched = result.launched;
-      } else {
-        launched = startTraeCN({
-          binPath,
-          newInstance: recoveryNewInstance,
-          useIsolatedProfile: quickstart.profileMode === 'existing' ? false : quickstart.useIsolatedProfile
-        });
-      }
-      console.log('[Gateway] Trae recovery launched:', {
-        reason: reason?.message || String(reason || 'unknown'),
-        requestedPort,
-        profileMode: quickstart.profileMode,
-        recoveryNewInstance,
-        killRunning,
-        alreadyRunning: running,
-        quit: quit ? { ok: quit.ok, alreadyStopped: quit.alreadyStopped } : null,
-        pid: launched && launched.pid
-      });
-    } catch (err) {
-      console.error('[Gateway] Trae recovery failed:', err.message);
-      return false;
-    }
-
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < this.traeRecoveryWaitMs) {
-      try {
-        await discoverTarget();
-        return true;
-      } catch (err) {
-        await new Promise(resolve => { this._setTimeout(resolve, 1500); });
-      }
-    }
-    console.warn('[Gateway] Trae recovery timed out waiting for CDP surface');
-    return false;
+    return result;
   }
 
   _normalizeFollowupTasks(items) {
