@@ -11,20 +11,10 @@ try {
   fs.unlinkSync(TEST_CONFIG_FILE);
 } catch {}
 
-let passed = 0;
-let failed = 0;
+const { createRunner } = require('../src/shared/test-runner');
 
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const r = createRunner('traecn-cli.test.js');
+const { test, asyncTest, summary } = r;
 
 function clearModuleCache() {
   const keys = Object.keys(require.cache);
@@ -418,5 +408,5 @@ test('taskId format includes batchId prefix', () => {
   assert.ok(taskId.endsWith('_0'));
 });
 
-console.log(`\n[traecn-cli.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+process.exit(r.failed > 0 ? 1 : 0);

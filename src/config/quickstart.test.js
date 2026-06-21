@@ -135,8 +135,8 @@ test('startTraeCN command can include isolated profile args through dry-run help
   assert.ok(result.commandArgs.includes('--user-data-dir=/tmp/traecnclaw-profile-9222'));
 });
 
-console.log(`\n[quickstart.test.js] Results: ${passed} passed, ${failed} failed\n`);
+summary();
 
-if (failed > 0) {
+if (r.failed > 0) {
   process.exit(1);
 }

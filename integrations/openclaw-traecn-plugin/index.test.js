@@ -5,23 +5,12 @@ const fs = require('fs');
 const path = require('path');
 const { toolDefinitions, slashCommands, formatResult, PLUGIN_ID } = require('./index');
 const { listCommands, mapSettingsAction } = require('./lib/command-set');
+const { createRunner } = require('../../src/shared/test-runner');
 
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'openclaw.plugin.json'), 'utf8'));
 
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const r = createRunner('index.test.js');
+const { test, asyncTest, summary } = r;
 
 console.log('\n[index.test.js] Running OpenClaw plugin tests...\n');
 
@@ -219,5 +208,5 @@ test('formatResult handles empty response', () => {
   assert.ok(result.includes('No response'));
 });
 
-console.log(`\n[index.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+process.exit(r.failed > 0 ? 1 : 0);
