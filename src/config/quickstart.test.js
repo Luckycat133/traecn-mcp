@@ -10,21 +10,10 @@ const {
   restartTraeCNWithDebug,
   getQuickstartConfig
 } = require('./quickstart');
+const { createRunner } = require('../shared/test-runner');
 
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const r = createRunner('quickstart.test.js');
+const { test, asyncTest, summary } = r;
 
 console.log('\n[quickstart.test.js] Running tests...\n');
 

@@ -43,41 +43,12 @@ function asyncTest(name, fn) {
 }
 
 function makeReqRes(headers = {}, url = '/api/status', method = 'GET', body = null) {
-  const payload = body === null || body === undefined ? '' : JSON.stringify(body);
-  const req = new Readable({
-    read() {
-      if (payload) this.push(payload);
-      this.push(null);
-    }
-  });
-  req.method = method;
-  req.url = url;
-  req.headers = {
-    host: '127.0.0.1',
-    ...(payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}),
-    ...headers
-  };
-  req.socket = { remoteAddress: '127.0.0.1' };
-
-  const resHeaders = {};
-  const res = {
-    statusCode: 200,
-    _writtenHead: null,
-    _body: null,
-    setHeader(name, value) { resHeaders[name.toLowerCase()] = value; },
-    getHeader(name) { return resHeaders[name.toLowerCase()]; },
-    removeHeader(name) { delete resHeaders[name.toLowerCase()]; },
-    writeHead(code, h) {
-      res.statusCode = code;
-      res._writtenHead = { ...resHeaders, ...h };
-    },
-    end(responseBody) {
-      res._body = responseBody;
-      res._ended = true;
-    }
-  };
-  return { req, res, resHeaders };
+  // Thin shim over the shared helper so existing call sites in this file
+  // keep working unchanged. The real implementation lives in
+  // src/shared/test-helpers.js.
+  return requireSharedMakeReqRes(headers, url, method, body);
 }
+const requireSharedMakeReqRes = require('../shared/test-helpers').makeReqRes;
 
 console.log('\n[gateway.test.js] Running RateLimiter and sanitizeLog tests...\n');
 
