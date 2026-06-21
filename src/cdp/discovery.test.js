@@ -2,21 +2,9 @@
 
 const assert = require('assert');
 const { DEFAULT_DISCOVERY_PORTS, scoreTarget, discoverTarget, fetchCDPTargets, fetchCDPVersion, classifyTargetSurface, describeCDPSurface } = require('./discovery');
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const { createRunner } = require('../shared/test-runner');
+const runner = createRunner('discovery.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 
 console.log('\n[discovery.test.js] Running tests...\n');
 
@@ -126,8 +114,5 @@ test('fetchCDPVersion rejects on connection failure', async () => {
   }
 });
 
-console.log(`\n[discovery.test.js] Results: ${passed} passed, ${failed} failed\n`);
-
-if (failed > 0) {
-  process.exit(1);
-}
+summary();
+if (runner.failed > 0) process.exit(1);

@@ -2,23 +2,9 @@
 
 const assert = require('assert');
 const { CommandPaletteDriver } = require('./command-palette-driver');
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    const r = fn();
-    if (r && typeof r.then === 'function') {
-      r.then(() => { passed++; console.log(`  PASS: ${name}`); })
-        .catch(err => { failed++; console.error(`  FAIL: ${name}: ${err.message}`); });
-      return;
-    }
-    passed++; console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++; console.error(`  FAIL: ${name}: ${err.message}`);
-  }
-}
+const { createRunner } = require('../shared/test-runner');
+const runner = createRunner('command-palette-driver.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 
 console.log('\n[command-palette-driver.test.js] Running tests...\n');
 
@@ -96,7 +82,7 @@ test('close() no-ops if palette not open', () => {
   });
 });
 
-setTimeout(() => {
-  console.log(`\n  Results: ${passed} passed, ${failed} failed\n`);
-  process.exit(failed > 0 ? 1 : 0);
-}, 100);
+pendingAsyncTests().then(() => {
+  summary();
+  if (runner.failed > 0) process.exit(1);
+});

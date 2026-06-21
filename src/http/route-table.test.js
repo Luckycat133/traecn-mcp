@@ -15,20 +15,9 @@
 const assert = require('assert');
 const { ROUTES, matchRoute, resolveHandler, compilePath } = require('./route-table');
 
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const { createRunner } = require('../shared/test-runner');
+const runner = createRunner('route-table.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 
 console.log('\n[route-table.test.js] Running route table tests...\n');
 
@@ -138,5 +127,5 @@ test('route-table: documents requiresAuth + requiresRateLimit + requiresBody fla
   assert.strictEqual(delegate.requiresBody, true);
 });
 
-console.log(`\n[route-table.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+if (runner.failed > 0) process.exit(1);

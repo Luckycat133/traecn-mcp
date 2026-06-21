@@ -18,21 +18,9 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { ROUTES: CENTRAL_ROUTES, matchRoute } = require('../route-table');
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const { createRunner } = require('../../shared/test-runner');
+const runner = createRunner('handlers.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 
 console.log('\n[handlers.test.js] Running handler module tests...\n');
 
@@ -88,5 +76,5 @@ test('handlers: tasks module routes resolve via matchRoute', () => {
   }
 });
 
-console.log(`\n[handlers.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+if (runner.failed > 0) process.exit(1);
