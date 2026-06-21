@@ -35,6 +35,7 @@ const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
 // in request-gate.js; this is a one-line shim kept for readability.
 const { redactUrl: _redactUrl } = require('./request-gate');
 const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, RateLimiter, HttpError } = require('./request-gate');
+const { TaskQueueService } = require('./task-queue-service');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -168,7 +169,14 @@ class Gateway {
       label: 'Gateway'
     });
     this.activeQueuePersistencePath = this._resolveActiveQueuePersistencePath();
-    this._restoreActiveQueue();
+    this.taskQueueService = new TaskQueueService({
+      logger: console,
+      persistencePath: this.activeQueuePersistencePath,
+      taskHistoryStore: this.taskHistoryStore,
+      isMockBridge: () => this.mockBridge,
+      isTerminalStatus: (status) => this._isTerminalTaskStatus(status),
+    });
+    this.taskQueueService.restore(this.taskQueue);
 
     this.configManager.on('configChanged', (data) => {
       this._applyConfigChanges(data.changes);
