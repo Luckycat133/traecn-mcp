@@ -87,6 +87,25 @@ function buildModule(topic, handlerBodies, routes) {
   const lines = [];
   lines.push("'use strict';");
   lines.push('');
+  // Auto-detect imports needed by the handler bodies. Known free
+  // identifiers that the Gateway gets from its module-level requires and
+  // that are used inside `_handle*` methods. We can't enumerate every
+  // possible reference, but the common ones are listed here.
+  const NEEDED = {
+    'parseBody': "const { parseBody } = require('../request-gate');",
+    'globalMetrics': "const { globalMetrics } = require('../../shared/metrics');",
+    'parsePositiveInt': "const { parsePositiveInt } = require('../../shared/utils');",
+  };
+  const allText = handlerBodies.join('\n');
+  const addedImports = new Set();
+  for (const [name, importLine] of Object.entries(NEEDED)) {
+    // Use word-boundary to avoid matching inside identifiers.
+    if (new RegExp('\\b' + name + '\\b').test(allText)) {
+      lines.push(importLine);
+      addedImports.add(name);
+    }
+  }
+  if (addedImports.size) lines.push('');
   lines.push('/**');
   lines.push(` * ${topic} handlers.`);
   lines.push(' *');
@@ -143,9 +162,12 @@ function main() {
     // Strip "_handle" prefix to get the bare name (e.g. "_handleCreateSession"
     // -> "CreateSession"). slice(7) is correct: "_handle" is 7 chars.
     const bare = r.name.slice('_handle'.length);
+    // Hyphens in topic name would break identifier resolution. Replace
+    // any non-identifier chars with camelCase transitions.
+    const identTopic = args.topic.replace(/[^a-zA-Z0-9]+(.)?/g, (_, c) => c ? c.toUpperCase() : '');
     const shim = [
       `  ${isAsync ? 'async ' : ''}_handle${bare}(${rawParams}) {`,
-      `    return ${args.topic}Handlers.handle${bare}(req, res, this${pathArgs});`,
+      `    return ${identTopic}Handlers.handle${bare}(req, res, this${pathArgs});`,
       `  }`,
     ];
     lines.splice(r.start, r.end - r.start + 1, ...shim);
