@@ -42,10 +42,16 @@ const statusHandlers = require('./handlers/status');
 const tasksHandlers = require('./handlers/tasks');
 const delegateHandlers = require('./handlers/delegate');
 const sessionsHandlers = require('./handlers/sessions');
+const configHandlers = require('./handlers/config');
+const dialogHandlers = require('./handlers/dialog');
+const settingsHandlers = require('./handlers/settings');
+const preflightHandlers = require('./handlers/preflight');
+const soloChatHandlers = require('./handlers/solo-chat');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
+
 const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
 
 // Notify OpenClaw (Telegram gateway) when async task completes
@@ -2230,30 +2236,15 @@ class Gateway {
   }
 
   async _handleNewChat(req, res) {
-    await this._ensureConnection();
-    const success = await this.driver.newChat();
-    this._json(req, res, { success });
+    return soloChatHandlers.handleNewChat(req, res, this);
   }
 
   async _handleListSoloChats(req, res) {
-    await this._ensureConnection();
-    const result = typeof this.driver.listSoloChats === 'function'
-      ? await this.driver.listSoloChats()
-      : { mode: 'unsupported', chats: [], count: 0, reason: 'driver_does_not_support_solo_chats' };
-    this._json(req, res, result);
+    return soloChatHandlers.handleListSoloChats(req, res, this);
   }
 
   async _handleSwitchSoloChat(req, res) {
-    const body = await parseBody(req);
-    await this._ensureConnection();
-    const result = typeof this.driver.switchSoloChat === 'function'
-      ? await this.driver.switchSoloChat({
-        index: Number.isInteger(body.index) ? body.index : null,
-        textIncludes: body.textIncludes,
-        titleIncludes: body.titleIncludes
-      })
-      : { success: false, reason: 'driver_does_not_support_solo_chats' };
-    this._json(req, res, result, result.success === false ? 404 : 200);
+    return soloChatHandlers.handleSwitchSoloChat(req, res, this);
   }
 
   _normalizeSoloChatTarget(value = {}) {
@@ -2454,79 +2445,7 @@ class Gateway {
   }
 
   async _handleSubmitSoloChatTask(req, res) {
-    const body = await parseBody(req);
-    if (!body.task) {
-      return this._json(req, res, { error: 'task is required' }, 400);
-    }
-    if (typeof body.task !== 'string' || body.task.length > 100000) {
-      return this._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
-    }
-
-    return await this._withUiActionLock(async () => {
-      await this._ensureConnection();
-      if (typeof this.driver.switchMode === 'function') {
-        await this.driver.switchMode('solo');
-      }
-      if (typeof this.driver.sendMessage !== 'function') {
-        return this._json(req, res, { error: 'driver does not support message submission' }, 501);
-      }
-
-      const requestedSoloChat = this._normalizeSoloChatTarget(body.soloChat || body.soloChatTarget || {
-        index: body.soloChatIndex,
-        titleIncludes: body.soloChatTitleIncludes,
-        textIncludes: body.soloChatTextIncludes
-      });
-
-      if (requestedSoloChat) {
-        if (typeof this.driver.switchSoloChat !== 'function') {
-          return this._json(req, res, { success: false, reason: 'driver_does_not_support_solo_chats' }, 501);
-        }
-        const switchResult = await this.driver.switchSoloChat(this._soloChatSwitchCriteria(requestedSoloChat));
-        if (switchResult.success === false) {
-          return this._json(req, res, switchResult, 404);
-        }
-      } else if (body.newChat !== false) {
-        if (typeof this.driver.newChat !== 'function') {
-          return this._json(req, res, { error: 'driver does not support new chat creation' }, 501);
-        }
-        await this.driver.newChat();
-      }
-
-      await this.driver.sendMessage(this._taskWithProjectContext(body.task, body.projectPath));
-      const queueStatus = typeof this.driver.checkQueueStatus === 'function'
-        ? await this.driver.checkQueueStatus()
-        : { queued: true, running: false, canSubmit: false };
-      const task = this._createQueuedTask({
-        ...body,
-        soloChat: requestedSoloChat,
-        includeProcessText: body.includeProcessText === true
-      }, {
-        ...queueStatus,
-        queued: queueStatus.queued !== false,
-        queueMessage: queueStatus.queueMessage || queueStatus.message || 'submitted to Solo chat'
-      });
-      task.status = 'executing';
-      task.submittedToTrae = true;
-      task.submittedAt = Date.now();
-      task.queueState = queueStatus.running ? 'running' : (queueStatus.queued ? 'queued' : 'submitted');
-      task.queueMessage = queueStatus.queueMessage || queueStatus.message || 'submitted to Solo chat';
-      await this._captureTaskSoloChat(task);
-      this._syncTaskHistoryMirror(task);
-      this._persistActiveQueue();
-      this._ensureBackgroundPolling();
-
-      return this._json(req, res, {
-        taskId: task.taskId,
-        status: task.status,
-        submittedToTrae: true,
-        soloChat: task.soloChat || null,
-        queueDetails: this._queueDetailsFromStatus(queueStatus, task.currentModel),
-        reviewRequired: task.reviewRequired,
-        autoContinue: task.autoContinue === true,
-        followupCount: task.followupTasks.length,
-        message: '任务已提交到 Solo 对话，后台会切回该对话收集结果'
-      }, 202);
-    });
+    return soloChatHandlers.handleSubmitSoloChatTask(req, res, this);
   }
 
   async _handleStopGeneration(req, res) {
