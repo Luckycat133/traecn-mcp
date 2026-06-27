@@ -278,3 +278,40 @@ Pattern: `Promise.all(asyncTests).then(summary)` → `pendingAsyncTests().then(s
 | handlers 测试 | handlers.test.js 7 cases |
 | system-test 自然退出 | < 1s |
 | Gateway 启动 | 9.6 ms |
+
+### 3.4 Round 4：browser-dom 扩展 + 批量 driver 迁移
+
+| Commit | 描述 |
+|---|---|
+| `79b4377` | 新增 `evaluateJSON`（解析 stringified JSON）和 `clickByTextRadix`（通过 `window.__radixClick`）；browser-dom.test.js 4→11 cases |
+| `6c23280` `45834ce` `653c680` `e34eb45` `67433f5` `72924b2` `41e0e52` `5201204` `3c43d28` `28ea472` | 10 commits 批量迁移 driver 中剩余的 Runtime.evaluate 调用：snapshot (5 sites) + file (3) + terminal (3) + extension (2) + diagnostics (3) + search (2) + git (3) + editor (2/6) + command-palette (4) + settings (2/13) |
+
+**总计迁移 ~29 个 inline `Runtime.evaluate` sites** across 10 driver files.
+
+**未迁移**:
+- settings-driver 11/13 sites：使用自定义多策略文本匹配（.text span → textContent → aria-label）和 fallback selector 链，不匹配 clickByText 简单 API。需要扩展 helper 以支持 multi-strategy text 解析 + partial match fallback，超出本轮 scope。
+- editor-driver `_clickApplyButton` 等 4 sites：使用 user-provided predicate function + radix-click，需要 helper 支持自定义 predicate。
+
+**API 扩展**：
+- `evaluate(client, fnDecl, args)`：原有，已迁移 18 sites
+- `evaluateJSON(client, fnDecl, args)`：新增，自动 JSON.parse 字符串返回
+- `clickByText(client, selectors, text)`：原有，已迁移 2 sites
+- `clickByTextRadix(client, selectors, text)`：新增，已迁移 4 sites
+
+### 3.5 当前度量（Round 4 后）
+
+| 指标 | 值 |
+|---|---|
+| `npm test` PASS 数 | **740** + 1 intentional fail（test-runner 自检） |
+| browser-dom.test.js cases | 11（原 7 + 4 新） |
+| driver files migrated | 10 (snapshot, file, terminal, extension, diagnostics, search, git, editor partial, command-palette, settings partial) |
+| driver Runtime.evaluate sites migrated | ~29 |
+| system-test 自然退出 | < 1s |
+| Gateway 启动 | 9.6 ms |
+
+**未做（后续 worktree 候选）**：
+1. **`_handleRequestImpl` 285 行 dispatch 链** — 仍在 gateway.js
+2. **Queue 状态机 / batch 执行 / recovery helper** — 领域服务重塑
+3. **dom-driver.js 第二单体（3756 行）** — 第二个最复杂文件
+4. **settings-driver 剩余 11 sites** — 需要 clickByText API 扩展（multi-strategy text + fallback selector）
+5. **editor-driver 剩余 4 sites** — 需要 clickByText API 支持自定义 predicate
