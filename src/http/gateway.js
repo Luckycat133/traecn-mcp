@@ -39,6 +39,7 @@ const { TaskQueueService } = require('./task-queue-service');
 const { TraeControl } = require('../cdp/trae-control');
 const { ROUTES, matchRoute, resolveHandler } = require('./route-table');
 const statusHandlers = require('./handlers/status');
+const tasksHandlers = require('./handlers/tasks');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -1813,47 +1814,19 @@ class Gateway {
   }
 
   _handleTasksHistory(req, res) {
-    const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
-    const page = parsePositiveInt(parsedUrl.searchParams.get('page'), 1);
-    const limit = Math.min(parsePositiveInt(parsedUrl.searchParams.get('limit'), 20), 100);
-    const status = parsedUrl.searchParams.get('status') || null;
-    const keyword = parsedUrl.searchParams.get('keyword') || null;
-    const startDate = parsedUrl.searchParams.get('startDate') || null;
-    const endDate = parsedUrl.searchParams.get('endDate') || null;
-    const sessionId = parsedUrl.searchParams.get('sessionId') || null;
-
-    const result = this.taskHistoryStore.getHistory({
-      page, limit, status, keyword, startDate, endDate, sessionId
-    });
-    this._json(req, res, result);
+    return tasksHandlers.handleTasksHistory(req, res, this);
   }
 
   _handleTasksHistoryClear(req, res) {
-    const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
-    const olderThanHours = parsedUrl.searchParams.has('olderThanHours')
-      ? parsePositiveInt(parsedUrl.searchParams.get('olderThanHours'), null)
-      : null;
-    const status = parsedUrl.searchParams.get('status') || null;
-    const beforeDate = parsedUrl.searchParams.get('beforeDate') || null;
-
-    const result = this.taskHistoryStore.clearHistory({ olderThanHours, status, beforeDate });
-    this._json(req, res, { success: true, ...result });
+    return tasksHandlers.handleTasksHistoryClear(req, res, this);
   }
 
   _handleGetTask(req, res, taskId) {
-    const task = this.taskHistoryStore.getTask(taskId);
-    if (!task) {
-      return this._json(req, res, { error: 'Task not found' }, 404);
-    }
-    this._json(req, res, task);
+    return tasksHandlers.handleGetTask(req, res, this, taskId);
   }
 
   _handleTaskReplay(req, res, taskId) {
-    const replay = this.taskHistoryStore.getReplay(taskId);
-    if (!replay) {
-      return this._json(req, res, { error: 'Task not found' }, 404);
-    }
-    this._json(req, res, replay);
+    return tasksHandlers.handleTaskReplay(req, res, this, taskId);
   }
 
   async _handleConfirmPlan(req, res) {
