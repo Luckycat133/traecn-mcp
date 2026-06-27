@@ -12,17 +12,12 @@ const { buildCodeReviewTask } = require('./review');
 // ============ 核心层 (Core Layer) ============
 // 最基础的功能，所有AI都应该使用
 
-let _instance = null;
-
 function getSkill(context = {}) {
-  if (!_instance) {
-    _instance = new TraeCNSkill(context);
-  }
-  return _instance;
+  return TraeCNSkill.getSharedInstance(context);
 }
 
 function reset() {
-  _instance = null;
+  TraeCNSkill.resetSharedInstance();
 }
 
 // ============ 基础层 (Basic Layer) ============

@@ -9,6 +9,7 @@ const {
   WS_MAX_CLIENTS,
   WS_MAX_UPGRADES_PER_WINDOW
 } = require('./websocket-handler');
+const { secureCompare } = require('../shared/utils');
 const http = require('http');
 const { WebSocket } = require('ws');
 
@@ -106,20 +107,17 @@ test('WebSocketHandler calculates progress for unknown status', () => {
 });
 
 test('WebSocketHandler secureCompare returns true for matching strings', () => {
-  const handler = new WebSocketHandler({});
-  assert.strictEqual(handler._secureCompare('token123', 'token123'), true);
+  assert.strictEqual(secureCompare('token123', 'token123'), true);
 });
 
 test('WebSocketHandler secureCompare returns false for different strings', () => {
-  const handler = new WebSocketHandler({});
-  assert.strictEqual(handler._secureCompare('token123', 'token456'), false);
+  assert.strictEqual(secureCompare('token123', 'token456'), false);
 });
 
 test('WebSocketHandler secureCompare returns false for non-string inputs', () => {
-  const handler = new WebSocketHandler({});
-  assert.strictEqual(handler._secureCompare(null, 'token'), false);
-  assert.strictEqual(handler._secureCompare('token', null), false);
-  assert.strictEqual(handler._secureCompare(123, 'token'), false);
+  assert.strictEqual(secureCompare(null, 'token'), false);
+  assert.strictEqual(secureCompare('token', null), false);
+  assert.strictEqual(secureCompare(123, 'token'), false);
 });
 
 test('WebSocketHandler broadcasts AI response to task subscribers', () => {

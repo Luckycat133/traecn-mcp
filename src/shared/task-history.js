@@ -37,6 +37,8 @@ class TaskHistoryStore {
     this.stepCounter = 0;
     this._dirty = false;
     this._cleanupTimer = null;
+    this._persistTimer = null;
+    this._persistDebounceMs = options.persistDebounceMs || 100;
     this._initPersistence();
     this._scheduleCleanup();
   }
@@ -62,7 +64,30 @@ class TaskHistoryStore {
     }
   }
 
+  /**
+   * Mark the store dirty and schedule a debounced write. Multiple rapid
+   * mutations (e.g. completing several tasks in a batch) coalesce into a
+   * single disk write instead of blocking the event loop on each call.
+   * Use {@link _persistNow} for an immediate synchronous write (e.g. shutdown).
+   */
   _persist() {
+    if (!this.persistencePath) return;
+    this._dirty = true;
+    if (this._persistTimer) return;
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null;
+      this._persistNow();
+    }, this._persistDebounceMs);
+    if (typeof this._persistTimer.unref === 'function') {
+      this._persistTimer.unref();
+    }
+  }
+
+  /**
+   * Synchronously write the current state to disk if there are unsaved
+   * changes. Called by the debounced timer and by {@link shutdown}.
+   */
+  _persistNow() {
     if (!this.persistencePath || !this._dirty) return;
     try {
       const filePath = path.resolve(this.persistencePath);
@@ -95,6 +120,10 @@ class TaskHistoryStore {
     if (this._cleanupTimer) {
       clearInterval(this._cleanupTimer);
       this._cleanupTimer = null;
+    }
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
     }
   }
 
@@ -269,10 +298,19 @@ class TaskHistoryStore {
 
     if (keyword) {
       const kw = keyword.toLowerCase();
-      results = results.filter(t =>
-        (t.task && t.task.toLowerCase().includes(kw)) ||
-        (t.result && JSON.stringify(t.result).toLowerCase().includes(kw))
-      );
+      results = results.filter(t => {
+        // Check the task string first (cheap); only serialize the result
+        // object (expensive) if the task string didn't match.
+        if (t.task && t.task.toLowerCase().includes(kw)) return true;
+        if (t.result) {
+          try {
+            return JSON.stringify(t.result).toLowerCase().includes(kw);
+          } catch {
+            return false;
+          }
+        }
+        return false;
+      });
     }
 
     if (startDate) {
@@ -472,7 +510,8 @@ class TaskHistoryStore {
 
   shutdown() {
     this._stopCleanup();
-    this._persist();
+    // Flush any pending debounced writes synchronously.
+    this._persistNow();
   }
 }
 

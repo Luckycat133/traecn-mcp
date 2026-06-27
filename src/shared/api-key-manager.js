@@ -12,6 +12,9 @@ class ApiKeyManager {
       getEnvWithFallback('TRAECN_API_KEYS_ENABLED', 'TRAE_API_KEYS_ENABLED', '0') === '1'
     );
     this.keys = new Map();
+    // Index from keyHash -> keyId for O(1) validation lookups. Maintained
+    // alongside `this.keys` on create/revoke/rotate.
+    this._keysByHash = new Map();
     this.signatureSecret = options.signatureSecret || getEnvWithFallback('TRAECN_SIGNATURE_SECRET', 'TRAE_SIGNATURE_SECRET', '');
     this.signatureTimestampWindow = options.signatureTimestampWindow || 300000;
     this.allowedIPs = options.allowedIPs !== undefined
@@ -125,25 +128,41 @@ class ApiKeyManager {
     };
 
     this.keys.set(keyId, keyData);
+    this._keysByHash.set(keyHash, keyId);
     return { ...keyData, key: rawKey };
   }
 
+  /**
+   * Validate a raw API key. Uses a hash index for O(1) lookup and
+   * `timingSafeEqual` to avoid timing side-channels on hash comparison.
+   *
+   * @param {string} rawKey - The raw key to validate.
+   * @returns {{valid: boolean, keyId?: string, permissions?: string[]} | {valid: boolean, reason: string} | null}
+   *   Result object if the key format is valid, null if not found.
+   */
   validateKey(rawKey) {
     if (!rawKey || typeof rawKey !== 'string') return null;
 
     const keyHash = this.hashKey(rawKey);
-    const keyPrefix = this.getKeyPrefix(rawKey);
+    const keyId = this._keysByHash.get(keyHash);
+    if (!keyId) return null;
 
-    for (const [keyId, keyData] of this.keys) {
-      if (keyData.keyHash === keyHash && keyData.keyPrefix === keyPrefix) {
-        if (keyData.expiresAt && new Date(keyData.expiresAt) < new Date()) {
-          return { valid: false, reason: 'expired' };
-        }
-        keyData.lastUsedAt = new Date().toISOString();
-        return { valid: true, keyId, permissions: keyData.permissions };
-      }
+    const keyData = this.keys.get(keyId);
+    if (!keyData) return null;
+
+    // Constant-time comparison of the hash to avoid timing leaks. Both
+    // buffers are 32-byte hex strings here; compare as buffers.
+    const a = Buffer.from(keyHash, 'hex');
+    const b = Buffer.from(keyData.keyHash, 'hex');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return null;
     }
-    return null;
+
+    if (keyData.expiresAt && new Date(keyData.expiresAt) < new Date()) {
+      return { valid: false, reason: 'expired' };
+    }
+    keyData.lastUsedAt = new Date().toISOString();
+    return { valid: true, keyId, permissions: keyData.permissions };
   }
 
   getKey(keyId) {
@@ -173,6 +192,10 @@ class ApiKeyManager {
   }
 
   revokeKey(keyId) {
+    const keyData = this.keys.get(keyId);
+    if (keyData) {
+      this._keysByHash.delete(keyData.keyHash);
+    }
     return this.keys.delete(keyId);
   }
 
@@ -180,11 +203,16 @@ class ApiKeyManager {
     const keyData = this.keys.get(keyId);
     if (!keyData) return null;
 
+    // Remove the old hash from the index before assigning a new one.
+    this._keysByHash.delete(keyData.keyHash);
+
     const newRawKey = this.generateKey();
     keyData.keyHash = this.hashKey(newRawKey);
     keyData.keyPrefix = this.getKeyPrefix(newRawKey);
     keyData.createdAt = new Date().toISOString();
     keyData.lastUsedAt = null;
+
+    this._keysByHash.set(keyData.keyHash, keyId);
 
     return { ...keyData, key: newRawKey };
   }

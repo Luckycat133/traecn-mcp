@@ -1,7 +1,7 @@
 'use strict';
 
-const { sleep, safeJsValue } = require('../shared/utils');
-const { TraeCNAutomationError } = require('./errors');
+const { safeJsValue } = require('../shared/utils');
+const { BaseDriver } = require('./base-driver');
 
 /**
  * EditorDriver — drives the Monaco / TraeCN code editor for accept/reject,
@@ -15,24 +15,7 @@ const { TraeCNAutomationError } = require('./errors');
  *
  * All VS Code command IDs are documented in command-palette-driver.js.
  */
-class EditorDriver {
-  constructor(client, config = {}, deps = {}) {
-    this.client = client;
-    this.config = config;
-    this.palette = deps.palette || null;
-  }
-
-  setPalette(palette) {
-    this.palette = palette;
-  }
-
-  _viaPalette(commandId) {
-    if (!this.palette) {
-      throw new TraeCNAutomationError('CommandPaletteDriver is required for this operation', 'PALETTE_REQUIRED', { commandId });
-    }
-    return this.palette.run(commandId);
-  }
-
+class EditorDriver extends BaseDriver {
   // ── AI Edit Accept / Reject (TraeCN-specific) ────────────────────────
 
   /**
@@ -64,7 +47,6 @@ class EditorDriver {
       })()`,
       returnByValue: true
     });
-    if (!r.result.value) return [];
     try {
       const parsed = JSON.parse(r.result.value);
       // Strip the `container` element since it's a DOM node, not serializable
@@ -102,22 +84,6 @@ class EditorDriver {
       returnByValue: true
     });
     return r.result.value;
-  }
-
-  async _ensureClickHelper() {
-    await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
-        if (window.__radixClick) return;
-        window.__radixClick = function(el) {
-          if (!el) return;
-          el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, button: 0}));
-          el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0}));
-          el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
-          el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
-        };
-      })()`,
-      returnByValue: true
-    });
   }
 
   /**
@@ -283,11 +249,7 @@ class EditorDriver {
       })()`,
       returnByValue: true
     });
-    try {
-      return JSON.parse(r.result.value);
-    } catch {
-      return { ok: false, error: 'parse failed' };
-    }
+    return this._parseResult(r.result.value, { ok: false, error: 'parse failed' });
   }
 
   /**
@@ -327,11 +289,7 @@ class EditorDriver {
       })()`,
       returnByValue: true
     });
-    try {
-      return JSON.parse(r.result.value);
-    } catch {
-      return { ok: false, error: 'parse failed' };
-    }
+    return this._parseResult(r.result.value, { ok: false, error: 'parse failed' });
   }
 
   /**
@@ -374,11 +332,7 @@ class EditorDriver {
       })()`,
       returnByValue: true
     });
-    try {
-      return JSON.parse(r.result.value);
-    } catch {
-      return [];
-    }
+    return this._parseResult(r.result.value, []);
   }
 }
 

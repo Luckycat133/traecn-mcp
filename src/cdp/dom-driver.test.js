@@ -917,6 +917,7 @@ test('listSoloChats returns Solo sidebar conversations from runtime evaluation',
   const driver = new DomDriver({
     async send(method, payload) {
       assert.strictEqual(method, 'Runtime.evaluate');
+      assert.strictEqual(payload.awaitPromise, true);
       expression = payload.expression || '';
       return {
         result: {
@@ -940,6 +941,11 @@ test('listSoloChats returns Solo sidebar conversations from runtime evaluation',
   assert.ok(expression.includes('conversation-item'));
   assert.ok(expression.includes('task-items-list'));
   assert.ok(expression.includes('task-item-info'));
+  assert.ok(expression.includes('findScrollHost'));
+  assert.ok(expression.includes('parentElement'));
+  assert.ok(expression.includes('document.scrollingElement'));
+  assert.ok(expression.includes('scrollTop'));
+  assert.ok(expression.includes("scanned: 'scroll'"));
 });
 
 test('switchSoloChat clicks matching Solo conversation and clears task state', async () => {
@@ -977,6 +983,170 @@ test('switchSoloChat clicks matching Solo conversation and clears task state', a
 test('switchSoloChat requires a selection criterion', async () => {
   const driver = new DomDriver({ send: async () => ({ result: { value: {} } }) }, getConfig());
   await assert.rejects(() => driver.switchSoloChat({}), /requires index, textIncludes, or titleIncludes/);
+});
+
+test('deleteSoloChats deletes matched Solo queue probe and verifies by title', async () => {
+  const mouseEvents = [];
+  const runtimeExpressions = [];
+  const driver = new DomDriver({
+    async send(method, payload) {
+      if (method === 'Input.dispatchMouseEvent') {
+        mouseEvents.push(payload);
+        return {};
+      }
+      assert.strictEqual(method, 'Runtime.evaluate');
+      const expression = payload.expression || '';
+      runtimeExpressions.push(expression);
+      if (expression.includes('var candidate =')) {
+        assert.strictEqual(payload.awaitPromise, true);
+        assert.ok(expression.includes('"Wait for Trae Queue 进行中 14:07"'));
+        assert.ok(expression.indexOf('candidate.title') < expression.indexOf('candidate.index'));
+        assert.ok(expression.includes('findScrollHost'));
+        assert.ok(expression.includes('scrollTop'));
+        return {
+          result: {
+            value: {
+              index: 0,
+              title: 'Wait for Trae Queue 进行中 14:07',
+              actionPoint: { x: 169, y: 150, kind: 'action' },
+              rowPoint: { x: 100, y: 162, kind: 'row' }
+            }
+          }
+        };
+      }
+      if (expression.includes('var anchor =')) {
+        return {
+          result: {
+            value: {
+              x: 99,
+              y: 273,
+              score: 160,
+              nodeText: '删除任务',
+              nodeClass: 'context-menu-container-delete',
+              clickClass: 'context-menu-container-delete'
+            }
+          }
+        };
+      }
+      if (expression.includes('querySelectorAll') && expression.includes('[role="dialog"]')) {
+        return {
+          result: {
+            value: {
+              x: 879,
+              y: 488,
+              score: 90,
+              nodeText: '删除',
+              nodeClass: 'icd-btn-content'
+            }
+          }
+        };
+      }
+      if (expression.includes('.soloaisidebar')) {
+        return {
+          result: {
+            value: {
+              mode: 'solo',
+              chats: [
+                { index: 0, title: '正常工作 任务完成', text: '正常工作 任务完成' }
+              ],
+              count: 1
+            }
+          }
+        };
+      }
+      throw new Error(`unexpected expression: ${expression.slice(0, 120)}`);
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+
+  const result = await driver.deleteSoloChats({
+    candidates: [
+      {
+        index: 0,
+        title: 'Wait for Trae Queue 进行中 14:07',
+        text: 'Wait for Trae Queue 进行中 14:07'
+      }
+    ]
+  });
+
+  assert.strictEqual(result.deleted, 1);
+  assert.strictEqual(result.attempts[0].success, true);
+  assert.strictEqual(result.attempts[0].deletePoint.nodeText, '删除任务');
+  assert.strictEqual(result.attempts[0].confirmPoint.nodeText, '删除');
+  assert.ok(mouseEvents.some(event => event.type === 'mousePressed' && event.x === 169 && event.y === 150));
+  assert.ok(mouseEvents.some(event => event.type === 'mousePressed' && event.x === 99 && event.y === 273));
+  assert.ok(mouseEvents.some(event => event.type === 'mousePressed' && event.x === 879 && event.y === 488));
+  assert.ok(runtimeExpressions.some(expression => expression.includes('.soloaisidebar')));
+});
+
+test('deleteSoloChats does not treat menu text insertion as deletion success', async () => {
+  const driver = new DomDriver({
+    async send(method, payload) {
+      if (method === 'Input.dispatchMouseEvent') return {};
+      assert.strictEqual(method, 'Runtime.evaluate');
+      const expression = payload.expression || '';
+      if (expression.includes('var candidate =')) {
+        return {
+          result: {
+            value: {
+              index: 0,
+              title: 'Wait for Trae Queue 进行中 14:11',
+              actionPoint: { x: 169, y: 150, kind: 'action' },
+              rowPoint: { x: 100, y: 162, kind: 'row' }
+            }
+          }
+        };
+      }
+      if (expression.includes('var anchor =')) {
+        return {
+          result: {
+            value: {
+              x: 99,
+              y: 273,
+              score: 160,
+              nodeText: '删除任务',
+              nodeClass: 'context-menu-container-delete',
+              clickClass: 'context-menu-container-delete'
+            }
+          }
+        };
+      }
+      if (expression.includes('querySelectorAll') && expression.includes('[role="dialog"]')) {
+        return { result: { value: null } };
+      }
+      if (expression.includes('.soloaisidebar')) {
+        return {
+          result: {
+            value: {
+              mode: 'solo',
+              chats: [
+                {
+                  index: 0,
+                  title: 'Wait for Trae Queue 重命名 导出 复制会话 删除任务 进行中 14:11',
+                  text: 'Wait for Trae Queue 重命名 导出 复制会话 删除任务 进行中 14:11'
+                }
+              ],
+              count: 1
+            }
+          }
+        };
+      }
+      throw new Error(`unexpected expression: ${expression.slice(0, 120)}`);
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+
+  const result = await driver.deleteSoloChats({
+    candidates: [
+      {
+        index: 0,
+        title: 'Wait for Trae Queue 进行中 14:11',
+        text: 'Wait for Trae Queue 进行中 14:11'
+      }
+    ]
+  });
+
+  assert.strictEqual(result.deleted, 0);
+  assert.strictEqual(result.attempts[0].success, false);
+  assert.strictEqual(result.attempts[0].reason, 'delete_verification_failed');
 });
 
 test('getConfig respects TRAECN_COMPOSER_SELECTORS env var', () => {

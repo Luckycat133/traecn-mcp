@@ -16,7 +16,8 @@ const { DriverRouter, DRIVER_SPEC } = require('./driver-router');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
-const { getEnvWithFallback, parsePositiveInt } = require('../shared/utils');
+const { getEnvWithFallback, parsePositiveInt, sleep, isGenericQueueProbeTask, isForeignQueueProbeText, secureCompare } = require('../shared/utils');
+const { sanitizeLog } = require('../shared/logger');
 const { ConfigManager } = require('../shared/config-manager');
 const { getGlobalStore } = require('../shared/task-history');
 const { buildCapabilities } = require('../shared/capabilities');
@@ -36,7 +37,6 @@ function normalizeUrl(rawUrl) {
   });
 }
 
-const SENSITIVE_KEYS = ['token', 'password', 'secret', 'credential', 'authorization'];
 const DEFAULT_JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'no-store',
@@ -55,29 +55,6 @@ const DEFAULT_HTML_HEADERS = {
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
 const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
-
-function sanitizeLog(obj) {
-  if (!obj || typeof obj !== 'object') return obj;
-  const sanitized = Array.isArray(obj) ? [] : {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (SENSITIVE_KEYS.some(k => key.toLowerCase().includes(k))) {
-      sanitized[key] = '[REDACTED]';
-    } else if (typeof value === 'object' && value !== null) {
-      sanitized[key] = sanitizeLog(value);
-    } else {
-      sanitized[key] = value;
-    }
-  }
-  return sanitized;
-}
-
-function secureCompare(left, right) {
-  if (typeof left !== 'string' || typeof right !== 'string') return false;
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
 
 class RateLimiter {
   constructor(windowMs, maxRequests) {
@@ -121,7 +98,10 @@ class RateLimiter {
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
-    let body = '';
+    // Collect chunks as buffers instead of string concatenation — the
+    // previous `body += chunk` approach forces UTF-8 decoding on every
+    // chunk and is O(n²) for large bodies due to string immutability.
+    const chunks = [];
     let size = 0;
     const maxSize = 1024 * 1024;
 
@@ -132,11 +112,16 @@ function parseBody(req) {
         req.destroy();
         return;
       }
-      body += chunk;
+      chunks.push(chunk);
     });
 
     req.on('end', () => {
+      if (chunks.length === 0) {
+        resolve({});
+        return;
+      }
       try {
+        const body = Buffer.concat(chunks).toString('utf8');
         resolve(body ? JSON.parse(body) : {});
       } catch {
         reject(new HttpError('Invalid JSON body', 400, 'INVALID_JSON'));
@@ -163,12 +148,17 @@ function jsonResponse(res, data, statusCode = 200, headers = {}, req = null) {
   const responseHeaders = { ...DEFAULT_JSON_HEADERS, ...headers };
 
   if (useGzip) {
-    responseHeaders['Content-Encoding'] = 'gzip';
-    res.writeHead(statusCode, responseHeaders);
+    // Gzip first, then write the header. If we write the header (with
+    // Content-Encoding: gzip) before gzip succeeds and gzip then fails,
+    // the client receives an uncompressed body with a gzip header →
+    // decode failure. Only set Content-Encoding on success.
     zlib.gzip(body, (err, compressed) => {
       if (err) {
+        res.writeHead(statusCode, responseHeaders);
         res.end(body);
       } else {
+        responseHeaders['Content-Encoding'] = 'gzip';
+        res.writeHead(statusCode, responseHeaders);
         res.end(compressed);
       }
     });
@@ -657,7 +647,11 @@ class Gateway {
         missingText.push({ filePath: check.filePath, includes: check.includes });
         continue;
       }
-      const absent = check.includes.filter(value => !content.includes(value));
+      const contentLower = content.toLowerCase();
+      const absent = check.includes.filter(value => {
+        const needle = String(value || '');
+        return !contentLower.includes(needle.toLowerCase());
+      });
       if (absent.length > 0) missingText.push({ filePath: check.filePath, includes: absent });
     }
 
@@ -723,7 +717,8 @@ class Gateway {
         followupCount: followupTasks.length,
         notifyUrl: body.notifyUrl || null,
         autoApproveDialog,
-        fallbackModels
+        fallbackModels,
+        sessionId: body.sessionId || null
       }
     });
     const perTaskTimeoutMs = this.driver.config.queuePerTaskTimeoutMs || 600000;
@@ -735,6 +730,7 @@ class Gateway {
     const task = {
       taskId: historyTaskId,
       chatId: body.chatId || null,
+      sessionId: body.sessionId || null,
       soloChat: this._normalizeSoloChatTarget(body.soloChat || body.soloChatTarget || {
         index: body.soloChatIndex,
         titleIncludes: body.soloChatTitleIncludes,
@@ -790,6 +786,34 @@ class Gateway {
     this._syncTaskHistoryMirror(task);
     this._persistActiveQueue();
     return task;
+  }
+
+  _appendSessionMessage(sessionId, message = {}) {
+    if (!sessionId) return false;
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    const role = message.role === 'assistant' ? 'assistant' : 'user';
+    const content = typeof message.content === 'string' ? message.content : '';
+    if (!content && role === 'assistant') return false;
+    session.messages.push({
+      role,
+      content,
+      timestamp: new Date().toISOString(),
+      ...(message.taskId ? { taskId: message.taskId } : {}),
+      ...(message.status ? { status: message.status } : {})
+    });
+    return true;
+  }
+
+  _isGenericQueueProbeTask(taskText) {
+    return isGenericQueueProbeTask(taskText);
+  }
+
+  _rejectGenericQueueProbeTask(req, res) {
+    return this._json(req, res, {
+      error: 'generic_queue_probe_task_rejected',
+      message: 'Do not send queue probe prompts to Trae. Use /api/queue-status, /api/preflight, or wait_task for local waiting.'
+    }, 400);
   }
 
   _maybeExtendQueuedTaskDeadline(task, queueStatus = {}) {
@@ -1360,6 +1384,20 @@ class Gateway {
     if (payload.reviewNotes !== undefined) task.reviewNotes = payload.reviewNotes;
     if (payload.nextTaskId !== undefined) task.nextTaskId = payload.nextTaskId;
 
+    if (task.sessionId && !task.sessionResultRecorded && ['done', 'awaiting_review', 'approval_required', 'review_rejected', 'queue_timeout', 'error', 'cancelled'].includes(status)) {
+      const resultText = typeof task.result?.text === 'string' ? task.result.text.trim() : '';
+      const errorText = task.error ? `Error: ${task.error}` : '';
+      const content = resultText || errorText || `Task ${status}`;
+      if (this._appendSessionMessage(task.sessionId, {
+        role: 'assistant',
+        content,
+        taskId,
+        status
+      })) {
+        task.sessionResultRecorded = true;
+      }
+    }
+
     this.taskHistoryStore.recordStep(taskId, status, {
       success: status !== 'error' && status !== 'queue_timeout',
       error: task.error || null,
@@ -1433,6 +1471,7 @@ class Gateway {
       autoApproveDialog: nextSpec.autoApproveDialog || task.autoApproveDialog || null,
       notifyUrl: task.notifyUrl,
       chatId: task.chatId,
+      sessionId: task.sessionId || null,
       soloChat: task.soloChat,
       fallbackModels: task.fallbackModels || [],
       modelProbeIntervalMs: task.modelProbeIntervalMs
@@ -1879,6 +1918,9 @@ class Gateway {
       }
       if (pathname === '/api/solo/chats/switch' && method === 'POST') {
         return await this._handleSwitchSoloChat(req, res);
+      }
+      if ((pathname === '/api/solo/chats/cleanup-foreign-queue' || pathname === '/api/solo/chats/cleanup_foreign_solo_queue') && method === 'POST') {
+        return await this._handleCleanupForeignQueue(req, res);
       }
       if (pathname === '/api/solo/chats/submit' && method === 'POST') {
         return await this._handleSubmitSoloChatTask(req, res);
@@ -2483,6 +2525,9 @@ class Gateway {
 
   async _handleDelegate(req, res, sessionId) {
     const body = await parseBody(req);
+    if (this._isGenericQueueProbeTask(body.task)) {
+      return this._rejectGenericQueueProbeTask(req, res);
+    }
     if (!body.task) {
       return this._json(req, res, { error: 'task is required' }, 400);
     }
@@ -2494,7 +2539,8 @@ class Gateway {
 
     const session = this.sessions.get(sessionId);
     if (session) {
-      session.messages.push({ role: 'user', content: body.task, timestamp: new Date().toISOString() });
+      this._appendSessionMessage(sessionId, { role: 'user', content: body.task });
+      body.sessionId = sessionId;
     }
 
     const queueStatus = typeof this.driver.checkQueueStatus === 'function'
@@ -2513,6 +2559,7 @@ class Gateway {
       }
 
       const task = this._createQueuedTask({
+        ...body,
         task: body.task,
         projectPath: body.projectPath,
         reviewRequired: body.reviewRequired === true,
@@ -2522,7 +2569,8 @@ class Gateway {
         autoApproveDialog: body.autoApproveDialog,
         includeProcessText: body.includeProcessText === true,
         notifyUrl: body.notifyUrl,
-        chatId: body.chatId
+        chatId: body.chatId,
+        sessionId: session ? sessionId : null
       }, queueStatus);
       this._ensureBackgroundPolling();
       return this._json(req, res, {
@@ -2540,7 +2588,7 @@ class Gateway {
     const result = await this.driver.delegate(this._taskWithProjectContext(body.task, body.projectPath));
 
     if (session) {
-      session.messages.push({ role: 'assistant', content: result.text, timestamp: new Date().toISOString() });
+      this._appendSessionMessage(sessionId, { role: 'assistant', content: result.text || '' });
     }
 
     const responseData = {
@@ -2583,6 +2631,187 @@ class Gateway {
       })
       : { success: false, reason: 'driver_does_not_support_solo_chats' };
     this._json(req, res, result, result.success === false ? 404 : 200);
+  }
+
+  _isForeignQueueConversation(chat) {
+    if (!chat || typeof chat !== 'object') return false;
+    const title = typeof chat.title === 'string' ? chat.title : '';
+    const text = typeof chat.text === 'string' ? chat.text : '';
+    const combined = `${title} ${text}`.replace(/\s+/g, ' ').trim();
+    return isForeignQueueProbeText(title)
+      || isForeignQueueProbeText(text)
+      || isForeignQueueProbeText(combined);
+  }
+
+  _extractForeignSoloChatCandidates(soloChatsResult) {
+    const result = soloChatsResult && typeof soloChatsResult === 'object'
+      ? soloChatsResult
+      : { mode: 'unknown', chats: [], count: 0, reason: 'solo_chats_unavailable' };
+    const chats = Array.isArray(result.chats) ? result.chats : [];
+    const candidates = chats.filter(chat => this._isForeignQueueConversation(chat))
+      .map(chat => ({
+        index: chat.index,
+        title: chat.title || '',
+        text: chat.text || '',
+        status: chat.status || null,
+        active: !!chat.active
+      }));
+    return {
+      mode: result.mode || 'unknown',
+      reason: result.reason || (candidates.length === 0 ? 'none_found' : null),
+      count: chats.length,
+      candidates
+    };
+  }
+
+  async _stopRunningForeignQueueCandidates(candidates = []) {
+    const running = Array.isArray(candidates)
+      ? candidates.filter(candidate => candidate && candidate.status === 'running')
+      : [];
+    if (running.length === 0) return { stopped: 0, attempts: [] };
+    if (typeof this.driver.switchSoloChat !== 'function' || typeof this.driver.stopGeneration !== 'function') {
+      return {
+        stopped: 0,
+        attempts: running.map(candidate => ({
+          candidate,
+          success: false,
+          reason: 'driver_does_not_support_stop_running_cleanup'
+        }))
+      };
+    }
+
+    const attempts = [];
+    let stopped = 0;
+    for (const candidate of running) {
+      try {
+        const switchResult = await this.driver.switchSoloChat({
+          index: Number.isInteger(candidate.index) ? candidate.index : null,
+          titleIncludes: candidate.title || undefined,
+          textIncludes: candidate.text || undefined
+        });
+        if (switchResult && switchResult.success === false) {
+          attempts.push({ candidate, success: false, reason: switchResult.reason || 'switch_failed', switchResult });
+          continue;
+        }
+        const stopResult = await this.driver.stopGeneration();
+        const success = stopResult && stopResult.success !== false;
+        if (success) stopped += 1;
+        attempts.push({
+          candidate,
+          success,
+          reason: success ? null : (stopResult?.reason || stopResult?.error || 'stop_failed'),
+          switchResult,
+          stopResult
+        });
+      } catch (err) {
+        attempts.push({ candidate, success: false, reason: err.message || 'stop_failed' });
+      }
+    }
+    return { stopped, attempts };
+  }
+
+  async _handleCleanupForeignQueue(req, res) {
+    const body = await parseBody(req);
+    await this._ensureConnection();
+    if (typeof this.driver.listSoloChats !== 'function') {
+      return this._json(req, res, { error: 'driver does not support listSoloChats' }, 501);
+    }
+    const listResult = await this.driver.listSoloChats();
+    const matchCandidates = this._extractForeignSoloChatCandidates(listResult);
+    const executeDelete = body.execute === true && body.dryRun !== true;
+
+    if (!executeDelete) {
+      return this._json(req, res, {
+        mode: matchCandidates.mode,
+        reason: matchCandidates.reason,
+        matched: matchCandidates.candidates.length,
+        total: matchCandidates.count,
+        candidates: matchCandidates.candidates,
+        support: typeof this.driver.deleteSoloChats === 'function' ? 'delete_supported' : 'delete_unsupported',
+        deleted: 0,
+        message: 'Dry-run cleanup result. Set { "execute": true } to attempt deletion.'
+      });
+    }
+
+    if (typeof this.driver.deleteSoloChats !== 'function') {
+      return this._json(req, res, {
+        error: 'driver does not support deleteSoloChats',
+        code: 'DRIVER_METHOD_MISSING',
+        candidates: matchCandidates.candidates
+      }, 501);
+    }
+
+    const maxPassesRaw = Number(body.maxPasses ?? body.passes ?? 1);
+    const maxPasses = Number.isFinite(maxPassesRaw)
+      ? Math.min(20, Math.max(1, Math.floor(maxPassesRaw)))
+      : 1;
+    const settleMsRaw = Number(body.settleMs ?? 500);
+    const settleMs = Number.isFinite(settleMsRaw)
+      ? Math.min(5000, Math.max(0, Math.floor(settleMsRaw)))
+      : 500;
+    const passResults = [];
+    let totalMatched = 0;
+    let totalDeleted = 0;
+    let totalStopped = 0;
+    let lastCandidates = matchCandidates;
+    let stopResult = { stopped: 0, attempts: [] };
+    let deleteResult = { deleted: 0, attempts: [], totalCandidates: 0, support: 'delete_supported' };
+
+    for (let pass = 1; pass <= maxPasses; pass += 1) {
+      const currentCandidates = pass === 1
+        ? lastCandidates
+        : this._extractForeignSoloChatCandidates(await this.driver.listSoloChats());
+      lastCandidates = currentCandidates;
+      if (currentCandidates.candidates.length === 0) {
+        passResults.push({
+          pass,
+          matched: 0,
+          stopped: 0,
+          deleted: 0,
+          reason: currentCandidates.reason || 'none_found'
+        });
+        break;
+      }
+
+      totalMatched += currentCandidates.candidates.length;
+      stopResult = await this._stopRunningForeignQueueCandidates(currentCandidates.candidates);
+      totalStopped += stopResult.stopped || 0;
+      const deleteCandidates = stopResult.stopped > 0
+        ? this._extractForeignSoloChatCandidates(await this.driver.listSoloChats())
+        : currentCandidates;
+      deleteResult = await this.driver.deleteSoloChats({ candidates: deleteCandidates.candidates });
+      const deleted = typeof deleteResult?.deleted === 'number' ? deleteResult.deleted : 0;
+      totalDeleted += deleted;
+      passResults.push({
+        pass,
+        matched: currentCandidates.candidates.length,
+        stopped: stopResult.stopped || 0,
+        deleted,
+        candidates: deleteCandidates.candidates,
+        stopResult,
+        driverResult: deleteResult
+      });
+
+      if (deleted === 0 && (stopResult.stopped || 0) === 0) break;
+      if (pass < maxPasses && settleMs > 0) await sleep(settleMs);
+    }
+
+    const finalCandidates = this._extractForeignSoloChatCandidates(await this.driver.listSoloChats());
+    return this._json(req, res, {
+      mode: finalCandidates.mode || lastCandidates.mode,
+      reason: finalCandidates.reason,
+      matched: totalMatched,
+      remainingMatched: finalCandidates.candidates.length,
+      total: finalCandidates.count,
+      candidates: finalCandidates.candidates,
+      deleted: totalDeleted,
+      support: 'delete_supported',
+      stopped: totalStopped,
+      passes: passResults.length,
+      passResults,
+      stopResult,
+      driverResult: deleteResult
+    });
   }
 
   _normalizeSoloChatTarget(value = {}) {
@@ -2735,24 +2964,43 @@ class Gateway {
     if (criteriaList.length === 0) return { skipped: true, reason: 'invalid_solo_chat_target' };
     let result = null;
     let criteria = null;
-    for (const item of criteriaList) {
-      criteria = item;
-      result = await this.driver.switchSoloChat(item);
-      if (result.success !== false) break;
-    }
-    this.taskHistoryStore.recordStep(task.taskId, 'solo_chat_switch', {
-      success: result.success !== false,
+	    for (const item of criteriaList) {
+	      criteria = item;
+	      result = await this.driver.switchSoloChat(item);
+	      if (result.success !== false && !this._isForeignQueueConversation(result)) break;
+	      if (result.success !== false && this._isForeignQueueConversation(result)) {
+	        result = { ...result, success: false, reason: 'matched_queue_probe_solo_chat' };
+	      }
+	    }
+	    this.taskHistoryStore.recordStep(task.taskId, 'solo_chat_switch', {
+	      success: result.success !== false,
       details: {
         action,
         criteria,
         result
       }
     });
-    if (result.success === false) {
-      throw new Error(`Failed to switch Solo chat for ${action}: ${result.reason || 'unknown'}`);
-    }
-    return result;
-  }
+	    if (result.success === false) {
+	      throw new Error(`Failed to switch Solo chat for ${action}: ${result.reason || 'unknown'}`);
+	    }
+	    const stableTitle = typeof result.title === 'string' && result.title.trim() ? result.title.trim() : '';
+	    const stableText = typeof result.text === 'string' && result.text.trim() ? result.text.trim() : '';
+	    if ((stableTitle || stableText) && !this._isForeignQueueConversation({ title: stableTitle, text: stableText })) {
+	      task.soloChat = this._normalizeSoloChatTarget({
+	        ...task.soloChat,
+	        titleIncludes: stableTitle || task.soloChat.titleIncludes,
+	        textIncludes: stableText || stableTitle || task.soloChat.textIncludes,
+	        candidates: [
+	          stableTitle,
+	          stableText,
+	          ...(Array.isArray(task.soloChat.candidates) ? task.soloChat.candidates : [])
+	        ]
+	      }) || task.soloChat;
+	      this._syncTaskHistoryMirror(task);
+	      this._persistActiveQueue();
+	    }
+	    return result;
+	  }
 
   async _captureTaskSoloChat(task) {
     if (!task || !this.driver || typeof this.driver.getActiveSoloChat !== 'function') return null;
@@ -2784,6 +3032,9 @@ class Gateway {
 
   async _handleSubmitSoloChatTask(req, res) {
     const body = await parseBody(req);
+    if (this._isGenericQueueProbeTask(body.task)) {
+      return this._rejectGenericQueueProbeTask(req, res);
+    }
     if (!body.task) {
       return this._json(req, res, { error: 'task is required' }, 400);
     }
@@ -3231,8 +3482,18 @@ class Gateway {
 
   async _handleReadiness(req, res) {
     await this._ensureConnection();
-    const readiness = await this.driver.checkReadiness();
-    this._json(req, res, readiness);
+    try {
+      const readiness = await this.driver.checkReadiness();
+      this._json(req, res, readiness);
+    } catch (err) {
+      this._json(req, res, {
+        ready: false,
+        blocker: 'readiness_probe_failed',
+        error: err.message,
+        code: err.code || 'READINESS_PROBE_FAILED',
+        transient: /Could not find node|Node is detached|Cannot find context|Execution context/i.test(err.message || '')
+      });
+    }
   }
 
   async _handleSettingsReadAll(req, res) {
@@ -3509,6 +3770,9 @@ class Gateway {
 
   async _handleDelegateAsync(req, res) {
     const body = await parseBody(req);
+    if (this._isGenericQueueProbeTask(body.task)) {
+      return this._rejectGenericQueueProbeTask(req, res);
+    }
     if (!body.task) {
       return this._json(req, res, { error: 'task is required' }, 400);
     }
@@ -3521,6 +3785,14 @@ class Gateway {
     const waitForQueue = body.waitForQueue !== false;
     const fallbackModels = this._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
     const modelProbeIntervalMs = this._modelProbeIntervalMs(body.modelProbeIntervalMs);
+    const effectiveSessionId = typeof body.sessionId === 'string' && body.sessionId.trim()
+      ? body.sessionId.trim()
+      : null;
+    const session = effectiveSessionId ? this.sessions.get(effectiveSessionId) : null;
+    if (session) {
+      this._appendSessionMessage(effectiveSessionId, { role: 'user', content: body.task });
+      body.sessionId = effectiveSessionId;
+    }
     await this._ensureConnection();
 
     // Get queue status with enhanced detection
@@ -3668,6 +3940,7 @@ class Gateway {
       if (/delegate timeout/i.test(e.message || '') && delegatePromise) {
         const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
         const task = this._createQueuedTask({
+          ...body,
           task: body.task,
           projectPath: body.projectPath,
           reviewRequired: body.reviewRequired === true,
@@ -3675,8 +3948,19 @@ class Gateway {
           followupTasks: normalizedFollowups,
           autoApproveDialog: body.autoApproveDialog,
           chatId,
+          sessionId: effectiveSessionId,
           includeProcessText,
-          notifyUrl: body.notifyUrl
+          notifyUrl: body.notifyUrl,
+          completionChecks: body.completionChecks,
+          soloChat: body.soloChat,
+          soloChatIndex: body.soloChatIndex,
+          soloChatTitleIncludes: body.soloChatTitleIncludes,
+          soloChatTextIncludes: body.soloChatTextIncludes,
+          fallbackModels: body.fallbackModels,
+          autoModelFallback: body.autoModelFallback,
+          modelProbeIntervalMs: body.modelProbeIntervalMs,
+          maxQueueWaitMs: body.maxQueueWaitMs,
+          queueMaxWaitMs: body.queueMaxWaitMs
         }, {
           queued: true,
           running: false,
@@ -3730,6 +4014,7 @@ class Gateway {
       if (recoveredResult) {
         const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
         const task = this._createQueuedTask({
+          ...body,
           task: body.task,
           projectPath: body.projectPath,
           reviewRequired: body.reviewRequired === true,
@@ -3737,8 +4022,19 @@ class Gateway {
           followupTasks: normalizedFollowups,
           autoApproveDialog: body.autoApproveDialog,
           chatId,
+          sessionId: effectiveSessionId,
           includeProcessText,
-          notifyUrl: body.notifyUrl
+          notifyUrl: body.notifyUrl,
+          completionChecks: body.completionChecks,
+          soloChat: body.soloChat,
+          soloChatIndex: body.soloChatIndex,
+          soloChatTitleIncludes: body.soloChatTitleIncludes,
+          soloChatTextIncludes: body.soloChatTextIncludes,
+          fallbackModels: body.fallbackModels,
+          autoModelFallback: body.autoModelFallback,
+          modelProbeIntervalMs: body.modelProbeIntervalMs,
+          maxQueueWaitMs: body.maxQueueWaitMs,
+          queueMaxWaitMs: body.queueMaxWaitMs
         }, { queued: false, running: false, queueMessage: 'recovered from review gate' });
         await this._finalizeCollectedBackgroundResult(task.taskId, task, recoveredResult);
         return this._json(req, res, {
@@ -3758,6 +4054,12 @@ class Gateway {
     if (chatId) {
       await notifyOpenClaw(chatId, formatResult(result));
     }
+    if (session && body.reviewRequired !== true && this._normalizeFollowupTasks(body.followupTasks).length === 0) {
+      this._appendSessionMessage(effectiveSessionId, {
+        role: 'assistant',
+        content: result.text || result.error || ''
+      });
+    }
 
     const responseData = {
       status: this._isSuccessfulResult(result) ? 'done' : 'error',
@@ -3773,6 +4075,7 @@ class Gateway {
     if (body.reviewRequired === true || this._normalizeFollowupTasks(body.followupTasks).length > 0) {
       const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
       const task = this._createQueuedTask({
+        ...body,
         task: body.task,
         projectPath: body.projectPath,
         reviewRequired: body.reviewRequired === true,
@@ -3780,8 +4083,19 @@ class Gateway {
         followupTasks: normalizedFollowups,
         autoApproveDialog: body.autoApproveDialog,
         chatId,
+        sessionId: effectiveSessionId,
         includeProcessText,
-        notifyUrl: body.notifyUrl
+        notifyUrl: body.notifyUrl,
+        completionChecks: body.completionChecks,
+        soloChat: body.soloChat,
+        soloChatIndex: body.soloChatIndex,
+        soloChatTitleIncludes: body.soloChatTitleIncludes,
+        soloChatTextIncludes: body.soloChatTextIncludes,
+        fallbackModels: body.fallbackModels,
+        autoModelFallback: body.autoModelFallback,
+        modelProbeIntervalMs: body.modelProbeIntervalMs,
+        maxQueueWaitMs: body.maxQueueWaitMs,
+        queueMaxWaitMs: body.queueMaxWaitMs
       }, { queued: false, running: false, queueMessage: 'immediate execution' });
       task.submittedToTrae = true;
       task.submittedAt = Date.now();
@@ -4525,10 +4839,10 @@ class Gateway {
     return await this._withUiActionLock(async () => {
       await this._ensureConnection();
       await this._switchToTaskSoloChat(task, 'collect_result');
-      if (this.driver && typeof this.driver.getActiveSoloChat === 'function') {
-        const activeSnapshot = await this.driver.getActiveSoloChat();
-        const activeChat = activeSnapshot?.active || null;
-        if (activeChat?.status === 'running') {
+	      if (this.driver && typeof this.driver.getActiveSoloChat === 'function') {
+	        const activeSnapshot = await this.driver.getActiveSoloChat();
+	        const activeChat = activeSnapshot?.active || null;
+	        if (activeChat?.status === 'running') {
           task.queueState = 'running';
           task.queueMessage = activeChat.title || activeChat.text || 'submitted Solo chat is still running';
           this.taskHistoryStore.recordStep(taskId, 'submitted_solo_chat_still_running', {
@@ -4539,11 +4853,49 @@ class Gateway {
           this._persistActiveQueue();
           if (this.wsHandler) {
             this.wsHandler.notifyTaskStatusChange(taskId, task);
-          }
-          return { text: '', stable: false, elapsedMs: 0, running: true };
-        }
-      }
-      const queueStatus = await this.driver.checkQueueStatus();
+	          }
+	          return { text: '', stable: false, elapsedMs: 0, running: true };
+	        }
+	        if (activeChat?.status === 'done' && this._hasCompletionChecks(task.completionChecks)) {
+	          const validation = this._validateCompletionChecks(task);
+	          if (validation.ok) {
+	            const ownershipSignals = this._taskOwnershipSignals(task).map(signal => signal.text);
+	            const result = {
+	              text: [
+	                '任务完成: submitted Solo chat is done and completion checks passed.',
+	                activeChat.title || activeChat.text || '',
+	                ...ownershipSignals.slice(0, 4)
+	              ].filter(Boolean).join('\n'),
+	              stable: true,
+	              elapsedMs: 0,
+	              completionChecksPassed: true,
+	              activeSoloChat: {
+	                index: activeChat.index,
+	                title: activeChat.title || null,
+	                status: activeChat.status
+	              }
+	            };
+	            this.taskHistoryStore.recordStep(taskId, 'submitted_solo_chat_done_completion_checks_passed', {
+	              success: true,
+	              details: {
+	                active: activeChat,
+	                ownershipSignals: ownershipSignals.slice(0, 8)
+	              }
+	            });
+	            await this._finalizeCollectedBackgroundResult(taskId, task, result);
+	            return result;
+	          }
+	          this.taskHistoryStore.recordStep(taskId, 'submitted_solo_chat_done_completion_checks_failed', {
+	            success: false,
+	            details: {
+	              active: activeChat,
+	              missingFiles: validation.missingFiles,
+	              missingText: validation.missingText
+	            }
+	          });
+	        }
+	      }
+	      const queueStatus = await this.driver.checkQueueStatus();
       this._updateQueuedTaskSnapshot(task, queueStatus);
       this._syncTaskHistoryMirror(task);
       this._persistActiveQueue();

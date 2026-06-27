@@ -429,7 +429,10 @@ class ConfigManager extends EventEmitter {
     const previousConfig = this._deepClone(this._config);
     this._config = this._deepClone(DEFAULT_CONFIG);
 
-    this._addHistory(previousConfig, this._config, 'reset');
+    // Deep clone the new config so the history entry is insulated from
+    // future mutations via this._config (update() reassigns keys on this._config,
+    // which would otherwise corrupt the stored "newConfig" reference).
+    this._addHistory(previousConfig, this._deepClone(this._config), 'reset');
     this._logAudit('reset', { previous: previousConfig, defaults: DEFAULT_CONFIG }, 'api');
 
     this.emit('configChanged', { changes: { '*': { previous: previousConfig, next: this._config } }, config: this.getConfig() });

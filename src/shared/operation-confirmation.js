@@ -7,6 +7,7 @@ const HIGH_RISK_COMMANDS = new Set([
   'batch_cancel',
   'cancel_task',
   'stop_generation',
+  'cleanup_foreign_solo_queue',
   'resolve_review_gate',
   'update_self',
   'restart_trae_debug'
@@ -83,7 +84,11 @@ function buildChecklist(command, params = {}) {
     checklist.push('Confirm current task can tolerate model or mode changes.');
   }
 
-  if (command === 'batch_cancel' || command === 'cancel_task' || command === 'stop_generation' || command === 'resolve_review_gate') {
+  if (command === 'cleanup_foreign_solo_queue') {
+    checklist.push('Run dryRun first and confirm only accidental queue-probe chats are matched.');
+  }
+
+  if (command === 'batch_cancel' || command === 'cancel_task' || command === 'stop_generation' || command === 'cleanup_foreign_solo_queue' || command === 'resolve_review_gate') {
     checklist.push('Confirm the task or batch ID and that cancellation is still desired.');
   }
 
@@ -137,6 +142,8 @@ function describeSideEffects(command, params) {
     case 'cancel_task':
     case 'stop_generation':
       return ['May cancel queued work.'];
+    case 'cleanup_foreign_solo_queue':
+      return ['May stop and delete accidental queue-probe Solo conversations.'];
     case 'resolve_review_gate':
       return ['May keep or revert changes at Trae CN internal task review gate.'];
     case 'restart_trae_debug':
@@ -152,6 +159,7 @@ function buildRecommendedFlow(command, risk, requiresConfirmation) {
   if (['delegate', 'delegate_async', 'review_code', 'vibe_workflow', 'batch_submit'].includes(command)) flow.push('check_queue');
   if (command === 'approve_dialog' || command === 'dismiss_dialog') flow.push('check_dialog');
   if (command === 'resolve_review_gate') flow.push('review_gate_status');
+  if (command === 'cleanup_foreign_solo_queue') flow.push('list_solo_chats');
   if (command === 'settings_set') flow.push('get_settings');
   if (requiresConfirmation) flow.push('user_confirmation');
   flow.push(command || 'target_command');

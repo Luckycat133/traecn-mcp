@@ -7,12 +7,16 @@ const path = require('path');
 const { loadEnv } = require('../src/config/env');
 const { resolveCDPEndpoint } = require('../src/cdp/discovery');
 const { startGateway } = require('../src/http/gateway');
+const { MCP_TOOLS } = require('../mcp-server');
+const { toolDefinitions: openClawTools } = require('../integrations/openclaw-traecn-plugin');
+const { listCommands } = require('../integrations/openclaw-traecn-plugin/lib/command-set');
 
 loadEnv(path.resolve(__dirname, '..', '.env'));
 
 const strict = process.argv.includes('--strict');
 const requireReady = process.argv.includes('--require-ready');
 const allowDelegate = process.argv.includes('--delegate');
+const cleanupQueueProbes = process.argv.includes('--cleanup-queue-probes') || process.env.TRAECN_LIVE_UAT_CLEANUP_QUEUE_PROBES === '1';
 const exerciseBackgroundWorkflow = process.argv.includes('--exercise-background-workflow');
 const autoReviewDecision = readArg('--auto-review-decision') || 'approve';
 const delegateTask = readArg('--delegate-task') || '请用一句话回复 TRAECNclaw live UAT ready';
@@ -111,7 +115,7 @@ function buildDiagnostics(endpoint, statusData, readinessData) {
         : 'Open Trae CN in the debug-enabled instance and complete login/onboarding.',
       'Open or focus a chat/project window with the message composer visible.',
       'Run npm run inspect:verify if readiness stays false after the UI is visible.',
-      'Use node scripts/live-uat.js --require-ready for a strict readiness gate, and add --delegate only when sending a real prompt is acceptable.'
+      'Use node scripts/live-uat.js --require-ready for a strict readiness gate, add --cleanup-queue-probes to remove accidental queue-probe chats, and add --delegate only when sending a real prompt is acceptable.'
     ]
   };
 }
@@ -121,6 +125,52 @@ function assertReady(readinessData, diagnostics, gateName) {
   const err = new Error(`${gateName} requires Trae CN UI readiness; ${diagnostics.readiness.reason}`);
   err.diagnostics = diagnostics;
   throw err;
+}
+
+async function assertQueueProbeRejected(port, token, route, body, name) {
+  const response = await request(port, 'POST', route, body, token);
+  assert.strictEqual(response.status, 400, `${name} must reject queue-probe prompts`);
+  assert.strictEqual(response.data.error, 'generic_queue_probe_task_rejected', `${name} should return generic_queue_probe_task_rejected`);
+  return response;
+}
+
+async function assertNoForeignQueueProbeChats(port, token, cleanupDryRun, checks) {
+  const matched = cleanupDryRun.data.matched || 0;
+  if (matched === 0) {
+    checks.push({ name: 'cleanup-dry-run', ok: true, matched: 0 });
+    return;
+  }
+
+  if (!cleanupQueueProbes) {
+    checks.push({ name: 'cleanup-dry-run', ok: false, matched });
+    if (strict) {
+      throw new Error(`Found ${matched} accidental queue-probe Solo chat(s). Re-run with --cleanup-queue-probes to stop/delete them, or run: node scripts/traecn-cli.js cleanup-queue --execute --json`);
+    }
+    return;
+  }
+
+  const cleanupExecute = await request(port, 'POST', '/api/solo/chats/cleanup-foreign-queue', {
+    execute: true,
+    maxPasses: 10
+  }, token);
+  assert.strictEqual(cleanupExecute.status, 200, 'cleanup execute should return 200 when queue-probe chats are matched');
+  assert.strictEqual(cleanupExecute.data.support, 'delete_supported', 'cleanup execute should advertise delete support');
+  checks.push({
+    name: 'cleanup-execute',
+    ok: true,
+    matched,
+    stopped: cleanupExecute.data.stopped || 0,
+    deleted: cleanupExecute.data.deleted || 0,
+    remainingMatched: cleanupExecute.data.remainingMatched || 0,
+    passes: cleanupExecute.data.passes || 1
+  });
+
+  const cleanupVerify = await request(port, 'POST', '/api/solo/chats/cleanup-foreign-queue', {
+    dryRun: true
+  }, token);
+  assert.strictEqual(cleanupVerify.status, 200, 'cleanup verify dry-run should return 200');
+  assert.strictEqual(cleanupVerify.data.matched || 0, 0, 'cleanup verify must find no queue-probe chats after execute');
+  checks.push({ name: 'cleanup-dry-run', ok: true, matched: 0, afterExecute: true });
 }
 
 async function waitForTaskTerminalState(port, taskId, token, timeoutMs) {
@@ -205,8 +255,37 @@ async function main() {
     const capabilities = await request(port, 'GET', '/api/capabilities');
     assert.strictEqual(capabilities.status, 200, 'capabilities endpoint should return 200');
     assert.ok(capabilities.data.commands?.some(command => command.command === 'delegate_async'), 'capabilities must include async delegation command');
+    assert.ok(capabilities.data.commands?.some(command => command.command === 'cleanup_foreign_solo_queue'), 'capabilities must include cleanup command');
     assert.strictEqual(capabilities.data.coverage?.queueManagement, true, 'capabilities must advertise queue management');
+    const asyncDelegate = capabilities.data.http?.find(operation => operation.path === '/api/delegate-async' && operation.method === 'POST');
+    const soloSubmit = capabilities.data.http?.find(operation => operation.path === '/api/solo/chats/submit' && operation.method === 'POST');
+    assert.ok(asyncDelegate?.accepts?.includes('sessionId'), 'delegate_async capabilities must expose sessionId');
+    assert.ok(asyncDelegate?.accepts?.includes('soloChatTitleIncludes'), 'delegate_async capabilities must expose Solo targeting');
+    assert.ok(asyncDelegate?.accepts?.includes('forceBackground'), 'delegate_async capabilities must expose forceBackground');
+    assert.ok(soloSubmit?.accepts?.includes('queueMaxWaitMs'), 'Solo submit capabilities must expose queueMaxWaitMs');
     checks.push({ name: 'capabilities', ok: true, commands: capabilities.data.commands.length });
+
+    const layeredProbe = [
+      '## Role and Objective',
+      'You are TraeCN operating inside a controlled workflow.',
+      '',
+      '## User Command Payload',
+      'wait for Trae queue',
+      'Raw params: {"task":"wait for Trae queue"}'
+    ].join('\n');
+    await assertQueueProbeRejected(port, token, '/api/delegate', {
+      task: layeredProbe
+    }, 'delegate layered queue probe');
+    await assertQueueProbeRejected(port, token, '/api/delegate-async', {
+      task: layeredProbe
+    }, 'delegate_async layered queue probe');
+    await assertQueueProbeRejected(port, token, '/api/solo/chats/submit', {
+      task: layeredProbe
+    }, 'solo submit layered queue probe');
+    await assertQueueProbeRejected(port, token, '/api/delegate', {
+      task: 'Wait for Trae Queue 进行中 17:34'
+    }, 'delegate status-title queue probe');
+    checks.push({ name: 'queue-probe-guard', ok: true, variants: ['layered-payload', 'status-title'] });
 
     const confirmationPlan = await request(port, 'POST', '/api/confirm/plan', {
       command: 'approve_dialog',
@@ -216,6 +295,15 @@ async function main() {
     assert.strictEqual(confirmationPlan.data.risk, 'high', 'approve_dialog must be high risk');
     assert.strictEqual(confirmationPlan.data.requiresConfirmation, true, 'approve_dialog must require confirmation');
     checks.push({ name: 'confirmation-plan', ok: true, risk: confirmationPlan.data.risk });
+
+    const cleanupPlan = await request(port, 'POST', '/api/confirm/plan', {
+      command: 'cleanup_foreign_solo_queue',
+      params: { execute: true }
+    }, token);
+    assert.strictEqual(cleanupPlan.status, 200, 'cleanup confirmation plan endpoint should return 200');
+    assert.strictEqual(cleanupPlan.data.risk, 'high', 'cleanup_foreign_solo_queue must be high risk');
+    assert.strictEqual(cleanupPlan.data.requiresConfirmation, true, 'cleanup_foreign_solo_queue must require confirmation');
+    checks.push({ name: 'cleanup-confirmation-plan', ok: true, risk: cleanupPlan.data.risk });
 
     const confirmationGate = await request(port, 'POST', '/api/settings/set', {
       label: 'TRAECNclaw live UAT dry gate',
@@ -229,9 +317,50 @@ async function main() {
     const openapi = await request(port, 'GET', '/openapi.json');
     assert.strictEqual(openapi.status, 200, 'openapi endpoint should return 200');
     assert.ok(openapi.data.paths && openapi.data.paths['/api/delegate'], 'OpenAPI must include delegate route');
+    assert.ok(openapi.data.paths['/api/solo/chats/cleanup-foreign-queue'], 'OpenAPI must include Solo queue cleanup route');
+    assert.ok(openapi.data.paths['/api/solo/chats/submit']?.post?.requestBody?.content?.['application/json']?.schema?.properties?.queueMaxWaitMs, 'OpenAPI Solo submit must expose queueMaxWaitMs');
     checks.push({ name: 'openapi', ok: true, paths: Object.keys(openapi.data.paths).length });
 
+    assert.ok(listCommands().some(command => command.command === 'cleanup_foreign_solo_queue'), 'command set must include cleanup_foreign_solo_queue');
+    assert.ok(MCP_TOOLS.some(tool => tool.name === 'cleanup_foreign_solo_queue'), 'MCP tools must include cleanup_foreign_solo_queue');
+    assert.ok(openClawTools.some(tool => tool.name === 'traecn_cleanup_queue'), 'OpenClaw runtime tools must include traecn_cleanup_queue');
+    checks.push({ name: 'agent-discovery-surfaces', ok: true });
+
+    const sessionA = await request(port, 'POST', '/api/sessions', { projectPath: process.cwd() }, token);
+    const sessionB = await request(port, 'POST', '/api/sessions', { projectPath: process.cwd() }, token);
+    assert.strictEqual(sessionA.status, 201, 'session A should be created');
+    assert.strictEqual(sessionB.status, 201, 'session B should be created');
+    assert.notStrictEqual(sessionA.data.sessionId, sessionB.data.sessionId, 'multiple logical sessions must have distinct ids');
+    const sessions = await request(port, 'GET', '/api/sessions', null, token);
+    assert.strictEqual(sessions.status, 200, 'sessions list should return 200');
+    assert.ok(sessions.data.sessions.some(session => session.id === sessionA.data.sessionId), 'sessions list should include session A');
+    assert.ok(sessions.data.sessions.some(session => session.id === sessionB.data.sessionId), 'sessions list should include session B');
+    const sessionADetails = await request(port, 'GET', `/api/sessions/${encodeURIComponent(sessionA.data.sessionId)}`, null, token);
+    assert.strictEqual(sessionADetails.status, 200, 'session details should return 200');
+    assert.deepStrictEqual(sessionADetails.data.messages, [], 'new session should start with no messages');
+    checks.push({ name: 'logical-sessions', ok: true, created: 2 });
+
     const diagnostics = buildDiagnostics(endpoint, lastStatusData, lastReadinessData);
+    if (readiness.data && readiness.data.ready === true) {
+      const settingsModel = await request(port, 'GET', '/api/settings/read?section=%E6%A8%A1%E5%9E%8B', null, token);
+      assert.strictEqual(settingsModel.status, 200, 'settings model read should return 200 when UI is ready');
+      assert.ok(Array.isArray(settingsModel.data.items), 'settings model read should return items array');
+      checks.push({ name: 'settings-read-model', ok: true, itemCount: settingsModel.data.items.length });
+
+      const soloChats = await request(port, 'GET', '/api/solo/chats', null, token);
+      assert.strictEqual(soloChats.status, 200, 'Solo chats list should return 200 when UI is ready');
+      checks.push({ name: 'solo-chats-read', ok: true, mode: soloChats.data.mode, count: soloChats.data.count });
+
+      const cleanupDryRun = await request(port, 'POST', '/api/solo/chats/cleanup-foreign-queue', {
+        dryRun: true
+      }, token);
+      assert.strictEqual(cleanupDryRun.status, 200, 'cleanup dry-run should return 200 when UI is ready');
+      assert.strictEqual(cleanupDryRun.data.support, 'delete_supported', 'cleanup dry-run should advertise delete support');
+      await assertNoForeignQueueProbeChats(port, token, cleanupDryRun, checks);
+    } else {
+      checks.push({ name: 'settings-and-solo-live-read', ok: true, skipped: true, reason: diagnostics.readiness.reason });
+    }
+
     if (requireReady) {
       assertReady(readiness.data, diagnostics, '--require-ready');
       checks.push({ name: 'require-ready', ok: true });

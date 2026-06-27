@@ -2,6 +2,7 @@
 
 const { sleep } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
+const { BaseDriver } = require('./base-driver');
 
 /**
  * ExtensionDriver — manage TraeCN / VS Code extensions.
@@ -13,21 +14,10 @@ const { TraeCNAutomationError } = require('./errors');
  *  - Optionally accepts a `exec` dep for direct `trae-cn --install-extension`
  *    / `trae-cn --list-extensions` / `trae-cn --uninstall-extension` calls.
  */
-class ExtensionDriver {
+class ExtensionDriver extends BaseDriver {
   constructor(client, config = {}, deps = {}) {
-    this.client = client;
-    this.config = config;
-    this.palette = deps.palette || null;
+    super(client, config, deps);
     this.exec = deps.exec || null; // function(cmd, args) => Promise<{stdout, stderr, code}>
-  }
-
-  setPalette(palette) { this.palette = palette; }
-
-  _viaPalette(commandId) {
-    if (!this.palette) {
-      throw new TraeCNAutomationError('CommandPaletteDriver required', 'PALETTE_REQUIRED', { commandId });
-    }
-    return this.palette.run(commandId);
   }
 
   // ── Open / focus ────────────────────────────────────────────────────

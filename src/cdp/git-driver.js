@@ -2,6 +2,7 @@
 
 const { sleep, safeJsValue } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
+const { BaseDriver } = require('./base-driver');
 
 /**
  * GitDriver — drive Source Control (Git) operations.
@@ -16,21 +17,10 @@ const { TraeCNAutomationError } = require('./errors');
  *  - For low-level read of status / diff, use the in-page SCM view DOM.
  *  - Optionally accepts a `git` child_process dep for direct CLI fallback.
  */
-class GitDriver {
+class GitDriver extends BaseDriver {
   constructor(client, config = {}, deps = {}) {
-    this.client = client;
-    this.config = config;
-    this.palette = deps.palette || null;
+    super(client, config, deps);
     this.exec = deps.exec || null; // optional: function(cmd, args, opts) => Promise<{stdout,stderr,code}>
-  }
-
-  setPalette(palette) { this.palette = palette; }
-
-  _viaPalette(commandId) {
-    if (!this.palette) {
-      throw new TraeCNAutomationError('CommandPaletteDriver required', 'PALETTE_REQUIRED', { commandId });
-    }
-    return this.palette.run(commandId);
   }
 
   // ── Open / focus ───────────────────────────────────────────────────
@@ -82,11 +72,10 @@ class GitDriver {
         const input = document.querySelector('.scm-viewlet textarea, .scm-editor textarea, [class*="commit-input"] textarea, [class*="scm-editor"] textarea, .scm-editor input.input');
         if (!input) return false;
         const tag = input.tagName;
-        const setter = Object.getOwnPropertyDescriptor(
-          tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype,
-          'value'
-        ).set;
-        setter.call(input, ${safeJsValue(message)});
+        const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (!descriptor || typeof descriptor.set !== 'function') return false;
+        descriptor.set.call(input, ${safeJsValue(message)});
         input.dispatchEvent(new Event('input', { bubbles: true }));
         return true;
       })()`,

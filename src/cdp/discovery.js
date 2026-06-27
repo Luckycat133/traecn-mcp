@@ -68,7 +68,12 @@ function describeCDPSurface(targets = []) {
 async function fetchCDPTargets(host, port) {
   return new Promise((resolve, reject) => {
     const url = `http://${host}:${port}/json/list`;
-    http.get(url, (res) => {
+    const req = http.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume(); // drain to free the socket
+        reject(new Error(`CDP /json/list returned HTTP ${res.statusCode}`));
+        return;
+      }
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
@@ -78,14 +83,23 @@ async function fetchCDPTargets(host, port) {
           reject(new Error(`Failed to parse CDP targets: ${err.message}`));
         }
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(5000, () => {
+      req.destroy(new Error('CDP /json/list request timed out'));
+    });
   });
 }
 
 async function fetchCDPVersion(host, port) {
   return new Promise((resolve, reject) => {
     const url = `http://${host}:${port}/json/version`;
-    http.get(url, (res) => {
+    const req = http.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        reject(new Error(`CDP /json/version returned HTTP ${res.statusCode}`));
+        return;
+      }
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
@@ -95,7 +109,11 @@ async function fetchCDPVersion(host, port) {
           reject(new Error(`Failed to parse CDP version: ${err.message}`));
         }
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(5000, () => {
+      req.destroy(new Error('CDP /json/version request timed out'));
+    });
   });
 }
 
@@ -278,30 +296,38 @@ async function discoverTarget(options = {}) {
     candidates.map(async (candidate) => {
       const client = new CDPClient(candidate.webSocketDebuggerUrl);
       await client.connect();
-      await client.send('DOM.enable');
-      await client.send('Runtime.enable');
+      try {
+        await client.send('DOM.enable');
+        await client.send('Runtime.enable');
 
-      const checkResult = await client.send('Runtime.evaluate', {
-        expression: `
-          (function() {
-            var composerSels = ${safeComposerSels};
-            var sendSels = ${safeSendSels};
-            var composer = null, sendBtn = null;
-            for (var i = 0; i < composerSels.length; i++) {
-              var el = document.querySelector(composerSels[i]);
-              if (el) { composer = { sel: composerSels[i], visible: el.getBoundingClientRect().width > 20 && el.getBoundingClientRect().height > 15 && el.offsetParent !== null }; break; }
-            }
-            for (var j = 0; j < sendSels.length; j++) {
-              var btn = document.querySelector(sendSels[j]);
-              if (btn) { sendBtn = { sel: sendSels[j] }; break; }
-            }
-            return { composer: composer, sendButton: sendBtn };
-          })()
-        `,
-        returnByValue: true
-      });
+        const checkResult = await client.send('Runtime.evaluate', {
+          expression: `
+            (function() {
+              var composerSels = ${safeComposerSels};
+              var sendSels = ${safeSendSels};
+              var composer = null, sendBtn = null;
+              for (var i = 0; i < composerSels.length; i++) {
+                var el = document.querySelector(composerSels[i]);
+                if (el) { composer = { sel: composerSels[i], visible: el.getBoundingClientRect().width > 20 && el.getBoundingClientRect().height > 15 && el.offsetParent !== null }; break; }
+              }
+              for (var j = 0; j < sendSels.length; j++) {
+                var btn = document.querySelector(sendSels[j]);
+                if (btn) { sendBtn = { sel: sendSels[j] }; break; }
+              }
+              return { composer: composer, sendButton: sendBtn };
+            })()
+          `,
+          returnByValue: true
+        });
 
-      return { candidate, client, readiness: checkResult.result?.value || {} };
+        return { candidate, client, readiness: checkResult.result?.value || {} };
+      } catch (err) {
+        // Close the client on probe failure so we don't leak WebSockets.
+        // Without this, a connected-but-rejected client is never closed
+        // because it's not in the `live` array.
+        await safeClose(client);
+        throw err;
+      }
     })
   );
 

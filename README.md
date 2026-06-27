@@ -150,7 +150,7 @@ Any MCP-capable agent can connect through the bundled stdio server:
 }
 ```
 
-The MCP server exposes `preflight`, `run_task`, `queue_task`, `poll_task`, `review_code`, settings/dialog/model controls, and the generic `traecn_command` catalog for full command coverage.
+The MCP server exposes `preflight`, `run_task`, `queue_task`, `poll_task`, `review_code`, settings/dialog/model controls, `long_queue_proof_status/start/cancel`, and the generic `traecn_command` catalog for full command coverage.
 
 ### Layered Architecture
 
@@ -228,6 +228,28 @@ By default, external TraeCN model queues do not expire locally; set
 `maxQueueWaitMs` (or `queueMaxWaitMs`) only when a caller explicitly wants a
 queue timeout.
 
+For the guarded GLM-5.2 acceptance proof, agents can use the same control flow
+through MCP/OpenClaw commands or the CLI:
+
+```sh
+traecnclaw proof status
+traecnclaw proof start --marker TRAECN_GLM52_CLEAN_1
+traecnclaw proof start --execute --detach --allow-quota-spend --marker TRAECN_GLM52_CLEAN_1
+traecnclaw proof cancel --marker TRAECN_GLM52_CLEAN_1
+```
+
+`proof status` only reads local proof files and detached watcher state.
+`proof start` is a dry-run unless `--execute` is passed, and new real TraeCN
+submissions still require `--allow-quota-spend`; use the dry-run first to verify
+cleanup, preflight readiness, evidence paths, and that no local task is active
+before a quota-consuming TraeCN submission.
+
+Use `traecnclaw cleanup-queue --status --json`, MCP
+`cleanup_queue_watch_status`, or OpenClaw `traecn_cleanup_watch_status` to
+inspect the local queue-probe cleanup watcher without touching TraeCN. The
+watcher is singleton-locked, so repeat detached starts return
+`alreadyRunning: true` instead of creating extra background cleanup processes.
+
 ```json
 {
   "task": "审查当前项目并输出 findings-first 结果",
@@ -249,8 +271,9 @@ npm run test:live
 npm run audit:prod
 ```
 
-`npm test` runs unit and integration tests. `test:system` starts the gateway in mock mode and verifies the HTTP flow. `test:uat` verifies documentation and OpenAPI coverage required for release acceptance.
-`test:live` runs safe real Trae CN/CDP smoke checks when a live remote-debugging endpoint is available; otherwise it reports `SKIP` and exits successfully. Use `node scripts/live-uat.js --strict` when a live desktop instance is required, `--require-ready` when the UI must be logged in and automation-ready, and `--delegate` only when sending a real test prompt is acceptable. `--delegate` is readiness-gated and fails with diagnostics instead of sending a prompt to an unready UI.
+`npm test` runs unit and integration tests. `test:system` starts the gateway in mock mode and verifies the HTTP flow. `test:uat` verifies documentation, OpenAPI coverage, and the machine-readable acceptance audit required for release acceptance. `npm run acceptance:audit` prints the current requirement-by-requirement status; add `-- --require-complete` before declaring the full unattended TraeCN goal complete.
+`test:live` runs safe real Trae CN/CDP smoke checks when a live remote-debugging endpoint is available; otherwise it reports `SKIP` and exits successfully. Use `node scripts/live-uat.js --strict` when a live desktop instance is required, `--require-ready` when the UI must be logged in and automation-ready, and `--cleanup-queue-probes` when accidental `wait for Trae queue` Solo chats should be stopped, deleted, and rechecked to `matched: 0`. `--strict` fails if those queue-probe chats remain. Add `--delegate` only when sending a real test prompt is acceptable. `--delegate` is readiness-gated and fails with diagnostics instead of sending a prompt to an unready UI.
+`npm run proof:long-queue` is the guarded GLM-5.2 proof runner. It defaults to dry-run, verifies preflight readiness, refuses to start when queue-probe Solo chats or local tasks remain, and prints the exact evidence paths. Add `-- --execute --detach --allow-quota-spend` only when a real long-queue TraeCN submission is explicitly approved; execute mode automatically stops/deletes accidental queue-probe Solo chats and requires consecutive clean dry-runs before submitting. Tune that gate with `-- --cleanup-stabilize-checks <n> --cleanup-stabilize-delay-ms <ms> --cleanup-max-attempts <n>`. Re-running with the same marker resumes the existing task from the evidence log instead of submitting again; add `-- --force-new` only when an intentional new submission is acceptable. Use `npm run proof:status`, MCP `long_queue_proof_status`, OpenClaw `traecn_long_queue_proof_status`, CLI `traecnclaw proof status`, or `npm run proof:cancel -- --marker <id>` to inspect or stop detached proof runs without creating another TraeCN conversation.
 
 ## Security
 

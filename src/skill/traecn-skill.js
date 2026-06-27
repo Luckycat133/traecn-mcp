@@ -747,6 +747,32 @@ class TraeCNSkill {
 
     return result;
   }
+
+  // ── Shared singleton management ─────────────────────────────────────
+  //
+  // Both index.js and simple-api.js need a process-wide singleton so that
+  // `reset()` in one module affects the other. Centralizing the singleton
+  // here avoids split-state bugs when consumers mix the two entry points.
+
+  /**
+   * Get the shared singleton instance, creating it on first access.
+   * @param {object} [context] - Optional context for first-time creation.
+   * @returns {TraeCNSkill}
+   */
+  static getSharedInstance(context) {
+    if (!TraeCNSkill._sharedInstance) {
+      TraeCNSkill._sharedInstance = new TraeCNSkill(context);
+    }
+    return TraeCNSkill._sharedInstance;
+  }
+
+  /**
+   * Reset the shared singleton. The next `getSharedInstance` call will
+   * create a fresh instance.
+   */
+  static resetSharedInstance() {
+    TraeCNSkill._sharedInstance = null;
+  }
 }
 
 module.exports = { TraeCNSkill, KNOWN_MODELS, SETTINGS_SECTIONS, TraeCNSkillError };

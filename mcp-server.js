@@ -108,6 +108,7 @@ const MCP_TOOLS = Object.freeze([
     inputSchema: schema({
       task: { type: 'string' },
       projectPath: { type: 'string' },
+      sessionId: { type: 'string' },
       includeProcess: { type: 'boolean' },
       autoWait: { type: 'boolean', default: true },
       mode: { type: 'string', enum: ['solo', 'ide'] },
@@ -133,6 +134,20 @@ const MCP_TOOLS = Object.freeze([
     inputSchema: schema({
       task: { type: 'string' },
       projectPath: { type: 'string' },
+      sessionId: { type: 'string' },
+      chatId: { type: 'string' },
+      soloChat: {
+        type: 'object',
+        properties: {
+          index: { type: 'number' },
+          titleIncludes: { type: 'string' },
+          textIncludes: { type: 'string' }
+        }
+      },
+      soloChatIndex: { type: 'number' },
+      soloChatTitleIncludes: { type: 'string' },
+      soloChatTextIncludes: { type: 'string' },
+      newChat: { type: 'boolean' },
       reviewRequired: { type: 'boolean' },
       autoContinue: { type: 'boolean' },
       followupTasks: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
@@ -144,9 +159,14 @@ const MCP_TOOLS = Object.freeze([
         ]
       },
       notifyUrl: { type: 'string' },
+      background: { type: 'boolean' },
+      forceBackground: { type: 'boolean' },
+      waitForQueue: { type: 'boolean' },
       fallbackModels: { type: 'array', items: { type: 'string' } },
       autoModelFallback: { type: 'boolean' },
-      modelProbeIntervalMs: { type: 'number' }
+      modelProbeIntervalMs: { type: 'number' },
+      maxQueueWaitMs: { type: 'number' },
+      queueMaxWaitMs: { type: 'number' }
     }, ['task'])
   },
   {
@@ -293,6 +313,61 @@ const MCP_TOOLS = Object.freeze([
     })
   },
   {
+    name: 'cleanup_foreign_solo_queue',
+    description: 'Find and optionally delete accidental queue-probe Solo conversations without sending another prompt to TraeCN.',
+    inputSchema: schema({
+      dryRun: { type: 'boolean' },
+      execute: { type: 'boolean' },
+      maxPasses: { type: 'number' },
+      settleMs: { type: 'number' }
+    })
+  },
+  {
+    name: 'cleanup_queue_watch_status',
+    description: 'Read local cleanup watcher lock/PID/stale status without contacting TraeCN or creating conversations.',
+    inputSchema: schema({
+      lockFile: { type: 'string' }
+    })
+  },
+  {
+    name: 'long_queue_proof_start',
+    description: 'Start the guarded GLM-5.2 long-queue proof. Defaults to dry-run; execute=true plus allowQuotaSpend=true is required for a new real TraeCN submission.',
+    inputSchema: schema({
+      marker: { type: 'string' },
+      model: { type: 'string' },
+      projectPath: { type: 'string' },
+      execute: { type: 'boolean' },
+      allowQuotaSpend: { type: 'boolean' },
+      detach: { type: 'boolean' },
+      forceNew: { type: 'boolean' },
+      resumeTaskId: { type: 'string' },
+      timeoutMs: { type: 'number' },
+      pollMs: { type: 'number' },
+      outputDir: { type: 'string' },
+      cleanupIntervalMs: { type: 'number' },
+      cleanupStabilizeChecks: { type: 'number' },
+      cleanupStabilizeDelayMs: { type: 'number' },
+      cleanupMaxAttempts: { type: 'number' }
+    })
+  },
+  {
+    name: 'long_queue_proof_status',
+    description: 'Read the latest or marker-scoped GLM-5.2 proof status without sending any TraeCN prompt.',
+    inputSchema: schema({
+      marker: { type: 'string' },
+      outputDir: { type: 'string' }
+    })
+  },
+  {
+    name: 'long_queue_proof_cancel',
+    description: 'Cancel the latest or marker-scoped GLM-5.2 proof watcher/task tracking without resubmitting a prompt.',
+    inputSchema: schema({
+      marker: { type: 'string' },
+      taskId: { type: 'string' },
+      outputDir: { type: 'string' }
+    })
+  },
+  {
     name: 'submit_solo_chat_task',
     description: 'Submit a task into a real Solo conversation and return a taskId; background polling switches back to that conversation to collect queued results.',
     inputSchema: schema({
@@ -325,7 +400,8 @@ const MCP_TOOLS = Object.freeze([
       fallbackModels: { type: 'array', items: { type: 'string' } },
       autoModelFallback: { type: 'boolean' },
       modelProbeIntervalMs: { type: 'number' },
-      maxQueueWaitMs: { type: 'number' }
+      maxQueueWaitMs: { type: 'number' },
+      queueMaxWaitMs: { type: 'number' }
     }, ['task'])
   },
   {
@@ -493,6 +569,31 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
     case 'switch_solo_chat': {
       const client = new TraeCNApiClient(context);
       const result = await client.switchSoloChat(args);
+      return asMcpContent(result.data || result);
+    }
+    case 'cleanup_foreign_solo_queue': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.cleanupForeignSoloQueue(args);
+      return asMcpContent(result.data || result);
+    }
+    case 'cleanup_queue_watch_status': {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'cleanup_queue_watch_status', args);
+      return asMcpContent(result.data || result);
+    }
+    case 'long_queue_proof_start': {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'long_queue_proof_start', args);
+      return asMcpContent(result.data || result);
+    }
+    case 'long_queue_proof_status': {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'long_queue_proof_status', args);
+      return asMcpContent(result.data || result);
+    }
+    case 'long_queue_proof_cancel': {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'long_queue_proof_cancel', args);
       return asMcpContent(result.data || result);
     }
     case 'submit_solo_chat_task': {

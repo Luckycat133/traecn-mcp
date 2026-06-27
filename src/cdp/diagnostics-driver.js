@@ -1,7 +1,6 @@
 'use strict';
 
-const { sleep } = require('../shared/utils');
-const { TraeCNAutomationError } = require('./errors');
+const { BaseDriver } = require('./base-driver');
 
 /**
  * DiagnosticsDriver — read problems, errors, warnings from the workspace.
@@ -12,22 +11,7 @@ const { TraeCNAutomationError } = require('./errors');
  *  - Also read Monaco markers (per-file diagnostics) directly via
  *    `monaco.editor.getModelMarkers({})`.
  */
-class DiagnosticsDriver {
-  constructor(client, config = {}, deps = {}) {
-    this.client = client;
-    this.config = config;
-    this.palette = deps.palette || null;
-  }
-
-  setPalette(palette) { this.palette = palette; }
-
-  _viaPalette(commandId) {
-    if (!this.palette) {
-      throw new TraeCNAutomationError('CommandPaletteDriver required', 'PALETTE_REQUIRED', { commandId });
-    }
-    return this.palette.run(commandId);
-  }
-
+class DiagnosticsDriver extends BaseDriver {
   openProblems() { return this._viaPalette('workbench.actions.view.problems'); }
   focusProblems() { return this._viaPalette('workbench.actions.focusProblemsPanel'); }
   nextProblem() { return this._viaPalette('editor.action.marker.next'); }
@@ -39,13 +23,15 @@ class DiagnosticsDriver {
    * Read all workspace problems from the rendered Problems panel.
    */
   async readAll(max = 500) {
+    // Coerce to a safe integer to prevent expression injection.
+    const safeMax = Math.max(0, Math.min(10000, parseInt(max, 10) || 500));
     const r = await this.client.send('Runtime.evaluate', {
       expression: `(()=>{
         const panel = document.querySelector('.markers-panel, [class*="problems-panel"], [class*="markers"]');
         if (!panel) return JSON.stringify({ ok: false, error: 'problems panel not open' });
         const rows = Array.from(panel.querySelectorAll('.monaco-list-row, [class*="marker"]'));
         const out = [];
-        for (let i = 0; i < Math.min(rows.length, ${max}); i++) {
+        for (let i = 0; i < Math.min(rows.length, ${safeMax}); i++) {
           const row = rows[i];
           const severity = /severity-error/.test(row.className) ? 'error'
                          : /severity-warning/.test(row.className) ? 'warning'
@@ -68,11 +54,12 @@ class DiagnosticsDriver {
    * This is the in-editor version (faster, doesn't require the panel open).
    */
   async readModelMarkers(max = 500) {
+    const safeMax = Math.max(0, Math.min(10000, parseInt(max, 10) || 500));
     const r = await this.client.send('Runtime.evaluate', {
       expression: `(()=>{
         if (!window.monaco?.editor) return JSON.stringify({ ok: false, error: 'monaco not present' });
         const markers = window.monaco.editor.getModelMarkers({});
-        const out = markers.slice(0, ${max}).map(m => ({
+        const out = markers.slice(0, ${safeMax}).map(m => ({
           severity: ['hint','info','warning','error'][m.severity || 0],
           message: (m.message || '').slice(0, 300),
           source: m.source || '',

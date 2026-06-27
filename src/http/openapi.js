@@ -278,7 +278,20 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string', description: 'The task to delegate' },
-                    includeProcessText: { type: 'boolean', description: 'Include process information in response' }
+                    projectPath: { type: 'string' },
+                    includeProcessText: { type: 'boolean', description: 'Include process information in response' },
+                    waitForQueue: { type: 'boolean', default: true },
+                    autoApproveDialog: {
+                      oneOf: [{ type: 'boolean' }, { type: 'string' }],
+                      description: 'Automatically handle code-answerable dialogs if the task is tracked in the background.'
+                    },
+                    fallbackModels: {
+                      type: 'array',
+                      items: { type: 'string' },
+                      description: 'Ordered model candidates to probe when the current model is queued.'
+                    },
+                    autoModelFallback: { type: 'boolean', default: false },
+                    modelProbeIntervalMs: { type: 'number', default: 60000 }
                   }
                 }
               }
@@ -375,9 +388,24 @@ function generateOpenAPISpec() {
                   properties: {
                     task: { type: 'string', description: 'The task to delegate', maxLength: 100000 },
                     projectPath: { type: 'string', description: 'Optional local project path TraeCN should work in' },
+                    sessionId: { type: 'string', description: 'Logical session to append the user prompt and eventual assistant result to' },
                     chatId: { type: 'string', description: 'Optional chat ID for notification callback' },
+                    soloChat: {
+                      type: 'object',
+                      properties: {
+                        index: { type: 'number' },
+                        titleIncludes: { type: 'string' },
+                        textIncludes: { type: 'string' }
+                      },
+                      description: 'Target a real Solo conversation for result ownership and later collection.'
+                    },
+                    soloChatIndex: { type: 'number' },
+                    soloChatTitleIncludes: { type: 'string' },
+                    soloChatTextIncludes: { type: 'string' },
+                    newChat: { type: 'boolean', description: 'When false, reuse the selected or targeted Solo conversation.' },
                     waitForQueue: { type: 'boolean', default: true },
                     background: { type: 'boolean', default: false },
+                    forceBackground: { type: 'boolean', default: false },
                     includeProcessText: { type: 'boolean', default: false },
                     fallbackModels: {
                       type: 'array',
@@ -386,6 +414,8 @@ function generateOpenAPISpec() {
                     },
                     autoModelFallback: { type: 'boolean', default: false },
                     modelProbeIntervalMs: { type: 'number', default: 60000 },
+                    maxQueueWaitMs: { type: 'number', description: 'Optional maximum local queue wait before timeout' },
+                    queueMaxWaitMs: { type: 'number', description: 'Alias for maxQueueWaitMs' },
                     reviewRequired: { type: 'boolean', default: false },
                     autoContinue: { type: 'boolean', default: false, description: 'Automatically approve stable review checkpoints and continue follow-up tasks.' },
                     autoApproveDialog: {
@@ -522,6 +552,60 @@ function generateOpenAPISpec() {
           }
         }
       },
+      '/api/solo/chats/cleanup-foreign-queue': {
+        post: {
+          summary: 'Find and optionally delete foreign queue-probe Solo conversations',
+          operationId: 'cleanupForeignSoloQueue',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: false,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    dryRun: { type: 'boolean', description: 'List matches without deleting them' },
+                    execute: { type: 'boolean', description: 'Delete matched queue-probe conversations when true' },
+                    maxPasses: { type: 'integer', minimum: 1, maximum: 20, description: 'Repeat list/stop/delete passes to catch queue-probe chats revealed after earlier deletions' },
+                    settleMs: { type: 'integer', minimum: 0, maximum: 5000, description: 'Delay between cleanup passes' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Cleanup result' },
+            '501': { description: 'Current driver cannot delete Solo chats' }
+          }
+        }
+      },
+      '/api/solo/chats/cleanup_foreign_solo_queue': {
+        post: {
+          summary: 'Find and optionally delete foreign queue-probe Solo conversations',
+          operationId: 'cleanupForeignSoloQueueAlias',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: false,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    dryRun: { type: 'boolean', description: 'List matches without deleting them' },
+                    execute: { type: 'boolean', description: 'Delete matched queue-probe conversations when true' },
+                    maxPasses: { type: 'integer', minimum: 1, maximum: 20, description: 'Repeat list/stop/delete passes to catch queue-probe chats revealed after earlier deletions' },
+                    settleMs: { type: 'integer', minimum: 0, maximum: 5000, description: 'Delay between cleanup passes' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Cleanup result' },
+            '501': { description: 'Current driver cannot delete Solo chats' }
+          }
+        }
+      },
       '/api/solo/chats/submit': {
         post: {
           summary: 'Submit a task into a real Solo-mode conversation and track it for queued-result collection',
@@ -559,7 +643,8 @@ function generateOpenAPISpec() {
                     fallbackModels: { type: 'array', items: { type: 'string' } },
                     autoModelFallback: { type: 'boolean' },
                     modelProbeIntervalMs: { type: 'number' },
-                    maxQueueWaitMs: { type: 'number' }
+                    maxQueueWaitMs: { type: 'number' },
+                    queueMaxWaitMs: { type: 'number', description: 'Alias for maxQueueWaitMs' }
                   }
                 }
               }

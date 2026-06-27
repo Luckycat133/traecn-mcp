@@ -2,6 +2,7 @@
 
 const { sleep, safeJsValue } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
+const { BaseDriver } = require('./base-driver');
 
 /**
  * TerminalDriver — drive TraeCN's integrated terminal panel.
@@ -13,24 +14,7 @@ const { TraeCNAutomationError } = require('./errors');
  *  - Read output via the xterm-rows innerText.
  *  - Track multiple terminals by aria-label / title in the terminal tab list.
  */
-class TerminalDriver {
-  constructor(client, config = {}, deps = {}) {
-    this.client = client;
-    this.config = config;
-    this.palette = deps.palette || null;
-  }
-
-  setPalette(palette) {
-    this.palette = palette;
-  }
-
-  _viaPalette(commandId) {
-    if (!this.palette) {
-      throw new TraeCNAutomationError('CommandPaletteDriver required', 'PALETTE_REQUIRED', { commandId });
-    }
-    return this.palette.run(commandId);
-  }
-
+class TerminalDriver extends BaseDriver {
   // ── Open / close / new (command palette) ───────────────────────────
 
   toggleTerminal() { return this._viaPalette('workbench.action.terminal.toggleTerminal'); }
@@ -61,7 +45,7 @@ class TerminalDriver {
           ok: true,
           present: true,
           output: rows ? (rows.innerText || '').slice(-8000) : '',
-          rowCount: rows ? rows.querySelectorAll('.xterm-rows > div').length : 0,
+          rowCount: rows ? rows.children.length : 0,
           tabs
         });
       })()`,

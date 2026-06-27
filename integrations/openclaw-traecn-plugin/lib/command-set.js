@@ -1,9 +1,15 @@
 'use strict';
 
+const path = require('path');
+const { spawnSync } = require('child_process');
 const { composeTraeCNPrompt } = require('../../../src/skill/prompt-layers');
 const { buildCodeReviewTask } = require('../../../src/skill/review');
 const { buildCapabilities } = require('../../../src/shared/capabilities');
 const { buildConfirmationPlan } = require('../../../src/shared/operation-confirmation');
+
+const REPO_ROOT = path.resolve(__dirname, '../../..');
+const LONG_QUEUE_PROOF_SCRIPT = path.join(REPO_ROOT, 'scripts', 'long-queue-proof.js');
+const TRAECN_CLI_SCRIPT = path.join(REPO_ROOT, 'scripts', 'traecn-cli.js');
 
 const COMMANDS = Object.freeze({
   CAPABILITIES: 'capabilities',
@@ -15,6 +21,8 @@ const COMMANDS = Object.freeze({
   NEW_CHAT: 'new_chat',
   LIST_SOLO_CHATS: 'list_solo_chats',
   SWITCH_SOLO_CHAT: 'switch_solo_chat',
+  CLEANUP_FOREIGN_SOLO_QUEUE: 'cleanup_foreign_solo_queue',
+  CLEANUP_QUEUE_WATCH_STATUS: 'cleanup_queue_watch_status',
   SUBMIT_SOLO_CHAT_TASK: 'submit_solo_chat_task',
   DELEGATE: 'delegate',
   DELEGATE_ASYNC: 'delegate_async',
@@ -40,6 +48,9 @@ const COMMANDS = Object.freeze({
   BATCH_SUBMIT: 'batch_submit',
   BATCH_STATUS: 'batch_status',
   BATCH_CANCEL: 'batch_cancel',
+  LONG_QUEUE_PROOF_START: 'long_queue_proof_start',
+  LONG_QUEUE_PROOF_STATUS: 'long_queue_proof_status',
+  LONG_QUEUE_PROOF_CANCEL: 'long_queue_proof_cancel',
   REVIEW_CODE: 'review_code',
   VIBE_WORKFLOW: 'vibe_workflow',
   // v0.4.0 — new driver-level commands. Each takes an `action` param that
@@ -111,10 +122,22 @@ const COMMAND_DEFINITIONS = Object.freeze([
     optional: ['index', 'titleIncludes', 'textIncludes']
   },
   {
+    command: COMMANDS.CLEANUP_FOREIGN_SOLO_QUEUE,
+    summary: '查找并可选删除误发的排队探测 Solo 对话；执行删除前会先停止仍在 running 的探测项',
+    required: [],
+    optional: ['dryRun', 'execute', 'maxPasses', 'settleMs']
+  },
+  {
+    command: COMMANDS.CLEANUP_QUEUE_WATCH_STATUS,
+    summary: '只读检查本地排队探针对话 cleanup watcher 的 lock、PID 与 stale 状态，不访问 TraeCN',
+    required: [],
+    optional: ['lockFile']
+  },
+  {
     command: COMMANDS.SUBMIT_SOLO_CHAT_TASK,
     summary: '提交任务到一个真实 Solo 对话并立即返回 taskId；后台会切回该对话收集排队后的结果',
     required: ['task'],
-    optional: ['projectPath', 'chatId', 'soloChat', 'soloChatIndex', 'soloChatTitleIncludes', 'soloChatTextIncludes', 'newChat', 'includeProcessText', 'reviewRequired', 'autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'maxQueueWaitMs']
+    optional: ['projectPath', 'chatId', 'soloChat', 'soloChatIndex', 'soloChatTitleIncludes', 'soloChatTextIncludes', 'newChat', 'includeProcessText', 'reviewRequired', 'autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'maxQueueWaitMs', 'queueMaxWaitMs']
   },
   {
     command: COMMANDS.DELEGATE,
@@ -126,7 +149,7 @@ const COMMAND_DEFINITIONS = Object.freeze([
     command: COMMANDS.DELEGATE_ASYNC,
     summary: '向 TraeCN 提交异步任务，返回 taskId 或直接返回结果',
     required: ['task'],
-    optional: ['projectPath', 'chatId', 'soloChat', 'soloChatIndex', 'soloChatTitleIncludes', 'soloChatTextIncludes', 'newChat', 'includeProcessText', 'waitForQueue', 'background', 'reviewRequired', 'autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs']
+    optional: ['projectPath', 'sessionId', 'chatId', 'soloChat', 'soloChatIndex', 'soloChatTitleIncludes', 'soloChatTextIncludes', 'newChat', 'includeProcessText', 'waitForQueue', 'background', 'forceBackground', 'reviewRequired', 'autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'maxQueueWaitMs', 'queueMaxWaitMs']
   },
   {
     command: COMMANDS.TASK_STATUS,
@@ -261,6 +284,24 @@ const COMMAND_DEFINITIONS = Object.freeze([
     optional: []
   },
   {
+    command: COMMANDS.LONG_QUEUE_PROOF_START,
+    summary: '启动 GLM-5.2 长队列无人值守证明；默认 dry-run，真实提交需 execute=true 且 allowQuotaSpend=true，detach=true 可后台等待',
+    required: [],
+    optional: ['marker', 'model', 'projectPath', 'execute', 'allowQuotaSpend', 'detach', 'forceNew', 'resumeTaskId', 'timeoutMs', 'pollMs', 'outputDir', 'cleanupIntervalMs', 'cleanupStabilizeChecks', 'cleanupStabilizeDelayMs', 'cleanupMaxAttempts']
+  },
+  {
+    command: COMMANDS.LONG_QUEUE_PROOF_STATUS,
+    summary: '读取最新或指定 marker 的 GLM-5.2 长队列证明状态，不发送任何 TraeCN prompt',
+    required: [],
+    optional: ['marker', 'outputDir']
+  },
+  {
+    command: COMMANDS.LONG_QUEUE_PROOF_CANCEL,
+    summary: '取消指定或最新 GLM-5.2 长队列证明的本地 watcher/任务追踪，不重新发送 prompt',
+    required: [],
+    optional: ['marker', 'taskId', 'outputDir']
+  },
+  {
     command: COMMANDS.REVIEW_CODE,
     summary: '将代码、diff 或审查说明委派给 TraeCN 执行结构化代码审查',
     required: ['instruction'],
@@ -270,7 +311,7 @@ const COMMAND_DEFINITIONS = Object.freeze([
     command: COMMANDS.VIBE_WORKFLOW,
     summary: '启动无人值守 vibe coding 工作流：提交初始任务并自动继续后续步骤，不需要人工审查推进',
     required: ['task'],
-    optional: ['steps', 'followupTasks', 'completionChecks', 'projectPath', 'chatId', 'includeProcessText', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'notifyUrl', 'maxQueueWaitMs']
+    optional: ['steps', 'followupTasks', 'completionChecks', 'projectPath', 'sessionId', 'chatId', 'soloChat', 'soloChatIndex', 'soloChatTitleIncludes', 'soloChatTextIncludes', 'newChat', 'includeProcessText', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'notifyUrl', 'forceBackground', 'maxQueueWaitMs', 'queueMaxWaitMs']
   },
   {
     command: COMMANDS.EDITOR,
@@ -356,6 +397,110 @@ function withLayeredTask(command, params = {}) {
   };
 }
 
+function addProofValueArg(args, name, value) {
+  if (value === undefined || value === null || value === '') return;
+  args.push(name, String(value));
+}
+
+function addProofFlag(args, name, enabled) {
+  if (enabled === true) args.push(name);
+}
+
+function parseProofJson(stdout, stderr) {
+  for (const stream of [stdout, stderr]) {
+    const text = String(stream || '').trim();
+    if (!text) continue;
+    try {
+      return JSON.parse(text);
+    } catch {}
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1));
+      } catch {}
+    }
+  }
+  return null;
+}
+
+function runLongQueueProof(mode, params = {}) {
+  const args = [LONG_QUEUE_PROOF_SCRIPT];
+  if (mode === 'status') args.push('--status');
+  if (mode === 'cancel') args.push('--cancel');
+
+  addProofValueArg(args, '--marker', params.marker);
+  addProofValueArg(args, '--model', params.model);
+  addProofValueArg(args, '--project', params.projectPath || params.project);
+  addProofValueArg(args, '--output-dir', params.outputDir);
+  addProofValueArg(args, '--host', params.host);
+  addProofValueArg(args, '--port', params.port);
+  addProofValueArg(args, '--token', params.token);
+  addProofValueArg(args, '--resume-task', params.resumeTaskId || params.taskId);
+  addProofValueArg(args, '--timeout-ms', params.timeoutMs);
+  addProofValueArg(args, '--poll-ms', params.pollMs);
+  addProofValueArg(args, '--cleanup-interval-ms', params.cleanupIntervalMs);
+  addProofValueArg(args, '--cleanup-stabilize-checks', params.cleanupStabilizeChecks);
+  addProofValueArg(args, '--cleanup-stabilize-delay-ms', params.cleanupStabilizeDelayMs);
+  addProofValueArg(args, '--cleanup-max-attempts', params.cleanupMaxAttempts);
+  addProofValueArg(args, '--log', params.logFile || params.evidenceLog);
+  addProofValueArg(args, '--final', params.finalFile);
+  addProofValueArg(args, '--stdout', params.stdoutFile);
+  addProofValueArg(args, '--stderr', params.stderrFile);
+
+  if (mode === 'start') {
+    addProofFlag(args, '--execute', params.execute === true);
+    addProofFlag(args, '--allow-quota-spend', params.allowQuotaSpend === true);
+    addProofFlag(args, '--detach', params.detach === true);
+    addProofFlag(args, '--force-new', params.forceNew === true);
+  }
+
+  const result = spawnSync(process.execPath, args, {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    timeout: Number(params.commandTimeoutMs) > 0 ? Number(params.commandTimeoutMs) : 180000
+  });
+  const parsed = parseProofJson(result.stdout, result.stderr);
+  const payload = parsed || {
+    status: result.error ? 'error' : 'unknown',
+    error: result.error ? result.error.message : (result.stderr || '').trim() || null,
+    stdout: (result.stdout || '').trim() || null
+  };
+  return {
+    status: result.status === 0 ? 200 : 500,
+    data: {
+      ...payload,
+      exitCode: result.status,
+      signal: result.signal || null
+    }
+  };
+}
+
+function runCleanupQueueWatchStatus(params = {}) {
+  const args = [TRAECN_CLI_SCRIPT, 'cleanup-queue', '--status', '--json'];
+  addProofValueArg(args, '--lock-file', params.lockFile);
+  const result = spawnSync(process.execPath, args, {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    timeout: Number(params.commandTimeoutMs) > 0 ? Number(params.commandTimeoutMs) : 30000
+  });
+  const parsed = parseProofJson(result.stdout, result.stderr);
+  const payload = parsed || {
+    mode: 'watch_status',
+    running: false,
+    error: result.error ? result.error.message : (result.stderr || '').trim() || null,
+    stdout: (result.stdout || '').trim() || null
+  };
+  return {
+    status: result.status === 0 ? 200 : 500,
+    data: {
+      ...payload,
+      exitCode: result.status,
+      signal: result.signal || null
+    }
+  };
+}
+
 async function executeCommand(client, command, params = {}) {
   switch (command) {
     case COMMANDS.CAPABILITIES:
@@ -413,6 +558,18 @@ async function executeCommand(client, command, params = {}) {
         titleIncludes: params.titleIncludes,
         textIncludes: params.textIncludes
       });
+    case COMMANDS.CLEANUP_FOREIGN_SOLO_QUEUE:
+      return client.cleanupForeignSoloQueue({
+        dryRun: params.dryRun === true || params.execute !== true,
+        execute: params.execute === true,
+        maxPasses: params.maxPasses,
+        settleMs: params.settleMs
+      });
+    case COMMANDS.CLEANUP_QUEUE_WATCH_STATUS:
+      if (client && typeof client.cleanupQueueWatchStatus === 'function') {
+        return client.cleanupQueueWatchStatus(params);
+      }
+      return runCleanupQueueWatchStatus(params);
     case COMMANDS.SUBMIT_SOLO_CHAT_TASK:
       requireParam(params, 'task');
       return client.submitSoloChatTask(withLayeredTask(command, params).task, {
@@ -433,7 +590,8 @@ async function executeCommand(client, command, params = {}) {
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
         modelProbeIntervalMs: params.modelProbeIntervalMs,
-        maxQueueWaitMs: params.maxQueueWaitMs
+        maxQueueWaitMs: params.maxQueueWaitMs,
+        queueMaxWaitMs: params.queueMaxWaitMs
       });
     case COMMANDS.DELEGATE:
       requireParam(params, 'task');
@@ -444,6 +602,7 @@ async function executeCommand(client, command, params = {}) {
         includeProcessText: params.includeProcessText === true,
         waitForQueue: params.waitForQueue !== false,
         background: params.background === true,
+        forceBackground: params.forceBackground === true,
         reviewRequired: params.reviewRequired === true,
         autoContinue: params.autoContinue === true,
         followupTasks: params.followupTasks,
@@ -452,7 +611,9 @@ async function executeCommand(client, command, params = {}) {
         notifyUrl: params.notifyUrl,
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
-        modelProbeIntervalMs: params.modelProbeIntervalMs
+        modelProbeIntervalMs: params.modelProbeIntervalMs,
+        maxQueueWaitMs: params.maxQueueWaitMs,
+        queueMaxWaitMs: params.queueMaxWaitMs
       });
     case COMMANDS.DELEGATE_ASYNC:
       requireParam(params, 'task');
@@ -468,6 +629,7 @@ async function executeCommand(client, command, params = {}) {
         includeProcessText: params.includeProcessText === true,
         waitForQueue: params.waitForQueue !== false,
         background: params.background === true,
+        forceBackground: params.forceBackground === true,
         reviewRequired: params.reviewRequired === true,
         autoContinue: params.autoContinue === true,
         followupTasks: params.followupTasks,
@@ -476,7 +638,9 @@ async function executeCommand(client, command, params = {}) {
         notifyUrl: params.notifyUrl,
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
-        modelProbeIntervalMs: params.modelProbeIntervalMs
+        modelProbeIntervalMs: params.modelProbeIntervalMs,
+        maxQueueWaitMs: params.maxQueueWaitMs,
+        queueMaxWaitMs: params.queueMaxWaitMs
       });
     case COMMANDS.TASK_STATUS:
       requireParam(params, 'taskId');
@@ -569,6 +733,21 @@ async function executeCommand(client, command, params = {}) {
     case COMMANDS.BATCH_CANCEL:
       requireParam(params, 'batchId');
       return client.cancelBatch(params.batchId);
+    case COMMANDS.LONG_QUEUE_PROOF_START:
+      if (client && typeof client.longQueueProofStart === 'function') {
+        return client.longQueueProofStart(params);
+      }
+      return runLongQueueProof('start', { host: client?.host, port: client?.port, token: client?.token, ...params });
+    case COMMANDS.LONG_QUEUE_PROOF_STATUS:
+      if (client && typeof client.longQueueProofStatus === 'function') {
+        return client.longQueueProofStatus(params);
+      }
+      return runLongQueueProof('status', { host: client?.host, port: client?.port, token: client?.token, ...params });
+    case COMMANDS.LONG_QUEUE_PROOF_CANCEL:
+      if (client && typeof client.longQueueProofCancel === 'function') {
+        return client.longQueueProofCancel(params);
+      }
+      return runLongQueueProof('cancel', { host: client?.host, port: client?.port, token: client?.token, ...params });
     case COMMANDS.REVIEW_CODE: {
       requireParam(params, 'instruction');
       const task = buildCodeReviewTask(params);
@@ -617,7 +796,13 @@ async function executeCommand(client, command, params = {}) {
       });
       return client.delegateAsync(withLayeredTask(command, params).task, {
         projectPath: params.projectPath,
+        sessionId: params.sessionId,
         chatId: params.chatId,
+        soloChat: params.soloChat,
+        soloChatIndex: params.soloChatIndex,
+        soloChatTitleIncludes: params.soloChatTitleIncludes,
+        soloChatTextIncludes: params.soloChatTextIncludes,
+        newChat: params.newChat,
         includeProcessText: params.includeProcessText === true,
         waitForQueue: params.waitForQueue !== false,
         background: true,
@@ -631,7 +816,8 @@ async function executeCommand(client, command, params = {}) {
         fallbackModels: params.fallbackModels,
         autoModelFallback: params.autoModelFallback === true,
         modelProbeIntervalMs: params.modelProbeIntervalMs,
-        maxQueueWaitMs: params.maxQueueWaitMs
+        maxQueueWaitMs: params.maxQueueWaitMs,
+        queueMaxWaitMs: params.queueMaxWaitMs
       });
     }
     default:
@@ -666,5 +852,7 @@ module.exports = {
   COMMAND_DEFINITIONS,
   executeCommand,
   listCommands,
-  mapSettingsAction
+  mapSettingsAction,
+  runCleanupQueueWatchStatus,
+  runLongQueueProof
 };
