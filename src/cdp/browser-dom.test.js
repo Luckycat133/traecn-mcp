@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { evaluate, clickByText } = require('./browser-dom');
+const { evaluate, clickByText, clickByTextRadix, evaluateJSON } = require('./browser-dom');
 
 let passed = 0;
 let failed = 0;
@@ -123,6 +123,51 @@ asyncTest('clickByText accepts a regex matcher', async () => {
   };
   const ok = await clickByText(client, ['.x'], /accept|应用/i);
   assert.strictEqual(ok, true);
+});
+
+asyncTest('clickByTextRadix: invokes window.__radixClick when present', async () => {
+  let radixClicked = null;
+  const client = {
+    send: async (method, params) => {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      assert.strictEqual(params.awaitPromise, true);
+      assert.strictEqual(params.returnByValue, true);
+      // Simulate page-side execution: window.__radixClick is available,
+      // matcher finds the node, click succeeds.
+      radixClicked = 'settings';
+      return { result: { value: true }, exceptionDetails: null };
+    }
+  };
+  const ok = await clickByTextRadix(client, ['.sidebar-item'], 'settings');
+  assert.strictEqual(ok, true);
+  assert.strictEqual(radixClicked, 'settings');
+});
+
+asyncTest('clickByTextRadix: returns radix_click_unavailable when __radixClick missing', async () => {
+  const client = {
+    send: async () => ({ result: { value: 'radix_click_unavailable' }, exceptionDetails: null })
+  };
+  const ok = await clickByTextRadix(client, ['.x'], 'whatever');
+  assert.strictEqual(ok, 'radix_click_unavailable');
+});
+
+asyncTest('evaluateJSON: parses stringified JSON from the page', async () => {
+  const client = {
+    send: async (method) => {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      return { result: { value: '{"ok":true,"items":[1,2,3]}' }, exceptionDetails: null };
+    }
+  };
+  const out = await evaluateJSON(client, '() => JSON.stringify({ ok: true, items: [1, 2, 3] })');
+  assert.deepStrictEqual(out, { ok: true, items: [1, 2, 3] });
+});
+
+asyncTest('evaluateJSON: passes through non-string values', async () => {
+  const client = {
+    send: async () => ({ result: { value: 42 }, exceptionDetails: null })
+  };
+  const out = await evaluateJSON(client, '() => 42');
+  assert.strictEqual(out, 42);
 });
 
 (async () => {
