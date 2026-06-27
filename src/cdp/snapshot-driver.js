@@ -4,7 +4,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 const { TraeCNAutomationError } = require('./errors');
-const { evaluateJSON } = require('./browser-dom');
+const { evaluateJSON, evaluate } = require('./browser-dom');
 
 /**
  * SnapshotDriver — capture DOM / page state / screenshots for replay and
@@ -70,28 +70,15 @@ class SnapshotDriver {
   async snapshotLayout(opts = {}) {
     const max = opts.max || 200;
     const minSize = opts.minSize || 50;
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
-        const out = [];
-        const all = document.querySelectorAll('*');
-        for (const el of all) {
-          if (out.length >= ${max}) break;
-          const rect = el.getBoundingClientRect();
-          if (rect.width < ${minSize} || rect.height < ${minSize}) continue;
-          if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
-          out.push({
-            tag: el.tagName,
-            class: (typeof el.className === 'string' ? el.className : '').slice(0, 100),
-            id: el.id || '',
-            rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
-            text: (el.innerText || '').slice(0, 60)
-          });
-        }
-        return JSON.stringify({ ok: true, viewport: { w: window.innerWidth, h: window.innerHeight }, items: out });
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return { ok: false, error: 'parse failed' }; }
+    try {
+      return await evaluateJSON(
+        this.client,
+        '(opts) => { const out = []; const all = document.querySelectorAll("*"); for (const el of all) { if (out.length >= opts.max) break; const rect = el.getBoundingClientRect(); if (rect.width < opts.minSize || rect.height < opts.minSize) continue; if (rect.bottom < 0 || rect.top > window.innerHeight) continue; out.push({ tag: el.tagName, class: (typeof el.className === "string" ? el.className : "").slice(0, 100), id: el.id || "", rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) }, text: (el.innerText || "").slice(0, 60) }); } return { ok: true, viewport: { w: window.innerWidth, h: window.innerHeight }, items: out }; }',
+        [{ max, minSize }]
+      );
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
   }
 
   /**
@@ -150,8 +137,9 @@ class SnapshotDriver {
    * for change detection between runs.
    */
   async pageHash() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
+    const content = await evaluate(
+      this.client,
+      `() => {
         // Concatenate: title + url + top-level visibility + counts
         const parts = [
           document.title,
@@ -167,11 +155,9 @@ class SnapshotDriver {
           Array.from(document.querySelectorAll('.tab')).map(t => (t.innerText||'').trim()).join('|')
         ];
         return parts.join('::');
-      })()`,
-      returnByValue: true
-    });
-    const content = String(r.result.value || '');
-    return crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
+      }`
+    );
+    return crypto.createHash('sha256').update(String(content || '')).digest('hex').slice(0, 16);
   }
 }
 
