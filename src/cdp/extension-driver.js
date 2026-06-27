@@ -2,6 +2,7 @@
 
 const { sleep } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
+const { evaluate, evaluateJSON } = require('./browser-dom');
 
 /**
  * ExtensionDriver — manage TraeCN / VS Code extensions.
@@ -68,20 +69,21 @@ class ExtensionDriver {
     await this._viaPalette('workbench.view.extensions');
     await sleep(300);
 
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
+    const inputFilled = await evaluate(
+      this.client,
+      `(query) => {
         const view = document.querySelector('.extensions-viewlet');
         if (!view) return false;
         const input = view.querySelector('input[placeholder*="Search" i], .extensions-search-input, input.input');
         if (!input) return false;
         const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        setter.call(input, ${JSON.stringify(query)});
+        setter.call(input, query);
         input.dispatchEvent(new Event('input', { bubbles: true }));
         return true;
-      })()`,
-      returnByValue: true
-    });
-    if (!r.result.value) {
+      }`,
+      [query]
+    );
+    if (!inputFilled) {
       throw new TraeCNAutomationError('Extensions search input not found', 'EXT_SEARCH_INPUT_MISSING', {});
     }
 
@@ -100,25 +102,29 @@ class ExtensionDriver {
    * Read the visible extensions list rows.
    */
   async _readExtensionList(max = 50) {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
-        const view = document.querySelector('.extensions-viewlet');
-        if (!view) return JSON.stringify({ ok: false, count: 0, items: [] });
-        const rows = Array.from(view.querySelectorAll('.extension-list-item, [class*="extension-list-item"]'));
-        const out = rows.slice(0, ${max}).map(row => {
-          const name = row.querySelector('.name')?.innerText?.trim() || '';
-          const id = row.querySelector('.identifier')?.innerText?.trim() || '';
-          const author = row.querySelector('.author')?.innerText?.trim() || '';
-          const desc = row.querySelector('.description')?.innerText?.trim() || '';
-          const version = row.querySelector('.version')?.innerText?.trim() || '';
-          const installed = !!row.querySelector('.extension-list-item__installed, [class*="installed"]');
-          return { name, id, author, desc: desc.slice(0, 200), version, installed };
-        });
-        return JSON.stringify({ ok: true, count: out.length, items: out });
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return { ok: false, count: 0, items: [] }; }
+    try {
+      return await evaluateJSON(
+        this.client,
+        `(max) => {
+          const view = document.querySelector('.extensions-viewlet');
+          if (!view) return { ok: false, count: 0, items: [] };
+          const rows = Array.from(view.querySelectorAll('.extension-list-item, [class*="extension-list-item"]'));
+          const out = rows.slice(0, max).map(row => {
+            const name = row.querySelector('.name')?.innerText?.trim() || '';
+            const id = row.querySelector('.identifier')?.innerText?.trim() || '';
+            const author = row.querySelector('.author')?.innerText?.trim() || '';
+            const desc = row.querySelector('.description')?.innerText?.trim() || '';
+            const version = row.querySelector('.version')?.innerText?.trim() || '';
+            const installed = !!row.querySelector('.extension-list-item__installed, [class*="installed"]');
+            return { name, id, author, desc: desc.slice(0, 200), version, installed };
+          });
+          return { ok: true, count: out.length, items: out };
+        }`,
+        [max]
+      );
+    } catch (err) {
+      return { ok: false, count: 0, items: [] };
+    }
   }
 
   /**
