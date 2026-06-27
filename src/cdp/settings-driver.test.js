@@ -59,8 +59,11 @@ asyncTest('_listSettingsSidebarSections filters invalid return values', async ()
 
 asyncTest('_clickSidebarItem waits only after a click match', async () => {
   const client = makeClient([
-    { result: { value: null } },
-    { result: { value: 'clicked: 通用' } },
+    // clickByTextEx auto-installs the radix helper.
+    { result: { value: 'installed' } },
+    // clickByTextEx match evaluation: returns the structured ok shape.
+    { result: { value: { ok: true, matchedText: '通用', matchedSelector: '.settings-sidebar-menu-item' } } },
+    // _waitForContent poll: returns a JSON-stringified items array.
     { result: { value: JSON.stringify([{ label: 'A', desc: 'd' }]) } }
   ]);
   const start = Date.now();
@@ -72,8 +75,8 @@ asyncTest('_clickSidebarItem waits only after a click match', async () => {
 
 asyncTest('_clickSidebarItem skips missing sections quickly', async () => {
   const client = makeClient([
-    { result: { value: null } },
-    { result: { value: 'not found: Missing' } }
+    { result: { value: 'installed' } },
+    { result: { value: { ok: false, reason: 'not_found' } } }
   ]);
   const start = Date.now();
   const value = await _clickSidebarItem(client, 'Missing', 5000);
@@ -118,14 +121,21 @@ asyncTest('_readSettingsContent returns fast for empty model-table sections', as
 asyncTest('SettingsDriver.readAll iterates discovered sections only', async () => {
   const discovered = ['通用', '模型', 'MCP'];
   const evaluations = [
-    { result: { value: null } },
+    // switchTab: _ensureClickHelper
+    { result: { value: 'installed' } },
+    // switchTab: settings-open probe
     { result: { value: true } },
+    // switchTab: list sidebar sections
     { result: { value: JSON.stringify(discovered) } }
   ];
   for (const name of discovered) {
-    evaluations.push({ result: { value: null } });
-    evaluations.push({ result: { value: 'clicked: ' + name } });
+    // _clickSidebarItem: clickByTextEx auto-installs radix helper
+    evaluations.push({ result: { value: 'installed' } });
+    // _clickSidebarItem: match outcome (structured ok shape)
+    evaluations.push({ result: { value: { ok: true, matchedText: name, matchedSelector: '.settings-sidebar-menu-item' } } });
+    // _waitForContent: returns a non-empty array
     evaluations.push({ result: { value: JSON.stringify([{ label: name + '项' }]) } });
+    // _readSettingsContent: full structured payload
     evaluations.push({
       result: {
         value: JSON.stringify({
@@ -153,11 +163,13 @@ asyncTest('SettingsDriver.readAll iterates discovered sections only', async () =
 asyncTest('SettingsDriver.readAll marks missing sections as skipped', async () => {
   const discovered = ['Exists', 'Missing'];
   const evaluations = [
-    { result: { value: null } },
+    // switchTab helpers + sidebar list
+    { result: { value: 'installed' } },
     { result: { value: true } },
     { result: { value: JSON.stringify(discovered) } },
-    { result: { value: null } },
-    { result: { value: 'clicked: Exists' } },
+    // Exists section: helper install + match + wait + read
+    { result: { value: 'installed' } },
+    { result: { value: { ok: true, matchedText: 'Exists', matchedSelector: '.settings-sidebar-menu-item' } } },
     { result: { value: JSON.stringify([{ label: 'Exists项' }]) } },
     {
       result: {
@@ -168,8 +180,9 @@ asyncTest('SettingsDriver.readAll marks missing sections as skipped', async () =
         })
       }
     },
-    { result: { value: null } },
-    { result: { value: 'not found: Missing' } }
+    // Missing section: helper install + match returns not_found (no wait)
+    { result: { value: 'installed' } },
+    { result: { value: { ok: false, reason: 'not_found' } } }
   ];
   const driver = new SettingsDriver(makeClient(evaluations), {});
   const result = await driver.readAll();
