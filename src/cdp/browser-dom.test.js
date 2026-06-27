@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { evaluate, clickByText, clickByTextRadix, evaluateJSON } = require('./browser-dom');
+const { evaluate, clickByText, clickByTextRadix, evaluateJSON, clickByTextEx, clickByPredicate } = require('./browser-dom');
 
 let passed = 0;
 let failed = 0;
@@ -168,6 +168,295 @@ asyncTest('evaluateJSON: passes through non-string values', async () => {
   };
   const out = await evaluateJSON(client, '() => 42');
   assert.strictEqual(out, 42);
+});
+
+// ── clickByTextEx tests ──────────────────────────────────────────────
+
+asyncTest('clickByTextEx: fallbackSelectors kicks in when primary misses', async () => {
+  let observedSelectors = null;
+  const client = {
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        const expr = params.expression;
+        // First call installs the radix helper; capture and return ok.
+        if (expr.includes('window.__radixClick') && expr.includes("'installed'")) {
+          return { result: { value: 'installed' }, exceptionDetails: null };
+        }
+        // The matching evaluation: extract the selectors argument we sent
+        // by grepping the serialised array, and simulate a fallback-selector hit.
+        const m = expr.match(/\["[^"]+","[^"]+","[^"]+"\]/);
+        observedSelectors = m ? m[0] : null;
+        return {
+          result: {
+            value: { ok: true, matchedText: 'Fallback Item', matchedSelector: '.fallback-item' }
+          },
+          exceptionDetails: null
+        };
+      }
+      return { result: { value: null } };
+    }
+  };
+  const out = await clickByTextEx(
+    client,
+    ['.primary-item'],
+    'Fallback Item',
+    { fallbackSelectors: ['.fallback-item', '.other-item'] }
+  );
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.matchedSelector, '.fallback-item');
+  assert.strictEqual(out.matchedText, 'Fallback Item');
+  // All three selectors should have been concatenated into the page-side call.
+  assert.ok(observedSelectors && observedSelectors.includes('.primary-item'));
+  assert.ok(observedSelectors && observedSelectors.includes('.fallback-item'));
+  assert.ok(observedSelectors && observedSelectors.includes('.other-item'));
+});
+
+asyncTest('clickByTextEx: strategies ordering puts aria-label first', async () => {
+  let observedStrategies = null;
+  const client = {
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        const expr = params.expression;
+        if (expr.includes('window.__radixClick') && expr.includes("'installed'")) {
+          return { result: { value: 'installed' }, exceptionDetails: null };
+        }
+        // Grab the strategies array from the serialised args.
+        const m = expr.match(/\["aria-label","text"\]/);
+        observedStrategies = m ? m[0] : null;
+        return {
+          result: {
+            value: { ok: true, matchedText: 'Close window', matchedSelector: '[aria-label]' }
+          },
+          exceptionDetails: null
+        };
+      }
+      return { result: { value: null } };
+    }
+  };
+  const out = await clickByTextEx(
+    client,
+    ['[aria-label]'],
+    'Close',
+    { strategies: ['aria-label', 'text'] }
+  );
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.matchedSelector, '[aria-label]');
+  assert.ok(observedStrategies, 'strategies array should appear in the serialised expression');
+});
+
+asyncTest('clickByTextEx: exact:true rejects substring matches', async () => {
+  let observedExact = null;
+  const client = {
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        const expr = params.expression;
+        if (expr.includes('window.__radixClick') && expr.includes("'installed'")) {
+          return { result: { value: 'installed' }, exceptionDetails: null };
+        }
+        // The boolean literal `true` ends up serialised in the args list.
+        // The exact flag is the 5th positional argument. Match a non-greedy
+        // form so we don't run into greedy backtracking across the literal
+        // arrays in the body.
+        observedExact = /,\s*true,\s*true,\s*"radix"\)/.test(expr);
+        // Simulate the page evaluating the predicate and finding nothing
+        // because exact matching rejected the substring-only candidate.
+        return {
+          result: { value: { ok: false, reason: 'not_found' } },
+          exceptionDetails: null
+        };
+      }
+      return { result: { value: null } };
+    }
+  };
+  const out = await clickByTextEx(
+    client,
+    ['.x'],
+    'Apply Settings Now',
+    { exact: true }
+  );
+  assert.strictEqual(out.ok, false);
+  assert.strictEqual(out.reason, 'not_found');
+  assert.strictEqual(observedExact, true, 'exact:true flag must reach the page-side evaluation');
+});
+
+asyncTest('clickByTextEx: click:radix invokes __radixClick via auto-install', async () => {
+  let helperInstallCalls = 0;
+  const client = {
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        const expr = params.expression;
+        if (expr.includes('window.__radixClick') && expr.includes("'installed'")) {
+          helperInstallCalls++;
+          return { result: { value: 'installed' }, exceptionDetails: null };
+        }
+        // Main match: simulate a successful radix-click outcome.
+        return {
+          result: {
+            value: { ok: true, matchedText: 'Save', matchedSelector: '.btn-save' }
+          },
+          exceptionDetails: null
+        };
+      }
+      return { result: { value: null } };
+    }
+  };
+  const out = await clickByTextEx(client, ['.btn-save'], 'Save', { click: 'radix' });
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.matchedText, 'Save');
+  assert.strictEqual(helperInstallCalls, 1, 'radix helper should be auto-installed once');
+});
+
+asyncTest('clickByTextEx: timeoutMs polls until element appears', async () => {
+  let callCount = 0;
+  const client = {
+    send: async (method) => {
+      if (method === 'Runtime.evaluate') {
+        callCount++;
+        if (callCount === 1) {
+          // helper install
+          return { result: { value: 'installed' }, exceptionDetails: null };
+        }
+        // 2nd call: not yet
+        // 3rd call: not yet
+        // 4th call: success
+        if (callCount <= 3) {
+          return {
+            result: { value: { ok: false, reason: 'not_found' } },
+            exceptionDetails: null
+          };
+        }
+        return {
+          result: {
+            value: { ok: true, matchedText: 'Late', matchedSelector: '.late' }
+          },
+          exceptionDetails: null
+        };
+      }
+      return { result: { value: null } };
+    }
+  };
+  const start = Date.now();
+  const out = await clickByTextEx(client, ['.late'], 'Late', { timeoutMs: 2000 });
+  const elapsed = Date.now() - start;
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.matchedText, 'Late');
+  // We polled at least twice (3rd call still not_found, 4th succeeds)
+  // so elapsed must be >= ~150ms.
+  assert.ok(elapsed >= 100, 'polling should take at least a few intervals, elapsed=' + elapsed);
+  assert.ok(elapsed < 1500, 'should not run past the timeout, elapsed=' + elapsed);
+});
+
+asyncTest('clickByTextEx: click:native does not auto-install radix helper', async () => {
+  let helperInstallCalls = 0;
+  let matchCalls = 0;
+  const client = {
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        const expr = params.expression;
+        if (expr.includes('window.__radixClick') && expr.includes("'installed'")) {
+          helperInstallCalls++;
+          return { result: { value: 'installed' }, exceptionDetails: null };
+        }
+        matchCalls++;
+        return {
+          result: { value: { ok: true, matchedText: 'X', matchedSelector: '.x' } },
+          exceptionDetails: null
+        };
+      }
+      return { result: { value: null } };
+    }
+  };
+  const out = await clickByTextEx(client, ['.x'], 'X', { click: 'native' });
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(helperInstallCalls, 0, 'native click should not install radix helper');
+  assert.strictEqual(matchCalls, 1);
+});
+
+// ── clickByPredicate tests ───────────────────────────────────────────
+
+asyncTest('clickByPredicate: matches via custom predicate', async () => {
+  let observedPredicate = null;
+  const client = {
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        const expr = params.expression;
+        if (expr.includes('window.__radixClick') && expr.includes("'installed'")) {
+          return { result: { value: 'installed' }, exceptionDetails: null };
+        }
+        // The predicate source is passed as a JSON-stringified argument and
+        // gets embedded verbatim into the page-side function body. We just
+        // check that the predicate text reached the page (escaped or not).
+        observedPredicate = /\\"accept\\"/.test(expr) || /"accept"/.test(expr);
+        return {
+          result: {
+            value: { ok: true, matchedText: 'Accept', matchedSelector: '.apply-btn' }
+          },
+          exceptionDetails: null
+        };
+      }
+      return { result: { value: null } };
+    }
+  };
+  const out = await clickByPredicate(
+    client,
+    '(t, ti, a) => (t || ti || a || "").toLowerCase().includes("accept")',
+    { selectors: ['.apply-btn'], fallbackSelectors: ['.fallback-apply'] }
+  );
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.matchedText, 'Accept');
+  assert.strictEqual(observedPredicate, true);
+});
+
+asyncTest('clickByPredicate: returns not_found when predicate rejects all nodes', async () => {
+  const client = {
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        const expr = params.expression;
+        if (expr.includes('window.__radixClick') && expr.includes("'installed'")) {
+          return { result: { value: 'installed' }, exceptionDetails: null };
+        }
+        return {
+          result: { value: { ok: false, reason: 'not_found' } },
+          exceptionDetails: null
+        };
+      }
+      return { result: { value: null } };
+    }
+  };
+  const out = await clickByPredicate(
+    client,
+    '(t, ti, a) => false',
+    { selectors: ['.btn'] }
+  );
+  assert.strictEqual(out.ok, false);
+  assert.strictEqual(out.reason, 'not_found');
+});
+
+asyncTest('clickByPredicate: surfaces radix_click_unavailable distinctly', async () => {
+  const client = {
+    send: async (method, params) => {
+      if (method === 'Runtime.evaluate') {
+        const expr = params.expression;
+        if (expr.includes('window.__radixClick') && expr.includes("'installed'")) {
+          return { result: { value: 'installed' }, exceptionDetails: null };
+        }
+        // Simulate a node match where window.__radixClick isn't present
+        // in the page despite our install call — defensive response shape.
+        return {
+          result: { value: { ok: false, reason: 'radix_click_unavailable' } },
+          exceptionDetails: null
+        };
+      }
+      return { result: { value: null } };
+    }
+  };
+  const out = await clickByPredicate(
+    client,
+    '(t) => t === "Apply"',
+    { selectors: ['.btn'] }
+  );
+  assert.strictEqual(out.ok, false);
+  assert.strictEqual(out.reason, 'radix_click_unavailable');
 });
 
 (async () => {
