@@ -95,8 +95,9 @@ class CommandPaletteDriver {
    * Most actions use keyboard, but a few need DOM clicks.
    */
   async _ensureClickHelper() {
-    await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
+    await dom.evaluate(
+      this.client,
+      `() => {
         if (window.__radixClick) return;
         window.__radixClick = function(el) {
           if (!el) return;
@@ -105,9 +106,8 @@ class CommandPaletteDriver {
           el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
           el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
         };
-      })()`,
-      returnByValue: true
-    });
+      }`
+    );
   }
 
   /**
@@ -201,35 +201,34 @@ class CommandPaletteDriver {
    * Whether the command palette quick-input is currently visible.
    */
   async _isPaletteOpen() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
+    const visible = await dom.evaluate(
+      this.client,
+      `() => {
         const q = document.querySelector('.quick-input-widget, [class*="quick-input-widget"]');
         if (!q) return false;
         const r = q.getBoundingClientRect();
         return r.width > 0 && r.height > 0 && q.offsetParent !== null;
-      })()`,
-      returnByValue: true
-    });
-    return !!r.result.value;
+      }`
+    );
+    return !!visible;
   }
 
   /**
    * Get the text input element inside the command palette.
    */
   async _findPaletteInput() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
+    const found = await dom.evaluate(
+      this.client,
+      `() => {
         const inputs = document.querySelectorAll('.quick-input-widget input.input, .quick-input-widget textarea, .quick-input-widget [contenteditable="true"]');
         if (!inputs.length) return null;
-        // Return the first one with a stable identifier
         for (const i of inputs) {
           if (i.offsetParent !== null) return true;
         }
         return true;
-      })()`,
-      returnByValue: true
-    });
-    return !!r.result.value;
+      }`
+    );
+    return !!found;
   }
 
   /**
@@ -239,8 +238,9 @@ class CommandPaletteDriver {
   async _setInputValue(hasInput, text) {
     // Use Runtime.evaluate to find and set the palette input directly.
     const safeText = safeJsValue(text);
-    await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
+    await dom.evaluate(
+      this.client,
+      `(text) => {
         const inputs = document.querySelectorAll('.quick-input-widget input.input, .quick-input-widget textarea, .quick-input-widget [contenteditable="true"]');
         for (const inp of inputs) {
           if (inp.offsetParent === null) continue;
@@ -248,19 +248,19 @@ class CommandPaletteDriver {
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
                         || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
             if (setter && setter.set) {
-              setter.set.call(inp, ${safeText});
+              setter.set.call(inp, text);
               inp.dispatchEvent(new Event('input', { bubbles: true }));
             }
           } else if (inp.getAttribute('contenteditable') === 'true') {
-            inp.textContent = ${safeText};
+            inp.textContent = text;
             inp.dispatchEvent(new Event('input', { bubbles: true }));
           }
           return true;
         }
         return false;
-      })()`,
-      returnByValue: true
-    });
+      }`,
+      [text]
+    );
   }
 
   /**
