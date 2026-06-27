@@ -9,26 +9,10 @@ const {
   _clickSidebarItem,
   _readSettingsContent
 } = require('./settings-driver');
+const { createRunner } = require('../shared/test-runner');
 
-let passed = 0;
-let failed = 0;
-const pending = [];
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log('  PASS: ' + name);
-  } catch (err) {
-    failed++;
-    console.error('  FAIL: ' + name);
-    console.error('        ' + err.message);
-  }
-}
-
-function asyncTest(name, fn) {
-  pending.push({ name, fn });
-}
+const r = createRunner('settings-driver.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = r;
 
 function makeClient(evaluations) {
   const queue = [...(evaluations || [])];
@@ -222,17 +206,9 @@ asyncTest('SettingsDriver.action rejects unknown actions', async () => {
 });
 
 (async () => {
-  for (const item of pending) {
-    try {
-      await item.fn();
-      passed++;
-      console.log('  PASS: ' + item.name);
-    } catch (err) {
-      failed++;
-      console.error('  FAIL: ' + item.name);
-      console.error('        ' + err.message);
-    }
-  }
-  console.log('\n[settings-driver.test.js] Results: ' + passed + ' passed, ' + failed + ' failed\n');
-  process.exit(failed > 0 ? 1 : 0);
+  // asyncTest() at the top level returned unawaited promises; drain them
+  // here so the final counts reflect every body completing.
+  await pendingAsyncTests();
+  summary();
+  process.exit(r.failed > 0 ? 1 : 0);
 })();

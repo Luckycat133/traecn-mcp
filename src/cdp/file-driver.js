@@ -2,6 +2,7 @@
 
 const { sleep, safeJsValue } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
+const { evaluate } = require('./browser-dom');
 const nodeFs = require('fs');
 
 /**
@@ -53,18 +54,11 @@ class FileDriver {
     }
     await this.palette.open();
     // Quick Open (not command palette) uses Ctrl+P / Cmd+P
-    const safe = safeJsValue(filePath);
-    await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
-        const input = document.querySelector('.quick-input-widget input.input');
-        if (!input) return false;
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        setter.call(input, ${safe});
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
-      })()`,
-      returnByValue: true
-    });
+    await evaluate(
+      this.client,
+      '(value) => { const input = document.querySelector(".quick-input-widget input.input"); if (!input) return false; const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; setter.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); return true; }',
+      [filePath]
+    );
     await sleep(200);
     await this.client.send('Input.dispatchKeyEvent', {
       type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13
@@ -93,24 +87,25 @@ class FileDriver {
    * List the current open editors (file paths and languages).
    */
   async listOpenEditors() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
-        const editors = window.monaco?.editor?.getEditors?.() || [];
-        return JSON.stringify(editors.map(e => {
-          const m = e.getModel();
-          return {
-            id: e.getId(),
-            path: m?.uri?.toString?.() || m?.uri?.path || '',
-            fsPath: m?.uri?.fsPath || '',
-            language: m?.getLanguageId?.(),
-            lineCount: m?.getLineCount?.() || 0,
-            hasFocus: !!(e.hasTextFocus && e.hasTextFocus())
-          };
-        }));
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return []; }
+    try {
+      return await evaluate(
+        this.client,
+        `() => {
+          const editors = window.monaco?.editor?.getEditors?.() || [];
+          return editors.map(e => {
+            const m = e.getModel();
+            return {
+              id: e.getId(),
+              path: m?.uri?.toString?.() || m?.uri?.path || '',
+              fsPath: m?.uri?.fsPath || '',
+              language: m?.getLanguageId?.(),
+              lineCount: m?.getLineCount?.() || 0,
+              hasFocus: !!(e.hasTextFocus && e.hasTextFocus())
+            };
+          });
+        }`
+      );
+    } catch { return []; }
   }
 
   /**
@@ -118,21 +113,22 @@ class FileDriver {
    * Reads from the rendered tree DOM, not a reliable source for very large trees.
    */
   async listExplorerVisible() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
-        const tree = document.querySelector('.explorer-viewlet .monaco-list, .explorer-viewlet [class*="list"]');
-        if (!tree) return JSON.stringify({ ok: false, error: 'no explorer' });
-        const rows = Array.from(tree.querySelectorAll('.monaco-list-row, [role="treeitem"]'));
-        const items = rows.slice(0, 500).map(r => ({
-          label: (r.querySelector('.label-name')?.innerText || r.innerText || '').trim().slice(0, 200),
-          aria: r.getAttribute('aria-label') || '',
-          expanded: r.getAttribute('aria-expanded') === 'true'
-        }));
-        return JSON.stringify({ ok: true, items });
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return { ok: false, error: 'parse failed' }; }
+    try {
+      return await evaluate(
+        this.client,
+        `() => {
+          const tree = document.querySelector('.explorer-viewlet .monaco-list, .explorer-viewlet [class*="list"]');
+          if (!tree) return { ok: false, error: 'no explorer' };
+          const rows = Array.from(tree.querySelectorAll('.monaco-list-row, [role="treeitem"]'));
+          const items = rows.slice(0, 500).map(r => ({
+            label: (r.querySelector('.label-name')?.innerText || r.innerText || '').trim().slice(0, 200),
+            aria: r.getAttribute('aria-label') || '',
+            expanded: r.getAttribute('aria-expanded') === 'true'
+          }));
+          return { ok: true, items };
+        }`
+      );
+    } catch { return { ok: false, error: 'parse failed' }; }
   }
 
   // ── Direct disk read/write (side-channel) ───────────────────────────

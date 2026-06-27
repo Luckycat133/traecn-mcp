@@ -30,170 +30,35 @@ const { findTraeCNBinary, isTraeCNRunning, restartTraeCNWithDebug, startTraeCN, 
 const { CDPHealthWatcher } = require('../cdp/health-watcher');
 const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
 
-function normalizeUrl(rawUrl) {
-  return rawUrl.replace(/[\x80-\xff]/g, ch => {
-    const byteVal = Buffer.from(ch, 'latin1')[0];
-    return '%' + byteVal.toString(16).toUpperCase().padStart(2, '0');
-  });
-}
-
-// Strip any sensitive query params (token/authorization/key/secret/password) from
-// a URL before it lands in a log line. Returns the path + redacted query, or
-// the original string if parsing fails.
-function _redactUrl(rawUrl) {
-  if (!rawUrl || rawUrl.indexOf('?') === -1) return rawUrl;
-  const qIdx = rawUrl.indexOf('?');
-  const path = rawUrl.slice(0, qIdx);
-  const query = rawUrl.slice(qIdx + 1);
-  const redacted = query.replace(
-    /(^|&)(token|authorization|api[_-]?key|secret|password)(=)/gi,
-    (_match, sep, _key, eq) => `${sep}${_key}=[REDACTED]`
-  );
-  return path + '?' + redacted;
-}
-
-const SENSITIVE_KEYS = ['token', 'password', 'secret', 'credential', 'authorization'];
-// SENSITIVE_KEYS is kept as a thin local re-export of utils.SENSITIVE_LOG_KEYS
-// so anyone grepping for this name (older code, third-party callers) still
-// finds something sensible. Update both lists together.
-Object.freeze(SENSITIVE_KEYS);
-const DEFAULT_JSON_HEADERS = {
-  'Content-Type': 'application/json; charset=utf-8',
-  'Cache-Control': 'no-store',
-  'X-Content-Type-Options': 'nosniff',
-  'Referrer-Policy': 'no-referrer'
-};
-const DEFAULT_HTML_HEADERS = {
-  'Content-Type': 'text/html; charset=utf-8',
-  'Cache-Control': 'no-store',
-  'X-Content-Type-Options': 'nosniff',
-  'Referrer-Policy': 'no-referrer',
-  'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline' 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"
-};
-// Safe X-Request-ID: ASCII letters/digits/_- up to 128 chars. Anything else is
-// rejected and replaced with a server-generated id.
-const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
-const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
-const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
+// Local alias so the existing call site (`_redactUrl(req.url)`) keeps working
+// after the helpers moved to ./request-gate. The real implementation lives
+// in request-gate.js; this is a one-line shim kept for readability.
+const { redactUrl: _redactUrl } = require('./request-gate');
+const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, RateLimiter, HttpError } = require('./request-gate');
+const { TaskQueueService } = require('./task-queue-service');
+const { TraeControl } = require('../cdp/trae-control');
+const { ROUTES, matchRoute, resolveHandler } = require('./route-table');
+const statusHandlers = require('./handlers/status');
+const tasksHandlers = require('./handlers/tasks');
+const delegateHandlers = require('./handlers/delegate');
+const sessionsHandlers = require('./handlers/sessions');
+const configHandlers = require('./handlers/config');
+const dialogHandlers = require('./handlers/dialog');
+const settingsHandlers = require('./handlers/settings');
+const preflightHandlers = require('./handlers/preflight');
+const soloChatHandlers = require('./handlers/solo-chat');
+const traeControlHandlers = require('./handlers/trae-control');
+const queueHandlers = require('./handlers/queue');
+const taskActionsHandlers = require('./handlers/task-actions');
+const batchHandlers = require('./handlers/batch');
+const projectHandlers = require('./handlers/project');
+const driverDispatchHandlers = require('./handlers/driver-dispatch');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
-// SENSITIVE_KEYS remains here for the legacy local-alias used inside other
-// helpers; both lists stay in sync via shared/utils.SENSITIVE_LOG_KEYS.
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
 
-function secureCompare(left, right) {
-  if (typeof left !== 'string' || typeof right !== 'string') return false;
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-class RateLimiter {
-  constructor(windowMs, maxRequests) {
-    this.windowMs = windowMs;
-    this.maxRequests = maxRequests;
-    this.requests = new Map();
-    this._lastCleanup = Date.now();
-  }
-
-  _cleanup() {
-    const now = Date.now();
-    if (now - this._lastCleanup < this.windowMs) return;
-    this._lastCleanup = now;
-    for (const [key, record] of this.requests) {
-      if (now - record.startTime > this.windowMs) {
-        this.requests.delete(key);
-      }
-    }
-  }
-
-  check(key) {
-    this._cleanup();
-    const now = Date.now();
-    const record = this.requests.get(key);
-
-    if (!record || now - record.startTime > this.windowMs) {
-      this.requests.set(key, { startTime: now, count: 1 });
-      return true;
-    }
-
-    record.count++;
-    return record.count <= this.maxRequests;
-  }
-
-  getRemaining(key) {
-    const record = this.requests.get(key);
-    if (!record) return this.maxRequests;
-    return Math.max(0, this.maxRequests - record.count);
-  }
-}
-
-function parseBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    let size = 0;
-    const maxSize = 1024 * 1024;
-
-    req.on('data', chunk => {
-      size += chunk.length;
-      if (size > maxSize) {
-        reject(new HttpError('Request body too large', 413, 'REQUEST_BODY_TOO_LARGE'));
-        req.destroy();
-        return;
-      }
-      body += chunk;
-    });
-
-    req.on('end', () => {
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        reject(new HttpError('Invalid JSON body', 400, 'INVALID_JSON'));
-      }
-    });
-
-    req.on('error', reject);
-  });
-}
-
-class HttpError extends Error {
-  constructor(message, statusCode = 500, code = 'HTTP_ERROR') {
-    super(message);
-    this.name = 'HttpError';
-    this.statusCode = statusCode;
-    this.code = code;
-  }
-}
-
-function jsonResponse(res, data, statusCode = 200, headers = {}, req = null) {
-  const body = Buffer.from(JSON.stringify(data), 'utf8');
-  const acceptEncoding = req ? (req.headers['accept-encoding'] || '') : '';
-  const useGzip = body.length > 1024 && acceptEncoding.includes('gzip');
-  const responseHeaders = { ...DEFAULT_JSON_HEADERS, ...headers };
-
-  if (useGzip) {
-    responseHeaders['Content-Encoding'] = 'gzip';
-    res.writeHead(statusCode, responseHeaders);
-    zlib.gzip(body, (err, compressed) => {
-      if (err) {
-        res.end(body);
-      } else {
-        res.end(compressed);
-      }
-    });
-  } else {
-    res.writeHead(statusCode, responseHeaders);
-    res.end(body);
-  }
-}
-
-function htmlResponse(res, html, statusCode = 200, headers = {}) {
-  res.writeHead(statusCode, {
-    ...DEFAULT_HTML_HEADERS,
-    ...headers
-  });
-  res.end(html);
-}
+const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
 
 // Notify OpenClaw (Telegram gateway) when async task completes
 async function notifyOpenClaw(chatId, message) {
@@ -321,8 +186,24 @@ class Gateway {
       logger: console,
       label: 'Gateway'
     });
+    this.traeControl = new TraeControl({
+      configManager: this.configManager,
+      isMockBridge: () => this.mockBridge,
+      autoStartTrae: this.autoStartTrae,
+      recoveryCooldownMs: this.traeRecoveryCooldownMs,
+      recoveryWaitMs: this.traeRecoveryWaitMs,
+      logger: console,
+      setTimeoutImpl: (cb, delay) => this._setTimeout(cb, delay),
+    });
     this.activeQueuePersistencePath = this._resolveActiveQueuePersistencePath();
-    this._restoreActiveQueue();
+    this.taskQueueService = new TaskQueueService({
+      logger: console,
+      persistencePath: this.activeQueuePersistencePath,
+      taskHistoryStore: this.taskHistoryStore,
+      isMockBridge: () => this.mockBridge,
+      isTerminalStatus: (status) => this._isTerminalTaskStatus(status),
+    });
+    this.taskQueueService.restore(this.taskQueue);
 
     this.configManager.on('configChanged', (data) => {
       this._applyConfigChanges(data.changes);
@@ -498,91 +379,14 @@ class Gateway {
   }
 
   async _attemptTraeRecovery(reason) {
-    if (this.mockBridge || !this.autoStartTrae) return false;
-
-    const now = Date.now();
-    if (now - this.lastTraeRecoveryAt < this.traeRecoveryCooldownMs) {
-      return false;
+    // Delegate to TraeControl but mirror `lastTraeRecoveryAt` on Gateway so
+    // existing tests + observability that read this.lastTraeRecoveryAt keep
+    // working unchanged.
+    const result = await this.traeControl.attemptRecovery(reason);
+    if (result || this.traeControl.lastRecoveryAt) {
+      this.lastTraeRecoveryAt = this.traeControl.lastRecoveryAt;
     }
-    this.lastTraeRecoveryAt = now;
-
-    const binPath = findTraeCNBinary();
-    if (!binPath) {
-      console.warn('[Gateway] Trae recovery skipped: binary not found');
-      return false;
-    }
-
-    const quickstart = getQuickstartConfig();
-    const requestedPort = getEnvWithFallback(
-      'TRAECN_REMOTE_DEBUGGING_PORT',
-      'TRAE_REMOTE_DEBUGGING_PORT',
-      quickstart.remoteDebuggingPort || '9334'
-    );
-    process.env.TRAECN_REMOTE_DEBUGGING_PORT = requestedPort;
-
-    try {
-      const running = isTraeCNRunning();
-      const recoveryNewInstance = getEnvWithFallback(
-        'TRAECN_TRAE_RECOVERY_NEW_INSTANCE',
-        'TRAE_TRAE_RECOVERY_NEW_INSTANCE',
-        '0'
-      ) === '1';
-      // TRAECN_RECOVERY_KILL_RUNNING=1: aggressively kill the existing
-      // TraeCN and relaunch with the debug port. Off by default so we
-      // never trample an interactive user session; opt in for unattended
-      // automation where lost session state is acceptable.
-      const killRunning = getEnvWithFallback(
-        'TRAECN_RECOVERY_KILL_RUNNING',
-        'TRAE_RECOVERY_KILL_RUNNING',
-        '0'
-      ) === '1';
-
-      if (running && !recoveryNewInstance && !killRunning) {
-        console.warn('[Gateway] Trae recovery skipped: normal Trae is already running without a reachable CDP endpoint; restart Trae CN with remote debugging enabled and existing profile.');
-        return false;
-      }
-
-      let launched = null;
-      let quit = null;
-      if (killRunning && running) {
-        // Use the canonical quit + relaunch path so the new instance
-        // reuses the same profile and CDP port — no zombie process.
-        const result = await restartTraeCNWithDebug({ binPath });
-        quit = result.quit;
-        launched = result.launched;
-      } else {
-        launched = startTraeCN({
-          binPath,
-          newInstance: recoveryNewInstance,
-          useIsolatedProfile: quickstart.profileMode === 'existing' ? false : quickstart.useIsolatedProfile
-        });
-      }
-      console.log('[Gateway] Trae recovery launched:', {
-        reason: reason?.message || String(reason || 'unknown'),
-        requestedPort,
-        profileMode: quickstart.profileMode,
-        recoveryNewInstance,
-        killRunning,
-        alreadyRunning: running,
-        quit: quit ? { ok: quit.ok, alreadyStopped: quit.alreadyStopped } : null,
-        pid: launched && launched.pid
-      });
-    } catch (err) {
-      console.error('[Gateway] Trae recovery failed:', err.message);
-      return false;
-    }
-
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < this.traeRecoveryWaitMs) {
-      try {
-        await discoverTarget();
-        return true;
-      } catch (err) {
-        await new Promise(resolve => { this._setTimeout(resolve, 1500); });
-      }
-    }
-    console.warn('[Gateway] Trae recovery timed out waiting for CDP surface');
-    return false;
+    return result;
   }
 
   _normalizeFollowupTasks(items) {
@@ -2024,47 +1828,19 @@ class Gateway {
   }
 
   _handleTasksHistory(req, res) {
-    const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
-    const page = parsePositiveInt(parsedUrl.searchParams.get('page'), 1);
-    const limit = Math.min(parsePositiveInt(parsedUrl.searchParams.get('limit'), 20), 100);
-    const status = parsedUrl.searchParams.get('status') || null;
-    const keyword = parsedUrl.searchParams.get('keyword') || null;
-    const startDate = parsedUrl.searchParams.get('startDate') || null;
-    const endDate = parsedUrl.searchParams.get('endDate') || null;
-    const sessionId = parsedUrl.searchParams.get('sessionId') || null;
-
-    const result = this.taskHistoryStore.getHistory({
-      page, limit, status, keyword, startDate, endDate, sessionId
-    });
-    this._json(req, res, result);
+    return tasksHandlers.handleTasksHistory(req, res, this);
   }
 
   _handleTasksHistoryClear(req, res) {
-    const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
-    const olderThanHours = parsedUrl.searchParams.has('olderThanHours')
-      ? parsePositiveInt(parsedUrl.searchParams.get('olderThanHours'), null)
-      : null;
-    const status = parsedUrl.searchParams.get('status') || null;
-    const beforeDate = parsedUrl.searchParams.get('beforeDate') || null;
-
-    const result = this.taskHistoryStore.clearHistory({ olderThanHours, status, beforeDate });
-    this._json(req, res, { success: true, ...result });
+    return tasksHandlers.handleTasksHistoryClear(req, res, this);
   }
 
   _handleGetTask(req, res, taskId) {
-    const task = this.taskHistoryStore.getTask(taskId);
-    if (!task) {
-      return this._json(req, res, { error: 'Task not found' }, 404);
-    }
-    this._json(req, res, task);
+    return tasksHandlers.handleGetTask(req, res, this, taskId);
   }
 
   _handleTaskReplay(req, res, taskId) {
-    const replay = this.taskHistoryStore.getReplay(taskId);
-    if (!replay) {
-      return this._json(req, res, { error: 'Task not found' }, 404);
-    }
-    this._json(req, res, replay);
+    return tasksHandlers.handleTaskReplay(req, res, this, taskId);
   }
 
   async _handleConfirmPlan(req, res) {
@@ -2305,34 +2081,19 @@ class Gateway {
   }
 
   async _handleStatus(req, res) {
-    this._json(req, res, await this._statusSnapshot());
+    return statusHandlers.handleStatus(req, res, this);
   }
 
-  /**
-   * Prometheus exposition format metrics endpoint.
-   * The body uses the standard text/plain; version=0.0.4 content type so
-   * any Prometheus / VictoriaMetrics / Mimir scraper picks it up without
-   * extra configuration. Counters, gauges, and histograms are exposed with
-   * the `traecn_*` prefix defined in MetricsCollector.
-   */
   _handleMetrics(req, res) {
-    // Refresh volatile gauges so scrapers see fresh values.
-    try { this._refreshMetricsGauges(); } catch { /* never fail the scrape */ }
-    const body = globalMetrics.toPrometheus();
-    res.writeHead(200, {
-      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
-      'Cache-Control': 'no-store'
-    });
-    res.end(body);
+    return statusHandlers.handleMetrics(req, res, this);
   }
 
-  /**
-   * JSON variant for ad-hoc debugging (curl, dashboards, smoke tests).
-   * Mirrors `/metrics` semantics but is not meant for production scraping.
-   */
   _handleMetricsJson(req, res) {
-    try { this._refreshMetricsGauges(); } catch { /* never fail the scrape */ }
-    this._json(req, res, globalMetrics.getMetrics());
+    return statusHandlers.handleMetricsJson(req, res, this);
+  }
+
+  async _handleReadiness(req, res) {
+    return statusHandlers.handleReadiness(req, res, this);
   }
 
   /**
@@ -2465,144 +2226,31 @@ class Gateway {
   }
 
   async _handleCreateSession(req, res) {
-    const body = await parseBody(req);
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-    await this._ensureConnection();
-
-    const session = {
-      id: sessionId,
-      createdAt: new Date().toISOString(),
-      projectPath: body.projectPath || null,
-      messages: []
-    };
-
-    this.sessions.set(sessionId, session);
-
-    const responseData = { sessionId, createdAt: session.createdAt };
-    this._storeIdempotency(req.headers['idempotency-key'], { data: responseData, statusCode: 201 });
-    this._json(req, res, responseData, 201);
+    return sessionsHandlers.handleCreateSession(req, res, this);
   }
 
   _handleListSessions(req, res) {
-    const sessions = Array.from(this.sessions.values()).map(s => ({
-      id: s.id,
-      createdAt: s.createdAt,
-      messageCount: s.messages.length
-    }));
-    this._json(req, res, { sessions });
+    return sessionsHandlers.handleListSessions(req, res, this);
   }
 
   _handleGetSession(req, res, sessionId) {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      return this._json(req, res, { error: 'Session not found' }, 404);
-    }
-    this._json(req, res, session);
+    return sessionsHandlers.handleGetSession(req, res, this, sessionId);
   }
 
   async _handleDelegate(req, res, sessionId) {
-    const body = await parseBody(req);
-    if (!body.task) {
-      return this._json(req, res, { error: 'task is required' }, 400);
-    }
-    if (typeof body.task !== 'string' || body.task.length > 100000) {
-      return this._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
-    }
-
-    await this._ensureConnection();
-
-    const session = this.sessions.get(sessionId);
-    if (session) {
-      session.messages.push({ role: 'user', content: body.task, timestamp: new Date().toISOString() });
-    }
-
-    const queueStatus = typeof this.driver.checkQueueStatus === 'function'
-      ? await this.driver.checkQueueStatus()
-      : { queued: false, running: false, canSubmit: true };
-    const waitForQueue = body.waitForQueue !== false;
-    const queueVisible = queueStatus.queued === true;
-    const queueBlocked = queueStatus.running === true || (queueVisible && queueStatus.canSubmit !== true);
-    if (queueBlocked || (waitForQueue && queueVisible)) {
-      if (!waitForQueue) {
-        return this._json(req, res, {
-          status: queueStatus.queued ? 'queued' : 'running',
-          queueDetails: this._queueDetailsFromStatus(queueStatus),
-          message: queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'
-        }, 202);
-      }
-
-      const task = this._createQueuedTask({
-        task: body.task,
-        projectPath: body.projectPath,
-        reviewRequired: body.reviewRequired === true,
-        autoContinue: body.autoContinue === true,
-        followupTasks: body.followupTasks,
-        completionChecks: body.completionChecks,
-        autoApproveDialog: body.autoApproveDialog,
-        includeProcessText: body.includeProcessText === true,
-        notifyUrl: body.notifyUrl,
-        chatId: body.chatId
-      }, queueStatus);
-      this._ensureBackgroundPolling();
-      return this._json(req, res, {
-        taskId: task.taskId,
-        status: 'queued',
-        queueDetails: this._queueDetailsFromStatus(queueStatus, task.currentModel),
-        reviewRequired: task.reviewRequired,
-        autoContinue: task.autoContinue === true,
-        followupCount: task.followupTasks.length,
-        message: '模型排队中，任务已加入后台。用 traecn_task_status 查询进度',
-        model: queueStatus.currentModel || null
-      }, 202);
-    }
-
-    const result = await this.driver.delegate(this._taskWithProjectContext(body.task, body.projectPath));
-
-    if (session) {
-      session.messages.push({ role: 'assistant', content: result.text, timestamp: new Date().toISOString() });
-    }
-
-    const responseData = {
-      text: result.text,
-      stable: result.stable,
-      elapsedMs: result.elapsedMs,
-      timedOut: result.timedOut || false
-    };
-
-    if (body.includeProcessText) {
-      responseData.processText = result.text;
-    }
-
-    this._storeIdempotency(req.headers['idempotency-key'], { data: responseData, statusCode: 200 });
-    this._json(req, res, responseData);
+    return sessionsHandlers.handleDelegate(req, res, this, sessionId);
   }
 
   async _handleNewChat(req, res) {
-    await this._ensureConnection();
-    const success = await this.driver.newChat();
-    this._json(req, res, { success });
+    return soloChatHandlers.handleNewChat(req, res, this);
   }
 
   async _handleListSoloChats(req, res) {
-    await this._ensureConnection();
-    const result = typeof this.driver.listSoloChats === 'function'
-      ? await this.driver.listSoloChats()
-      : { mode: 'unsupported', chats: [], count: 0, reason: 'driver_does_not_support_solo_chats' };
-    this._json(req, res, result);
+    return soloChatHandlers.handleListSoloChats(req, res, this);
   }
 
   async _handleSwitchSoloChat(req, res) {
-    const body = await parseBody(req);
-    await this._ensureConnection();
-    const result = typeof this.driver.switchSoloChat === 'function'
-      ? await this.driver.switchSoloChat({
-        index: Number.isInteger(body.index) ? body.index : null,
-        textIncludes: body.textIncludes,
-        titleIncludes: body.titleIncludes
-      })
-      : { success: false, reason: 'driver_does_not_support_solo_chats' };
-    this._json(req, res, result, result.success === false ? 404 : 200);
+    return soloChatHandlers.handleSwitchSoloChat(req, res, this);
   }
 
   _normalizeSoloChatTarget(value = {}) {
@@ -2803,456 +2451,47 @@ class Gateway {
   }
 
   async _handleSubmitSoloChatTask(req, res) {
-    const body = await parseBody(req);
-    if (!body.task) {
-      return this._json(req, res, { error: 'task is required' }, 400);
-    }
-    if (typeof body.task !== 'string' || body.task.length > 100000) {
-      return this._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
-    }
-
-    return await this._withUiActionLock(async () => {
-      await this._ensureConnection();
-      if (typeof this.driver.switchMode === 'function') {
-        await this.driver.switchMode('solo');
-      }
-      if (typeof this.driver.sendMessage !== 'function') {
-        return this._json(req, res, { error: 'driver does not support message submission' }, 501);
-      }
-
-      const requestedSoloChat = this._normalizeSoloChatTarget(body.soloChat || body.soloChatTarget || {
-        index: body.soloChatIndex,
-        titleIncludes: body.soloChatTitleIncludes,
-        textIncludes: body.soloChatTextIncludes
-      });
-
-      if (requestedSoloChat) {
-        if (typeof this.driver.switchSoloChat !== 'function') {
-          return this._json(req, res, { success: false, reason: 'driver_does_not_support_solo_chats' }, 501);
-        }
-        const switchResult = await this.driver.switchSoloChat(this._soloChatSwitchCriteria(requestedSoloChat));
-        if (switchResult.success === false) {
-          return this._json(req, res, switchResult, 404);
-        }
-      } else if (body.newChat !== false) {
-        if (typeof this.driver.newChat !== 'function') {
-          return this._json(req, res, { error: 'driver does not support new chat creation' }, 501);
-        }
-        await this.driver.newChat();
-      }
-
-      await this.driver.sendMessage(this._taskWithProjectContext(body.task, body.projectPath));
-      const queueStatus = typeof this.driver.checkQueueStatus === 'function'
-        ? await this.driver.checkQueueStatus()
-        : { queued: true, running: false, canSubmit: false };
-      const task = this._createQueuedTask({
-        ...body,
-        soloChat: requestedSoloChat,
-        includeProcessText: body.includeProcessText === true
-      }, {
-        ...queueStatus,
-        queued: queueStatus.queued !== false,
-        queueMessage: queueStatus.queueMessage || queueStatus.message || 'submitted to Solo chat'
-      });
-      task.status = 'executing';
-      task.submittedToTrae = true;
-      task.submittedAt = Date.now();
-      task.queueState = queueStatus.running ? 'running' : (queueStatus.queued ? 'queued' : 'submitted');
-      task.queueMessage = queueStatus.queueMessage || queueStatus.message || 'submitted to Solo chat';
-      await this._captureTaskSoloChat(task);
-      this._syncTaskHistoryMirror(task);
-      this._persistActiveQueue();
-      this._ensureBackgroundPolling();
-
-      return this._json(req, res, {
-        taskId: task.taskId,
-        status: task.status,
-        submittedToTrae: true,
-        soloChat: task.soloChat || null,
-        queueDetails: this._queueDetailsFromStatus(queueStatus, task.currentModel),
-        reviewRequired: task.reviewRequired,
-        autoContinue: task.autoContinue === true,
-        followupCount: task.followupTasks.length,
-        message: '任务已提交到 Solo 对话，后台会切回该对话收集结果'
-      }, 202);
-    });
+    return soloChatHandlers.handleSubmitSoloChatTask(req, res, this);
   }
 
   async _handleStopGeneration(req, res) {
-    await this._ensureConnection();
-    const result = typeof this.driver.stopGeneration === 'function'
-      ? await this.driver.stopGeneration()
-      : { success: false, reason: 'driver_does_not_support_stop_generation' };
-    this._json(req, res, result, result.success === false ? 409 : 200);
+    return traeControlHandlers.handleStopGeneration(req, res, this);
   }
 
   async _handleRestartTraeDebug(req, res) {
-    const body = await parseBody(req);
-    const expectedPhrase = 'restart-trae-cn-with-debug-existing-profile';
-    const plan = buildConfirmationPlan({
-      command: 'restart_trae_debug',
-      params: {
-        projectPath: body.projectPath || null,
-        profileMode: 'existing'
-      },
-      forceConfirm: true
-    });
-    const confirmed = body.confirmationPhrase === expectedPhrase || body.confirmationId === plan.confirmationId;
-    if (!confirmed) {
-      return this._json(req, res, {
-        error: 'Explicit confirmation required before restarting Trae CN',
-        confirmationId: plan.confirmationId,
-        plan
-      }, 409);
-    }
-
-    if (this.client) {
-      try {
-        await this.client.close();
-      } catch (_) {}
-      this.client = null;
-      this.driver = null;
-    }
-
-    const quickstart = getQuickstartConfig();
-    const requestedPort = getEnvWithFallback(
-      'TRAECN_REMOTE_DEBUGGING_PORT',
-      'TRAE_REMOTE_DEBUGGING_PORT',
-      quickstart.remoteDebuggingPort || '9334'
-    );
-    process.env.TRAECN_REMOTE_DEBUGGING_PORT = requestedPort;
-
-    let restart;
-    try {
-      restart = await restartTraeCNWithDebug({
-        projectPath: body.projectPath,
-        quitTimeoutMs: body.quitTimeoutMs,
-        pollMs: body.pollMs
-      });
-    } catch (err) {
-      return this._json(req, res, {
-        ok: false,
-        error: err.message,
-        profileMode: 'existing',
-        requestedPort
-      }, 500);
-    }
-
-    const cdpWaitMs = Number.isFinite(Number(body.cdpWaitMs)) ? Number(body.cdpWaitMs) : 60000;
-    const startedAt = Date.now();
-    let connected = false;
-    let surface = null;
-    let lastError = null;
-    while (Date.now() - startedAt < cdpWaitMs) {
-      try {
-        surface = await discoverTarget();
-        connected = true;
-        break;
-      } catch (err) {
-        lastError = err.message;
-        await new Promise(resolve => { this._setTimeout(resolve, 1000); });
-      }
-    }
-
-    this._json(req, res, {
-      ok: connected,
-      action: 'restart_trae_debug',
-      profileMode: 'existing',
-      requestedPort,
-      restart,
-      cdpWaitMs,
-      connected,
-      surface: surface ? describeCDPSurface([surface.target || surface]) : null,
-      error: connected ? null : (lastError || 'Timed out waiting for CDP')
-    }, connected ? 200 : 504);
+    return traeControlHandlers.handleRestartTraeDebug(req, res, this);
   }
 
   async _handleReviewGateStatus(req, res) {
-    await this._ensureConnection();
-    const result = typeof this.driver.checkTaskReviewGate === 'function'
-      ? await this.driver.checkTaskReviewGate()
-      : { awaitingReview: false, reason: 'driver_does_not_support_review_gate' };
-    this._json(req, res, result);
+    return traeControlHandlers.handleReviewGateStatus(req, res, this);
   }
 
   async _handleReviewGateResolve(req, res) {
-    const body = await parseBody(req);
-    const action = body.action || 'keep_all';
-    if (!['keep_all', 'revert_all', 'keep', 'discard'].includes(action)) {
-      return this._json(req, res, { error: 'action must be keep_all or revert_all' }, 400);
-    }
-    await this._ensureConnection();
-    const normalizedAction = action === 'keep' ? 'keep_all' : (action === 'discard' ? 'revert_all' : action);
-    const result = typeof this.driver.resolveTaskReviewGate === 'function'
-      ? await this.driver.resolveTaskReviewGate(normalizedAction)
-      : { success: false, reason: 'driver_does_not_support_review_gate' };
-    this._json(req, res, result, result.success === false ? 409 : 200);
+    return traeControlHandlers.handleReviewGateResolve(req, res, this);
   }
 
   async _handleDetectMode(req, res) {
-    await this._ensureConnection();
-    const modeInfo = await this.driver.detectMode();
-    this._json(req, res, {
-      mode: modeInfo.mode,
-      confidence: modeInfo.confidence,
-      indicators: modeInfo.indicators
-    });
+    return traeControlHandlers.handleDetectMode(req, res, this);
   }
 
   async _handleSwitchMode(req, res) {
-    const body = await parseBody(req);
-    if (!body.mode) {
-      return this._json(req, res, { error: 'mode is required' }, 400);
-    }
-    if (!['solo', 'ide'].includes(body.mode.toLowerCase())) {
-      return this._json(req, res, { error: 'mode must be "solo" or "ide"' }, 400);
-    }
-
-    await this._ensureConnection();
-    const result = await this.driver.switchMode(body.mode);
-    this._json(req, res, {
-      success: result.success,
-      mode: body.mode,
-      previousMode: result.previousMode || null,
-      alreadyInMode: result.alreadyInMode || false
-    });
+    return traeControlHandlers.handleSwitchMode(req, res, this);
   }
 
   async _handleSwitchModel(req, res) {
-    const body = await parseBody(req);
-    if (!body.model) {
-      return this._json(req, res, { error: 'model is required' }, 400);
-    }
-
-    await this._ensureConnection();
-    const switchResult = await this.driver.switchModel(body.model);
-    const normalizedSwitch = this._normalizeModelSwitchResult(switchResult);
-
-    if (!normalizedSwitch.success) {
-      return this._json(req, res, {
-        success: false,
-        model: normalizedSwitch.model || null,
-        requestedModel: body.model,
-        switchResult: normalizedSwitch.switchResult || switchResult,
-        error: normalizedSwitch.error || 'Model switch failed'
-      }, 502);
-    }
-
-    if (body.waitForQueue === false) {
-      const status = await this.driver.checkQueueStatus();
-      return this._json(req, res, {
-        success: true,
-        model: normalizedSwitch.model || body.model,
-        requestedModel: body.model,
-        switchResult: normalizedSwitch.switchResult || switchResult,
-        previousModel: normalizedSwitch.previousModel || null,
-        alreadySelected: normalizedSwitch.alreadySelected || false,
-        queued: status.queued === true,
-        running: status.running === true,
-        canSubmit: status.canSubmit === true,
-        queueDetails: this._queueDetailsFromStatus(status, normalizedSwitch.model || body.model)
-      });
-    }
-
-    // Wait for model to become available (up to 10 minutes)
-    const queueWaitTimeoutMs = this.driver.config.queueWaitTimeoutMs || 600000;
-    const queuePollIntervalMs = this.driver.config.queuePollIntervalMs || 15000;
-    const maxRetries = Math.ceil(queueWaitTimeoutMs / queuePollIntervalMs);
-
-    let waitedMs = 0;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const status = await this.driver.checkQueueStatus();
-      if (!status.queued) {
-        // Model is ready
-        return this._json(req, res, {
-          success: true,
-          model: normalizedSwitch.model || body.model,
-          requestedModel: body.model,
-          switchResult: normalizedSwitch.switchResult || switchResult,
-          previousModel: normalizedSwitch.previousModel || null,
-          alreadySelected: normalizedSwitch.alreadySelected || false,
-          queueWaitMs: waitedMs,
-          queueWaitAttempts: attempt
-        });
-      }
-
-      // Still queued — wait and retry
-      await new Promise(r => { this._setTimeout(r, queuePollIntervalMs); });
-      waitedMs += queuePollIntervalMs;
-    }
-
-    // Timed out waiting for model to become available
-    return this._json(req, res, {
-      success: false,
-      model: normalizedSwitch.model || body.model,
-      requestedModel: body.model,
-      switchResult: normalizedSwitch.switchResult || switchResult,
-      error: 'Model queue wait timeout',
-      queueWaitMs: waitedMs,
-      queueWaitAttempts: maxRetries
-    }, 504);
+    return traeControlHandlers.handleSwitchModel(req, res, this);
   }
 
   async _handleQueueStatus(req, res) {
-    await this._ensureConnection();
-    const status = this._applyRecentQueueSnapshot(await this.driver.checkQueueStatus());
-    this._json(req, res, status);
+    return queueHandlers.handleQueueStatus(req, res, this);
   }
 
   async _handleOpenProject(req, res) {
-    const body = await parseBody(req);
-    if (!body.projectPath) {
-      return this._json(req, res, { error: 'projectPath is required' }, 400);
-    }
-
-    const projectPath = body.projectPath;
-    const newInstance = body.newInstance === true;
-    let result;
-
-    try {
-      // Use the existing quickstart machinery so we honor TRAECN_BIN / platform-specific
-      // binary resolution (.app bundles on macOS, .exe on Windows) instead of relying on
-      // a `trae-cn` shim that does not exist on this machine.
-      const {
-        findTraeCNBinary,
-        isTraeCNRunning,
-        startTraeCN
-      } = require('../config/quickstart');
-
-      const cdpHost = process.env.TRAECN_CDP_HOST || process.env.TRAE_CDP_HOST || '127.0.0.1';
-      const cdpPort = process.env.TRAECN_REMOTE_DEBUGGING_PORT || process.env.TRAE_REMOTE_DEBUGGING_PORT || '9222';
-
-      const alreadyRunning = isTraeCNRunning();
-
-      if (alreadyRunning && !newInstance) {
-        // TraeCN is already running. Restarting it would lose the user's session,
-        // unsaved buffers, and AI chat context. We refuse to spawn a duplicate and
-        // report the current surface so the caller can decide what to do (e.g.
-        // ask the user to switch projects manually, or call --newInstance=true
-        // to opt into spawning a separate window).
-        let currentSurface = null;
-        try {
-          const { fetchCDPTargets } = require('../cdp/discovery');
-          const targets = await fetchCDPTargets(cdpHost, cdpPort);
-          const page = targets.find(t => t.type === 'page');
-          if (page) {
-            currentSurface = {
-              targetId: page.id,
-              title: page.title,
-              url: page.url
-            };
-          }
-        } catch (e) {
-          // CDP probe failed — TraeCN may be running but unreachable. Fall through
-          // to the not-running path so the caller can still try to start a fresh
-          // instance.
-        }
-
-        result = {
-          success: false,
-          alreadyRunning: true,
-          projectPath,
-          currentSurface,
-          cdp: { host: cdpHost, port: cdpPort },
-          hint: 'TraeCN is already running. Pass newInstance=true to spawn a separate window, or stop TraeCN first.',
-          error: currentSurface
-            ? `TraeCN is already running on workspace "${currentSurface.title || '(untitled)'}".`
-            : 'TraeCN is already running but CDP did not return any page target.'
-        };
-        this._json(req, res, result, 409);
-        return;
-      }
-
-      // TraeCN is not running (or caller asked for a separate window). Start it
-      // with the project via the canonical quickstart helper so we get the right
-      // binary path, --remote-debugging-port, and platform-correct spawn args.
-      const binPath = findTraeCNBinary();
-      if (!binPath) {
-        result = {
-          success: false,
-          projectPath,
-          error: 'TraeCN binary not found. Set TRAECN_BIN environment variable.'
-        };
-        this._json(req, res, result, 404);
-        return;
-      }
-
-      const startResult = startTraeCN({ binPath, projectPath, newInstance });
-      result = {
-        success: true,
-        projectPath,
-        binPath,
-        pid: startResult.pid,
-        command: startResult.command,
-        args: startResult.args,
-        cdp: { host: cdpHost, port: cdpPort },
-        started: true
-      };
-
-      // Poll for CDP target readiness (replaces hardcoded sleep)
-      const { fetchCDPTargets } = require('../cdp/discovery');
-      const maxWaitMs = 15000;
-      const pollIntervalMs = 1000;
-      const startTime = Date.now();
-
-      let pageTarget = null;
-      while (Date.now() - startTime < maxWaitMs) {
-        try {
-          const targets = await fetchCDPTargets(cdpHost, cdpPort);
-          pageTarget = targets.find(t => t.type === 'page');
-          if (pageTarget && pageTarget.webSocketDebuggerUrl) break;
-        } catch (e) {
-          // CDP not ready yet — retry
-        }
-        await new Promise(r => this._setTimeout(r, pollIntervalMs));
-      }
-
-      // Try to check for restricted mode dialog via CDP
-      try {
-        const { CDPClient } = require('../cdp/client');
-
-        if (pageTarget && pageTarget.webSocketDebuggerUrl) {
-          const cdpClient = new CDPClient(pageTarget.webSocketDebuggerUrl);
-          await cdpClient.connect();
-          await cdpClient.send('DOM.enable');
-          await cdpClient.send('Runtime.enable');
-          const { DomDriver } = require('../cdp/dom-driver');
-          const tempDriver = new DomDriver(cdpClient);
-          const restrictedCheck = await tempDriver.checkRestrictedMode();
-          await cdpClient.close();
-
-          if (restrictedCheck && restrictedCheck.restricted) {
-            result.restrictedMode = true;
-            result.restrictedInfo = restrictedCheck;
-            result.message = '受限模式已启用，请在Trae CN窗口手动点击「信任」以继续';
-          }
-        }
-      } catch (cdpErr) {
-        // CDP not available yet (gateway just started, browser not ready) — non-fatal
-        result._cdpCheckNote = 'CDP check skipped: ' + cdpErr.message;
-      }
-    } catch (err) {
-      result = { success: false, projectPath, error: err.message };
-    }
-
-    this._json(req, res, result);
+    return projectHandlers.handleOpenProject(req, res, this);
   }
 
   async _handleUpdateSelf(req, res) {
-    const body = await parseBody(req);
-    this._json(req, res, {
-      success: false,
-      version: packageInfo.version,
-      force: body.force === true,
-      message: 'Automatic self-update is not enabled. Pull the latest repository revision and run npm install.',
-      currentVersion: packageInfo.version
-    }, 200);
-  }
-
-  async _handleReadiness(req, res) {
-    await this._ensureConnection();
-    const readiness = await this.driver.checkReadiness();
-    this._json(req, res, readiness);
+    return projectHandlers.handleUpdateSelf(req, res, this);
   }
 
   async _handleSettingsReadAll(req, res) {
@@ -3528,308 +2767,9 @@ class Gateway {
   // for background processing; if false, return immediately with queue info.
 
   async _handleDelegateAsync(req, res) {
-    const body = await parseBody(req);
-    if (!body.task) {
-      return this._json(req, res, { error: 'task is required' }, 400);
-    }
-    if (typeof body.task !== 'string' || body.task.length > 100000) {
-      return this._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
-    }
-
-    const chatId = body.chatId || null;
-    const includeProcessText = body.includeProcessText === true;
-    const waitForQueue = body.waitForQueue !== false;
-    const fallbackModels = this._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
-    const modelProbeIntervalMs = this._modelProbeIntervalMs(body.modelProbeIntervalMs);
-    await this._ensureConnection();
-
-    // Get queue status with enhanced detection
-    let queueStatus = await this.driver.checkQueueStatus();
-    let modelProbe = null;
-    let queueVisible = queueStatus.queued === true;
-    let queueBlocked = queueStatus.running || (queueVisible && queueStatus.canSubmit !== true);
-    let shouldBackgroundWait = queueStatus.running || (waitForQueue && queueVisible);
-
-    if ((shouldBackgroundWait || queueBlocked) && fallbackModels.length > 0) {
-      const probeTask = {
-        taskId: 'probe_' + Date.now(),
-        fallbackModels,
-        modelProbeIntervalMs,
-        nextModelProbeAt: Date.now(),
-        modelProbeResults: [],
-        currentModel: queueStatus.currentModel || null,
-        queueState: queueStatus.running ? 'running' : (queueStatus.queued ? 'queued' : null)
-      };
-      modelProbe = await this._probeFallbackModels(probeTask, { recordHistory: false });
-      if (modelProbe.queueStatus) {
-        queueStatus = modelProbe.queueStatus;
-        queueVisible = queueStatus.queued === true;
-        queueBlocked = queueStatus.running || (queueVisible && queueStatus.canSubmit !== true);
-        shouldBackgroundWait = queueStatus.running || (waitForQueue && queueVisible && queueStatus.canSubmit !== true);
-      }
-      body.fallbackModels = fallbackModels;
-      body.modelProbeIntervalMs = modelProbeIntervalMs;
-      body.initialModelProbeResults = modelProbe.results || [];
-      body.initialLastModelProbeAt = probeTask.lastModelProbeAt || null;
-      body.initialNextModelProbeAt = probeTask.nextModelProbeAt || null;
-    }
-
-    // Build queue ETA message
-    let queueEtaMessage = '';
-    if (queueStatus.queueEstimatedWait) {
-      queueEtaMessage = `，预计等待 ${queueStatus.queueEstimatedWait}`;
-    } else if (queueStatus.queuePosition) {
-      queueEtaMessage = `，当前第 ${queueStatus.queuePosition} 位`;
-    }
-
-    if (shouldBackgroundWait || queueBlocked) {
-      if (!waitForQueue) {
-        if (queueVisible && queueStatus.canSubmit === true && !queueStatus.running) {
-          // Caller explicitly opted out of local waiting. Let Trae own the queue.
-        } else {
-        // Caller doesn't want to wait — return queue info immediately
-          return this._json(req, res, {
-            status: queueStatus.queued ? 'queued' : 'running',
-            queueDetails: {
-              state: queueStatus.queued ? 'queued' : 'running',
-              currentModel: queueStatus.currentModel || '',
-              queuePosition: queueStatus.queuePosition,
-              queueEstimatedWait: queueStatus.queueEstimatedWait,
-              queueMessage: queueStatus.queueMessage || (queueStatus.running ? '模型正在执行其他任务' : '模型排队中')
-            },
-            message: `${queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'}${queueEtaMessage}，请稍后重试或设置 waitForQueue=true 自动等待`,
-            model: queueStatus.currentModel
-          }, 202);
-        }
-      }
-
-      if (shouldBackgroundWait) {
-        body.chatId = chatId;
-        body.includeProcessText = includeProcessText;
-        const task = this._createQueuedTask(body, queueStatus);
-        if (Array.isArray(body.initialModelProbeResults)) {
-          task.modelProbeResults = body.initialModelProbeResults;
-          task.lastModelProbeAt = body.initialLastModelProbeAt;
-          task.nextModelProbeAt = body.initialNextModelProbeAt;
-        }
-        this._ensureBackgroundPolling();
-
-        return this._json(req, res, {
-          taskId: task.taskId,
-          status: 'queued',
-          queueDetails: {
-            state: queueStatus.queued ? 'queued' : 'running',
-            currentModel: queueStatus.currentModel || '',
-            queuePosition: queueStatus.queuePosition,
-            queueEstimatedWait: queueStatus.queueEstimatedWait,
-            queueMessage: queueStatus.queueMessage || (queueStatus.running ? '模型正在执行其他任务' : '模型排队中')
-          },
-          reviewRequired: task.reviewRequired,
-          autoContinue: task.autoContinue === true,
-          followupCount: task.followupTasks.length,
-          modelProbeResults: task.modelProbeResults || [],
-          nextModelProbeAt: task.nextModelProbeAt || null,
-          message: `${queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'}${queueEtaMessage}，任务已加入后台。用 traecn_task_status 查询进度`,
-          model: queueStatus.currentModel
-        }, 202);
-      }
-    }
-
-    if (body.background === true || body.forceBackground === true) {
-      body.chatId = chatId;
-      body.includeProcessText = includeProcessText;
-      const task = this._createQueuedTask(body, {
-        ...queueStatus,
-        queued: true,
-        queueMessage: queueStatus.queueMessage || 'background execution requested'
-      });
-      if (Array.isArray(body.initialModelProbeResults)) {
-        task.modelProbeResults = body.initialModelProbeResults;
-        task.lastModelProbeAt = body.initialLastModelProbeAt;
-        task.nextModelProbeAt = body.initialNextModelProbeAt;
-      }
-      this._ensureBackgroundPolling();
-      return this._json(req, res, {
-        taskId: task.taskId,
-        status: 'queued',
-        queueDetails: {
-          state: 'queued',
-          currentModel: queueStatus.currentModel || '',
-          queuePosition: queueStatus.queuePosition,
-          queueEstimatedWait: queueStatus.queueEstimatedWait,
-          queueMessage: task.queueMessage
-        },
-        reviewRequired: task.reviewRequired,
-        autoContinue: task.autoContinue === true,
-        followupCount: task.followupTasks.length,
-        modelProbeResults: task.modelProbeResults || [],
-        nextModelProbeAt: task.nextModelProbeAt || null,
-        message: '任务已加入后台执行队列。用 traecn_task_status 查询进度',
-        model: queueStatus.currentModel
-      }, 202);
-    }
-
-    // Model is idle/ready — execute synchronously with timeout protection
-    if (!this.driver) {
-      return this._json(req, res, { error: 'CDP driver not available — connection may have failed' }, 503);
-    }
-
-    let result;
-    let timeoutId;
-    let delegatePromise;
-    try {
-      const syncTimeout = 180000;
-      const timeoutPromise = new Promise((_, reject) =>
-        { timeoutId = this._setTimeout(() => reject(new Error('delegate timeout (' + syncTimeout + 'ms)')), syncTimeout); }
-      );
-      delegatePromise = this.driver.delegate(this._taskWithProjectContext(body.task, body.projectPath));
-      result = await Promise.race([delegatePromise, timeoutPromise]);
-    } catch (e) {
-      if (/delegate timeout/i.test(e.message || '') && delegatePromise) {
-        const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
-        const task = this._createQueuedTask({
-          task: body.task,
-          projectPath: body.projectPath,
-          reviewRequired: body.reviewRequired === true,
-          autoContinue: body.autoContinue === true,
-          followupTasks: normalizedFollowups,
-          autoApproveDialog: body.autoApproveDialog,
-          chatId,
-          includeProcessText,
-          notifyUrl: body.notifyUrl
-        }, {
-          queued: true,
-          running: false,
-          queueMessage: 'sync delegate timed out; tracking submitted Trae request in background'
-        });
-        task.status = 'executing';
-        task.submittedToTrae = true;
-        task.submittedAt = Date.now();
-        task.error = null;
-        this.taskLocks.add(task.taskId);
-        await this._captureTaskSoloChat(task);
-        this._syncTaskHistoryMirror(task);
-        this._persistActiveQueue();
-
-        delegatePromise
-          .then(async (resolvedResult) => {
-            const liveTask = this.taskQueue.get(task.taskId);
-            if (!liveTask || this._isTerminalTaskStatus(liveTask.status)) return;
-            await this._finalizeCollectedBackgroundResult(task.taskId, liveTask, resolvedResult);
-          })
-          .catch(async (err) => {
-            const liveTask = this.taskQueue.get(task.taskId);
-            if (!liveTask || this._isTerminalTaskStatus(liveTask.status)) return;
-            if (await this._retryBackgroundTaskAfterError(task.taskId, liveTask, err)) {
-              return;
-            }
-            await this._finalizeBackgroundTask(task.taskId, liveTask, 'error', {
-              error: err.message
-            });
-          })
-          .finally(() => {
-            this.taskLocks.delete(task.taskId);
-          });
-
-        return this._json(req, res, {
-          taskId: task.taskId,
-          status: task.status,
-          submittedToTrae: true,
-          reviewRequired: task.reviewRequired,
-          followupCount: task.followupTasks.length,
-          message: 'Trae 请求已提交但同步等待超时，已自动转入后台追踪。用 traecn_task_status 查询进度'
-        }, 202);
-      }
-      const recoveredResult = await this._recoverAwaitingReviewFromGate({
-        createdAt: Date.now(),
-        followupTasks: this._normalizeFollowupTasks(body.followupTasks),
-        autoApproveDialog: body.autoApproveDialog,
-        reviewRequired: body.reviewRequired === true,
-        autoContinue: body.autoContinue === true
-      });
-      if (recoveredResult) {
-        const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
-        const task = this._createQueuedTask({
-          task: body.task,
-          projectPath: body.projectPath,
-          reviewRequired: body.reviewRequired === true,
-          autoContinue: body.autoContinue === true,
-          followupTasks: normalizedFollowups,
-          autoApproveDialog: body.autoApproveDialog,
-          chatId,
-          includeProcessText,
-          notifyUrl: body.notifyUrl
-        }, { queued: false, running: false, queueMessage: 'recovered from review gate' });
-        await this._finalizeCollectedBackgroundResult(task.taskId, task, recoveredResult);
-        return this._json(req, res, {
-          taskId: task.taskId,
-          status: task.status,
-          reviewRequired: task.reviewRequired,
-          followupCount: task.followupTasks.length,
-          message: 'Trae 已生成结果，但当前停在内部审查闸口；任务已恢复为等待审查',
-          resultPreview: (recoveredResult.text || '').slice(0, 500)
-        }, 202);
-      }
-      return this._json(req, res, { error: 'delegate failed: ' + e.message }, 504);
-    } finally {
-      if (timeoutId) this._clearTimeout(timeoutId);
-    }
-
-    if (chatId) {
-      await notifyOpenClaw(chatId, formatResult(result));
-    }
-
-    const responseData = {
-      status: this._isSuccessfulResult(result) ? 'done' : 'error',
-      text: result.text,
-      stable: result.stable,
-      elapsedMs: result.elapsedMs,
-      timedOut: result.timedOut || false,
-      needsApproval: result.needsApproval || false,
-      question: result.question || '',
-      error: this._isSuccessfulResult(result) ? undefined : (result.error || 'Trae returned an incomplete, timed-out, or failed result')
-    };
-
-    if (body.reviewRequired === true || this._normalizeFollowupTasks(body.followupTasks).length > 0) {
-      const normalizedFollowups = this._normalizeFollowupTasks(body.followupTasks);
-      const task = this._createQueuedTask({
-        task: body.task,
-        projectPath: body.projectPath,
-        reviewRequired: body.reviewRequired === true,
-        autoContinue: body.autoContinue === true,
-        followupTasks: normalizedFollowups,
-        autoApproveDialog: body.autoApproveDialog,
-        chatId,
-        includeProcessText,
-        notifyUrl: body.notifyUrl
-      }, { queued: false, running: false, queueMessage: 'immediate execution' });
-      task.submittedToTrae = true;
-      task.submittedAt = Date.now();
-      task.queueState = 'running';
-      await this._finalizeCollectedBackgroundResult(task.taskId, task, result);
-      return this._json(req, res, {
-        taskId: task.taskId,
-        status: task.status,
-        reviewRequired: task.reviewRequired,
-        followupCount: task.followupTasks.length,
-        message: task.status === 'approval_required'
-          ? 'Trae 结果需要先处理确认弹窗'
-          : (task.status === 'awaiting_review'
-              ? 'Trae 已完成，等待人工审查'
-              : (task.status === 'executing'
-                  ? 'Trae 已返回过程文本，任务已转入后台继续收集。用 traecn_task_status 查询进度'
-                  : 'Trae 返回了不完整或超时结果，未进入审查')),
-        resultPreview: (result.text || '').slice(0, 500)
-      }, task.status === 'error' ? 504 : 202);
-    }
-
-    if (includeProcessText && result.processText) {
-      responseData.processText = result.processText;
-    }
-
-    this._storeIdempotency(req.headers['idempotency-key'], { data: responseData, statusCode: 200 });
-    this._json(req, res, responseData);
+    return delegateHandlers.handleDelegateAsync(req, res, this);
   }
+
 
   // ── Task status & cancel ──────────────────────────────────────────────────
 
@@ -3881,240 +2821,19 @@ class Gateway {
   }
 
   async _handleTaskStatus(req, res, taskId) {
-    const task = this.taskQueue.get(taskId);
-    if (!task) {
-      const historyTask = this.taskHistoryStore.getTask(taskId);
-      if (historyTask) {
-        return this._json(req, res, this._historyTaskStatusResponse(historyTask));
-      }
-      return this._json(req, res, { error: 'Task not found' }, 404);
-    }
-
-    if (task.status === 'queued') {
-      await this._refreshQueuedTaskSnapshot(task);
-    } else if (task.status === 'executing') {
-      await this._refreshExecutingTaskSnapshot(task);
-    }
-
-    const response = {
-      taskId,
-      status: task.status,
-      createdAt: task.createdAt,
-      elapsed: Date.now() - task.createdAt
-    };
-
-    switch (task.status) {
-      case 'queued':
-        response.message = '队列等待中';
-        response.queueElapsed = Date.now() - task.createdAt;
-        response.deadline = task.deadline || null;
-        response.remaining = task.deadline ? Math.max(0, task.deadline - Date.now()) : null;
-        response.queueDetails = {
-          state: task.queueState || 'queued',
-          queuePosition: task.queuePosition || null,
-          queueEstimatedWait: task.queueEstimatedWait || null,
-          queueMessage: task.queueMessage || null,
-          currentModel: task.currentModel || null,
-          canSubmit: task.queueCanSubmit === true
-        };
-        response.fallbackModels = task.fallbackModels || [];
-        response.modelProbe = {
-          lastModelProbeAt: task.lastModelProbeAt || null,
-          nextModelProbeAt: task.nextModelProbeAt || null,
-          results: task.modelProbeResults || []
-        };
-        break;
-      case 'executing':
-        response.message = 'Trae 正在执行';
-        response.submittedToTrae = task.submittedToTrae === true;
-        response.submittedAt = task.submittedAt || null;
-        response.queueDetails = {
-          state: task.queueState || null,
-          queuePosition: task.queuePosition || null,
-          queueEstimatedWait: task.queueEstimatedWait || null,
-          queueMessage: task.queueMessage || null,
-          currentModel: task.currentModel || null,
-          canSubmit: task.queueCanSubmit === true
-        };
-        break;
-      case 'approval_required':
-        response.message = 'Trae 需要先处理确认弹窗';
-        response.result = {
-          text: task.result?.text || '',
-          needsApproval: true,
-          question: task.result?.question || '',
-          dialogType: task.result?.dialogType || null,
-          buttons: task.result?.buttons || [],
-          options: task.result?.options || [],
-          answerAction: task.result?.dialogType === 'review_scope_question'
-            ? { endpoint: '/api/dialog/approve', method: 'POST', body: { action: 'answer', answer: '<option label>' } }
-            : null
-        };
-        break;
-      case 'awaiting_review':
-        response.message = '等待人工审查';
-        response.reviewRequired = true;
-        response.followupCount = task.followupTasks?.length || 0;
-        response.result = {
-          text: task.result?.text || '',
-          stable: task.result?.stable || false,
-          elapsedMs: task.result?.elapsedMs || null,
-          timedOut: task.result?.timedOut || false,
-          needsApproval: false
-        };
-        break;
-      case 'done':
-        response.message = '执行完成';
-        response.result = {
-          text: task.result.text,
-          stable: task.result.stable,
-          elapsedMs: task.result.elapsedMs,
-          timedOut: task.result.timedOut || false,
-          needsApproval: task.result.needsApproval || false
-        };
-        break;
-      case 'error':
-        response.message = '执行出错';
-        response.error = task.error;
-        break;
-      case 'cancelled':
-        response.message = '已取消';
-        break;
-      case 'queue_timeout':
-        response.message = '排队超时，请稍后重试或切换模型';
-        response.error = 'Task exceeded queue wait timeout';
-        break;
-      case 'review_rejected':
-        response.message = '审查未通过，任务已停止';
-        response.reviewDecision = task.reviewDecision || 'reject';
-        response.reviewNotes = task.reviewNotes || '';
-        break;
-    }
-
-    this._json(req, res, response);
+    return taskActionsHandlers.handleTaskStatus(req, res, this, taskId);
   }
 
   async _handleTaskReview(req, res, taskId) {
-    const task = this.taskQueue.get(taskId);
-    if (!task) {
-      return this._json(req, res, { error: 'Task not found' }, 404);
-    }
-    if (task.status !== 'awaiting_review') {
-      return this._json(req, res, {
-        error: 'Task is not awaiting review',
-        status: task.status
-      }, 400);
-    }
-
-    const body = await parseBody(req);
-    const decision = String(body.decision || '').toLowerCase();
-    const notes = typeof body.notes === 'string' ? body.notes : '';
-    if (!['approve', 'continue', 'reject'].includes(decision)) {
-      return this._json(req, res, { error: 'decision must be approve, continue, or reject' }, 400);
-    }
-
-    const result = await this._continueReviewedTask(taskId, task, decision === 'continue' ? 'approve' : decision, notes);
-    this._json(req, res, result);
+    return taskActionsHandlers.handleTaskReview(req, res, this, taskId);
   }
 
   async _handleTaskCancel(req, res, taskId) {
-    const task = this.taskQueue.get(taskId);
-    if (!task) {
-      return this._json(req, res, { error: 'Task not found' }, 404);
-    }
-    if (!['queued', 'executing', 'awaiting_review', 'approval_required'].includes(task.status)) {
-      return this._json(req, res, {
-        error: 'Task is not in a cancellable state',
-        status: task.status
-      }, 400);
-    }
-    let stopResult = null;
-    if (task.status === 'executing' && task.submittedToTrae === true && this.driver && typeof this.driver.stopGeneration === 'function') {
-      try {
-        stopResult = await this.driver.stopGeneration();
-      } catch (err) {
-        stopResult = { success: false, error: err.message };
-      }
-    }
-    // Remove task from locks if it's there
-    this.taskLocks.delete(taskId);
-    task.status = 'cancelled';
-    task.error = null;
-    task.cancelledAt = Date.now();
-    if (stopResult) task.stopResult = stopResult;
-    this.taskHistoryStore.cancelTask(taskId);
-    if (this.wsHandler) {
-      this.wsHandler.notifyTaskStatusChange(taskId, task);
-    }
-    this._syncTaskHistoryMirror(task);
-    this._persistActiveQueue();
-    this._json(req, res, { taskId, status: 'cancelled', stopResult });
+    return taskActionsHandlers.handleTaskCancel(req, res, this, taskId);
   }
 
   async _handleBatchSubmit(req, res) {
-    const body = await parseBody(req);
-    if (!body.tasks || !Array.isArray(body.tasks) || body.tasks.length === 0) {
-      return this._json(req, res, { error: 'tasks array is required and must not be empty' }, 400);
-    }
-    if (body.tasks.length > 100) {
-      return this._json(req, res, { error: 'Maximum 100 tasks per batch' }, 400);
-    }
-    for (const item of body.tasks) {
-      if (!item.task || typeof item.task !== 'string') {
-        return this._json(req, res, { error: 'Each task must have a task string' }, 400);
-      }
-      if (item.task.length > 100000) {
-        return this._json(req, res, { error: 'Each task must be at most 100000 characters' }, 400);
-      }
-    }
-
-    const strategy = body.strategy || 'parallel';
-    if (!['parallel', 'sequential', 'priority'].includes(strategy)) {
-      return this._json(req, res, { error: 'strategy must be "parallel", "sequential", or "priority"' }, 400);
-    }
-
-    const maxConcurrency = Math.min(Math.max(body.maxConcurrency || 5, 1), 20);
-    const onComplete = body.onComplete || null;
-
-    const batchId = 'batch_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-    const tasks = body.tasks.map((item, index) => ({
-      taskId: `${batchId}_${index}`,
-      task: item.task,
-      priority: item.priority || 5,
-      status: 'pending',
-      result: null,
-      error: null
-    }));
-
-    if (strategy === 'priority') {
-      tasks.sort((a, b) => b.priority - a.priority);
-    }
-
-    const batch = {
-      batchId,
-      tasks,
-      strategy,
-      maxConcurrency,
-      onComplete,
-      status: 'running',
-      createdAt: Date.now(),
-      completedCount: 0,
-      failedCount: 0,
-      totalCount: tasks.length,
-      results: []
-    };
-
-    this.batchTasks.set(batchId, batch);
-    this._startBatchExecution(batchId);
-
-    return this._json(req, res, {
-      batchId,
-      status: 'running',
-      totalTasks: tasks.length,
-      strategy,
-      maxConcurrency,
-      message: `Batch submitted with ${tasks.length} tasks using ${strategy} strategy`
-    }, 202);
+    return batchHandlers.handleBatchSubmit(req, res, this);
   }
 
   _startBatchExecution(batchId) {
@@ -4253,82 +2972,15 @@ class Gateway {
   }
 
   _handleBatchStatus(req, res, batchId) {
-    const batch = this.batchTasks.get(batchId);
-    if (!batch) {
-      return this._json(req, res, { error: 'Batch not found' }, 404);
-    }
-
-    const response = {
-      batchId: batch.batchId,
-      status: batch.status,
-      strategy: batch.strategy,
-      maxConcurrency: batch.maxConcurrency,
-      totalCount: batch.totalCount,
-      completedCount: batch.completedCount,
-      failedCount: batch.failedCount,
-      pendingCount: batch.tasks.filter(t => t.status === 'pending').length,
-      executingCount: batch.tasks.filter(t => t.status === 'executing').length,
-      createdAt: batch.createdAt,
-      tasks: batch.tasks.map(t => ({
-        taskId: t.taskId,
-        priority: t.priority,
-        status: t.status,
-        result: t.result,
-        error: t.error
-      }))
-    };
-
-    this._json(req, res, response);
+    return batchHandlers.handleBatchStatus(req, res, this, batchId);
   }
 
   _handleBatchCancel(req, res, batchId) {
-    const batch = this.batchTasks.get(batchId);
-    if (!batch) {
-      return this._json(req, res, { error: 'Batch not found' }, 404);
-    }
-
-    if (batch.status === 'completed' || batch.status === 'cancelled') {
-      return this._json(req, res, {
-        error: 'Batch is already ' + batch.status,
-        status: batch.status
-      }, 400);
-    }
-
-    batch.status = 'cancelled';
-    batch._cancelled = true;
-    for (const task of batch.tasks) {
-      if (task.status === 'pending' || task.status === 'executing') {
-        task.status = 'cancelled';
-      }
-    }
-
-    this.batchTasks.delete(batchId);
-
-    this._json(req, res, {
-      batchId,
-      status: 'cancelled',
-      message: 'Batch cancelled'
-    });
+    return batchHandlers.handleBatchCancel(req, res, this, batchId);
   }
 
   _handleQueueStatusList(req, res) {
-    const tasks = Array.from(this.taskQueue.entries())
-      .filter(([, t]) => !this._isTerminalTaskStatus(t.status))
-      .map(([id, t]) => ({
-      taskId: id,
-      status: t.status,
-      createdAt: t.createdAt,
-      currentModel: t.currentModel || null,
-      fallbackModels: t.fallbackModels || [],
-      lastModelProbeAt: t.lastModelProbeAt || null,
-      nextModelProbeAt: t.nextModelProbeAt || null,
-      modelProbeResults: t.modelProbeResults || [],
-      submittedToTrae: t.submittedToTrae === true,
-      submittedAt: t.submittedAt || null,
-      result: t.status === 'done' ? t.result : undefined,
-      error: t.status === 'error' ? t.error : undefined
-      }));
-    this._json(req, res, { tasks });
+    return queueHandlers.handleQueueStatusList(req, res, this);
   }
 
   _formatCompletionCheckFailure(validation = {}) {
@@ -4640,67 +3292,7 @@ class Gateway {
   }
 
   async _handleAdoptCurrentTask(req, res) {
-    const body = await parseBody(req);
-    const taskText = typeof body.task === 'string' && body.task.trim()
-      ? body.task
-      : 'Adopt existing Trae request from current chat';
-    if (taskText.length > 100000) {
-      return this._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
-    }
-
-    await this._ensureConnection();
-    const queueStatus = await this.driver.checkQueueStatus();
-    const hasSubmittedWork = queueStatus.queued === true || queueStatus.running === true || body.force === true;
-    if (!hasSubmittedWork) {
-      return this._json(req, res, {
-        error: 'No visible queued or running Trae request to adopt. Pass force=true only if the current chat is already producing a response.',
-        queueDetails: this._queueDetailsFromStatus(queueStatus)
-      }, 409);
-    }
-
-    const task = this._createQueuedTask({
-      task: taskText,
-      projectPath: body.projectPath || null,
-      reviewRequired: body.reviewRequired === true,
-      autoContinue: body.autoContinue === true,
-      followupTasks: this._normalizeFollowupTasks(body.followupTasks),
-      autoApproveDialog: body.autoApproveDialog,
-      chatId: body.chatId || null,
-      includeProcessText: body.includeProcessText === true,
-      notifyUrl: body.notifyUrl,
-      fallbackModels: body.fallbackModels,
-      autoModelFallback: body.autoModelFallback === true,
-      modelProbeIntervalMs: body.modelProbeIntervalMs
-    }, {
-      ...queueStatus,
-      queued: queueStatus.queued !== false,
-      queueMessage: queueStatus.queueMessage || queueStatus.message || 'adopted existing Trae request'
-    });
-    task.status = 'executing';
-    task.submittedToTrae = true;
-    task.submittedAt = Number.isFinite(Number(body.submittedAt)) ? Number(body.submittedAt) : Date.now();
-    task.queueMessage = queueStatus.queueMessage || queueStatus.message || 'adopted existing Trae request';
-    await this._captureTaskSoloChat(task);
-    this._syncTaskHistoryMirror(task);
-    this._persistActiveQueue();
-    this._ensureBackgroundPolling();
-
-    return this._json(req, res, {
-      taskId: task.taskId,
-      status: task.status,
-      submittedToTrae: true,
-      reviewRequired: task.reviewRequired,
-      followupCount: task.followupTasks.length,
-      queueDetails: {
-        state: task.queueState || (queueStatus.running ? 'running' : 'queued'),
-        currentModel: task.currentModel || queueStatus.currentModel || null,
-        queuePosition: task.queuePosition || null,
-        queueEstimatedWait: task.queueEstimatedWait || null,
-        queueMessage: task.queueMessage || null,
-        canSubmit: task.queueCanSubmit === true
-      },
-      message: '已接管当前 Trae 请求；后台将只等待/收集现有结果，不会重新发送任务'
-    }, 202);
+    return taskActionsHandlers.handleAdoptCurrentTask(req, res, this);
   }
 
   // ── Background polling (queue-aware) ──────────────────────────────────────
@@ -5021,55 +3613,5 @@ Gateway.prototype._getDriverRouter = function() {
 };
 
 Gateway.prototype._handleDriverAction = async function(req, res, driverName) {
-  await this._ensureConnection();
-  if (!this.driver) {
-    return this._json(req, res, {
-      error: 'CDP driver not initialized; TraeCN may not be reachable',
-      code: 'DRIVER_NOT_READY'
-    }, 503);
-  }
-  if (this.mockBridge) {
-    return this._json(req, res, {
-      error: 'Driver commands require a live TraeCN connection; mock bridge is active (TRAECN_ENABLE_MOCK_BRIDGE=1)',
-      code: 'MOCK_BRIDGE_ACTIVE'
-    }, 503);
-  }
-  let body;
-  try {
-    body = await new Promise((resolve, reject) => {
-      let buf = '';
-      let size = 0;
-      const max = 1024 * 1024;
-      req.on('data', chunk => {
-        size += chunk.length;
-        if (size > max) { reject(new Error('body too large')); req.destroy(); return; }
-        buf += chunk;
-      });
-      req.on('end', () => {
-        if (!buf) return resolve({});
-        try { resolve(JSON.parse(buf)); }
-        catch (e) { reject(new Error('Invalid JSON body')); }
-      });
-      req.on('error', reject);
-    });
-  } catch (err) {
-    return this._json(req, res, { error: err.message || 'Invalid JSON body' }, 400);
-  }
-  if (!body || typeof body !== 'object') {
-    return this._json(req, res, { error: 'JSON object body required' }, 400);
-  }
-  const router = this._getDriverRouter();
-  try {
-    const result = await router.invoke(driverName, body);
-    return this._json(req, res, { ok: true, driver: driverName, action: body.action, result });
-  } catch (err) {
-    const code = err.code || 'DRIVER_ERROR';
-    return this._json(req, res, {
-      ok: false,
-      driver: driverName,
-      action: body.action,
-      error: err.message,
-      code
-    }, code === 'UNKNOWN_DRIVER' || code === 'UNKNOWN_ACTION' || code === 'MISSING_ACTION' ? 400 : 500);
-  }
+  return driverDispatchHandlers.handleDriverAction(req, res, this, driverName);
 };

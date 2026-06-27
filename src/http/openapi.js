@@ -1391,6 +1391,438 @@ function generateOpenAPISpec() {
             '200': { description: 'Dismiss result' }
           }
         }
+      },
+      // Driver endpoints — added 2026-06-21
+      '/api/editor': {
+        post: {
+          summary: 'Invoke an editor driver action',
+          operationId: 'invokeEditor',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: {
+                      type: 'string',
+                      description: 'Editor action name. One of: acceptAll, rejectAll, acceptNext, rejectNext, readApplyState, save, saveAll, saveAs, revertFile, revertAll, closeActive, closeAll, newFile, revealInExplorer, copyPathOfActive, reloadWindow, toggleSidebar, togglePanel, splitEditor, showCommands, undo, redo, formatDocument, formatSelection, commentLine, copyLinesDown, copyLinesUp, moveLinesDown, moveLinesUp, insertCursorAbove, insertCursorBelow, insertCursorAtEachMatchSelection, expandLineSelection, shrinkSelection, addSelectionToNextFindMatch, addSelectionToPreviousFindMatch, selectAll, triggerSuggest, showHover, gotoLine, revealDefinition, peekDefinition, showReferences, renameSymbol, findAllReferences, implementInterface, quickFix, refactor, fold, unfold, foldAll, unfoldAll, foldRecursively, unfoldRecursively, readActive, writeActive, listActive.'
+                    },
+                    value: { type: 'string', description: 'Used by writeActive to set the active editor buffer contents.' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Action result',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      driver: { type: 'string' },
+                      action: { type: 'string' },
+                      result: {}
+                    }
+                  }
+                }
+              }
+            },
+            '400': { description: 'Missing or unknown action, or invalid JSON body' },
+            '500': { description: 'Driver invocation failed' }
+          }
+        }
+      },
+      '/api/file': {
+        post: {
+          summary: 'Invoke a file driver action',
+          operationId: 'invokeFile',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: {
+                      type: 'string',
+                      description: 'File action name. One of: closeActive, closeAll, closeOthers, newFile, revertFile, revealInExplorer, copyPath, save, saveAll, saveAs, openFileByPath, listOpenEditors, listExplorerVisible, readDisk, writeDisk, deleteDisk, mkdirDisk, listTreeDisk, renameDisk.'
+                    },
+                    filePath: { type: 'string', description: 'Used by openFileByPath, readDisk, writeDisk, deleteDisk.' },
+                    content: { type: 'string', description: 'Used by writeDisk.' },
+                    dirPath: { type: 'string', description: 'Used by mkdirDisk.' },
+                    rootPath: { type: 'string', description: 'Used by listTreeDisk.' },
+                    opts: { description: 'Options bag passed through to listTreeDisk.', oneOf: [{ type: 'object' }, { type: 'string' }] },
+                    oldPath: { type: 'string', description: 'Used by renameDisk.' },
+                    newPath: { type: 'string', description: 'Used by renameDisk.' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Action result',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      driver: { type: 'string' },
+                      action: { type: 'string' },
+                      result: {}
+                    }
+                  }
+                }
+              }
+            },
+            '400': { description: 'Missing or unknown action, or invalid JSON body' },
+            '500': { description: 'Driver invocation failed' }
+          }
+        }
+      },
+      '/api/terminal': {
+        post: {
+          summary: 'Invoke a terminal driver action',
+          operationId: 'invokeTerminal',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: {
+                      type: 'string',
+                      description: 'Terminal action name. One of: toggleTerminal, newTerminal, killTerminal, clearTerminal, splitTerminal, focusTerminal, snapshot, tail, send, sendLine, sendKey, sendCtrlC, sendCtrlD, sendCtrlL, sendCtrlZ, selectTab.'
+                    },
+                    lines: { type: 'number', description: 'Used by tail to specify how many trailing lines to read.' },
+                    text: { type: 'string', description: 'Used by send and sendLine.' },
+                    key: { type: 'string', description: 'Used by sendKey.' },
+                    code: { type: 'string', description: 'Used by sendKey.' },
+                    wvk: { description: 'Used by sendKey.' },
+                    modifiers: { type: 'array', items: { type: 'string' }, description: 'Used by sendKey.' },
+                    title: { type: 'string', description: 'Used by selectTab.' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Action result',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      driver: { type: 'string' },
+                      action: { type: 'string' },
+                      result: {}
+                    }
+                  }
+                }
+              }
+            },
+            '400': { description: 'Missing or unknown action, or invalid JSON body' },
+            '500': { description: 'Driver invocation failed' }
+          }
+        }
+      },
+      '/api/git': {
+        post: {
+          summary: 'Invoke a git driver action',
+          operationId: 'invokeGit',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: {
+                      type: 'string',
+                      description: 'Git action name. One of: openSCM, focusSCM, refreshSCM, stageAll, unstageAll, commit, commitAmend, commitSignedOff, push, pull, sync, fetch, clone, init, checkout, branch, merge, rebase, stash, stashPop, stashApply, showOutput, showLog, diff, commitWithMessage, readStatus, readCurrentBranch, execGit.'
+                    },
+                    message: { type: 'string', description: 'Used by commitWithMessage.' },
+                    args: { type: 'array', items: { type: 'string' }, description: 'Used by execGit to pass arbitrary git CLI arguments.' },
+                    opts: { type: 'object', description: 'Options bag for execGit.' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Action result',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      driver: { type: 'string' },
+                      action: { type: 'string' },
+                      result: {}
+                    }
+                  }
+                }
+              }
+            },
+            '400': { description: 'Missing or unknown action, or invalid JSON body' },
+            '500': { description: 'Driver invocation failed' }
+          }
+        }
+      },
+      '/api/search': {
+        post: {
+          summary: 'Invoke a search driver action',
+          operationId: 'invokeSearch',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: {
+                      type: 'string',
+                      description: 'Search action name. One of: openSearch, findInFiles, closeSearch, toggleCaseSensitive, toggleWholeWord, toggleRegex, collapseAll, find, readResults.'
+                    },
+                    query: { type: 'string', description: 'Used by find to specify the search query.' },
+                    opts: { type: 'object', description: 'Search options for find (e.g. include/exclude globs, maxResults).' },
+                    maxResults: { type: 'number', description: 'Used by readResults to cap returned matches.' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Action result',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      driver: { type: 'string' },
+                      action: { type: 'string' },
+                      result: {}
+                    }
+                  }
+                }
+              }
+            },
+            '400': { description: 'Missing or unknown action, or invalid JSON body' },
+            '500': { description: 'Driver invocation failed' }
+          }
+        }
+      },
+      '/api/diagnostics': {
+        post: {
+          summary: 'Invoke a diagnostics driver action',
+          operationId: 'invokeDiagnostics',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: {
+                      type: 'string',
+                      description: 'Diagnostics action name. One of: openProblems, focusProblems, nextProblem, prevProblem, nextInFiles, showErrors, readAll, readModelMarkers, count, hover.'
+                    },
+                    max: { type: 'number', description: 'Maximum number of problems or markers to return for readAll/readModelMarkers.' },
+                    line: { type: 'number', description: 'Line coordinate for hover.' },
+                    column: { type: 'number', description: 'Column coordinate for hover.' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Action result',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      driver: { type: 'string' },
+                      action: { type: 'string' },
+                      result: {}
+                    }
+                  }
+                }
+              }
+            },
+            '400': { description: 'Missing or unknown action, or invalid JSON body' },
+            '500': { description: 'Driver invocation failed' }
+          }
+        }
+      },
+      '/api/snapshot': {
+        post: {
+          summary: 'Invoke a snapshot driver action',
+          operationId: 'invokeSnapshot',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: {
+                      type: 'string',
+                      description: 'Snapshot action name. One of: dom, text, layout, pageHash, screenshot, screenshotElement.'
+                    },
+                    selector: { type: 'string', description: 'CSS selector for dom/text/screenshotElement.' },
+                    opts: { type: 'object', description: 'Layout options for layout (e.g. include/exclude, regions).' },
+                    targetPath: { type: 'string', description: 'Filesystem path for screenshot/screenshotElement output.' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Action result',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      driver: { type: 'string' },
+                      action: { type: 'string' },
+                      result: {}
+                    }
+                  }
+                }
+              }
+            },
+            '400': { description: 'Missing or unknown action, or invalid JSON body' },
+            '500': { description: 'Driver invocation failed' }
+          }
+        }
+      },
+      '/api/extension': {
+        post: {
+          summary: 'Invoke an extension driver action',
+          operationId: 'invokeExtension',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: {
+                      type: 'string',
+                      description: 'Extension action name. One of: openExtensions, focusExtensions, openMarketplace, install, uninstall, enable, enableAll, enableAllWorkspace, disable, disableAll, disableAllWorkspace, showInstalled, showEnabled, showDisabled, showOutdated, updateAll, searchMarketplace, readVisible, listViaCLI, installViaCLI, uninstallViaCLI.'
+                    },
+                    query: { type: 'string', description: 'Search query for searchMarketplace.' },
+                    opts: { description: 'Options bag for searchMarketplace/listViaCLI.', oneOf: [{ type: 'object' }, { type: 'string' }] },
+                    max: { type: 'number', description: 'Maximum results returned by readVisible.' },
+                    extensionId: { type: 'string', description: 'Extension identifier for installViaCLI/uninstallViaCLI.' },
+                    version: { type: 'string', description: 'Extension version for installViaCLI.' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Action result',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      driver: { type: 'string' },
+                      action: { type: 'string' },
+                      result: {}
+                    }
+                  }
+                }
+              }
+            },
+            '400': { description: 'Missing or unknown action, or invalid JSON body' },
+            '500': { description: 'Driver invocation failed' }
+          }
+        }
+      },
+      '/api/command': {
+        post: {
+          summary: 'Invoke a command palette action',
+          operationId: 'invokeCommand',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['action'],
+                  properties: {
+                    action: {
+                      type: 'string',
+                      description: 'Command action name. One of: open, close, run, runSequence.'
+                    },
+                    commandId: { type: 'string', description: 'Command identifier used by run.' },
+                    commandIds: { type: 'array', items: { type: 'string' }, description: 'Ordered list of command identifiers used by runSequence.' },
+                    opts: { type: 'object', description: 'Options bag for run.' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Action result',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      ok: { type: 'boolean' },
+                      driver: { type: 'string' },
+                      action: { type: 'string' },
+                      result: {}
+                    }
+                  }
+                }
+              }
+            },
+            '400': { description: 'Missing or unknown action, or invalid JSON body' },
+            '500': { description: 'Driver invocation failed' }
+          }
+        }
       }
     },
     components: {

@@ -38,6 +38,11 @@ function gatewayLiteralRoutes() {
   for (const match of source.matchAll(/pathname === '([^']+)'/g)) {
     routes.add(match[1]);
   }
+  // Driver routes are dispatched via a `driverRoute = { name: '/api/<name>', ... }` table
+  // in gateway.js. Match `/api/<name>` literals inside that block so coverage tracks them.
+  for (const match of source.matchAll(/'((?:\/api\/[a-z]+))'/g)) {
+    routes.add(match[1]);
+  }
   return Array.from(routes).filter(route => route !== '/debug/automation').sort();
 }
 

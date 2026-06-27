@@ -3,22 +3,9 @@
 const assert = require('assert');
 const { DriverRouter, DRIVER_SPEC } = require('./driver-router');
 
-let passed = 0, failed = 0;
-const asyncTests = [];
-
-function test(name, fn) {
-  try {
-    const r = fn();
-    if (r && typeof r.then === 'function') {
-      asyncTests.push(
-        Promise.resolve(r)
-          .then(() => { passed++; console.log(`  PASS: ${name}`); })
-          .catch(err => { failed++; console.error(`  FAIL: ${name}: ${err.message}`); })
-      );
-    } else { passed++; console.log(`  PASS: ${name}`); }
-  } catch (err) { failed++; console.error(`  FAIL: ${name}: ${err.message}`); }
-}
-
+const { createRunner } = require('../shared/test-runner');
+const runner = createRunner('driver-router.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 // Build a fake DomDriver with a "fake child" for each named driver.
 function fakeDriver() {
   const drivers = {};
@@ -129,7 +116,8 @@ test('all 9 drivers are reachable', () => {
   }
 });
 
-Promise.all(asyncTests).then(() => {
-  console.log(`\n  Results: ${passed} passed, ${failed} failed\n`);
-  process.exit(failed > 0 ? 1 : 0);
+Promise.resolve().then(async () => {
+  await pendingAsyncTests();
+  summary();
+  if (runner.failed > 0) process.exit(1);
 });

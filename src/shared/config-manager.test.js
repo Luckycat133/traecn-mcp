@@ -12,45 +12,10 @@ const {
   DEFAULT_CONFIG,
   LOG_LEVELS
 } = require('./config-manager');
+const { createRunner } = require('../shared/test-runner');
 
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
-
-function asyncTest(name, fn) {
-  try {
-    const result = fn();
-    if (result instanceof Promise) {
-      return result
-        .then(() => {
-          passed++;
-          console.log(`  PASS: ${name}`);
-        })
-        .catch(err => {
-          failed++;
-          console.error(`  FAIL: ${name}`);
-          console.error(`        ${err.message}`);
-        });
-    }
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const r = createRunner('config-manager.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = r;
 
 console.log('\n[config-manager.test.js] Running tests...\n');
 
@@ -503,5 +468,5 @@ test('ConfigManager keeps secrets as plaintext when no passphrase is configured'
   }
 });
 
-console.log(`\n[config-manager.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+process.exit(r.failed > 0 ? 1 : 0);
