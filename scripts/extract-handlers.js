@@ -95,6 +95,7 @@ function buildModule(topic, handlerBodies, routes) {
     'parseBody': "const { parseBody } = require('../request-gate');",
     'globalMetrics': "const { globalMetrics } = require('../../shared/metrics');",
     'parsePositiveInt': "const { parsePositiveInt } = require('../../shared/utils');",
+    'buildConfirmationPlan': "const { buildConfirmationPlan } = require('../../shared/operation-confirmation');",
   };
   const allText = handlerBodies.join('\n');
   const addedImports = new Set();
