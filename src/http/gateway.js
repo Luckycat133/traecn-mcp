@@ -38,6 +38,7 @@ const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, Rate
 const { TaskQueueService } = require('./task-queue-service');
 const { TraeControl } = require('../cdp/trae-control');
 const { ROUTES, matchRoute, resolveHandler } = require('./route-table');
+const statusHandlers = require('./handlers/status');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -2093,34 +2094,19 @@ class Gateway {
   }
 
   async _handleStatus(req, res) {
-    this._json(req, res, await this._statusSnapshot());
+    return statusHandlers.handleStatus(req, res, this);
   }
 
-  /**
-   * Prometheus exposition format metrics endpoint.
-   * The body uses the standard text/plain; version=0.0.4 content type so
-   * any Prometheus / VictoriaMetrics / Mimir scraper picks it up without
-   * extra configuration. Counters, gauges, and histograms are exposed with
-   * the `traecn_*` prefix defined in MetricsCollector.
-   */
   _handleMetrics(req, res) {
-    // Refresh volatile gauges so scrapers see fresh values.
-    try { this._refreshMetricsGauges(); } catch { /* never fail the scrape */ }
-    const body = globalMetrics.toPrometheus();
-    res.writeHead(200, {
-      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
-      'Cache-Control': 'no-store'
-    });
-    res.end(body);
+    return statusHandlers.handleMetrics(req, res, this);
   }
 
-  /**
-   * JSON variant for ad-hoc debugging (curl, dashboards, smoke tests).
-   * Mirrors `/metrics` semantics but is not meant for production scraping.
-   */
   _handleMetricsJson(req, res) {
-    try { this._refreshMetricsGauges(); } catch { /* never fail the scrape */ }
-    this._json(req, res, globalMetrics.getMetrics());
+    return statusHandlers.handleMetricsJson(req, res, this);
+  }
+
+  async _handleReadiness(req, res) {
+    return statusHandlers.handleReadiness(req, res, this);
   }
 
   /**
@@ -3035,12 +3021,6 @@ class Gateway {
       message: 'Automatic self-update is not enabled. Pull the latest repository revision and run npm install.',
       currentVersion: packageInfo.version
     }, 200);
-  }
-
-  async _handleReadiness(req, res) {
-    await this._ensureConnection();
-    const readiness = await this.driver.checkReadiness();
-    this._json(req, res, readiness);
   }
 
   async _handleSettingsReadAll(req, res) {
