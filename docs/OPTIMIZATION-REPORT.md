@@ -88,8 +88,7 @@
 - `scripts/migrate-test-runner.js`：243 行 regex 驱动自动迁移器（含路径深度修正、setTimeout-Results 剥离、Promise.all(asyncTests) 剥离等），可重复运行幂等。
 - `scripts/collect-metrics.js`：89 行 LOC + test-case 快照脚本，用于报告生成。
 
-**migrated**：13 个文件
-**skipped（异步模式，需手迁移）**：9 个文件使用 `Promise.all(asyncTests)` 或 asyncTest + 双计数器
+**migrated**：21 个文件（13 同步 + 7 Promise.all(asyncTests) + 1 git-driver 手迁移）
 **skipped（不同框架）**：4 个文件用 `node:test` / 自定义 `expect()` / Mocha describe/it
 **skipped（agent C 早期已迁移但代码中保留异步尾巴）**：3 个文件由 agent C 部分迁移
 
@@ -169,7 +168,7 @@
 | 3 | dom-driver.js 第二单体拆分（3756 行） | 与 gateway.js 同样的 48-branch 链 |
 | 4 | browser-dom helpers 增加 radix-click 支持 | settings-driver 等剩余 13 个 hotspot 可批量迁移 |
 | 5 | browser-dom helpers 改 returnByValue:JSON 模式 | snapshot-driver / file-driver / terminal-driver 等可批量迁移 |
-| 6 | 9 个异步模式 .test.js 手迁移到 test-runner | -270 LOC |
+| 6 | 9 个异步模式 .test.js 手迁移到 test-runner | ✅ 7 已迁（5bbf0b7），剩 1 个 git-driver 已在更早 commit 手迁；net −130 LOC |
 | 7 | OpenAPI 改从 ROUTES 自动生成 | 去掉手维护的 1868 行 |
 
 ### 回滚策略
