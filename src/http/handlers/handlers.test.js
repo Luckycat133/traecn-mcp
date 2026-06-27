@@ -8,10 +8,6 @@
  *   - the module loads and exposes the expected exports
  *   - the ROUTES slice doesn't overlap with another slice
  *   - the combined slice matches the central route-table
- *
- * The real handler bodies still live on Gateway; once they are migrated
- * to the per-topic modules, additional integration tests will be added
- * alongside each file (e.g. status.test.js, tasks.test.js).
  */
 
 const assert = require('assert');
@@ -26,8 +22,12 @@ console.log('\n[handlers.test.js] Running handler module tests...\n');
 
 const HANDLERS_DIR = __dirname;
 
+function findModule(name) {
+  return require(path.join(HANDLERS_DIR, name));
+}
+
 test('handlers: status module loads and exposes ROUTES', () => {
-  const mod = require('./status');
+  const mod = findModule('status');
   assert.ok(Array.isArray(mod.ROUTES));
   assert.ok(mod.ROUTES.length >= 5);
   assert.strictEqual(typeof mod.handleStatus, 'function');
@@ -35,11 +35,22 @@ test('handlers: status module loads and exposes ROUTES', () => {
 });
 
 test('handlers: tasks module loads and exposes ROUTES', () => {
-  const mod = require('./tasks');
+  const mod = findModule('tasks');
   assert.ok(Array.isArray(mod.ROUTES));
-  assert.ok(mod.ROUTES.length >= 10);
+  assert.ok(mod.ROUTES.length >= 4, 'tasks module owns history/clear/getTask/replay');
   assert.strictEqual(typeof mod.handleTasksHistory, 'function');
+});
+
+test('handlers: delegate module loads and exposes handleDelegateAsync', () => {
+  const mod = findModule('delegate');
   assert.strictEqual(typeof mod.handleDelegateAsync, 'function');
+  assert.ok(Array.isArray(mod.ROUTES));
+  assert.ok(mod.ROUTES.length >= 3, 'delegate owns /api/tasks/delegate + /api/delegate + /api/delegate-async');
+});
+
+test('handlers: sessions module loads and exposes ROUTES', () => {
+  const mod = findModule('sessions');
+  assert.strictEqual(typeof mod.handleDelegate, 'function');
 });
 
 test('handlers: combined ROUTES slice matches the central route-table', () => {
@@ -59,7 +70,7 @@ test('handlers: combined ROUTES slice matches the central route-table', () => {
 });
 
 test('handlers: status module routes resolve via matchRoute', () => {
-  const mod = require('./status');
+  const mod = findModule('status');
   for (const route of mod.ROUTES) {
     const sample = route.path.replace(/:[a-zA-Z]+/g, 'sample');
     const result = matchRoute(route.method, sample);
@@ -68,7 +79,7 @@ test('handlers: status module routes resolve via matchRoute', () => {
 });
 
 test('handlers: tasks module routes resolve via matchRoute', () => {
-  const mod = require('./tasks');
+  const mod = findModule('tasks');
   for (const route of mod.ROUTES) {
     const sample = route.path.replace(/:[a-zA-Z]+/g, 'sample');
     const result = matchRoute(route.method, sample);
