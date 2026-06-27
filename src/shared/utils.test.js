@@ -2,33 +2,10 @@
 
 const assert = require('assert');
 const { getEnvWithFallback, parseSelectors, parsePositiveInt, sleep, escapeJsString, safeClose, sanitizeLog, getGatewayContext } = require('../shared/utils');
+const { createRunner } = require('../shared/test-runner');
 
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
-
-async function asyncTest(name, fn) {
-  try {
-    await fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const r = createRunner('utils.test.js');
+const { test, asyncTest, summary } = r;
 
 console.log('\n[utils.test.js] Running tests...\n');
 
@@ -172,6 +149,6 @@ test('escapeJsString handles string with no special chars', () => {
     assert.strictEqual(ctx.timeout, 30000);
   });
 
-  console.log(`\n[utils.test.js] Results: ${passed} passed, ${failed} failed\n`);
-  process.exit(failed > 0 ? 1 : 0);
+  summary();
+  process.exit(r.failed > 0 ? 1 : 0);
 })();

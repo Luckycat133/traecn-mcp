@@ -2,21 +2,9 @@
 
 const assert = require('assert');
 const { AuditLogger } = require('../shared/audit-logger');
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const { createRunner } = require('./test-runner');
+const runner = createRunner('audit-logger.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 
 console.log('\n[audit-logger.test.js] Running tests...\n');
 
@@ -376,5 +364,5 @@ test('AuditLogger includes metadata in log entry', () => {
   assert.strictEqual(logger.logs[0].metadata.count, 42);
 });
 
-console.log(`\n[audit-logger.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+if (runner.failed > 0) process.exit(1);

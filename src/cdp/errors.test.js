@@ -2,21 +2,9 @@
 
 const assert = require('assert');
 const { TraeCNAutomationError, TraeAutomationError } = require('../cdp/errors');
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const { createRunner } = require('../shared/test-runner');
+const runner = createRunner('errors.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 
 console.log('\n[errors.test.js] Running tests...\n');
 
@@ -129,5 +117,5 @@ test('TraeCNAutomationError.webhookFailed truncates long bodies', () => {
   assert.ok(err.details.body.length <= 1024, 'body should be truncated to <= 1024 chars');
 });
 
-console.log(`\n[errors.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+if (runner.failed > 0) process.exit(1);

@@ -2,6 +2,7 @@
 
 const { sleep, safeJsValue } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
+const { evaluate, evaluateJSON } = require('./browser-dom');
 
 /**
  * GitDriver — drive Source Control (Git) operations.
@@ -77,8 +78,9 @@ class GitDriver {
     await sleep(300);
 
     // Find the commit input
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
+    const inputFound = await evaluate(
+      this.client,
+      `(message) => {
         const input = document.querySelector('.scm-viewlet textarea, .scm-editor textarea, [class*="commit-input"] textarea, [class*="scm-editor"] textarea, .scm-editor input.input');
         if (!input) return false;
         const tag = input.tagName;
@@ -86,14 +88,14 @@ class GitDriver {
           tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype,
           'value'
         ).set;
-        setter.call(input, ${safeJsValue(message)});
+        setter.call(input, message);
         input.dispatchEvent(new Event('input', { bubbles: true }));
         return true;
-      })()`,
-      returnByValue: true
-    });
-    if (!r.result.value) {
-      throw new TraeCNAutomationError('SCM commit input not found', 'SCM_INPUT_MISSING', {});
+      }`,
+      [message]
+    );
+    if (!inputFound) {
+      throw TraeCNAutomationError('SCM commit input not found', 'SCM_INPUT_MISSING', {});
     }
     await sleep(200);
 
@@ -107,36 +109,40 @@ class GitDriver {
    * Read the current SCM view: changed files + their add/modify/delete markers.
    */
   async readStatus() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
-        const scm = document.querySelector('.scm-viewlet');
-        if (!scm) return JSON.stringify({ ok: false, error: 'scm not open' });
-        const groups = Array.from(scm.querySelectorAll('.monaco-list-row'));
-        const items = groups.slice(0, 500).map(g => {
-          const fileName = g.querySelector('.label-name')?.innerText || (g.innerText || '').split('\\n')[0].trim();
-          const fileIcon = g.querySelector('[class*="codicon-modified"], [class*="codicon-added"], [class*="codicon-deleted"]')?.className || '';
-          const status = /modified/.test(fileIcon) ? 'M'
-                       : /added|untracked/.test(fileIcon) ? 'A'
-                       : /deleted/.test(fileIcon) ? 'D'
-                       : /renamed/.test(fileIcon) ? 'R' : '?';
-          return { file: fileName.slice(0, 200), status };
-        });
-        // Current branch + ahead/behind from the input placeholder or header
-        const branchEl = scm.querySelector('.statusbar-item [aria-label*="Git"]') || document.querySelector('.statusbar-item [aria-label*="Git"]');
-        const branch = branchEl?.getAttribute('aria-label') || '';
-        return JSON.stringify({ ok: true, items, branch });
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return { ok: false, error: 'parse failed' }; }
+    try {
+      return await evaluateJSON(
+        this.client,
+        `() => {
+          const scm = document.querySelector('.scm-viewlet');
+          if (!scm) return { ok: false, error: 'scm not open' };
+          const groups = Array.from(scm.querySelectorAll('.monaco-list-row'));
+          const items = groups.slice(0, 500).map(g => {
+            const fileName = g.querySelector('.label-name')?.innerText || (g.innerText || '').split('\\n')[0].trim();
+            const fileIcon = g.querySelector('[class*="codicon-modified"], [class*="codicon-added"], [class*="codicon-deleted"]')?.className || '';
+            const status = /modified/.test(fileIcon) ? 'M'
+                         : /added|untracked/.test(fileIcon) ? 'A'
+                         : /deleted/.test(fileIcon) ? 'D'
+                         : /renamed/.test(fileIcon) ? 'R' : '?';
+            return { file: fileName.slice(0, 200), status };
+          });
+          // Current branch + ahead/behind from the input placeholder or header
+          const branchEl = scm.querySelector('.statusbar-item [aria-label*="Git"]') || document.querySelector('.statusbar-item [aria-label*="Git"]');
+          const branch = branchEl?.getAttribute('aria-label') || '';
+          return { ok: true, items, branch };
+        }`
+      );
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
   }
 
   /**
    * Read the current branch name (from status bar or SCM header).
    */
   async readCurrentBranch() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
+    return evaluate(
+      this.client,
+      `() => {
         const els = document.querySelectorAll('.statusbar [aria-label*="Git" i], .statusbar [title*="Git" i]');
         for (const e of els) {
           const t = e.getAttribute('aria-label') || e.title || '';
@@ -144,10 +150,8 @@ class GitDriver {
           if (m) return m[1];
         }
         return null;
-      })()`,
-      returnByValue: true
-    });
-    return r.result.value;
+      }`
+    );
   }
 
   // ── CLI fallback (optional) ────────────────────────────────────────

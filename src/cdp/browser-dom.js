@@ -217,6 +217,123 @@ async function isVisible(client, nodeId) {
   }
 }
 
+/**
+ * Evaluate a function in the page context and return the by-value result.
+ *
+ * Wraps `Runtime.evaluate` with safe defaults:
+ *   - `awaitPromise: true` so the function can return a Promise
+ *   - `returnByValue: true` so callers get a JSON-serializable value
+ *     instead of an objectId they have to release
+ *   - `exceptionDetails` is surfaced as a thrown error so callers don't
+ *     silently consume page-side exceptions
+ *
+ * `args` is forwarded as the trailing arguments to the function expression,
+ * matching CDP's `Runtime.evaluate#arguments` shape. They must be JSON-safe.
+ */
+async function evaluate(client, fnDecl, args = []) {
+  const { result, exceptionDetails } = await client.send('Runtime.evaluate', {
+    expression: `(${fnDecl})(${args.map(a => JSON.stringify(a)).join(', ')})`,
+    returnByValue: true,
+    awaitPromise: true
+  });
+  if (exceptionDetails) {
+    const message = exceptionDetails.exception?.description
+      || exceptionDetails.text
+      || 'Runtime.evaluate threw';
+    throw new Error(`[browser-dom.evaluate] ${message}`);
+  }
+  return result.value;
+}
+
+/**
+ * Click the first element matching any of `selectors` whose visible text
+ * matches `text`. Returns true if a click happened, false otherwise.
+ *
+ * `text` may be a string (substring, case-insensitive) or a RegExp.
+ * Implementation evaluates a single helper function in the page so the
+ * loop runs locally instead of round-tripping per node.
+ */
+async function clickByText(client, selectors, text) {
+  const fnDecl = `function() {
+    const selectors = arguments[0];
+    const pattern = arguments[1];
+    const matcher = (pattern instanceof RegExp)
+      ? (s) => pattern.test(s)
+      : (s) => s.toLowerCase().includes(String(pattern).toLowerCase());
+    for (const sel of selectors) {
+      const nodes = document.querySelectorAll(sel);
+      for (const node of nodes) {
+        const text = (node.innerText || node.textContent || '').trim();
+        if (!matcher(text)) continue;
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+        const style = window.getComputedStyle(node);
+        if (style.visibility === 'hidden' || style.display === 'none') continue;
+        node.click();
+        return true;
+      }
+    }
+    return false;
+  }`;
+  return evaluate(client, fnDecl, [selectors, typeof text === 'string' ? text : text.source]);
+}
+
+/**
+ * Like `clickByText` but invokes `window.__radixClick(node)` instead of
+ * the native `.click()` method.
+ *
+ * Used by driver code that targets Radix UI primitives (which require a
+ * synthetic event sequence rather than the browser's native click
+ * dispatch). The element visibility / text-match loop is otherwise
+ * identical to `clickByText`.
+ *
+ * Returns true if a click happened, false otherwise.
+ */
+async function clickByTextRadix(client, selectors, text) {
+  const fnDecl = `function() {
+    const selectors = arguments[0];
+    const pattern = arguments[1];
+    if (typeof window.__radixClick !== 'function') return 'radix_click_unavailable';
+    const matcher = (pattern instanceof RegExp)
+      ? (s) => pattern.test(s)
+      : (s) => s.toLowerCase().includes(String(pattern).toLowerCase());
+    for (const sel of selectors) {
+      const nodes = document.querySelectorAll(sel);
+      for (const node of nodes) {
+        const text = (node.innerText || node.textContent || '').trim();
+        if (!matcher(text)) continue;
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+        const style = window.getComputedStyle(node);
+        if (style.visibility === 'hidden' || style.display === 'none') continue;
+        try { window.__radixClick(node); } catch (e) { return 'radix_click_failed: ' + e.message; }
+        return true;
+      }
+    }
+    return false;
+  }`;
+  return evaluate(client, fnDecl, [selectors, typeof text === 'string' ? text : text.source]);
+}
+
+/**
+ * Evaluate a function in the page and parse the returned value as JSON.
+ *
+ * The legacy driver pattern is to `JSON.stringify(...)` inside the
+ * expression and `JSON.parse(result.value)` on the Node side. This
+ * helper consolidates that round-trip: pass a function that returns a
+ * JSON-stringifiable object, and we hand back the parsed value.
+ *
+ * Throws if the value is not a string or if parsing fails.
+ */
+async function evaluateJSON(client, fnDecl, args = []) {
+  const raw = await evaluate(client, fnDecl, args);
+  if (typeof raw !== 'string') return raw;
+  try { return JSON.parse(raw); }
+  catch (e) {
+    throw new Error(`[browser-dom.evaluateJSON] failed to parse: ${e.message}`);
+  }
+}
+
 module.exports = {
   querySelector,
   querySelectorAll,
@@ -230,5 +347,9 @@ module.exports = {
   setContentEditableText,
   pressEnter,
   findFirstMatching,
+  evaluate,
+  evaluateJSON,
+  clickByText,
+  clickByTextRadix,
   DomCache
 };

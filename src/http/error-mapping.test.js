@@ -3,14 +3,9 @@
 const assert = require('assert');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { errorToHttpStatus, errorToBody, CODE_TO_STATUS, DEFAULT_STATUS } = require('./error-mapping');
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try { fn(); passed++; console.log(`  PASS: ${name}`); }
-  catch (err) { failed++; console.error(`  FAIL: ${name}\n    ${err.message}`); }
-}
+const { createRunner } = require('../shared/test-runner');
+const runner = createRunner('error-mapping.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 
 test('errorToHttpStatus: known TraeCNAutomationError code maps correctly', () => {
   assert.strictEqual(
@@ -105,5 +100,5 @@ test('CODE_TO_STATUS is frozen and covers all known TraeCN codes', () => {
   }
 });
 
-console.log(`\n[error-mapping.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+if (runner.failed > 0) process.exit(1);
