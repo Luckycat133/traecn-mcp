@@ -41,6 +41,7 @@ const { ROUTES, matchRoute, resolveHandler } = require('./route-table');
 const statusHandlers = require('./handlers/status');
 const tasksHandlers = require('./handlers/tasks');
 const delegateHandlers = require('./handlers/delegate');
+const sessionsHandlers = require('./handlers/sessions');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -2213,117 +2214,19 @@ class Gateway {
   }
 
   async _handleCreateSession(req, res) {
-    const body = await parseBody(req);
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-    await this._ensureConnection();
-
-    const session = {
-      id: sessionId,
-      createdAt: new Date().toISOString(),
-      projectPath: body.projectPath || null,
-      messages: []
-    };
-
-    this.sessions.set(sessionId, session);
-
-    const responseData = { sessionId, createdAt: session.createdAt };
-    this._storeIdempotency(req.headers['idempotency-key'], { data: responseData, statusCode: 201 });
-    this._json(req, res, responseData, 201);
+    return sessionsHandlers.handleCreateSession(req, res, this);
   }
 
   _handleListSessions(req, res) {
-    const sessions = Array.from(this.sessions.values()).map(s => ({
-      id: s.id,
-      createdAt: s.createdAt,
-      messageCount: s.messages.length
-    }));
-    this._json(req, res, { sessions });
+    return sessionsHandlers.handleListSessions(req, res, this);
   }
 
   _handleGetSession(req, res, sessionId) {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      return this._json(req, res, { error: 'Session not found' }, 404);
-    }
-    this._json(req, res, session);
+    return sessionsHandlers.handleGetSession(req, res, this, sessionId);
   }
 
   async _handleDelegate(req, res, sessionId) {
-    const body = await parseBody(req);
-    if (!body.task) {
-      return this._json(req, res, { error: 'task is required' }, 400);
-    }
-    if (typeof body.task !== 'string' || body.task.length > 100000) {
-      return this._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
-    }
-
-    await this._ensureConnection();
-
-    const session = this.sessions.get(sessionId);
-    if (session) {
-      session.messages.push({ role: 'user', content: body.task, timestamp: new Date().toISOString() });
-    }
-
-    const queueStatus = typeof this.driver.checkQueueStatus === 'function'
-      ? await this.driver.checkQueueStatus()
-      : { queued: false, running: false, canSubmit: true };
-    const waitForQueue = body.waitForQueue !== false;
-    const queueVisible = queueStatus.queued === true;
-    const queueBlocked = queueStatus.running === true || (queueVisible && queueStatus.canSubmit !== true);
-    if (queueBlocked || (waitForQueue && queueVisible)) {
-      if (!waitForQueue) {
-        return this._json(req, res, {
-          status: queueStatus.queued ? 'queued' : 'running',
-          queueDetails: this._queueDetailsFromStatus(queueStatus),
-          message: queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'
-        }, 202);
-      }
-
-      const task = this._createQueuedTask({
-        task: body.task,
-        projectPath: body.projectPath,
-        reviewRequired: body.reviewRequired === true,
-        autoContinue: body.autoContinue === true,
-        followupTasks: body.followupTasks,
-        completionChecks: body.completionChecks,
-        autoApproveDialog: body.autoApproveDialog,
-        includeProcessText: body.includeProcessText === true,
-        notifyUrl: body.notifyUrl,
-        chatId: body.chatId
-      }, queueStatus);
-      this._ensureBackgroundPolling();
-      return this._json(req, res, {
-        taskId: task.taskId,
-        status: 'queued',
-        queueDetails: this._queueDetailsFromStatus(queueStatus, task.currentModel),
-        reviewRequired: task.reviewRequired,
-        autoContinue: task.autoContinue === true,
-        followupCount: task.followupTasks.length,
-        message: '模型排队中，任务已加入后台。用 traecn_task_status 查询进度',
-        model: queueStatus.currentModel || null
-      }, 202);
-    }
-
-    const result = await this.driver.delegate(this._taskWithProjectContext(body.task, body.projectPath));
-
-    if (session) {
-      session.messages.push({ role: 'assistant', content: result.text, timestamp: new Date().toISOString() });
-    }
-
-    const responseData = {
-      text: result.text,
-      stable: result.stable,
-      elapsedMs: result.elapsedMs,
-      timedOut: result.timedOut || false
-    };
-
-    if (body.includeProcessText) {
-      responseData.processText = result.text;
-    }
-
-    this._storeIdempotency(req.headers['idempotency-key'], { data: responseData, statusCode: 200 });
-    this._json(req, res, responseData);
+    return sessionsHandlers.handleDelegate(req, res, this, sessionId);
   }
 
   async _handleNewChat(req, res) {
