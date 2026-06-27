@@ -4,6 +4,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 const { TraeCNAutomationError } = require('./errors');
+const { evaluateJSON } = require('./browser-dom');
 
 /**
  * SnapshotDriver — capture DOM / page state / screenshots for replay and
@@ -36,30 +37,30 @@ class SnapshotDriver {
    * (uses Runtime.evaluate). Otherwise capture the body.
    */
   async snapshotDom(selector) {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
-        const el = ${selector ? `document.querySelector(${JSON.stringify(selector)})` : 'document.body'};
-        if (!el) return JSON.stringify({ ok: false, error: 'not found' });
-        return JSON.stringify({ ok: true, html: el.outerHTML, length: el.outerHTML.length });
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return { ok: false, error: 'parse failed' }; }
+    try {
+      return await evaluateJSON(
+        this.client,
+        '(sel) => { const el = sel ? document.querySelector(sel) : document.body; if (!el) return { ok: false, error: "not found" }; const html = el.outerHTML; return { ok: true, html, length: html.length }; }',
+        [selector || null]
+      );
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
   }
 
   /**
    * Snapshot visible text of the page or a specific element.
    */
   async snapshotText(selector) {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
-        const el = ${selector ? `document.querySelector(${JSON.stringify(selector)})` : 'document.body'};
-        if (!el) return JSON.stringify({ ok: false, error: 'not found' });
-        return JSON.stringify({ ok: true, text: (el.innerText || '').slice(0, 50000) });
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return { ok: false, error: 'parse failed' }; }
+    try {
+      return await evaluateJSON(
+        this.client,
+        '(sel) => { const el = sel ? document.querySelector(sel) : document.body; if (!el) return { ok: false, error: "not found" }; return { ok: true, text: (el.innerText || "").slice(0, 50000) }; }',
+        [selector || null]
+      );
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
   }
 
   /**
@@ -114,16 +115,16 @@ class SnapshotDriver {
    */
   async screenshotElement(selector, targetPath) {
     await this._ensureDir();
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return JSON.stringify({ ok: false, error: 'not found' });
-        const r = el.getBoundingClientRect();
-        return JSON.stringify({ ok: true, x: r.x, y: r.y, w: r.width, h: r.height });
-      })()`,
-      returnByValue: true
-    });
-    const rect = JSON.parse(r.result.value);
+    let rect;
+    try {
+      rect = await evaluateJSON(
+        this.client,
+        '(sel) => { const el = document.querySelector(sel); if (!el) return { ok: false, error: "not found" }; const r = el.getBoundingClientRect(); return { ok: true, x: r.x, y: r.y, w: r.width, h: r.height }; }',
+        [selector]
+      );
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
     if (!rect.ok) return rect;
 
     const filePath = targetPath || path.join(this.screenshotDir, `snap-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.png`);

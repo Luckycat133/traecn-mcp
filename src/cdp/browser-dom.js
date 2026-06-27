@@ -278,6 +278,62 @@ async function clickByText(client, selectors, text) {
   return evaluate(client, fnDecl, [selectors, typeof text === 'string' ? text : text.source]);
 }
 
+/**
+ * Like `clickByText` but invokes `window.__radixClick(node)` instead of
+ * the native `.click()` method.
+ *
+ * Used by driver code that targets Radix UI primitives (which require a
+ * synthetic event sequence rather than the browser's native click
+ * dispatch). The element visibility / text-match loop is otherwise
+ * identical to `clickByText`.
+ *
+ * Returns true if a click happened, false otherwise.
+ */
+async function clickByTextRadix(client, selectors, text) {
+  const fnDecl = `function() {
+    const selectors = arguments[0];
+    const pattern = arguments[1];
+    if (typeof window.__radixClick !== 'function') return 'radix_click_unavailable';
+    const matcher = (pattern instanceof RegExp)
+      ? (s) => pattern.test(s)
+      : (s) => s.toLowerCase().includes(String(pattern).toLowerCase());
+    for (const sel of selectors) {
+      const nodes = document.querySelectorAll(sel);
+      for (const node of nodes) {
+        const text = (node.innerText || node.textContent || '').trim();
+        if (!matcher(text)) continue;
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+        const style = window.getComputedStyle(node);
+        if (style.visibility === 'hidden' || style.display === 'none') continue;
+        try { window.__radixClick(node); } catch (e) { return 'radix_click_failed: ' + e.message; }
+        return true;
+      }
+    }
+    return false;
+  }`;
+  return evaluate(client, fnDecl, [selectors, typeof text === 'string' ? text : text.source]);
+}
+
+/**
+ * Evaluate a function in the page and parse the returned value as JSON.
+ *
+ * The legacy driver pattern is to `JSON.stringify(...)` inside the
+ * expression and `JSON.parse(result.value)` on the Node side. This
+ * helper consolidates that round-trip: pass a function that returns a
+ * JSON-stringifiable object, and we hand back the parsed value.
+ *
+ * Throws if the value is not a string or if parsing fails.
+ */
+async function evaluateJSON(client, fnDecl, args = []) {
+  const raw = await evaluate(client, fnDecl, args);
+  if (typeof raw !== 'string') return raw;
+  try { return JSON.parse(raw); }
+  catch (e) {
+    throw new Error(`[browser-dom.evaluateJSON] failed to parse: ${e.message}`);
+  }
+}
+
 module.exports = {
   querySelector,
   querySelectorAll,
@@ -292,6 +348,8 @@ module.exports = {
   pressEnter,
   findFirstMatching,
   evaluate,
+  evaluateJSON,
   clickByText,
+  clickByTextRadix,
   DomCache
 };
