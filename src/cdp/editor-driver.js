@@ -2,6 +2,7 @@
 
 const { sleep, safeJsValue } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
+const { evaluate, evaluateJSON } = require('./browser-dom');
 
 /**
  * EditorDriver — drives the Monaco / TraeCN code editor for accept/reject,
@@ -40,35 +41,29 @@ class EditorDriver {
    * Returns one or more apply containers with their visible buttons.
    */
   async _findApplyContainers() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
-        const containers = document.querySelectorAll('.icube-apply-action-container');
-        const out = [];
-        for (const c of containers) {
-          if (c.offsetParent === null) continue;
-          const buttons = Array.from(c.querySelectorAll('button, [role="button"], .action-label'))
-            .filter(b => b.offsetParent !== null)
-            .map(b => ({
-              text: (b.innerText || '').trim(),
-              title: b.title || '',
-              aria: b.getAttribute('aria-label') || '',
-              class: b.className || ''
-            }));
-          out.push({
-            container: c,
-            containerClass: c.className,
-            buttons
-          });
-        }
-        return JSON.stringify(out);
-      })()`,
-      returnByValue: true
-    });
-    if (!r.result.value) return [];
     try {
-      const parsed = JSON.parse(r.result.value);
-      // Strip the `container` element since it's a DOM node, not serializable
-      return parsed.map(c => ({ containerClass: c.containerClass, buttons: c.buttons }));
+      const parsed = await evaluateJSON(
+        this.client,
+        `() => {
+          const containers = document.querySelectorAll('.icube-apply-action-container');
+          const out = [];
+          for (const c of containers) {
+            if (c.offsetParent === null) continue;
+            const buttons = Array.from(c.querySelectorAll('button, [role="button"], .action-label'))
+              .filter(b => b.offsetParent !== null)
+              .map(b => ({
+                text: (b.innerText || '').trim(),
+                title: b.title || '',
+                aria: b.getAttribute('aria-label') || '',
+                class: b.className || ''
+              }));
+            // Strip the DOM node; only serialize metadata.
+            out.push({ containerClass: c.className, buttons });
+          }
+          return out;
+        }`
+      );
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -105,8 +100,9 @@ class EditorDriver {
   }
 
   async _ensureClickHelper() {
-    await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
+    await evaluate(
+      this.client,
+      `() => {
         if (window.__radixClick) return;
         window.__radixClick = function(el) {
           if (!el) return;
@@ -115,9 +111,8 @@ class EditorDriver {
           el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
           el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
         };
-      })()`,
-      returnByValue: true
-    });
+      }`
+    );
   }
 
   /**
