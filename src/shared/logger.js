@@ -8,16 +8,26 @@ const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const SENSITIVE_KEYS = ['token', 'password', 'secret', 'credential', 'authorization'];
 
 /**
- * 清除敏感信息
+ * Recursively strip sensitive values (tokens, passwords, etc.) from an object
+ * for safe logging. Replaces matching values with `[REDACTED]`.
+ *
+ * Handles circular references without throwing by tracking seen objects.
+ *
+ * @param {*} obj - Value to sanitize (usually a metadata object).
+ * @param {WeakSet} [seen] - Internal recursion guard for circular refs.
+ * @returns {*} Sanitized copy with sensitive values redacted.
  */
-function sanitizeLog(obj) {
+function sanitizeLog(obj, seen) {
   if (!obj || typeof obj !== 'object') return obj;
+  if (!seen) seen = new WeakSet();
+  if (seen.has(obj)) return '[Circular]';
+  seen.add(obj);
   const sanitized = Array.isArray(obj) ? [] : {};
   for (const [key, value] of Object.entries(obj)) {
     if (SENSITIVE_KEYS.some(k => key.toLowerCase().includes(k))) {
       sanitized[key] = '[REDACTED]';
     } else if (typeof value === 'object' && value !== null) {
-      sanitized[key] = sanitizeLog(value);
+      sanitized[key] = sanitizeLog(value, seen);
     } else {
       sanitized[key] = value;
     }
@@ -209,9 +219,16 @@ class Logger {
     return this.requestContext.get(requestId);
   }
 
+  /**
+   * Remove a request context entry. Periodically sweeps stale entries
+   * (>5min old) but does NOT scan on every call — that would be O(n) per
+   * request. The sweep runs at most once per minute.
+   */
   clearRequestContext(requestId) {
     this.requestContext.delete(requestId);
     const now = Date.now();
+    if (this._lastContextSweep && now - this._lastContextSweep < 60000) return;
+    this._lastContextSweep = now;
     for (const [id, ctx] of this.requestContext) {
       if (now - ctx.timestamp > 300000) {
         this.requestContext.delete(id);
@@ -219,12 +236,17 @@ class Logger {
     }
   }
 
+  /**
+   * Create a per-request logger that automatically tags every log entry
+   * with `requestId` and `sessionId`. All four level methods accept
+   * `(message, metadata)` for consistency.
+   */
   createRequestLogger(requestId, sessionId) {
     return {
       debug: (message, metadata) => this.debug(message, { requestId, sessionId, metadata }),
       info: (message, metadata) => this.info(message, { requestId, sessionId, metadata }),
       warn: (message, metadata) => this.warn(message, { requestId, sessionId, metadata }),
-      error: (message, options = {}) => this.error(message, { requestId, sessionId, ...options })
+      error: (message, metadata) => this.error(message, { requestId, sessionId, metadata })
     };
   }
 

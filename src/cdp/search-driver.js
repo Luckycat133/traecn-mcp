@@ -2,6 +2,7 @@
 
 const { sleep } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
+const { BaseDriver } = require('./base-driver');
 
 /**
  * SearchDriver — drive the Search panel and Find in Files.
@@ -13,22 +14,7 @@ const { TraeCNAutomationError } = require('./errors');
  *    `.search-widget .input`, press Enter to trigger.
  *  - Read results from `.search-results .monaco-list-row` rows.
  */
-class SearchDriver {
-  constructor(client, config = {}, deps = {}) {
-    this.client = client;
-    this.config = config;
-    this.palette = deps.palette || null;
-  }
-
-  setPalette(palette) { this.palette = palette; }
-
-  _viaPalette(commandId) {
-    if (!this.palette) {
-      throw new TraeCNAutomationError('CommandPaletteDriver required', 'PALETTE_REQUIRED', { commandId });
-    }
-    return this.palette.run(commandId);
-  }
-
+class SearchDriver extends BaseDriver {
   // ── Open / focus (command palette) ──────────────────────────────────
 
   openSearch() { return this._viaPalette('workbench.view.search'); }

@@ -60,7 +60,21 @@ const VIBE_WORKFLOW_PARAMETERS = {
     },
     completionChecks: COMPLETION_CHECKS_SCHEMA,
     projectPath: { type: 'string', description: 'Project path TraeCN should work inside' },
+    sessionId: { type: 'string', description: 'Logical session to append user and assistant messages to' },
     chatId: { type: 'string', description: 'Optional OpenClaw chat id for notifications' },
+    soloChat: {
+      type: 'object',
+      properties: {
+        index: { type: 'number' },
+        titleIncludes: { type: 'string' },
+        textIncludes: { type: 'string' }
+      },
+      description: 'Target a real Solo conversation for ownership and queued result collection'
+    },
+    soloChatIndex: { type: 'number', description: 'Target Solo conversation index' },
+    soloChatTitleIncludes: { type: 'string', description: 'Target Solo conversation title text' },
+    soloChatTextIncludes: { type: 'string', description: 'Target Solo conversation body text' },
+    newChat: { type: 'boolean', description: 'When false, reuse the targeted Solo conversation' },
     includeProcessText: { type: 'boolean', description: 'Include TraeCN process text in collected results', default: false },
     reviewRequired: { type: 'boolean', description: 'Mark workflow checkpoints reviewable while auto-continuing them', default: false },
     autoApproveDialog: {
@@ -75,7 +89,47 @@ const VIBE_WORKFLOW_PARAMETERS = {
     autoModelFallback: { type: 'boolean', description: 'Use gateway default fallback model list while queued', default: false },
     modelProbeIntervalMs: { type: 'number', description: 'Minimum interval between fallback model probes' },
     notifyUrl: { type: 'string', description: 'Webhook URL to notify when workflow state changes' },
-    maxQueueWaitMs: { type: 'number', description: 'Optional local queue wait cap; omit to wait indefinitely' }
+    forceBackground: { type: 'boolean', description: 'Force gateway background tracking even if the model appears ready', default: false },
+    maxQueueWaitMs: { type: 'number', description: 'Optional local queue wait cap; omit to wait indefinitely' },
+    queueMaxWaitMs: { type: 'number', description: 'Alias for maxQueueWaitMs' }
+  }
+};
+
+const LONG_QUEUE_PROOF_START_PARAMETERS = {
+  type: 'object',
+  properties: {
+    marker: { type: 'string', description: 'Stable owned proof marker. Reusing a marker resumes existing evidence instead of submitting again.' },
+    model: { type: 'string', description: 'Model to prove, defaults to GLM-5.2' },
+    projectPath: { type: 'string', description: 'Project path TraeCN should use for proof context' },
+    execute: { type: 'boolean', description: 'Enter execute mode. Without allowQuotaSpend=true this still refuses new TraeCN submissions.', default: false },
+    allowQuotaSpend: { type: 'boolean', description: 'Required with execute=true before starting any new quota-consuming TraeCN proof submission.', default: false },
+    detach: { type: 'boolean', description: 'Run the proof watcher in a detached local screen session', default: false },
+    forceNew: { type: 'boolean', description: 'Intentionally bypass existing proof/task resume guards and submit a fresh proof', default: false },
+    resumeTaskId: { type: 'string', description: 'Resume waiting for an existing task id without submitting a new prompt' },
+    timeoutMs: { type: 'number', description: 'Maximum wait time for proof result; 0 means no local timeout' },
+    pollMs: { type: 'number', description: 'Task status poll interval' },
+    outputDir: { type: 'string', description: 'Directory for proof evidence files' },
+    cleanupIntervalMs: { type: 'number', description: 'Interval for queue-probe cleanup during proof waits' },
+    cleanupStabilizeChecks: { type: 'number', description: 'Consecutive clean cleanup dry-runs required before submitting' },
+    cleanupStabilizeDelayMs: { type: 'number', description: 'Delay between cleanup stabilization checks' },
+    cleanupMaxAttempts: { type: 'number', description: 'Maximum cleanup stabilization attempts' }
+  }
+};
+
+const LONG_QUEUE_PROOF_STATUS_PARAMETERS = {
+  type: 'object',
+  properties: {
+    marker: { type: 'string', description: 'Optional proof marker. Omit to inspect the newest proof artifact.' },
+    outputDir: { type: 'string', description: 'Directory containing proof evidence files' }
+  }
+};
+
+const LONG_QUEUE_PROOF_CANCEL_PARAMETERS = {
+  type: 'object',
+  properties: {
+    marker: { type: 'string', description: 'Optional proof marker. Omit to cancel the newest proof artifact.' },
+    taskId: { type: 'string', description: 'Optional task id to cancel if known' },
+    outputDir: { type: 'string', description: 'Directory containing proof evidence files' }
   }
 };
 
@@ -121,7 +175,7 @@ const toolDefinitions = [
   },
   {
     name: 'traecn_command',
-    description: 'Execute a preset TraeCN command through the local TraeCNclaw gateway. Use traecn_command_set to discover available commands. Core commands include status, readiness, restart_trae_debug, new_chat, delegate, delegate_async, vibe_workflow, task_status, adopt_current_task, cancel_task, stop_generation, review_gate_status, resolve_review_gate, switch_mode, switch_model, queue_status, open_project, settings_read, settings_read_all, settings_set, settings_navigate, settings_back, dialog_status, approve_dialog, dismiss_dialog, batch_submit, batch_status, batch_cancel, and review_code.',
+    description: 'Execute a preset TraeCN command through the local TraeCNclaw gateway. Use traecn_command_set to discover available commands. Core commands include status, readiness, restart_trae_debug, new_chat, delegate, delegate_async, vibe_workflow, task_status, adopt_current_task, cancel_task, stop_generation, cleanup_foreign_solo_queue, cleanup_queue_watch_status, long_queue_proof_start, long_queue_proof_status, long_queue_proof_cancel, review_gate_status, resolve_review_gate, switch_mode, switch_model, queue_status, open_project, settings_read, settings_read_all, settings_set, settings_navigate, settings_back, dialog_status, approve_dialog, dismiss_dialog, batch_submit, batch_status, batch_cancel, and review_code.',
     parameters: {
       type: 'object',
       required: ['command'],
@@ -307,10 +361,24 @@ const toolDefinitions = [
         projectPath: { type: 'string', description: 'Path to the project to open in TraeCN' },
         sessionId: { type: 'string', description: 'Existing session ID to use instead of creating a new one' },
         chatId: { type: 'string', description: 'Optional OpenClaw chat id for notifications' },
+        soloChat: {
+          type: 'object',
+          properties: {
+            index: { type: 'number' },
+            titleIncludes: { type: 'string' },
+            textIncludes: { type: 'string' }
+          },
+          description: 'Target a real Solo conversation for ownership and queued result collection'
+        },
+        soloChatIndex: { type: 'number', description: 'Target Solo conversation index' },
+        soloChatTitleIncludes: { type: 'string', description: 'Target Solo conversation title text' },
+        soloChatTextIncludes: { type: 'string', description: 'Target Solo conversation body text' },
+        newChat: { type: 'boolean', description: 'When false, reuse the targeted Solo conversation' },
         allowAutoStart: { type: 'boolean', description: 'Allow automatically starting TraeCN if not running', default: false },
         includeProcessText: { type: 'boolean', description: 'Include process/thinking information in the response', default: false },
         waitForQueue: { type: 'boolean', description: 'If true (default), queue the task when model is busy. If false, return queue info immediately without waiting.', default: true },
         background: { type: 'boolean', description: 'Queue immediately in the gateway background worker', default: false },
+        forceBackground: { type: 'boolean', description: 'Force gateway background tracking even if the model appears ready', default: false },
         asyncPoll: { type: 'boolean', description: 'If true, always use async delegate path (returns taskId). Useful when you want to manage polling yourself.', default: false },
         reviewRequired: { type: 'boolean', description: 'Return successful results as review checkpoints before finalizing', default: false },
         autoContinue: { type: 'boolean', description: 'Automatically approve reviewable follow-up workflow checkpoints', default: false },
@@ -336,20 +404,41 @@ const toolDefinitions = [
           description: 'Ordered model candidates to probe while queued. The gateway switches through them and uses the first model that can submit.'
         },
         autoModelFallback: { type: 'boolean', description: 'Use the gateway default fallback model list while queued.', default: false },
-        modelProbeIntervalMs: { type: 'number', description: 'Minimum interval between background fallback model probes for this task.' }
+        modelProbeIntervalMs: { type: 'number', description: 'Minimum interval between background fallback model probes for this task.' },
+        maxQueueWaitMs: { type: 'number', description: 'Optional local queue wait cap; omit to wait indefinitely' },
+        queueMaxWaitMs: { type: 'number', description: 'Alias for maxQueueWaitMs' }
       }
     },
     handler: async (params, context) => {
       const client = new TraeCNApiClient(context);
 
-      if (params.asyncPoll) {
+      const shouldUseAsync = params.asyncPoll === true
+        || params.background === true
+        || params.forceBackground === true
+        || params.reviewRequired === true
+        || params.autoContinue === true
+        || Array.isArray(params.followupTasks)
+        || !!params.completionChecks
+        || !!params.soloChat
+        || Number.isInteger(params.soloChatIndex)
+        || !!params.soloChatTitleIncludes
+        || !!params.soloChatTextIncludes
+        || params.newChat !== undefined;
+
+      if (shouldUseAsync) {
         const result = await client.delegateAsync(params.task, {
           projectPath: params.projectPath,
           sessionId: params.sessionId,
           chatId: params.chatId,
+          soloChat: params.soloChat,
+          soloChatIndex: params.soloChatIndex,
+          soloChatTitleIncludes: params.soloChatTitleIncludes,
+          soloChatTextIncludes: params.soloChatTextIncludes,
+          newChat: params.newChat,
           includeProcessText: params.includeProcessText,
           waitForQueue: params.waitForQueue !== false,
           background: params.background === true,
+          forceBackground: params.forceBackground === true,
           reviewRequired: params.reviewRequired === true,
           autoContinue: params.autoContinue === true,
           followupTasks: params.followupTasks,
@@ -357,7 +446,9 @@ const toolDefinitions = [
           notifyUrl: params.notifyUrl,
           fallbackModels: params.fallbackModels,
           autoModelFallback: params.autoModelFallback === true,
-          modelProbeIntervalMs: params.modelProbeIntervalMs
+          modelProbeIntervalMs: params.modelProbeIntervalMs,
+          maxQueueWaitMs: params.maxQueueWaitMs,
+          queueMaxWaitMs: params.queueMaxWaitMs
         });
         return result.data || result;
       }
@@ -442,6 +533,69 @@ const toolDefinitions = [
     handler: async (params, context) => {
       const client = new TraeCNApiClient(context);
       return client.checkQueueStatus();
+    }
+  },
+  {
+    name: 'traecn_cleanup_queue',
+    description: 'Find and optionally delete accidental "wait for Trae queue" Solo conversations. With execute=true it stops running queue-probe chats before deleting them.',
+    parameters: {
+      type: 'object',
+      properties: {
+        dryRun: { type: 'boolean', description: 'List matches without deleting them', default: true },
+        execute: { type: 'boolean', description: 'Stop and delete matched queue-probe conversations', default: false },
+        maxPasses: { type: 'integer', description: 'Repeat cleanup passes for hidden queue-probe chats revealed after earlier deletions', default: 10 },
+        settleMs: { type: 'integer', description: 'Delay between cleanup passes in milliseconds', default: 500 }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await client.cleanupForeignSoloQueue(params || {});
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_cleanup_watch_status',
+    description: 'Read local cleanup watcher lock/PID/stale status without contacting TraeCN or creating conversations.',
+    parameters: {
+      type: 'object',
+      properties: {
+        lockFile: { type: 'string', description: 'Optional cleanup watcher lock file path' }
+      }
+    },
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'cleanup_queue_watch_status', params || {});
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_long_queue_proof_start',
+    description: 'Start or dry-run the guarded GLM-5.2 long-queue proof. Defaults to dry-run; a new real submission requires execute=true and allowQuotaSpend=true.',
+    parameters: LONG_QUEUE_PROOF_START_PARAMETERS,
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'long_queue_proof_start', params || {});
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_long_queue_proof_status',
+    description: 'Read local GLM-5.2 proof status and recent evidence without sending any TraeCN prompt.',
+    parameters: LONG_QUEUE_PROOF_STATUS_PARAMETERS,
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'long_queue_proof_status', params || {});
+      return result.data || result;
+    }
+  },
+  {
+    name: 'traecn_long_queue_proof_cancel',
+    description: 'Cancel a local GLM-5.2 proof watcher/task tracking without submitting another TraeCN prompt.',
+    parameters: LONG_QUEUE_PROOF_CANCEL_PARAMETERS,
+    handler: async (params, context) => {
+      const client = new TraeCNApiClient(context);
+      const result = await executeCommand(client, 'long_queue_proof_cancel', params || {});
+      return result.data || result;
     }
   },
   {

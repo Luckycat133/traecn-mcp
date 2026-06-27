@@ -16,6 +16,17 @@ const SENSITIVE_ACTIONS = [
 
 const SENSITIVE_PARAMS = ['token', 'password', 'secret', 'key', 'credential', 'authorization', 'apiKey', 'api_key'];
 
+// Default cap on in-memory log entries. Without a bound, a long-running
+// process accumulates entries indefinitely. Oldest entries are dropped first.
+const DEFAULT_MAX_LOGS = 10000;
+
+/**
+ * Append-only audit logger. Captures security-sensitive actions both in
+ * memory (for querying) and to a date-based JSONL file (for durability).
+ *
+ * Sensitive parameters are redacted before logging. Old log files beyond
+ * `maxLogAge` days are pruned on init and on each write.
+ */
 class AuditLogger {
   constructor(options = {}) {
     this.enabled = options.enabled !== undefined
@@ -24,6 +35,7 @@ class AuditLogger {
     this.logDir = options.logDir || getEnvWithFallback('TRAECN_AUDIT_LOG_DIR', 'TRAE_AUDIT_LOG_DIR', './audit-logs');
     this.maxLogAge = options.maxLogAge || parseInt(getEnvWithFallback('TRAECN_AUDIT_MAX_AGE_DAYS', 'TRAE_AUDIT_MAX_AGE_DAYS', '30'), 10);
     this.maxLogSize = options.maxLogSize || parseInt(getEnvWithFallback('TRAECN_AUDIT_MAX_SIZE_MB', 'TRAE_AUDIT_MAX_SIZE_MB', '100'), 10);
+    this.maxLogs = options.maxLogs || DEFAULT_MAX_LOGS;
     this.logs = [];
     this._logFile = null;
     this._init();
@@ -130,6 +142,11 @@ class AuditLogger {
     };
 
     this.logs.push(entry);
+
+    // Bound in-memory growth: drop oldest entries beyond maxLogs.
+    if (this.logs.length > this.maxLogs) {
+      this.logs.splice(0, this.logs.length - this.maxLogs);
+    }
 
     if (SENSITIVE_ACTIONS.includes(options.action)) {
       this._writeToFile(entry);
@@ -279,7 +296,7 @@ class AuditLogger {
 
     const statusCounts = { success: 0, failure: 0 };
     for (const log of this.logs) {
-      if (log.status === 'success' || log.status === 'success') {
+      if (log.status === 'success') {
         statusCounts.success++;
       } else {
         statusCounts.failure++;

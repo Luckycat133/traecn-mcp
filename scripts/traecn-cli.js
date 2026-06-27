@@ -36,6 +36,24 @@ function color(col, text) {
   return COLORS[col] + text + COLORS.reset;
 }
 
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function readNumberOption(args, name, fallback) {
+  const index = args.indexOf(name);
+  if (index === -1) return fallback;
+  const value = Number(args[index + 1]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function readStringOption(args, name, fallback = null) {
+  const index = args.indexOf(name);
+  if (index === -1) return fallback;
+  const value = args[index + 1];
+  return value && !value.startsWith('-') ? value : fallback;
+}
+
 function loadConfig() {
   if (config) return config;
 
@@ -144,6 +162,9 @@ ${color('bold', 'COMMANDS:')}
   ${color('green', 'status')}                Show gateway status
   ${color('green', 'capabilities')}          Show compact agent capability catalog
   ${color('green', 'preflight')} [cmd] [json] One-call readiness/queue/dialog preflight
+  ${color('green', 'cleanup-queue')}          Find and delete queue-probe Solo chats
+  ${color('green', 'cleanup-queue')} --status Show cleanup watcher lock/process status
+  ${color('green', 'proof')} status|start|cancel  Manage guarded GLM-5.2 long-queue proof
   ${color('green', 'plan')} <command> [json] Create operation confirmation plan
   ${color('green', 'models')}                List available models
   ${color('green', 'config')} get <key>      Get config value
@@ -186,6 +207,14 @@ ${color('bold', 'EXAMPLES:')}
   traecn status
   traecn capabilities
   traecn preflight delegate_async '{"task":"..."}'
+  traecn cleanup-queue --execute --max-passes 10
+  traecn cleanup-queue --status --json
+  traecn cleanup-queue --execute --watch-ms 600000 --stable-ms 120000
+  traecn cleanup-queue --execute --watch-ms 7200000 --stable-ms 1800000 --detach --log cleanup-watch.jsonl
+  traecn proof status
+  traecn proof start --marker TRAECN_GLM52_CLEAN_1
+  traecn proof start --execute --detach --allow-quota-spend --marker TRAECN_GLM52_CLEAN_1
+  traecn proof cancel --marker TRAECN_GLM52_CLEAN_1
   traecn plan settings_set '{"label":"Auto Save","value":true}'
   traecn models
   traecn config get host
@@ -368,6 +397,332 @@ function buildDetachedWaitCommand(options, cwd = process.cwd()) {
       `cd ${shellQuote(cwd)} && ${args.map(shellQuote).join(' ')} > ${shellQuote(finalFile)} 2> ${shellQuote(stderrFile)}`
     ]
   };
+}
+
+function defaultCleanupSessionName() {
+  return `traecn_cleanup_queue_${Date.now()}`;
+}
+
+function appSupportDir() {
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'TRAECNclaw');
+  }
+  return path.join(os.homedir(), '.traecnclaw');
+}
+
+function defaultCleanupWatchLockFile() {
+  return path.join(appSupportDir(), 'cleanup-watch.lock');
+}
+
+function isPidRunning(pid) {
+  const parsed = Number(pid);
+  if (!Number.isInteger(parsed) || parsed <= 0) return false;
+  try {
+    process.kill(parsed, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function processInfoForPid(pid) {
+  const parsed = Number(pid);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  const result = spawnSync('ps', ['-o', 'pid=', '-o', 'pgid=', '-o', 'command=', '-p', String(parsed)], { encoding: 'utf8' });
+  if (result.status !== 0 || !result.stdout.trim()) return null;
+  const line = result.stdout.trim();
+  const match = line.match(/^(\d+)\s+(\d+)\s+(.*)$/);
+  if (!match) return null;
+  return {
+    pid: Number(match[1]),
+    pgid: Number(match[2]),
+    command: match[3]
+  };
+}
+
+function waitForPidExit(pid, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidRunning(pid)) return true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  return !isPidRunning(pid);
+}
+
+function terminateCleanupWatcher(pid, options = {}) {
+  const parsed = Number(pid);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed === process.pid) {
+    return { pid: parsed || null, terminated: false, reason: 'invalid_or_current_pid' };
+  }
+  const info = processInfoForPid(parsed);
+  const signals = [];
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 1000;
+  const signalTargets = [];
+  if (info && Number.isInteger(info.pgid) && info.pgid > 1 && info.pgid !== process.pid) {
+    signalTargets.push({ target: -info.pgid, kind: 'process_group', pgid: info.pgid });
+  }
+  signalTargets.push({ target: parsed, kind: 'pid', pid: parsed });
+
+  for (const item of signalTargets) {
+    try {
+      process.kill(item.target, 'SIGTERM');
+      signals.push({ ...item, signal: 'SIGTERM', ok: true });
+    } catch (err) {
+      signals.push({ ...item, signal: 'SIGTERM', ok: false, error: err.message });
+    }
+  }
+  if (!waitForPidExit(parsed, timeoutMs)) {
+    for (const item of signalTargets) {
+      try {
+        process.kill(item.target, 'SIGKILL');
+        signals.push({ ...item, signal: 'SIGKILL', ok: true });
+      } catch (err) {
+        signals.push({ ...item, signal: 'SIGKILL', ok: false, error: err.message });
+      }
+    }
+  }
+  return {
+    pid: parsed,
+    process: info,
+    terminated: !isPidRunning(parsed),
+    signals
+  };
+}
+
+function listCleanupWatcherProcesses() {
+  const result = spawnSync('ps', ['-axo', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'etime=', '-o', 'command='], { encoding: 'utf8' });
+  if (result.status !== 0 || !result.stdout) return [];
+  return result.stdout.split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
+      if (!match) return null;
+      return {
+        pid: Number(match[1]),
+        ppid: Number(match[2]),
+        pgid: Number(match[3]),
+        elapsed: match[4],
+        command: match[5]
+      };
+    })
+    .filter(item => item
+      && item.pid !== process.pid
+      && /(?:^|\/)node(?:\S*)?\s+.*scripts\/traecn-cli\.js cleanup-queue\b/.test(item.command)
+      && /\s--watch-ms\s/.test(item.command));
+}
+
+function readCleanupWatchLock(lockFile = defaultCleanupWatchLockFile()) {
+  try {
+    if (!fs.existsSync(lockFile)) return null;
+    return JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+  } catch {
+    return { error: 'invalid_lock_file', lockFile };
+  }
+}
+
+function describeCleanupWatchStatus(options = {}) {
+  const lockFile = path.resolve(options.lockFile || defaultCleanupWatchLockFile());
+  const lock = readCleanupWatchLock(lockFile);
+  const running = Boolean(lock && !lock.error && isPidRunning(lock.pid));
+  const stale = Boolean(lock && !lock.error && !running);
+  const watcherProcesses = listCleanupWatcherProcesses();
+  const lockPid = lock && !lock.error ? lock.pid || null : null;
+  const orphanProcesses = watcherProcesses.filter(processInfo => processInfo.pid !== lockPid);
+  return {
+    mode: 'watch_status',
+    lockFile,
+    running,
+    stale,
+    pid: lock && !lock.error ? lock.pid || null : null,
+    lock,
+    watcherCount: watcherProcesses.length,
+    watcherProcesses,
+    orphanProcesses,
+    message: running
+      ? `Cleanup watcher is running with pid ${lock.pid}${orphanProcesses.length ? `; ${orphanProcesses.length} orphan watcher(s) also detected` : ''}`
+      : stale
+        ? `Cleanup watcher lock is stale for pid ${lock.pid}`
+        : orphanProcesses.length
+          ? `Cleanup watcher lock is not running, but ${orphanProcesses.length} orphan watcher(s) are active`
+          : 'Cleanup watcher is not running'
+  };
+}
+
+function acquireCleanupWatchLock(options = {}) {
+  const lockFile = path.resolve(options.lockFile || defaultCleanupWatchLockFile());
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  const existing = readCleanupWatchLock(lockFile);
+  if (existing && !existing.error && isPidRunning(existing.pid) && existing.pid !== process.pid) {
+    if (options.replace === true) {
+      terminateCleanupWatcher(existing.pid, { timeoutMs: options.replaceTimeoutMs || 1000 });
+    } else {
+      return {
+        ok: false,
+        alreadyRunning: true,
+        lockFile,
+        existing
+      };
+    }
+  }
+  if (existing && (!isPidRunning(existing.pid) || options.replace === true || existing.error)) {
+    try {
+      fs.unlinkSync(lockFile);
+    } catch {}
+  }
+
+  const payload = {
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    command: 'cleanup-queue',
+    watchMs: options.watchMs,
+    stableMs: options.stableMs,
+    intervalMs: options.intervalMs,
+    logFile: options.logFile || null,
+    finalFile: options.finalFile || null
+  };
+  try {
+    fs.writeFileSync(lockFile, `${JSON.stringify(payload, null, 2)}\n`, { flag: 'wx' });
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      const current = readCleanupWatchLock(lockFile);
+      if (current && current.pid === process.pid) {
+        try {
+          fs.unlinkSync(lockFile);
+        } catch {}
+      }
+    };
+    return {
+      ok: true,
+      lockFile,
+      owner: payload,
+      release
+    };
+  } catch (err) {
+    const current = readCleanupWatchLock(lockFile);
+    return {
+      ok: false,
+      alreadyRunning: Boolean(current && !current.error && isPidRunning(current.pid)),
+      lockFile,
+      existing: current,
+      error: err.message
+    };
+  }
+}
+
+function buildDetachedCleanupCommand(options, cwd = process.cwd()) {
+  const logFile = options.logFile ? path.resolve(options.logFile) : null;
+  const sessionName = options.sessionName || defaultCleanupSessionName();
+  const finalFile = path.resolve(options.finalFile || defaultWaitOutputPath(logFile, 'cleanup-final.json') || 'cleanup-final.json');
+  const stderrFile = path.resolve(options.stderrFile || defaultWaitOutputPath(logFile, 'cleanup.stderr') || 'cleanup.stderr');
+  const args = [
+    process.execPath,
+    __filename,
+    'cleanup-queue',
+    '--execute',
+    '--json',
+    '--max-passes',
+    String(options.maxPasses),
+    '--watch-ms',
+    String(options.watchMs),
+    '--stable-ms',
+    String(options.stableMs),
+    '--interval-ms',
+    String(options.intervalMs)
+  ];
+  if (logFile) args.push('--log', logFile);
+  if (finalFile) args.push('--final', finalFile);
+  if (stderrFile) args.push('--stderr', stderrFile);
+  if (options.lockFile) args.push('--lock-file', path.resolve(options.lockFile));
+  if (options.replace === true) args.push('--replace');
+  return {
+    sessionName,
+    logFile,
+    finalFile,
+    stderrFile,
+    screenArgs: [
+      '-dmS',
+      sessionName,
+      '/bin/zsh',
+      '-lc',
+      `cd ${shellQuote(cwd)} && ${args.map(shellQuote).join(' ')} > ${shellQuote(finalFile)} 2> ${shellQuote(stderrFile)}`
+    ]
+  };
+}
+
+async function runCleanupWatchAttempt(cleanupOnce, options = {}) {
+  const lockFile = options.lockFile || null;
+  const intervalMs = Number.isFinite(Number(options.intervalMs)) ? Number(options.intervalMs) : 15000;
+  const transientDelayMs = Math.max(1000, intervalMs);
+  try {
+    const result = await cleanupOnce();
+    if (![200, 501].includes(result.status)) {
+      return {
+        result,
+        iteration: {
+          at: new Date().toISOString(),
+          status: result.status || 0,
+          error: result.data?.error || result.data?.message || 'cleanup_request_failed',
+          matched: 0,
+          remainingMatched: 0,
+          deleted: 0,
+          stopped: 0,
+          passes: 0,
+          lockFile,
+          transient: true,
+          nextDelayMs: transientDelayMs
+        },
+        clean: false,
+        transient: true
+      };
+    }
+    const matched = result.data.matched || 0;
+    const remainingMatched = result.data.remainingMatched || 0;
+    const hasResidualMatches = matched > 0 || remainingMatched > 0;
+    const nextDelayMs = hasResidualMatches ? 1000 : Math.max(1000, intervalMs);
+    return {
+      result,
+      iteration: {
+        at: new Date().toISOString(),
+        status: result.status,
+        matched,
+        remainingMatched,
+        deleted: result.data.deleted || 0,
+        stopped: result.data.stopped || 0,
+        passes: result.data.passes || 1,
+        lockFile,
+        nextDelayMs
+      },
+      clean: !hasResidualMatches,
+      transient: false
+    };
+  } catch (err) {
+    return {
+      result: {
+        status: 0,
+        data: {
+          error: err.message || 'cleanup_request_failed'
+        }
+      },
+      iteration: {
+        at: new Date().toISOString(),
+        status: 0,
+        error: err.message || 'cleanup_request_failed',
+        matched: 0,
+        remainingMatched: 0,
+        deleted: 0,
+        stopped: 0,
+        passes: 0,
+        lockFile,
+        transient: true,
+        nextDelayMs: transientDelayMs
+      },
+      clean: false,
+      transient: true
+    };
+  }
 }
 
 async function cmdDelegate(args) {
@@ -741,6 +1096,276 @@ async function cmdPreflight(args) {
   }
 }
 
+async function cmdCleanupQueue(args) {
+  const outputFormat = args.includes('--json') || args.includes('-o') && args[args.indexOf('-o') + 1] === 'json'
+    ? 'json'
+    : 'text';
+  const lockFile = readStringOption(args, '--lock-file', null);
+  if (args.includes('--status')) {
+    const status = describeCleanupWatchStatus({ lockFile });
+    if (outputFormat === 'json') {
+      console.log(JSON.stringify(status, null, 2));
+    } else {
+      console.log(`\n${color('bold', '═══ Cleanup Watcher Status ═══')}\n`);
+      console.log(`  ${color('cyan', 'Running:')} ${status.running ? color('green', 'yes') : color('yellow', 'no')}`);
+      console.log(`  ${color('cyan', 'PID:')}     ${status.pid || 'none'}`);
+      console.log(`  ${color('cyan', 'Lock:')}    ${status.lockFile}`);
+      if (status.stale) console.log(`  ${color('cyan', 'Stale:')}   yes`);
+      console.log(`\n${color('dim', status.message)}\n`);
+    }
+    return;
+  }
+
+  const execute = args.includes('--execute');
+  const dryRun = args.includes('--dry-run') || !execute;
+  const maxPasses = readNumberOption(args, '--max-passes', 10);
+  const watchMs = readNumberOption(args, '--watch-ms', 0);
+  const stableMs = readNumberOption(args, '--stable-ms', 120000);
+  const intervalMs = readNumberOption(args, '--interval-ms', 15000);
+  const detach = args.includes('--detach');
+  const sessionName = readStringOption(args, '--session', null);
+  const logFile = readStringOption(args, '--log', null);
+  const finalFile = readStringOption(args, '--final', null);
+  const stderrFile = readStringOption(args, '--stderr', null);
+  const replace = args.includes('--replace');
+
+  try {
+    if (detach) {
+      if (!execute || watchMs <= 0) {
+        console.error(color('red', 'Error: cleanup-queue --detach requires --execute and --watch-ms'));
+        process.exit(1);
+      }
+      const detached = buildDetachedCleanupCommand({
+        maxPasses,
+        watchMs,
+        stableMs,
+        intervalMs,
+        sessionName,
+        logFile,
+        finalFile,
+        stderrFile,
+        lockFile,
+        replace
+      });
+      const cleanupLockFile = path.resolve(lockFile || defaultCleanupWatchLockFile());
+      const existingLock = readCleanupWatchLock(cleanupLockFile);
+      if (existingLock && !existingLock.error && isPidRunning(existingLock.pid) && replace !== true) {
+        const payload = {
+          detached: false,
+          alreadyRunning: true,
+          lockFile: cleanupLockFile,
+          existing: existingLock,
+          message: 'Cleanup watcher is already running; use --replace to terminate the existing watcher and start a new one.'
+        };
+        if (outputFormat === 'json') {
+          console.log(JSON.stringify(payload, null, 2));
+        } else {
+          console.log(color('yellow', `Cleanup watcher already running: pid ${existingLock.pid}`));
+          console.log(color('dim', `Lock: ${payload.lockFile}`));
+        }
+        return;
+      }
+      if (existingLock && !existingLock.error && isPidRunning(existingLock.pid) && replace === true) {
+        const terminated = terminateCleanupWatcher(existingLock.pid, { timeoutMs: 5000 });
+        if (!terminated.terminated) {
+          const payload = {
+            detached: false,
+            alreadyRunning: true,
+            lockFile: cleanupLockFile,
+            existing: existingLock,
+            terminate: terminated,
+            error: 'unable_to_replace_running_cleanup_watcher'
+          };
+          if (outputFormat === 'json') {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.error(color('red', `Unable to replace cleanup watcher pid ${existingLock.pid}`));
+          }
+          process.exit(1);
+        }
+      }
+      if (replace === true) {
+        for (const processInfo of listCleanupWatcherProcesses()) {
+          if (existingLock && processInfo.pid === existingLock.pid) continue;
+          const terminated = terminateCleanupWatcher(processInfo.pid, { timeoutMs: 5000 });
+          if (!terminated.terminated) {
+            const payload = {
+              detached: false,
+              alreadyRunning: true,
+              lockFile: cleanupLockFile,
+              orphan: processInfo,
+              terminate: terminated,
+              error: 'unable_to_replace_orphan_cleanup_watcher'
+            };
+            if (outputFormat === 'json') {
+              console.log(JSON.stringify(payload, null, 2));
+            } else {
+              console.error(color('red', `Unable to replace orphan cleanup watcher pid ${processInfo.pid}`));
+            }
+            process.exit(1);
+          }
+        }
+      }
+      if (existingLock && (replace === true || existingLock.error || !isPidRunning(existingLock.pid))) {
+        try {
+          fs.unlinkSync(cleanupLockFile);
+        } catch {}
+      }
+      for (const filePath of [detached.logFile, detached.finalFile, detached.stderrFile]) {
+        if (filePath) fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      }
+      const started = spawnSync('screen', detached.screenArgs, { encoding: 'utf8' });
+      if (started.error || started.status !== 0) {
+        console.error(color('red', `Detach failed: ${started.error ? started.error.message : started.stderr || 'screen exited with status ' + started.status}`));
+        process.exit(1);
+      }
+      const payload = {
+        detached: true,
+        sessionName: detached.sessionName,
+        logFile: detached.logFile,
+        finalFile: detached.finalFile,
+        stderrFile: detached.stderrFile,
+        lockFile: path.resolve(lockFile || defaultCleanupWatchLockFile()),
+        watchMs,
+        stableMs,
+        intervalMs
+      };
+      if (outputFormat === 'json') {
+        console.log(JSON.stringify(payload, null, 2));
+      } else {
+        console.log(color('green', `Detached cleanup watcher started: ${detached.sessionName}`));
+        if (detached.logFile) console.log(color('dim', `Evidence log: ${detached.logFile}`));
+        console.log(color('dim', `Final JSON: ${detached.finalFile}`));
+        console.log(color('dim', `Errors: ${detached.stderrFile}`));
+      }
+      return;
+    }
+
+    const cleanupOnce = () => apiRequest('POST', '/api/solo/chats/cleanup-foreign-queue', {
+      execute,
+      dryRun,
+      ...(execute && Number.isFinite(maxPasses) && maxPasses > 0 ? { maxPasses } : {})
+    });
+    let result;
+    if (execute && watchMs > 0) {
+      const lock = acquireCleanupWatchLock({
+        lockFile,
+        replace,
+        watchMs,
+        stableMs,
+        intervalMs,
+        logFile,
+        finalFile
+      });
+      if (!lock.ok) {
+        result = {
+          status: 200,
+          data: {
+            mode: 'watch_already_running',
+            alreadyRunning: lock.alreadyRunning === true,
+            lockFile: lock.lockFile,
+            existing: lock.existing || null,
+            error: lock.error || null
+          }
+        };
+        if (outputFormat === 'json') {
+          console.log(JSON.stringify(result.data, null, 2));
+        } else {
+          console.log(color('yellow', `Cleanup watcher already running: pid ${lock.existing?.pid || 'unknown'}`));
+          console.log(color('dim', `Lock: ${lock.lockFile}`));
+        }
+        return;
+      }
+      const startedAt = Date.now();
+      let cleanSince = null;
+      const iterations = [];
+      const releaseAndExit = () => {
+        lock.release();
+        process.exit(0);
+      };
+      process.once('SIGINT', releaseAndExit);
+      process.once('SIGTERM', releaseAndExit);
+      try {
+        while (Date.now() - startedAt <= watchMs) {
+          const attempt = await runCleanupWatchAttempt(cleanupOnce, { lockFile: lock.lockFile, intervalMs });
+          result = attempt.result;
+          iterations.push(attempt.iteration);
+          appendJsonLine(logFile, iterations[iterations.length - 1]);
+          if (attempt.transient) {
+            cleanSince = null;
+          } else if (!attempt.clean) {
+            cleanSince = null;
+          } else {
+            cleanSince = cleanSince || Date.now();
+            if (Date.now() - cleanSince >= stableMs) break;
+          }
+          await delay(attempt.iteration.nextDelayMs);
+        }
+      } finally {
+        process.removeListener('SIGINT', releaseAndExit);
+        process.removeListener('SIGTERM', releaseAndExit);
+        lock.release();
+      }
+      let verify;
+      try {
+        verify = await apiRequest('POST', '/api/solo/chats/cleanup-foreign-queue', { dryRun: true });
+      } catch (err) {
+        verify = {
+          status: 0,
+          data: {
+            error: err.message || 'cleanup_verify_failed'
+          }
+        };
+      }
+      result = {
+        status: verify.status,
+        data: {
+          mode: 'watch',
+          lockFile: lock.lockFile,
+          matched: verify.data?.matched || 0,
+          remainingMatched: verify.data?.matched || 0,
+          total: verify.data?.total || null,
+          deleted: iterations.reduce((sum, item) => sum + item.deleted, 0),
+          stopped: iterations.reduce((sum, item) => sum + item.stopped, 0),
+          support: verify.data?.support || result?.data?.support || 'unknown',
+          watchMs,
+          stableMs,
+          intervalMs,
+          elapsedMs: Date.now() - startedAt,
+          iterations,
+          transientErrors: iterations.filter(item => item.transient === true).length,
+          finalDryRun: verify.data
+        }
+      };
+    } else {
+      result = await cleanupOnce();
+    }
+    if (![200, 501].includes(result.status)) {
+      console.error(color('red', `Error: ${result.data.error || 'Unable to cleanup Solo queue probes'}`));
+      if (outputFormat === 'json') console.log(JSON.stringify(result.data, null, 2));
+      process.exit(1);
+    }
+    if (outputFormat === 'json') {
+      console.log(JSON.stringify(result.data, null, 2));
+      return;
+    }
+    console.log(`\n${color('bold', '═══ Solo Queue Cleanup ═══')}\n`);
+    console.log(`  ${color('cyan', 'Matched:')} ${result.data.matched || 0}/${result.data.total || 0}`);
+    if (typeof result.data.remainingMatched === 'number') {
+      console.log(`  ${color('cyan', 'Remaining:')} ${result.data.remainingMatched}`);
+    }
+    console.log(`  ${color('cyan', 'Deleted:')} ${result.data.deleted || 0}`);
+    console.log(`  ${color('cyan', 'Mode:')}    ${result.data.mode || 'unknown'}`);
+    console.log(`  ${color('cyan', 'Support:')} ${result.data.support || 'unknown'}`);
+    if (dryRun && (result.data.matched || 0) > 0) {
+      console.log(color('yellow', '\nDry run only. Re-run with --execute to delete matched queue-probe chats.'));
+    }
+  } catch (err) {
+    console.error(color('red', `Request failed: ${err.message}`));
+    process.exit(1);
+  }
+}
+
 async function cmdStatus() {
   try {
     const result = await apiRequest('GET', '/api/status');
@@ -1079,6 +1704,43 @@ async function cmdLogs(args) {
   }
 }
 
+function buildProofCliArgs(args) {
+  const subcommand = args[0] && !args[0].startsWith('-') ? args[0] : 'status';
+  const rest = subcommand === args[0] ? args.slice(1) : args.slice();
+  const proofArgs = [path.join(__dirname, 'long-queue-proof.js')];
+  if (subcommand === 'status') {
+    proofArgs.push('--status');
+  } else if (subcommand === 'cancel') {
+    proofArgs.push('--cancel');
+  } else if (subcommand === 'start' || subcommand === 'run') {
+    // No --execute is added here. The proof runner stays dry-run by default.
+  } else {
+    throw new Error(`Unknown proof command "${subcommand}"`);
+  }
+  proofArgs.push(...rest);
+  return proofArgs;
+}
+
+async function cmdProof(args) {
+  let proofArgs;
+  try {
+    proofArgs = buildProofCliArgs(args);
+  } catch (err) {
+    console.error(color('red', `Error: ${err.message}`));
+    console.error(color('gray', 'Usage: traecn proof status|start|cancel [long-queue-proof options]'));
+    process.exit(1);
+  }
+  const result = spawnSync(process.execPath, proofArgs, {
+    cwd: path.resolve(__dirname, '..'),
+    stdio: 'inherit'
+  });
+  if (result.error) {
+    console.error(color('red', `Proof command failed: ${result.error.message}`));
+    process.exit(1);
+  }
+  process.exit(result.status === null ? 1 : result.status);
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -1110,6 +1772,12 @@ async function main() {
         break;
       case 'preflight':
         await cmdPreflight(args.slice(1));
+        break;
+      case 'cleanup-queue':
+        await cmdCleanupQueue(args.slice(1));
+        break;
+      case 'proof':
+        await cmdProof(args.slice(1));
         break;
       case 'plan':
         await cmdPlan(args.slice(1));
@@ -1155,5 +1823,18 @@ module.exports = {
   appendJsonLine,
   shellQuote,
   defaultWaitSessionName,
-  buildDetachedWaitCommand
+  buildDetachedWaitCommand,
+  buildProofCliArgs,
+  appSupportDir,
+  defaultCleanupWatchLockFile,
+  isPidRunning,
+  processInfoForPid,
+  waitForPidExit,
+  terminateCleanupWatcher,
+  listCleanupWatcherProcesses,
+  readCleanupWatchLock,
+  describeCleanupWatchStatus,
+  acquireCleanupWatchLock,
+  buildDetachedCleanupCommand,
+  runCleanupWatchAttempt
 };

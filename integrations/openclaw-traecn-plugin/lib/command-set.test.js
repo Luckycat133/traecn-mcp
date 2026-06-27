@@ -1,7 +1,10 @@
 'use strict';
 
 const assert = require('assert');
-const { executeCommand, listCommands } = require('./command-set');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { executeCommand, listCommands, runCleanupQueueWatchStatus } = require('./command-set');
 
 let passed = 0;
 let failed = 0;
@@ -55,6 +58,8 @@ async function test(name, fn) {
     const commands = listCommands();
     const list = commands.find(command => command.command === 'list_solo_chats');
     const switchChat = commands.find(command => command.command === 'switch_solo_chat');
+    const cleanup = commands.find(command => command.command === 'cleanup_foreign_solo_queue');
+    const cleanupWatch = commands.find(command => command.command === 'cleanup_queue_watch_status');
     const submit = commands.find(command => command.command === 'submit_solo_chat_task');
 
     assert.ok(list);
@@ -63,10 +68,98 @@ async function test(name, fn) {
     assert.ok(switchChat.optional.includes('index'));
     assert.ok(switchChat.optional.includes('titleIncludes'));
     assert.ok(switchChat.optional.includes('textIncludes'));
+    assert.ok(cleanup);
+    assert.deepStrictEqual(cleanup.required, []);
+    assert.ok(cleanup.optional.includes('dryRun'));
+    assert.ok(cleanup.optional.includes('execute'));
+    assert.ok(cleanupWatch);
+    assert.deepStrictEqual(cleanupWatch.required, []);
+    assert.ok(cleanupWatch.optional.includes('lockFile'));
     assert.ok(submit);
     assert.deepStrictEqual(submit.required, ['task']);
     assert.ok(submit.optional.includes('soloChat'));
     assert.ok(submit.optional.includes('soloChatTitleIncludes'));
+    assert.ok(submit.optional.includes('queueMaxWaitMs'));
+  });
+
+  await test('delegate_async exposes session and long-queue Solo ownership options', async () => {
+    const commands = listCommands();
+    const delegateAsync = commands.find(command => command.command === 'delegate_async');
+
+    assert.ok(delegateAsync);
+    assert.ok(delegateAsync.optional.includes('sessionId'));
+    assert.ok(delegateAsync.optional.includes('soloChat'));
+    assert.ok(delegateAsync.optional.includes('soloChatTitleIncludes'));
+    assert.ok(delegateAsync.optional.includes('forceBackground'));
+    assert.ok(delegateAsync.optional.includes('maxQueueWaitMs'));
+    assert.ok(delegateAsync.optional.includes('queueMaxWaitMs'));
+  });
+
+  await test('long queue proof commands are exposed with dry-run-safe start controls', async () => {
+    const commands = listCommands();
+    const start = commands.find(command => command.command === 'long_queue_proof_start');
+    const status = commands.find(command => command.command === 'long_queue_proof_status');
+    const cancel = commands.find(command => command.command === 'long_queue_proof_cancel');
+
+    assert.ok(start);
+    assert.deepStrictEqual(start.required, []);
+    assert.ok(start.optional.includes('execute'));
+    assert.ok(start.optional.includes('allowQuotaSpend'));
+    assert.ok(start.optional.includes('detach'));
+    assert.ok(start.optional.includes('cleanupStabilizeChecks'));
+    assert.ok(status);
+    assert.deepStrictEqual(status.required, []);
+    assert.ok(status.optional.includes('marker'));
+    assert.ok(cancel);
+    assert.deepStrictEqual(cancel.required, []);
+    assert.ok(cancel.optional.includes('taskId'));
+  });
+
+  await test('long queue proof commands use client hooks when available', async () => {
+    const calls = [];
+    const client = {
+      longQueueProofStart: async params => {
+        calls.push({ name: 'start', params });
+        return { status: 200, data: { status: 'dry_run', executeRequired: true } };
+      },
+      longQueueProofStatus: async params => {
+        calls.push({ name: 'status', params });
+        return { status: 200, data: { status: 'missing' } };
+      },
+      longQueueProofCancel: async params => {
+        calls.push({ name: 'cancel', params });
+        return { status: 200, data: { status: 'cancel_requested' } };
+      }
+    };
+
+    const start = await executeCommand(client, 'long_queue_proof_start', { marker: 'TRAECN_GLM52_SAFE', execute: false });
+    const status = await executeCommand(client, 'long_queue_proof_status', { marker: 'TRAECN_GLM52_SAFE' });
+    const cancel = await executeCommand(client, 'long_queue_proof_cancel', { marker: 'TRAECN_GLM52_SAFE' });
+
+    assert.strictEqual(start.data.executeRequired, true);
+    assert.strictEqual(status.data.status, 'missing');
+    assert.strictEqual(cancel.data.status, 'cancel_requested');
+    assert.deepStrictEqual(calls.map(call => call.name), ['start', 'status', 'cancel']);
+    assert.strictEqual(calls[0].params.execute, false);
+  });
+
+  await test('long queue proof start forwards explicit quota approval flag', async () => {
+    const calls = [];
+    const client = {
+      longQueueProofStart: async params => {
+        calls.push(params);
+        return { status: 200, data: { status: 'quota_approval_required' } };
+      }
+    };
+
+    await executeCommand(client, 'long_queue_proof_start', {
+      marker: 'TRAECN_GLM52_SAFE',
+      execute: true,
+      allowQuotaSpend: true
+    });
+
+    assert.strictEqual(calls[0].execute, true);
+    assert.strictEqual(calls[0].allowQuotaSpend, true);
   });
 
   await test('list_solo_chats delegates to client listSoloChats', async () => {
@@ -81,6 +174,58 @@ async function test(name, fn) {
     const result = await executeCommand(client, 'list_solo_chats', {});
     assert.strictEqual(called, true);
     assert.strictEqual(result.data.mode, 'solo');
+  });
+
+  await test('cleanup_foreign_solo_queue delegates dry-run and execute flags', async () => {
+    let captured = null;
+    const client = {
+      cleanupForeignSoloQueue: async (options) => {
+        captured = options;
+        return { status: 200, data: { matched: 1, deleted: 1 } };
+      }
+    };
+
+    const result = await executeCommand(client, 'cleanup_foreign_solo_queue', {
+      dryRun: false,
+      execute: true,
+      maxPasses: 10,
+      settleMs: 250
+    });
+    assert.strictEqual(result.data.deleted, 1);
+    assert.strictEqual(captured.dryRun, false);
+    assert.strictEqual(captured.execute, true);
+    assert.strictEqual(captured.maxPasses, 10);
+    assert.strictEqual(captured.settleMs, 250);
+  });
+
+  await test('cleanup_queue_watch_status uses client hook when available', async () => {
+    let captured = null;
+    const client = {
+      cleanupQueueWatchStatus: async (options) => {
+        captured = options;
+        return { status: 200, data: { mode: 'watch_status', running: true, pid: 123 } };
+      }
+    };
+
+    const result = await executeCommand(client, 'cleanup_queue_watch_status', {
+      lockFile: '/tmp/cleanup-watch.lock'
+    });
+    assert.strictEqual(result.data.mode, 'watch_status');
+    assert.strictEqual(result.data.running, true);
+    assert.strictEqual(captured.lockFile, '/tmp/cleanup-watch.lock');
+  });
+
+  await test('cleanup_queue_watch_status fallback reads local lock state only', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-command-cleanup-status-'));
+    const lockFile = path.join(dir, 'cleanup-watch.lock');
+    fs.writeFileSync(lockFile, JSON.stringify({ pid: 99999999, startedAt: 'stale' }));
+
+    const result = runCleanupQueueWatchStatus({ lockFile });
+    assert.strictEqual(result.status, 200);
+    assert.strictEqual(result.data.mode, 'watch_status');
+    assert.strictEqual(result.data.running, false);
+    assert.strictEqual(result.data.stale, true);
+    assert.strictEqual(result.data.lockFile, lockFile);
   });
 
   await test('switch_solo_chat delegates criteria to client switchSoloChat', async () => {
@@ -116,13 +261,42 @@ async function test(name, fn) {
     const result = await executeCommand(client, 'submit_solo_chat_task', {
       task: 'Implement feature',
       soloChatTitleIncludes: 'Feature chat',
-      includeProcessText: true
+      includeProcessText: true,
+      queueMaxWaitMs: 600000
     });
 
     assert.strictEqual(result.data.taskId, 'task_solo_1');
     assert.ok(captured.task.includes('Implement feature'));
     assert.strictEqual(captured.options.soloChatTitleIncludes, 'Feature chat');
     assert.strictEqual(captured.options.includeProcessText, true);
+    assert.strictEqual(captured.options.queueMaxWaitMs, 600000);
+  });
+
+  await test('delegate_async forwards session and long-queue ownership options', async () => {
+    let captured = null;
+    const client = {
+      delegateAsync: async (task, options) => {
+        captured = { task, options };
+        return { status: 202, data: { taskId: 'task_async_owned', status: 'queued' } };
+      }
+    };
+
+    const result = await executeCommand(client, 'delegate_async', {
+      task: 'Owned long queue task',
+      sessionId: 'session_a',
+      soloChatTitleIncludes: 'Feature chat',
+      forceBackground: true,
+      maxQueueWaitMs: 3600000,
+      queueMaxWaitMs: 3600000
+    });
+
+    assert.strictEqual(result.data.taskId, 'task_async_owned');
+    assert.ok(captured.task.includes('Owned long queue task'));
+    assert.strictEqual(captured.options.sessionId, 'session_a');
+    assert.strictEqual(captured.options.soloChatTitleIncludes, 'Feature chat');
+    assert.strictEqual(captured.options.forceBackground, true);
+    assert.strictEqual(captured.options.maxQueueWaitMs, 3600000);
+    assert.strictEqual(captured.options.queueMaxWaitMs, 3600000);
   });
 
   await test('review_code forwards completion checks for queued reviews', async () => {

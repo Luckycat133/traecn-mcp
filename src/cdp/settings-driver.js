@@ -2,6 +2,7 @@
 
 const { TraeCNAutomationError } = require('./errors');
 const { sleep, safeJsValue } = require('../shared/utils');
+const { RADIX_CLICK_INJECTION } = require('./base-driver');
 
 // Map human-readable section names to sidebar item text
 const SETTINGS_SECTIONS = [
@@ -389,19 +390,11 @@ async function _setToggle(client, labelText, checked) {
 /**
  * Inject __radixClick helper into the page if not already present.
  * Radix UI components only respond to pointerdown, not synthetic MouseEvent('click').
+ * Uses the shared RADIX_CLICK_INJECTION constant from base-driver.js.
  */
 async function _ensureClickHelper(client) {
   await client.send('Runtime.evaluate', {
-    expression: `(function() {
-      if (window.__radixClick) return;
-      window.__radixClick = function(el) {
-        if (!el) return;
-        el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, button: 0}));
-        el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0}));
-        el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
-        el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
-      };
-    })()`,
+    expression: RADIX_CLICK_INJECTION,
     returnByValue: true
   });
 }

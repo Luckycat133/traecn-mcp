@@ -1,7 +1,7 @@
 'use strict';
 
 const { WebSocketServer } = require('ws');
-const crypto = require('crypto');
+const { secureCompare } = require('../shared/utils');
 
 const WS_HEARTBEAT_INTERVAL = 30000;
 const WS_HEARTBEAT_TIMEOUT = 60000;
@@ -97,13 +97,13 @@ class WebSocketHandler {
 
     const authHeader = request.headers[this.gateway.authHeader.toLowerCase()] || '';
     if (authHeader.startsWith('Bearer ')) {
-      context.authenticated = this._secureCompare(authHeader.slice(7), token);
+      context.authenticated = secureCompare(authHeader.slice(7), token);
       return context.authenticated;
     }
 
     const customToken = request.headers['x-traecn-token'];
     if (customToken) {
-      context.authenticated = this._secureCompare(customToken, token);
+      context.authenticated = secureCompare(customToken, token);
       return context.authenticated;
     }
 
@@ -152,12 +152,25 @@ class WebSocketHandler {
     return { allowed: true };
   }
 
-  _secureCompare(left, right) {
-    if (typeof left !== 'string' || typeof right !== 'string') return false;
-    const leftBuffer = Buffer.from(left);
-    const rightBuffer = Buffer.from(right);
-    if (leftBuffer.length !== rightBuffer.length) return false;
-    return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+  /**
+   * Periodically reclaim Map entries for IPs whose upgrade-attempt windows
+   * have fully expired. Without this, the upgradeAttempts Map grows
+   * unbounded over the process lifetime as every IP that ever connected
+   * leaves a (possibly empty) array entry.
+   */
+  _cleanupUpgradeAttempts() {
+    const now = Date.now();
+    const windowMs = Number.isFinite(WS_RATE_LIMIT_WINDOW_MS) && WS_RATE_LIMIT_WINDOW_MS > 0
+      ? WS_RATE_LIMIT_WINDOW_MS
+      : 60000;
+    for (const [key, timestamps] of this.upgradeAttempts) {
+      const recent = timestamps.filter(t => now - t < windowMs);
+      if (recent.length === 0) {
+        this.upgradeAttempts.delete(key);
+      } else if (recent.length !== timestamps.length) {
+        this.upgradeAttempts.set(key, recent);
+      }
+    }
   }
 
   _handleConnection(ws, req) {
@@ -223,6 +236,14 @@ class WebSocketHandler {
 
     ws.on('error', () => {
       this._cleanupClient(clientInfo);
+    });
+
+    // Reset the heartbeat timeout when a WebSocket pong is received —
+    // this is the signal that the client is actually alive. Without this,
+    // the heartbeat timer is reset on every server-side ping (which the
+    // client may never receive), so dead clients are never terminated.
+    ws.on('pong', () => {
+      this._setHeartbeat(ws);
     });
 
     this._setHeartbeat(ws);
@@ -293,6 +314,10 @@ class WebSocketHandler {
 
     ws.on('error', () => {
       this._cleanupClient(clientInfo);
+    });
+
+    ws.on('pong', () => {
+      this._setHeartbeat(ws);
     });
 
     this._setHeartbeat(ws);
@@ -391,11 +416,21 @@ class WebSocketHandler {
     this._heartbeatInterval = setInterval(() => {
       for (const clientInfo of this.clients) {
         if (clientInfo.ws.readyState === 1) {
+          // Ping the client. The heartbeat timeout timer is NOT reset
+          // here — it is only reset when we receive a pong (or an
+          // application-level ping). If the client is dead and never
+          // responds, the existing timer will fire and terminate the
+          // connection. Previously this called _setHeartbeat on every
+          // ping, which reset the timer before it could ever fire.
           clientInfo.ws.ping();
-          this._setHeartbeat(clientInfo.ws);
         }
       }
+      // Reclaim expired upgrade-attempt entries to bound Map growth.
+      this._cleanupUpgradeAttempts();
     }, WS_HEARTBEAT_INTERVAL);
+    if (typeof this._heartbeatInterval.unref === 'function') {
+      this._heartbeatInterval.unref();
+    }
   }
 
   _stopHeartbeat() {

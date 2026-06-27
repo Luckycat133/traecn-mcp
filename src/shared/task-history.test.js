@@ -376,7 +376,7 @@ test('persistence writes to file', () => {
   });
   const taskId = store.createTask('session1', 'Persistent task');
   store.completeTask(taskId, { text: 'Done' });
-  store._persist();
+  store._persistNow();
   const store2 = new TaskHistoryStore({
     maxSize: 100,
     persistencePath: tmpFile

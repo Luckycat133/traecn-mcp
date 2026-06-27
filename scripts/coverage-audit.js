@@ -92,6 +92,8 @@ assertArrayIncludesAll(MCP_TOOLS.map(tool => tool.name), [
   'run_task',
   'queue_task',
   'poll_task',
+  'cleanup_foreign_solo_queue',
+  'cleanup_queue_watch_status',
   'review_code',
   'check_queue',
   'check_dialog'
@@ -104,6 +106,8 @@ assertArrayIncludesAll(openClawManifest.tools.map(tool => tool.name), [
   'traecn_command',
   'traecn_plan_operation',
   'traecn_delegate',
+  'traecn_cleanup_queue',
+  'traecn_cleanup_watch_status',
   'traecn_queue_status',
   'traecn_dialog_status'
 ], 'OpenClaw manifest tools');
@@ -135,6 +139,7 @@ assertArrayIncludesAll(cliSource, [
   "case 'capabilities'",
   "case 'preflight'",
   "case 'plan'",
+  "case 'cleanup-queue'",
   "case 'delegate'",
   "case 'batch'",
   "case 'logs'",
@@ -143,6 +148,7 @@ assertArrayIncludesAll(cliSource, [
 
 assert.ok(packageJson.scripts.test.includes('scripts/traecn-cli.test.js'), 'npm test must include CLI tests');
 assert.ok(packageJson.scripts['test:uat'].includes('coverage-audit'), 'test:uat must include coverage audit');
+assert.ok(packageJson.scripts['test:uat'].includes('acceptance-audit'), 'test:uat must include acceptance audit');
 assert.ok(packageJson.scripts['test:all'].includes('test:uat'), 'test:all must include UAT gate');
 assert.ok(packageJson.scripts['audit:prod'], 'production audit script is required');
 
@@ -154,10 +160,14 @@ const docs = [
   read('docs/openclaw-command-set.md')
 ].join('\n');
 assertArrayIncludesAll(docs, ['preflight', 'reviewCode', 'queueTask', 'plan_operation', 'traecn_command'], 'docs');
+assert.ok(commandNames.includes('cleanup_foreign_solo_queue'), 'command-set must include cleanup_foreign_solo_queue');
+assert.ok(commandNames.includes('cleanup_queue_watch_status'), 'command-set must include cleanup_queue_watch_status');
+assert.ok(specPaths.includes('/api/solo/chats/cleanup-foreign-queue'), 'OpenAPI must include Solo cleanup route');
 
 const files = packedFiles();
 assertArrayIncludesAll(files, [
   'mcp-server.js',
+  'scripts/acceptance-audit.js',
   'scripts/coverage-audit.js',
   'scripts/live-uat.js',
   'scripts/traecn-cli.js',

@@ -217,6 +217,23 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('cleanupForeignSoloQueue sends POST to cleanup endpoint', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ matched: 1, deleted: 1 }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    const result = await client.cleanupForeignSoloQueue({ execute: true, maxPasses: 10, settleMs: 250 });
+    assert.strictEqual(result.data.deleted, 1);
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/solo/chats/cleanup-foreign-queue');
+    assert.strictEqual(lastRequest.body.execute, true);
+    assert.strictEqual(lastRequest.body.dryRun, false);
+    assert.strictEqual(lastRequest.body.maxPasses, 10);
+    assert.strictEqual(lastRequest.body.settleMs, 250);
+    server.close();
+  });
+
   await asyncTest('submitSoloChatTask sends POST to /api/solo/chats/submit', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(202, { 'Content-Type': 'application/json' });
@@ -427,6 +444,28 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     assert.strictEqual(lastRequest.url, '/api/delegate-async');
     assert.strictEqual(lastRequest.body.soloChatTitleIncludes, 'Feature chat');
     assert.strictEqual(lastRequest.body.newChat, false);
+    server.close();
+  });
+
+  await asyncTest('delegateAsync forwards session and long-queue ownership options', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task_owned_queue', status: 'queued' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+    await client.delegateAsync('Owned queue task', {
+      sessionId: 'session_a',
+      soloChat: { titleIncludes: 'Feature chat' },
+      forceBackground: true,
+      maxQueueWaitMs: 3600000,
+      queueMaxWaitMs: 3600000
+    });
+    assert.strictEqual(lastRequest.url, '/api/delegate-async');
+    assert.strictEqual(lastRequest.body.sessionId, 'session_a');
+    assert.deepStrictEqual(lastRequest.body.soloChat, { titleIncludes: 'Feature chat' });
+    assert.strictEqual(lastRequest.body.forceBackground, true);
+    assert.strictEqual(lastRequest.body.maxQueueWaitMs, 3600000);
+    assert.strictEqual(lastRequest.body.queueMaxWaitMs, 3600000);
     server.close();
   });
 

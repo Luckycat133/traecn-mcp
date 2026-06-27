@@ -44,6 +44,11 @@ async function test(name, fn) {
     assert.ok(names.includes('vibe_workflow'));
     assert.ok(names.includes('list_solo_chats'));
     assert.ok(names.includes('switch_solo_chat'));
+    assert.ok(names.includes('cleanup_foreign_solo_queue'));
+    assert.ok(names.includes('cleanup_queue_watch_status'));
+    assert.ok(names.includes('long_queue_proof_start'));
+    assert.ok(names.includes('long_queue_proof_status'));
+    assert.ok(names.includes('long_queue_proof_cancel'));
     assert.ok(names.includes('submit_solo_chat_task'));
     assert.ok(names.includes('traecn_command'));
   });
@@ -73,10 +78,32 @@ async function test(name, fn) {
     assert.ok(switchSoloChat.inputSchema.properties.index);
     assert.ok(switchSoloChat.inputSchema.properties.titleIncludes);
     assert.ok(switchSoloChat.inputSchema.properties.textIncludes);
+    const cleanup = result.tools.find(tool => tool.name === 'cleanup_foreign_solo_queue');
+    assert.ok(cleanup);
+    assert.ok(cleanup.inputSchema.properties.dryRun);
+    assert.ok(cleanup.inputSchema.properties.execute);
+    const cleanupWatch = result.tools.find(tool => tool.name === 'cleanup_queue_watch_status');
+    assert.ok(cleanupWatch);
+    assert.ok(cleanupWatch.inputSchema.properties.lockFile);
+    const proofStart = result.tools.find(tool => tool.name === 'long_queue_proof_start');
+    assert.ok(proofStart);
+    assert.ok(proofStart.inputSchema.properties.execute);
+    assert.ok(proofStart.inputSchema.properties.allowQuotaSpend);
+    assert.ok(proofStart.inputSchema.properties.detach);
+    const proofStatus = result.tools.find(tool => tool.name === 'long_queue_proof_status');
+    assert.ok(proofStatus);
+    assert.ok(proofStatus.inputSchema.properties.marker);
     const submitSolo = result.tools.find(tool => tool.name === 'submit_solo_chat_task');
     assert.ok(submitSolo);
     assert.deepStrictEqual(submitSolo.inputSchema.required, ['task']);
     assert.ok(submitSolo.inputSchema.properties.soloChat);
+    assert.ok(submitSolo.inputSchema.properties.queueMaxWaitMs);
+    const queueTask = result.tools.find(tool => tool.name === 'queue_task');
+    assert.ok(queueTask.inputSchema.properties.sessionId);
+    assert.ok(queueTask.inputSchema.properties.soloChat);
+    assert.ok(queueTask.inputSchema.properties.soloChatTitleIncludes);
+    assert.ok(queueTask.inputSchema.properties.forceBackground);
+    assert.ok(queueTask.inputSchema.properties.maxQueueWaitMs);
   });
 
   await test('MCP workflow tools expose completion checks', async () => {
@@ -124,10 +151,18 @@ async function test(name, fn) {
     assert.ok(payload.commands.some(command => command.command === 'vibe_workflow'));
     assert.ok(payload.commands.some(command => command.command === 'list_solo_chats'));
     assert.ok(payload.commands.some(command => command.command === 'switch_solo_chat'));
+    assert.ok(payload.commands.some(command => command.command === 'cleanup_foreign_solo_queue'));
+    assert.ok(payload.commands.some(command => command.command === 'cleanup_queue_watch_status'));
+    assert.ok(payload.commands.some(command => command.command === 'long_queue_proof_start'));
+    assert.ok(payload.commands.some(command => command.command === 'long_queue_proof_status'));
+    assert.ok(payload.commands.some(command => command.command === 'long_queue_proof_cancel'));
     assert.ok(payload.commands.some(command => command.command === 'submit_solo_chat_task'));
     assert.ok(payload.mcp.tools.some(tool => tool.name === 'traecn_capabilities'));
     assert.ok(payload.mcp.tools.some(tool => tool.name === 'vibe_workflow'));
     assert.ok(payload.mcp.tools.some(tool => tool.name === 'list_solo_chats'));
+    assert.ok(payload.mcp.tools.some(tool => tool.name === 'cleanup_foreign_solo_queue'));
+    assert.ok(payload.mcp.tools.some(tool => tool.name === 'cleanup_queue_watch_status'));
+    assert.ok(payload.mcp.tools.some(tool => tool.name === 'long_queue_proof_status'));
     assert.ok(payload.mcp.tools.some(tool => tool.name === 'submit_solo_chat_task'));
   });
 
@@ -233,6 +268,15 @@ async function test(name, fn) {
     assert.strictEqual(denied.isError, true);
     const payload = JSON.parse(denied.content[0].text);
     assert.strictEqual(payload.code, 'MCP_AUTH_DENIED');
+  });
+
+  await test('MCP auth treats proof status as read-only and proof start as delegate', () => {
+    assert.strictEqual(mcpAuth.requiredPermissionFor('cleanup_queue_watch_status', {}), 'read');
+    assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', { command: 'cleanup_queue_watch_status' }), 'read');
+    assert.strictEqual(mcpAuth.requiredPermissionFor('long_queue_proof_status', {}), 'read');
+    assert.strictEqual(mcpAuth.requiredPermissionFor('long_queue_proof_start', {}), 'delegate');
+    assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', { command: 'long_queue_proof_status' }), 'read');
+    assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', { command: 'long_queue_proof_start' }), 'delegate');
   });
 
   await test('mcp-auth module is exported from mcp-server', () => {

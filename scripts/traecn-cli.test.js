@@ -4,6 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { spawnSync } = require('child_process');
 
 const TEST_CONFIG_FILE = path.join(os.tmpdir(), `traecn-cli-test-${process.pid}.json`);
 process.env.TRAECN_CONFIG_FILE = TEST_CONFIG_FILE;
@@ -90,6 +91,44 @@ test('loadConfig uses environment variable for token when set', () => {
   const cfg = loadConfig();
   assert.strictEqual(cfg.token, 'test-token-456');
   delete process.env.TRAECN_GATEWAY_TOKEN;
+});
+
+test('buildProofCliArgs maps proof status without execute side effects', () => {
+  clearModuleCache();
+  const { buildProofCliArgs } = require('./traecn-cli');
+  const args = buildProofCliArgs(['status', '--marker', 'TRAECN_GLM52_SAFE']);
+  assert.ok(args[0].endsWith('long-queue-proof.js'));
+  assert.ok(args.includes('--status'));
+  assert.ok(args.includes('--marker'));
+  assert.ok(!args.includes('--execute'));
+});
+
+test('buildProofCliArgs keeps proof start dry-run unless caller passes execute', () => {
+  clearModuleCache();
+  const { buildProofCliArgs } = require('./traecn-cli');
+  const dryRun = buildProofCliArgs(['start', '--marker', 'TRAECN_GLM52_SAFE']);
+  const execute = buildProofCliArgs(['start', '--execute', '--detach', '--allow-quota-spend']);
+  assert.ok(!dryRun.includes('--status'));
+  assert.ok(!dryRun.includes('--cancel'));
+  assert.ok(!dryRun.includes('--execute'));
+  assert.ok(!dryRun.includes('--allow-quota-spend'));
+  assert.ok(execute.includes('--execute'));
+  assert.ok(execute.includes('--detach'));
+  assert.ok(execute.includes('--allow-quota-spend'));
+});
+
+test('CLI proof help does not suggest quota-spending start without approval flag', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'traecn-cli.js'), 'utf8');
+  assert.ok(source.includes('traecn proof start --execute --detach --allow-quota-spend --marker'));
+  assert.ok(!source.includes('traecn proof start --execute --detach --marker'));
+});
+
+test('buildProofCliArgs maps proof cancel without resubmission flag', () => {
+  clearModuleCache();
+  const { buildProofCliArgs } = require('./traecn-cli');
+  const args = buildProofCliArgs(['cancel', '--marker', 'TRAECN_GLM52_SAFE']);
+  assert.ok(args.includes('--cancel'));
+  assert.ok(!args.includes('--execute'));
 });
 
 test('saveConfig returns boolean result', () => {
@@ -274,6 +313,19 @@ test('CLI exposes preflight command in help and dispatcher', () => {
   assert.ok(source.includes('/api/preflight'));
 });
 
+test('CLI exposes cleanup-queue command in help and dispatcher', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'traecn-cli.js'), 'utf8');
+  assert.ok(source.includes("'cleanup-queue'") || source.includes('"cleanup-queue"'));
+  assert.ok(source.includes('cmdCleanupQueue'));
+  assert.ok(source.includes('/api/solo/chats/cleanup-foreign-queue'));
+  assert.ok(source.includes('--execute'));
+  assert.ok(source.includes('--status'));
+  assert.ok(source.includes('buildDetachedCleanupCommand'));
+  assert.ok(source.includes('describeCleanupWatchStatus'));
+  assert.ok(source.includes('cleanup-queue --execute --watch-ms 7200000'));
+  assert.ok(source.includes('hasResidualMatches ? 1000'), 'cleanup watcher must retry quickly when matched chats remain');
+});
+
 test('CLI exposes vibe completion check flags', () => {
   const source = fs.readFileSync(path.join(__dirname, 'traecn-cli.js'), 'utf8');
   assert.ok(source.includes('--check-file'));
@@ -376,6 +428,122 @@ test('buildDetachedWaitCommand creates non-recursive screen command', () => {
   assert.ok(shellCommand.includes('/tmp/project path'));
   assert.ok(shellCommand.includes("'wait'"));
   assert.ok(!shellCommand.includes('--detach'));
+});
+
+test('acquireCleanupWatchLock creates and releases a cleanup watcher lock', () => {
+  clearModuleCache();
+  const { acquireCleanupWatchLock, readCleanupWatchLock } = require('./traecn-cli');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-cleanup-lock-test-'));
+  const lockFile = path.join(dir, 'cleanup-watch.lock');
+  const lock = acquireCleanupWatchLock({ lockFile, watchMs: 1000, stableMs: 100, intervalMs: 50 });
+
+  assert.strictEqual(lock.ok, true);
+  assert.strictEqual(fs.existsSync(lockFile), true);
+  assert.strictEqual(readCleanupWatchLock(lockFile).pid, process.pid);
+  lock.release();
+  assert.strictEqual(fs.existsSync(lockFile), false);
+});
+
+test('acquireCleanupWatchLock rejects an already running watcher lock', () => {
+  clearModuleCache();
+  const { acquireCleanupWatchLock } = require('./traecn-cli');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-cleanup-lock-test-'));
+  const lockFile = path.join(dir, 'cleanup-watch.lock');
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+
+  const lock = acquireCleanupWatchLock({ lockFile });
+  assert.strictEqual(lock.ok, false);
+  assert.strictEqual(lock.alreadyRunning, true);
+  assert.strictEqual(lock.existing.pid, process.pid);
+});
+
+test('acquireCleanupWatchLock replaces stale watcher lock', () => {
+  clearModuleCache();
+  const { acquireCleanupWatchLock } = require('./traecn-cli');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-cleanup-lock-test-'));
+  const lockFile = path.join(dir, 'cleanup-watch.lock');
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: 99999999, startedAt: 'stale' }));
+
+  const lock = acquireCleanupWatchLock({ lockFile });
+  assert.strictEqual(lock.ok, true);
+  assert.strictEqual(lock.owner.pid, process.pid);
+  lock.release();
+});
+
+test('describeCleanupWatchStatus reports running and stale watcher locks', () => {
+  clearModuleCache();
+  const { describeCleanupWatchStatus } = require('./traecn-cli');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-cleanup-lock-test-'));
+  const runningLock = path.join(dir, 'running.lock');
+  const staleLock = path.join(dir, 'stale.lock');
+  fs.writeFileSync(runningLock, JSON.stringify({ pid: process.pid, startedAt: 'now' }));
+  fs.writeFileSync(staleLock, JSON.stringify({ pid: 99999999, startedAt: 'stale' }));
+
+  const running = describeCleanupWatchStatus({ lockFile: runningLock });
+  const stale = describeCleanupWatchStatus({ lockFile: staleLock });
+  assert.strictEqual(running.running, true);
+  assert.strictEqual(running.stale, false);
+  assert.strictEqual(stale.running, false);
+  assert.strictEqual(stale.stale, true);
+});
+
+test('cleanup watcher process helpers avoid killing current process', () => {
+  clearModuleCache();
+  const { processInfoForPid, terminateCleanupWatcher, listCleanupWatcherProcesses } = require('./traecn-cli');
+  const info = processInfoForPid(process.pid);
+  assert.strictEqual(info.pid, process.pid);
+  assert.ok(info.pgid > 0);
+  const terminated = terminateCleanupWatcher(process.pid);
+  assert.strictEqual(terminated.terminated, false);
+  assert.strictEqual(terminated.reason, 'invalid_or_current_pid');
+  assert.ok(Array.isArray(listCleanupWatcherProcesses()));
+});
+
+test('buildDetachedCleanupCommand forwards singleton lock options', () => {
+  clearModuleCache();
+  const { buildDetachedCleanupCommand } = require('./traecn-cli');
+  const detached = buildDetachedCleanupCommand({
+    maxPasses: 20,
+    watchMs: 10000,
+    stableMs: 1000,
+    intervalMs: 500,
+    lockFile: '/tmp/traecn-cleanup.lock',
+    replace: true
+  }, '/tmp/project');
+  const command = detached.screenArgs[4];
+  assert.ok(command.includes('--lock-file'));
+  assert.ok(command.includes('/tmp/traecn-cleanup.lock'));
+  assert.ok(command.includes('--final'));
+  assert.ok(command.includes('--stderr'));
+  assert.ok(command.includes('--replace'));
+});
+
+test('runCleanupWatchAttempt treats request failures as transient retryable iterations', () => {
+  const result = spawnSync(process.execPath, ['-e', `
+    const assert = require('assert');
+    const { runCleanupWatchAttempt } = require('./scripts/traecn-cli');
+    (async () => {
+      const failed = await runCleanupWatchAttempt(async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:8788'); }, { lockFile: '/tmp/cleanup.lock', intervalMs: 25 });
+      assert.strictEqual(failed.result.status, 0);
+      assert.strictEqual(failed.transient, true);
+      assert.strictEqual(failed.clean, false);
+      assert.strictEqual(failed.iteration.transient, true);
+      assert.strictEqual(failed.iteration.nextDelayMs, 1000);
+      const clean = await runCleanupWatchAttempt(async () => ({ status: 200, data: { matched: 0, remainingMatched: 0, deleted: 0, stopped: 0, passes: 1 } }), { lockFile: '/tmp/cleanup.lock', intervalMs: 25 });
+      assert.strictEqual(clean.result.status, 200);
+      assert.strictEqual(clean.transient, false);
+      assert.strictEqual(clean.clean, true);
+      assert.strictEqual(clean.iteration.matched, 0);
+    })().catch(err => {
+      console.error(err.stack || err.message);
+      process.exit(1);
+    });
+  `], {
+    cwd: path.resolve(__dirname, '..'),
+    encoding: 'utf8',
+    env: { ...process.env, TRAECN_CONFIG_FILE: TEST_CONFIG_FILE }
+  });
+  assert.strictEqual(result.status, 0, result.stderr || result.stdout);
 });
 
 test('defaultWaitSessionName sanitizes task ids for screen', () => {

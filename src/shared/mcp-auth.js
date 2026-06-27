@@ -38,6 +38,11 @@ const TOOL_PERMISSIONS = Object.freeze({
   new_chat: WRITE_PERMISSION,
   list_solo_chats: READ_PERMISSION,
   switch_solo_chat: WRITE_PERMISSION,
+  cleanup_foreign_solo_queue: DELEGATE_PERMISSION,
+  cleanup_queue_watch_status: READ_PERMISSION,
+  long_queue_proof_status: READ_PERMISSION,
+  long_queue_proof_start: DELEGATE_PERMISSION,
+  long_queue_proof_cancel: DELEGATE_PERMISSION,
   submit_solo_chat_task: DELEGATE_PERMISSION,
   poll_task: READ_PERMISSION,
   wait_task: READ_PERMISSION,
@@ -64,9 +69,22 @@ const ADMIN_COMMANDS = new Set([
   // placeholder for future admin-level commands
 ]);
 
+const READ_COMMANDS = new Set([
+  'batch_status',
+  'dialog_status',
+  'cleanup_queue_watch_status',
+  'long_queue_proof_status',
+  'queue_status',
+  'review_gate_status',
+  'settings_read',
+  'settings_read_all',
+  'task_status'
+]);
+
 function resolveCommandPermission(command) {
   if (typeof command !== 'string' || !command) return READ_PERMISSION;
   if (ADMIN_COMMANDS.has(command)) return ADMIN_PERMISSION;
+  if (READ_COMMANDS.has(command)) return READ_PERMISSION;
   // Conservative default: assume side effect -> require delegate.
   // Read-only commands start with `get_`, `list_`, `check_`, `read_`.
   if (/^(get|list|check|read|preflight|status|describe)/i.test(command)) return READ_PERMISSION;

@@ -146,6 +146,15 @@ class TraeCNApiClient {
     return this._request('POST', '/api/solo/chats/switch', body);
   }
 
+  async cleanupForeignSoloQueue(options = {}) {
+    return this._request('POST', '/api/solo/chats/cleanup-foreign-queue', {
+      execute: options.execute === true,
+      dryRun: options.dryRun === true || options.execute !== true,
+      ...(options.maxPasses !== undefined ? { maxPasses: options.maxPasses } : {}),
+      ...(options.settleMs !== undefined ? { settleMs: options.settleMs } : {})
+    });
+  }
+
   async submitSoloChatTask(task, options = {}) {
     const body = { task };
     if (options.projectPath) body.projectPath = options.projectPath;

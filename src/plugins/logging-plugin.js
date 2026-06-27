@@ -1,21 +1,6 @@
 'use strict';
 
-const SENSITIVE_KEYS = ['token', 'password', 'secret', 'credential', 'authorization'];
-
-function sanitizeLog(obj) {
-  if (!obj || typeof obj !== 'object') return obj;
-  const sanitized = Array.isArray(obj) ? [] : {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (SENSITIVE_KEYS.some(k => key.toLowerCase().includes(k))) {
-      sanitized[key] = '[REDACTED]';
-    } else if (typeof value === 'object' && value !== null) {
-      sanitized[key] = sanitizeLog(value);
-    } else {
-      sanitized[key] = value;
-    }
-  }
-  return sanitized;
-}
+const { sanitizeLog } = require('../shared/logger');
 
 function getLogLevel() {
   return process.env.TRAECN_LOGGING_LEVEL || process.env.TRAE_LOGGING_LEVEL || 'info';

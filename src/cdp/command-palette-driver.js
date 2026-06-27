@@ -2,6 +2,7 @@
 
 const { sleep, safeJsValue } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
+const { RADIX_CLICK_INJECTION } = require('./base-driver');
 const dom = require('./browser-dom');
 
 /**
@@ -91,21 +92,12 @@ class CommandPaletteDriver {
   }
 
   /**
-   * Ensure the `__radixClick` helper is injected (shared with SettingsDriver).
-   * Most actions use keyboard, but a few need DOM clicks.
+   * Ensure the `__radixClick` helper is injected (shared with SettingsDriver
+   * and BaseDriver). Most actions use keyboard, but a few need DOM clicks.
    */
   async _ensureClickHelper() {
     await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
-        if (window.__radixClick) return;
-        window.__radixClick = function(el) {
-          if (!el) return;
-          el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, button: 0}));
-          el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0}));
-          el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
-          el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
-        };
-      })()`,
+      expression: RADIX_CLICK_INJECTION,
       returnByValue: true
     });
   }

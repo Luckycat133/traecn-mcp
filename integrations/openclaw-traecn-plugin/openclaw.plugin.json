@@ -91,6 +91,8 @@
               "new_chat",
               "list_solo_chats",
               "switch_solo_chat",
+              "cleanup_foreign_solo_queue",
+              "cleanup_queue_watch_status",
               "submit_solo_chat_task",
               "delegate",
               "delegate_async",
@@ -116,6 +118,9 @@
               "batch_submit",
               "batch_status",
               "batch_cancel",
+              "long_queue_proof_start",
+              "long_queue_proof_status",
+              "long_queue_proof_cancel",
               "review_code",
               "vibe_workflow",
               "editor",
@@ -197,9 +202,38 @@
             "type": "string",
             "description": "Project path TraeCN should work inside"
           },
+          "sessionId": {
+            "type": "string",
+            "description": "Logical session to append user and assistant messages to"
+          },
           "chatId": {
             "type": "string",
             "description": "Optional OpenClaw chat id for notifications"
+          },
+          "soloChat": {
+            "type": "object",
+            "properties": {
+              "index": { "type": "number" },
+              "titleIncludes": { "type": "string" },
+              "textIncludes": { "type": "string" }
+            },
+            "description": "Target a real Solo conversation for ownership and queued result collection"
+          },
+          "soloChatIndex": {
+            "type": "number",
+            "description": "Target Solo conversation index"
+          },
+          "soloChatTitleIncludes": {
+            "type": "string",
+            "description": "Target Solo conversation title text"
+          },
+          "soloChatTextIncludes": {
+            "type": "string",
+            "description": "Target Solo conversation body text"
+          },
+          "newChat": {
+            "type": "boolean",
+            "description": "When false, reuse the targeted Solo conversation"
           },
           "includeProcessText": {
             "type": "boolean",
@@ -229,9 +263,18 @@
             "type": "string",
             "description": "Webhook URL to notify when workflow state changes"
           },
+          "forceBackground": {
+            "type": "boolean",
+            "description": "Force gateway background tracking even if the model appears ready",
+            "default": false
+          },
           "maxQueueWaitMs": {
             "type": "number",
             "description": "Optional local queue wait cap; omit to wait indefinitely"
+          },
+          "queueMaxWaitMs": {
+            "type": "number",
+            "description": "Alias for maxQueueWaitMs"
           }
         }
       }
@@ -309,6 +352,31 @@
             "type": "string",
             "description": "Optional OpenClaw chat id for notifications"
           },
+          "soloChat": {
+            "type": "object",
+            "properties": {
+              "index": { "type": "number" },
+              "titleIncludes": { "type": "string" },
+              "textIncludes": { "type": "string" }
+            },
+            "description": "Target a real Solo conversation for ownership and queued result collection"
+          },
+          "soloChatIndex": {
+            "type": "number",
+            "description": "Target Solo conversation index"
+          },
+          "soloChatTitleIncludes": {
+            "type": "string",
+            "description": "Target Solo conversation title text"
+          },
+          "soloChatTextIncludes": {
+            "type": "string",
+            "description": "Target Solo conversation body text"
+          },
+          "newChat": {
+            "type": "boolean",
+            "description": "When false, reuse the targeted Solo conversation"
+          },
           "allowAutoStart": {
             "type": "boolean",
             "description": "Allow automatically starting TraeCN if not running",
@@ -327,6 +395,11 @@
           "background": {
             "type": "boolean",
             "description": "Queue immediately in the gateway background worker",
+            "default": false
+          },
+          "forceBackground": {
+            "type": "boolean",
+            "description": "Force gateway background tracking even if the model appears ready",
             "default": false
           },
           "asyncPoll": {
@@ -396,6 +469,90 @@
           "modelProbeIntervalMs": {
             "type": "number",
             "description": "Minimum interval between background fallback model probes"
+          },
+          "maxQueueWaitMs": {
+            "type": "number",
+            "description": "Optional local queue wait cap; omit to wait indefinitely"
+          },
+          "queueMaxWaitMs": {
+            "type": "number",
+            "description": "Alias for maxQueueWaitMs"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_settings_action",
+      "description": "Perform supported actions on the TraeCN settings panel through implemented gateway routes.",
+      "parameters": {
+        "type": "object",
+        "required": ["action"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["navigate", "read", "readAll", "type", "clickTab", "toggle", "dropdown", "set", "readTables", "back"],
+            "description": "Action to perform on settings"
+          },
+          "params": {
+            "type": "object",
+            "description": "Parameters for the action",
+            "properties": {
+              "section": {
+                "type": "string",
+                "description": "Section to navigate to"
+              },
+              "label": {
+                "type": "string",
+                "description": "Label text of the setting item"
+              },
+              "text": {
+                "type": "string",
+                "description": "Text to type or element text to click"
+              },
+              "value": {
+                "type": "string",
+                "description": "Value to set or select"
+              },
+              "enabled": {
+                "type": "boolean",
+                "description": "Toggle state"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_settings_read",
+      "description": "Read settings from the TraeCN settings panel. Optionally specify a section.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string",
+            "description": "Settings section to read. Leave empty for current section."
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_settings_set",
+      "description": "Change a setting in the TraeCN settings panel. Specify the label text and new value.",
+      "parameters": {
+        "type": "object",
+        "required": ["label", "value"],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "The label text of the setting to change"
+          },
+          "value": {
+            "type": "string",
+            "description": "The new value for the setting"
+          },
+          "section": {
+            "type": "string",
+            "description": "Optional settings section to navigate to first"
           }
         }
       }
@@ -440,6 +597,159 @@
       "parameters": {
         "type": "object",
         "properties": {}
+      }
+    },
+    {
+      "name": "traecn_cleanup_queue",
+      "description": "Find and optionally delete accidental \"wait for Trae queue\" Solo conversations. With execute=true it stops running queue-probe chats before deleting them.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean",
+            "description": "List matches without deleting them",
+            "default": true
+          },
+          "execute": {
+            "type": "boolean",
+            "description": "Stop and delete matched queue-probe conversations",
+            "default": false
+          },
+          "maxPasses": {
+            "type": "integer",
+            "description": "Repeat cleanup passes for hidden queue-probe chats revealed after earlier deletions",
+            "default": 10
+          },
+          "settleMs": {
+            "type": "integer",
+            "description": "Delay between cleanup passes in milliseconds",
+            "default": 500
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_cleanup_watch_status",
+      "description": "Read local cleanup watcher lock/PID/stale status without contacting TraeCN or creating conversations.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "lockFile": {
+            "type": "string",
+            "description": "Optional cleanup watcher lock file path"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_long_queue_proof_start",
+      "description": "Start or dry-run the guarded GLM-5.2 long-queue proof. Defaults to dry-run; a new real submission requires execute=true and allowQuotaSpend=true.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string",
+            "description": "Stable owned proof marker. Reusing a marker resumes existing evidence instead of submitting again."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model to prove, defaults to GLM-5.2"
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Project path TraeCN should use for proof context"
+          },
+          "execute": {
+            "type": "boolean",
+            "description": "Enter execute mode. Without allowQuotaSpend=true this refuses new TraeCN submissions.",
+            "default": false
+          },
+          "allowQuotaSpend": {
+            "type": "boolean",
+            "description": "Required with execute=true before starting any new quota-consuming TraeCN proof submission.",
+            "default": false
+          },
+          "detach": {
+            "type": "boolean",
+            "description": "Run the proof watcher in a detached local screen session",
+            "default": false
+          },
+          "forceNew": {
+            "type": "boolean",
+            "description": "Intentionally bypass existing proof/task resume guards and submit a fresh proof",
+            "default": false
+          },
+          "resumeTaskId": {
+            "type": "string",
+            "description": "Resume waiting for an existing task id without submitting a new prompt"
+          },
+          "timeoutMs": {
+            "type": "number",
+            "description": "Maximum wait time for proof result; 0 means no local timeout"
+          },
+          "pollMs": {
+            "type": "number",
+            "description": "Task status poll interval"
+          },
+          "outputDir": {
+            "type": "string",
+            "description": "Directory for proof evidence files"
+          },
+          "cleanupIntervalMs": {
+            "type": "number",
+            "description": "Interval for queue-probe cleanup during proof waits"
+          },
+          "cleanupStabilizeChecks": {
+            "type": "number",
+            "description": "Consecutive clean cleanup dry-runs required before submitting"
+          },
+          "cleanupStabilizeDelayMs": {
+            "type": "number",
+            "description": "Delay between cleanup stabilization checks"
+          },
+          "cleanupMaxAttempts": {
+            "type": "number",
+            "description": "Maximum cleanup stabilization attempts"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_long_queue_proof_status",
+      "description": "Read local GLM-5.2 proof status and recent evidence without sending any TraeCN prompt.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string",
+            "description": "Optional proof marker. Omit to inspect the newest proof artifact."
+          },
+          "outputDir": {
+            "type": "string",
+            "description": "Directory containing proof evidence files"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_long_queue_proof_cancel",
+      "description": "Cancel a local GLM-5.2 proof watcher/task tracking without submitting another TraeCN prompt.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string",
+            "description": "Optional proof marker. Omit to cancel the newest proof artifact."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Optional task id to cancel if known"
+          },
+          "outputDir": {
+            "type": "string",
+            "description": "Directory containing proof evidence files"
+          }
+        }
       }
     },
     {
