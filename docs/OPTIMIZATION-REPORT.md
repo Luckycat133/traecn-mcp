@@ -231,3 +231,50 @@ node src/http/error-mapping.test.js          # 10 cases
 | Gateway 启动时间 | 9.6 ms（−67% vs 一轮前） |
 
 **两轮共 17 个 commit，4 个 follow-up bucket 全部交付（虽然 Bucket A 与 D 未达 100% 目标，但都交付了可复用架构：route-table 骨架 + browser-dom helpers + shared test-runner）。** 下一轮 worktree 可以基于这些基础设施渐进深化 gateway.js / dom-driver.js 的 handler 拆分，并补充 browser-dom 的 radix-click / JSON 模式支持以解锁剩余 driver 的批量迁移。
+
+---
+
+## 3. 后续轮次（Round 2.5 + Round 3）
+
+### 3.1 Round 2.5：剩余 7 个 async-pattern .test.js 迁移
+
+| Commit | 文件 | Tests |
+|---|---|---|
+| `5bbf0b7` | extension-driver, diagnostics-driver, snapshot-driver, search-driver, file-driver, terminal-driver, driver-router | 40 |
+
+Pattern: `Promise.all(asyncTests).then(summary)` → `pendingAsyncTests().then(summary)` 通过 shared runner 的内部队列。
+
+**Bucket C 总计**: 21 个 *.test.js 迁移到 `src/shared/test-runner`（13 同步 + 7 Promise.all(asyncTests) + 1 git-driver 手迁移）。
+
+### 3.2 Round 3：gateway.js handler body 拆分（深度拆分第二阶段）
+
+| Commit | 模块 | 描述 |
+|---|---|---|
+| `c97475b` | status | 4 handlers: `_handleStatus`, `_handleReadiness`, `_handleMetrics`, `_handleMetricsJson` |
+| `49472e4` | tasks | 4 handlers: history/clear/getTask/replay |
+| `7abf413` | delegate | 1 handler: `_handleDelegateAsync`（303 行最大单方法） |
+| `e7af5b9` | sessions | 4 handlers: create/list/get/delegate |
+| (后续) | config, dialog, settings, preflight, trae-control, solo-chat, queue, task-actions, batch, project, driver-dispatch | 共 31 handlers |
+
+**总**: 13 个 handler 模块 / 39 个 handler 实现迁出 / gateway.js 5075 → 3617 行（**-1458 行, -28.7%**）。
+
+**机制**：
+1. `scripts/extract-handlers.js` 自动提取器：基于正则定位方法签名，括号计数找结束，转换 `this.X` → `ctx.X`，写入新模块，自动检测常见 `require` 依赖（parseBody / globalMetrics / parsePositiveInt / buildConfirmationPlan）。
+2. Gateway 保留 thin delegating shim（3 行）：`_handleX(req, res, ...)` → `xxxHandlers.handleX(req, res, this, ...)`
+3. `route-table.js` 维持权威 ROUTES 表（每模块自带 ROUTES slice，handlers.test.js 验证一致性）。
+
+**验收**：127/127 PASS（gateway.test.js）+ 7/7 PASS（handlers.test.js）。
+
+**未做**：`_handleRequestImpl`（285 行的 dispatch 链）仍在 gateway.js；queue 状态机、batch 执行、recovery 等大块 helper 也未迁。这些与 handler 表一一对应的迁移已完成，剩下的更接近"领域服务"重塑，留待下一轮 worktree。
+
+### 3.3 当前度量（Round 3 后）
+
+| 指标 | 值 |
+|---|---|
+| `npm test` PASS 数 | **736** + 1 intentional fail（test-runner 自检） |
+| gateway.js 行数 | **3617**（was 5075, **-28.7%**） |
+| handlers/*.js 模块数 | 14（status, tasks, delegate, sessions, config, dialog, settings, preflight, trae-control, solo-chat, queue, task-actions, batch, project, driver-dispatch） |
+| handlers/ 总行数 | 2556 |
+| handlers 测试 | handlers.test.js 7 cases |
+| system-test 自然退出 | < 1s |
+| Gateway 启动 | 9.6 ms |
