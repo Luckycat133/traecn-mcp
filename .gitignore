@@ -2,5 +2,6 @@ node_modules/
 .env
 *.log
 .DS_Store
+.claude/worktrees/
 audit-logs/
 demo-output/
