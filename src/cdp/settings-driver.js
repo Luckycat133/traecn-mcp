@@ -2,7 +2,7 @@
 
 const { TraeCNAutomationError } = require('./errors');
 const { sleep, safeJsValue } = require('../shared/utils');
-const { clickByText } = require('./browser-dom');
+const { clickByTextRadix } = require('./browser-dom');
 
 // Map human-readable section names to sidebar item text
 const SETTINGS_SECTIONS = [
@@ -20,12 +20,12 @@ async function _goToSettingsTab(client) {
   await _ensureClickHelper(client);
   // First try the SOLO mode tab strip; if that misses, click the
   // icube settings cog/button selectors used on other layouts.
-  const clicked = await clickByText(
+  const clicked = await clickByTextRadix(
     client,
     ['.icube-solo-mode-tab-item', '.icube-settings-wrapper', '.icube-settings-button', '.codicon-icube-Settings'],
     '设置'
   );
-  if (!clicked) {
+  if (!clicked || clicked === 'radix_click_unavailable') {
     throw TraeCNAutomationError.selectorNotFound('settings tab', SOLO_MODE_TABS);
   }
   await sleep(800);
@@ -711,24 +711,9 @@ class SettingsDriver {
    */
   async click(text) {
     await _ensureClickHelper(this.client);
-    const safeName = safeJsValue(text);
-    return await this.client.send('Runtime.evaluate', {
-      expression: `
-        (function() {
-          var items = document.querySelectorAll('.settings-sidebar-menu-item');
-          for (var i = 0; i < items.length; i++) {
-            var textEl = items[i].querySelector('.text');
-            var itemText = textEl ? (textEl.textContent || '').trim() : (items[i].textContent || '').trim();
-            if (itemText === ${safeName}) {
-              window.__radixClick(items[i]);
-              return 'clicked: ' + itemText;
-            }
-          }
-          return 'not found: ' + ${safeName};
-        })()
-      `,
-      returnByValue: true
-    }).then(r => r.result?.value || 'unknown');
+    const clicked = await clickByTextRadix(this.client, ['.settings-sidebar-menu-item'], text);
+    if (clicked === 'radix_click_unavailable') return 'radix_click_unavailable';
+    return clicked ? `clicked: ${text}` : `not found: ${text}`;
   }
 
   /**
