@@ -1571,260 +1571,72 @@ class Gateway {
       return this._json(req, res, { error: 'Origin not allowed' }, 403);
     }
 
-    if (pathname === '/api/status' && method === 'GET') {
-      if (!this._checkRateLimit(req)) {
-        this._finishRequestLog(req, res, 429);
-        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
-      }
-      return this._handleStatus(req, res);
-    }
-    if (pathname === '/api/capabilities' && method === 'GET') {
-      if (!this._checkRateLimit(req)) {
-        this._finishRequestLog(req, res, 429);
-        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
-      }
-      return this._json(req, res, buildCapabilities({ commands: listCommands() }));
+    // Single-source-of-truth route lookup. Public endpoints (requiresAuth: false)
+    // are dispatched before the auth check to preserve the pre-refactor behavior
+    // where /api/status, /api/capabilities, /api/config*, /, /openapi.json,
+    // /metrics, and /metrics.json were served without authentication.
+    const match = matchRoute(method, pathname);
+    if (!match) {
+      this._finishRequestLog(req, res, 404);
+      return this._json(req, res, { error: 'Not found' }, 404);
     }
 
-    if (pathname === '/api/config' && method === 'GET') {
-      return this._handleGetConfig(req, res);
-    }
-    if (pathname === '/api/config/schema' && method === 'GET') {
-      return this._handleGetConfigSchema(req, res);
-    }
-    if (pathname === '/api/config/update' && method === 'POST') {
-      return await this._handleUpdateConfig(req, res);
-    }
-    if (pathname === '/api/config/reset' && method === 'POST') {
-      return await this._handleResetConfig(req, res);
-    }
-    if (pathname === '/api/config/diff' && method === 'GET') {
-      return this._handleConfigDiff(req, res);
-    }
-    if (pathname === '/' && method === 'GET') {
-      if (!this._checkRateLimit(req)) {
-        this._finishRequestLog(req, res, 429);
-        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
-      }
-      return this._html(req, res, renderChatUI());
-    }
-    if (pathname === '/openapi.json' && method === 'GET') {
-      if (!this._checkRateLimit(req)) {
-        this._finishRequestLog(req, res, 429);
-        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
-      }
-      return this._json(req, res, generateOpenAPISpec());
-    }
+    const { route, params } = match;
 
-    // /metrics is intentionally unauthenticated so Prometheus can scrape it.
-    // The endpoint rate-limits per IP to deter abuse.
-    if (pathname === '/metrics' && method === 'GET') {
-      if (!this._checkRateLimit(req)) {
-        this._finishRequestLog(req, res, 429);
-        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
-      }
-      return this._handleMetrics(req, res);
-    }
-    if (pathname === '/metrics.json' && method === 'GET') {
-      if (!this._checkRateLimit(req)) {
-        this._finishRequestLog(req, res, 429);
-        return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
-      }
-      return this._handleMetricsJson(req, res);
-    }
-
-    if (!this._authenticate(req)) {
+    if (route.requiresAuth && !this._authenticate(req)) {
       this._finishRequestLog(req, res, 401);
       return this._json(req, res, { error: 'Unauthorized' }, 401);
     }
 
-    if (!this._checkRateLimit(req)) {
+    if (route.requiresRateLimit && !this._checkRateLimit(req)) {
       this._finishRequestLog(req, res, 429);
       return this._json(req, res, { error: 'Rate limit exceeded' }, 429);
     }
 
-    const idempotencyResponse = this._checkIdempotency(req);
-    if (idempotencyResponse) {
-      this._finishRequestLog(req, res, idempotencyResponse.statusCode);
-      return this._json(req, res, idempotencyResponse.data, idempotencyResponse.statusCode);
+    // Idempotency replay only applies to authenticated mutations; public
+    // endpoints skip the idempotency cache so /metrics scrapes are cheap.
+    if (route.requiresAuth) {
+      const idempotencyResponse = this._checkIdempotency(req);
+      if (idempotencyResponse) {
+        this._finishRequestLog(req, res, idempotencyResponse.statusCode);
+        return this._json(req, res, idempotencyResponse.data, idempotencyResponse.statusCode);
+      }
+    }
+
+    if (route.debugOnly && !this.debugEndpoints) {
+      this._finishRequestLog(req, res, 404);
+      return this._json(req, res, { error: 'Not found' }, 404);
     }
 
     try {
-      if (pathname === '/api/tasks/history' && method === 'GET') {
-        return this._handleTasksHistory(req, res);
+      const handler = resolveHandler(this, route.handler);
+      if (!handler) {
+        this._finishRequestLog(req, res, 501);
+        return this._json(req, res, { error: 'Handler not implemented' }, 501);
       }
-      if (pathname === '/api/confirm/plan' && method === 'POST') {
-        return await this._handleConfirmPlan(req, res);
-      }
-      if (pathname === '/api/preflight' && method === 'POST') {
-        return await this._handlePreflight(req, res);
-      }
-      if (pathname === '/api/tasks/history' && method === 'DELETE') {
-        return this._handleTasksHistoryClear(req, res);
-      }
-      if (pathname.match(/^\/api\/tasks\/[^/]+\/replay$/) && method === 'GET') {
-        const taskId = pathname.split('/')[3];
-        return this._handleTaskReplay(req, res, taskId);
-      }
-      if (pathname.match(/^\/api\/tasks\/[^/]+$/) && method === 'GET') {
-        const taskId = pathname.split('/')[3];
-        return this._handleGetTask(req, res, taskId);
-      }
-      if (pathname === '/api/sessions' && method === 'POST') {
-        return await this._handleCreateSession(req, res);
-      }
-      if (pathname === '/api/sessions' && method === 'GET') {
-        return this._handleListSessions(req, res);
-      }
-      if (pathname.match(/^\/api\/sessions\/[^/]+$/) && method === 'GET') {
-        const sessionId = pathname.split('/').pop();
-        return this._handleGetSession(req, res, sessionId);
-      }
-      if (pathname.match(/^\/api\/sessions\/[^/]+\/delegate$/) && method === 'POST') {
-        const sessionId = pathname.split('/')[3];
-        return await this._handleDelegate(req, res, sessionId);
-      }
-      if (pathname === '/api/new-chat' && method === 'POST') {
-        return await this._handleNewChat(req, res);
-      }
-      if (pathname === '/api/solo/chats' && method === 'GET') {
-        return await this._handleListSoloChats(req, res);
-      }
-      if (pathname === '/api/solo/chats/switch' && method === 'POST') {
-        return await this._handleSwitchSoloChat(req, res);
-      }
-      if (pathname === '/api/solo/chats/submit' && method === 'POST') {
-        return await this._handleSubmitSoloChatTask(req, res);
-      }
-      if (pathname === '/api/trae/stop-generation' && method === 'POST') {
-        return await this._handleStopGeneration(req, res);
-      }
-      if (pathname === '/api/trae/restart-debug' && method === 'POST') {
-        return await this._handleRestartTraeDebug(req, res);
-      }
-      if (pathname === '/api/trae/review-gate' && method === 'GET') {
-        return await this._handleReviewGateStatus(req, res);
-      }
-      if (pathname === '/api/trae/review-gate' && method === 'POST') {
-        return await this._handleReviewGateResolve(req, res);
-      }
-      if (pathname === '/api/detect-mode' && method === 'GET') {
-        return await this._handleDetectMode(req, res);
-      }
-      if (pathname === '/api/switch-mode' && method === 'POST') {
-        return await this._handleSwitchMode(req, res);
-      }
-      if (pathname === '/api/switch-model' && method === 'POST') {
-        return await this._handleSwitchModel(req, res);
-      }
-      if (pathname === '/api/queue-status' && method === 'GET') {
-        return await this._handleQueueStatus(req, res);
-      }
-      if (pathname === '/api/queue/status' && method === 'GET') {
-        return this._handleQueueStatusList(req, res);
-      }
-      if (pathname === '/api/task/adopt-current' && method === 'POST') {
-        return await this._handleAdoptCurrentTask(req, res);
-      }
-      if (pathname.match(/^\/api\/task\/[^/]+$/) && method === 'GET') {
-        const taskId = pathname.split('/').pop();
-        return await this._handleTaskStatus(req, res, taskId);
-      }
-      if (pathname.match(/^\/api\/task\/[^/]+\/review$/) && method === 'POST') {
-        const segments = pathname.split('/');
-        const taskId = segments[3];
-        return await this._handleTaskReview(req, res, taskId);
-      }
-      if (pathname.match(/^\/api\/task\/[^/]+\/cancel$/) && method === 'POST') {
-        const segments = pathname.split('/');
-        const taskId = segments[3];
-        return await this._handleTaskCancel(req, res, taskId);
-      }
-      if (pathname === '/api/tasks/batch' && method === 'POST') {
-        return this._handleBatchSubmit(req, res);
-      }
-      if (pathname.match(/^\/api\/tasks\/batch\/[^/]+$/) && method === 'GET') {
-        const batchId = pathname.split('/').pop();
-        return this._handleBatchStatus(req, res, batchId);
-      }
-      if (pathname.match(/^\/api\/tasks\/batch\/[^/]+$/) && method === 'DELETE') {
-        const batchId = pathname.split('/').pop();
-        return this._handleBatchCancel(req, res, batchId);
-      }
-      if (pathname === '/api/delegate' && method === 'POST') {
-        return await this._handleDelegateAsync(req, res);
-      }
-      if (pathname === '/api/delegate-async' && method === 'POST') {
-        return await this._handleDelegateAsync(req, res);
-      }
-      if (pathname === '/api/open-project' && method === 'POST') {
-        return await this._handleOpenProject(req, res);
-      }
-      if (pathname === '/api/update-self' && method === 'POST') {
-        return await this._handleUpdateSelf(req, res);
-      }
-      if (pathname === '/api/readiness' && method === 'GET') {
-        return await this._handleReadiness(req, res);
-      }
-      if (pathname === '/api/settings/read-all' && method === 'GET') {
-        return await this._handleSettingsReadAll(req, res);
-      }
-      if (pathname === '/api/settings/read' && method === 'GET') {
-        return await this._handleSettingsRead(req, res);
-      }
-      if (pathname === '/api/settings' && method === 'GET') {
-        return await this._handleSettingsRead(req, res);
-      }
-      if (pathname === '/api/settings/set' && method === 'POST') {
-        return await this._handleSettingsSet(req, res);
-      }
-      if (pathname === '/api/settings' && method === 'POST') {
-        return await this._handleSettingsSet(req, res);
-      }
-      if (pathname === '/api/settings/switch-tab' && method === 'POST') {
-        return await this._handleSettingsSwitchTab(req, res);
-      }
-      if (pathname === '/api/settings/back-to-chat' && method === 'POST') {
-        return await this._handleSettingsBackToChat(req, res);
-      }
-      if (pathname === '/api/dialog/approve' && method === 'POST') {
-        return await this._handleDialogApprove(req, res);
-      }
-      if (pathname === '/api/dialog/dismiss' && method === 'POST') {
-        return await this._handleDialogDismiss(req, res);
-      }
-      if (pathname === '/api/dialog/status' && method === 'GET') {
-        return await this._handleDialogStatus(req, res);
-      }
-      // v0.4.0 — driver-level commands
-      const driverRoute = {
-        editor: '/api/editor',
-        file: '/api/file',
-        terminal: '/api/terminal',
-        git: '/api/git',
-        search: '/api/search',
-        diagnostics: '/api/diagnostics',
-        snapshot: '/api/snapshot',
-        extension: '/api/extension',
-        command: '/api/command'
-      };
-      for (const [name, path_] of Object.entries(driverRoute)) {
-        if (pathname === path_ && method === 'POST') {
-          return await this._handleDriverAction(req, res, name);
-        }
-      }
-      if (pathname === '/debug/automation' && method === 'GET' && this.debugEndpoints) {
-        return await this._handleDebugAutomation(req, res);
-      }
-
-      this._finishRequestLog(req, res, 404);
-      return this._json(req, res, { error: 'Not found' }, 404);
+      const positionalParams = (route.pathParams || []).map(name => params[name]);
+      return await handler(req, res, ...positionalParams);
     } catch (err) {
       console.error('[Gateway] Error:', sanitizeLog({ message: err.message, code: err.code, name: err.name }));
       const statusCode = errorToHttpStatus(err);
       this._finishRequestLog(req, res, statusCode);
       return this._json(req, res, errorToBody(err), statusCode);
     }
+  }
+
+  // Thin wrappers for endpoints that the route table dispatches to but which
+  // previously lived inline. Keeping them as named handlers lets the route
+  // table refer to them by string and keeps handler signatures consistent.
+  _handleCapabilities(req, res) {
+    return this._json(req, res, buildCapabilities({ commands: listCommands() }));
+  }
+
+  _handleRoot(req, res) {
+    return this._html(req, res, renderChatUI());
+  }
+
+  _handleOpenApiSpec(req, res) {
+    return this._json(req, res, generateOpenAPISpec());
   }
 
   _handleTasksHistory(req, res) {
