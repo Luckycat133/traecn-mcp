@@ -103,12 +103,12 @@ const ROUTES = [
   { method: 'POST', path: '/api/confirm/plan', handler: '_handleConfirmPlan', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'POST', path: '/api/preflight', handler: '_handlePreflight', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 
-  // Config
-  { method: 'GET', path: '/api/config', handler: '_handleGetConfig', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
-  { method: 'GET', path: '/api/config/schema', handler: '_handleGetConfigSchema', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
-  { method: 'POST', path: '/api/config/update', handler: '_handleUpdateConfig', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
-  { method: 'POST', path: '/api/config/reset', handler: '_handleResetConfig', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
-  { method: 'GET', path: '/api/config/diff', handler: '_handleConfigDiff', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
+  // Config (public — matches pre-refactor behavior: served before auth check)
+  { method: 'GET', path: '/api/config', handler: '_handleGetConfig', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
+  { method: 'GET', path: '/api/config/schema', handler: '_handleGetConfigSchema', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
+  { method: 'POST', path: '/api/config/update', handler: '_handleUpdateConfig', requiresAuth: false, requiresRateLimit: true, requiresBody: true },
+  { method: 'POST', path: '/api/config/reset', handler: '_handleResetConfig', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
+  { method: 'GET', path: '/api/config/diff', handler: '_handleConfigDiff', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
 
   // Driver dispatch (POST to /api/<driverName>)
   { method: 'POST', path: '/api/editor', handler: '_handleDriverAction:editor', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
