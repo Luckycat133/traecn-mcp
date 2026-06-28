@@ -8,12 +8,24 @@ const { getEnvWithFallback } = require('../src/shared/utils');
 loadEnv(path.resolve(__dirname, '..', '.env'));
 
 async function main() {
+  const args = process.argv.slice(2);
+  // Default: do NOT auto-launch Trae CN. If the user has quit it, they
+  // probably want it to stay quit. Set TRAECN_AUTOSTART=1 (or pass
+  // --launch-trae) to restore the old auto-start behavior. This prevents
+  // the "I quit Trae and it came back" footgun that bites every developer
+  // the first time they run `npm run quickstart` after closing the IDE.
+  const autoLaunch = process.env.TRAECN_AUTOSTART === '1' || args.includes('--launch-trae');
+
   console.log('[TRAECNclaw] Checking TraeCN status...');
 
   if (isTraeCNRunning()) {
     console.log('[TRAECNclaw] TraeCN is already running.');
+  } else if (!autoLaunch) {
+    console.log('[TRAECNclaw] TraeCN is not running. Skipping auto-launch (opt-in).');
+    console.log('[TRAECNclaw] To start it explicitly, run: npm run start:traecn');
+    console.log('[TRAECNclaw] Or re-run with: npm run quickstart -- --launch-trae');
   } else {
-    console.log('[TRAECNclaw] TraeCN is not running. Attempting to start...');
+    console.log('[TRAECNclaw] TraeCN is not running. Auto-launch enabled, starting...');
     const binPath = findTraeCNBinary();
     if (!binPath) {
       console.error('[TRAECNclaw] TraeCN binary not found.');
