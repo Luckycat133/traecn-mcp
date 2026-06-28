@@ -1,6 +1,7 @@
 'use strict';
 
 const { parseBody } = require('../request-gate');
+const { isGenericQueueProbeTask } = require('../../shared/utils');
 
 /**
  * batch handlers.
@@ -55,12 +56,20 @@ async function handleBatchSubmit(req, res, ctx) {
   if (body.tasks.length > 100) {
     return ctx._json(req, res, { error: 'Maximum 100 tasks per batch' }, 400);
   }
-  for (const item of body.tasks) {
+  for (let idx = 0; idx < body.tasks.length; idx++) {
+    const item = body.tasks[idx];
     if (!item.task || typeof item.task !== 'string') {
       return ctx._json(req, res, { error: 'Each task must have a task string' }, 400);
     }
     if (item.task.length > 100000) {
       return ctx._json(req, res, { error: 'Each task must be at most 100000 characters' }, 400);
+    }
+    if (isGenericQueueProbeTask(item.task)) {
+      return ctx._json(req, res, {
+        error: 'generic_queue_probe_task_rejected',
+        message: 'Batch contains a queue probe prompt. Use /api/queue-status, /api/preflight, or wait_task for local waiting.',
+        offendingIndex: idx
+      }, 400);
     }
   }
 

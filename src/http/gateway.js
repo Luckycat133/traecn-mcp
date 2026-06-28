@@ -119,25 +119,25 @@ async function sendTaskWebhook(url, payload) {
 
 class Gateway {
   constructor(options = {}) {
-    const host = process.env.TRAECN_HOST ?? process.env.HOST ?? process.env.TRAE_HOST ?? '127.0.0.1';
-    const port = process.env.TRAECN_PORT ?? process.env.PORT ?? process.env.TRAE_PORT ?? '8788';
-    this.host = options.host || host;
-    this.port = options.port !== undefined ? options.port : parsePositiveInt(port, 8788);
-    this.token = getEnvWithFallback('TRAECN_GATEWAY_TOKEN', 'TRAE_GATEWAY_TOKEN', '');
-    this.authHeader = getEnvWithFallback('TRAECN_AUTH_HEADER', 'TRAE_AUTH_HEADER', 'Authorization');
-    this.allowedOrigins = getEnvWithFallback('TRAECN_ALLOWED_ORIGINS', 'TRAE_ALLOWED_ORIGINS', '');
-    this.debugEndpoints = getEnvWithFallback('TRAECN_ENABLE_DEBUG_ENDPOINTS', 'TRAE_ENABLE_DEBUG_ENDPOINTS', '0') === '1';
-    this.mockBridge = getEnvWithFallback('TRAECN_ENABLE_MOCK_BRIDGE', 'TRAE_ENABLE_MOCK_BRIDGE', '0') === '1';
-    this.enforceOperationConfirmation = getEnvWithFallback('TRAECN_ENFORCE_OPERATION_CONFIRMATION', 'TRAE_ENFORCE_OPERATION_CONFIRMATION', '0') === '1';
-
-    const rateWindowMs = parsePositiveInt(getEnvWithFallback('TRAECN_RATE_LIMIT_WINDOW_MS', 'TRAE_RATE_LIMIT_WINDOW_MS', '60000'), 60000);
-    const rateMaxRequests = parsePositiveInt(getEnvWithFallback('TRAECN_RATE_LIMIT_MAX_REQUESTS', 'TRAE_RATE_LIMIT_MAX_REQUESTS', '60'), 60);
-    this.rateLimiter = new RateLimiter(rateWindowMs, rateMaxRequests);
-
+    // Initialize ConfigManager first — it owns all config sources
+    // (file + env-var overrides) and exposes a unified getConfig().
     this.configManager = options.configManager || new ConfigManager({
       configFile: process.env.TRAECN_CONFIG_FILE,
       watchEnabled: process.env.TRAECN_CONFIG_WATCH === '1'
     });
+
+    // Read all config from the manager; options override still wins for host/port.
+    const config = this.configManager.getConfig();
+    this.host = options.host || config.server.host;
+    this.port = options.port !== undefined ? options.port : config.server.port;
+    this.token = config.server.token;
+    this.authHeader = config.server.authHeader;
+    this.allowedOrigins = config.cors.allowedOrigins;
+    this.debugEndpoints = config.features.debugEndpoints;
+    this.mockBridge = config.features.mockBridge;
+    this.enforceOperationConfirmation = config.features.enforceOperationConfirmation;
+
+    this.rateLimiter = new RateLimiter(config.rateLimit.windowMs, config.rateLimit.maxRequests);
 
     this.taskHistoryStore = getGlobalStore();
 
@@ -154,29 +154,14 @@ class Gateway {
     this.uiActionChain = Promise.resolve();
     this.taskLocks = new Set();
     this.activeTimers = new Set();
-    this.autoStartTrae = getEnvWithFallback('TRAECN_AUTO_START_TRAE', 'TRAE_AUTO_START_TRAE', '1') !== '0';
-    this.traeRecoveryCooldownMs = parsePositiveInt(
-      getEnvWithFallback('TRAECN_TRAE_RECOVERY_COOLDOWN_MS', 'TRAE_TRAE_RECOVERY_COOLDOWN_MS', '30000'),
-      30000
-    );
-    this.traeRecoveryWaitMs = parsePositiveInt(
-      getEnvWithFallback('TRAECN_TRAE_RECOVERY_WAIT_MS', 'TRAE_TRAE_RECOVERY_WAIT_MS', '60000'),
-      60000
-    );
+    this.autoStartTrae = config.traeControl.autoStart;
+    this.traeRecoveryCooldownMs = config.traeControl.recoveryCooldownMs;
+    this.traeRecoveryWaitMs = config.traeControl.recoveryWaitMs;
     this.lastTraeRecoveryAt = 0;
-    this.autoRecover = getEnvWithFallback('TRAECN_AUTO_RECOVER', 'TRAE_AUTO_RECOVER', '0') === '1';
-    this.autoRecoverProbeMs = parsePositiveInt(
-      getEnvWithFallback('TRAECN_AUTO_RECOVER_PROBE_MS', 'TRAE_AUTO_RECOVER_PROBE_MS', '30000'),
-      30000
-    );
-    this.autoRecoverMax = parsePositiveInt(
-      getEnvWithFallback('TRAECN_AUTO_RECOVER_MAX', 'TRAE_AUTO_RECOVER_MAX', '5'),
-      5
-    );
-    this.autoRecoverProbeTimeoutMs = parsePositiveInt(
-      getEnvWithFallback('TRAECN_AUTO_RECOVER_PROBE_TIMEOUT_MS', 'TRAE_AUTO_RECOVER_PROBE_TIMEOUT_MS', '5000'),
-      5000
-    );
+    this.autoRecover = config.autoRecover.enabled;
+    this.autoRecoverProbeMs = config.autoRecover.probeIntervalMs;
+    this.autoRecoverMax = config.autoRecover.maxRecoveries;
+    this.autoRecoverProbeTimeoutMs = config.autoRecover.probeTimeoutMs;
     this.healthWatcher = new CDPHealthWatcher({
       gateway: this,
       enabled: this.autoRecover,
@@ -195,7 +180,7 @@ class Gateway {
       logger: console,
       setTimeoutImpl: (cb, delay) => this._setTimeout(cb, delay),
     });
-    this.activeQueuePersistencePath = this._resolveActiveQueuePersistencePath();
+    this.activeQueuePersistencePath = this._resolveActiveQueuePersistencePath(config.queue.persistencePath);
     this.taskQueueService = new TaskQueueService({
       logger: console,
       persistencePath: this.activeQueuePersistencePath,
@@ -211,13 +196,75 @@ class Gateway {
   }
 
   _applyConfigChanges(changes) {
+    const config = this.configManager.getConfig();
+
+    // Rate limit — rebuild the limiter with new values.
     if (changes.rateLimit) {
-      const newWindowMs = this.configManager.getConfig().rateLimit.windowMs;
-      const newMaxRequests = this.configManager.getConfig().rateLimit.maxRequests;
-      this.rateLimiter = new RateLimiter(newWindowMs, newMaxRequests);
+      this.rateLimiter = new RateLimiter(config.rateLimit.windowMs, config.rateLimit.maxRequests);
     }
+
+    // CORS
     if (changes.cors) {
-      this.allowedOrigins = this.configManager.getConfig().cors.allowedOrigins;
+      this.allowedOrigins = config.cors.allowedOrigins;
+    }
+
+    // Server auth
+    if (changes.server) {
+      if (changes.server.token !== undefined) {
+        this.token = config.server.token;
+      }
+      if (changes.server.authHeader !== undefined) {
+        this.authHeader = config.server.authHeader;
+      }
+    }
+
+    // Trae control
+    if (changes.traeControl) {
+      if (changes.traeControl.autoStart !== undefined) {
+        this.autoStartTrae = config.traeControl.autoStart;
+        this.traeControl.autoStartTrae = config.traeControl.autoStart;
+      }
+      if (changes.traeControl.recoveryCooldownMs !== undefined) {
+        this.traeRecoveryCooldownMs = config.traeControl.recoveryCooldownMs;
+        this.traeControl.recoveryCooldownMs = config.traeControl.recoveryCooldownMs;
+      }
+      if (changes.traeControl.recoveryWaitMs !== undefined) {
+        this.traeRecoveryWaitMs = config.traeControl.recoveryWaitMs;
+        this.traeControl.recoveryWaitMs = config.traeControl.recoveryWaitMs;
+      }
+    }
+
+    // Auto recover
+    if (changes.autoRecover) {
+      if (changes.autoRecover.enabled !== undefined) {
+        this.autoRecover = config.autoRecover.enabled;
+        this.healthWatcher.enabled = config.autoRecover.enabled;
+      }
+      if (changes.autoRecover.probeIntervalMs !== undefined) {
+        this.autoRecoverProbeMs = config.autoRecover.probeIntervalMs;
+        this.healthWatcher.probeIntervalMs = config.autoRecover.probeIntervalMs;
+      }
+      if (changes.autoRecover.maxRecoveries !== undefined) {
+        this.autoRecoverMax = config.autoRecover.maxRecoveries;
+        this.healthWatcher.maxRecoveries = config.autoRecover.maxRecoveries;
+      }
+      if (changes.autoRecover.probeTimeoutMs !== undefined) {
+        this.autoRecoverProbeTimeoutMs = config.autoRecover.probeTimeoutMs;
+        this.healthWatcher.probeTimeoutMs = config.autoRecover.probeTimeoutMs;
+      }
+    }
+
+    // Feature flags
+    if (changes.features) {
+      if (changes.features.debugEndpoints !== undefined) {
+        this.debugEndpoints = config.features.debugEndpoints;
+      }
+      if (changes.features.mockBridge !== undefined) {
+        this.mockBridge = config.features.mockBridge;
+      }
+      if (changes.features.enforceOperationConfirmation !== undefined) {
+        this.enforceOperationConfirmation = config.features.enforceOperationConfirmation;
+      }
     }
   }
 
@@ -253,8 +300,10 @@ class Gateway {
     return timer;
   }
 
-  _resolveActiveQueuePersistencePath() {
-    const configured = getEnvWithFallback(
+  _resolveActiveQueuePersistencePath(configuredPath) {
+    // Prefer the path from config (already resolved by ConfigManager from
+    // env vars or config file). Fall back to the OS-specific default.
+    const configured = configuredPath || getEnvWithFallback(
       'TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH',
       'TRAE_ACTIVE_QUEUE_PERSISTENCE_PATH',
       ''
@@ -643,8 +692,10 @@ class Gateway {
   }
 
   _queueFlickerGraceMs() {
+    // Driver runtime config takes precedence, then ConfigManager, then default.
     const configured = this.driver?.config?.queueFlickerGraceMs
-      ?? getEnvWithFallback('TRAECN_QUEUE_FLICKER_GRACE_MS', 'TRAE_QUEUE_FLICKER_GRACE_MS', DEFAULT_QUEUE_FLICKER_GRACE_MS);
+      ?? this.configManager?.getConfig()?.queue?.flickerGraceMs
+      ?? DEFAULT_QUEUE_FLICKER_GRACE_MS;
     return parsePositiveInt(configured, DEFAULT_QUEUE_FLICKER_GRACE_MS);
   }
 

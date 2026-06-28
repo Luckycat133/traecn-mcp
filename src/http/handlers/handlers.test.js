@@ -89,3 +89,75 @@ test('handlers: tasks module routes resolve via matchRoute', () => {
 
 summary();
 if (runner.failed > 0) process.exit(1);
+// ── Queue-probe guard (regression test for "wait for Trae queue" spam) ──
+const { handleDelegateAsync } = require('./delegate');
+const { handleSubmitSoloChatTask } = require('./solo-chat');
+const { handleDelegate: handleSessionDelegate } = require('./sessions');
+const { handleBatchSubmit } = require('./batch');
+const { isGenericQueueProbeTask } = require('../../shared/utils');
+
+function fakeCtx() {
+  return {
+    _json: (req, res, body, status) => { res.status = status; res.body = body; return res; }
+  };
+}
+
+asyncTest('handleDelegateAsync rejects "wait for Trae queue" with 400', async () => {
+  const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ task: 'wait for Trae queue' }))]);
+  const res = {};
+  const ctx = fakeCtx();
+  await handleDelegateAsync(req, res, ctx);
+  assert.strictEqual(res.status, 400);
+  assert.strictEqual(res.body.error, 'generic_queue_probe_task_rejected');
+});
+
+asyncTest('handleSubmitSoloChatTask rejects "Wait for Trae Queue 进行中 17:34" with 400', async () => {
+  const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ task: 'Wait for Trae Queue 进行中 17:34' }))]);
+  const res = {};
+  const ctx = fakeCtx();
+  await handleSubmitSoloChatTask(req, res, ctx);
+  assert.strictEqual(res.status, 400);
+  assert.strictEqual(res.body.error, 'generic_queue_probe_task_rejected');
+});
+
+asyncTest('handleSessionDelegate rejects layered queue probes', async () => {
+  const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ task: '现在已经排到了' }))]);
+  const res = {};
+  const ctx = fakeCtx();
+  await handleSessionDelegate(req, res, ctx, 'test-session');
+  assert.strictEqual(res.status, 400);
+  assert.strictEqual(res.body.error, 'generic_queue_probe_task_rejected');
+});
+
+asyncTest('handleBatchSubmit rejects a batch containing a queue-probe task', async () => {
+  const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ tasks: [{ task: 'real work' }, { task: 'wait for Trae queue' }] }))]);
+  const res = {};
+  const ctx = fakeCtx();
+  await handleBatchSubmit(req, res, ctx);
+  assert.strictEqual(res.status, 400);
+  assert.strictEqual(res.body.error, 'generic_queue_probe_task_rejected');
+  assert.strictEqual(res.body.offendingIndex, 1);
+});
+
+asyncTest('handleDelegateAsync still accepts legitimate tasks (regression: not over-blocking)', async () => {
+  const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ task: 'implement the queue status panel without sending prompts' }))]);
+  const res = {};
+  const ctx = {
+    _json: (req, res, body, status) => { res.status = status; res.body = body; return res; },
+    // The handler will reach ctx.driver.checkQueueStatus() — make it throw
+    // so the request fails for an unrelated reason, but never with
+    // 'generic_queue_probe_task_rejected'.
+    _ensureConnection: async () => { throw new Error('not_connected_for_test'); },
+    _normalizeFallbackModels: () => [],
+    _modelProbeIntervalMs: () => 15000
+  };
+  await handleDelegateAsync(req, res, ctx).catch(() => {});
+  assert.notStrictEqual(res.body && res.body.error, 'generic_queue_probe_task_rejected');
+});
+
+test('isGenericQueueProbeTask detects the canonical probe string', () => {
+  assert.strictEqual(isGenericQueueProbeTask('wait for Trae queue'), true);
+  assert.strictEqual(isGenericQueueProbeTask('Wait for Trae Queue 进行中 17:34'), true);
+  assert.strictEqual(isGenericQueueProbeTask('Please implement a queue-status panel'), false);
+  assert.strictEqual(isGenericQueueProbeTask('implement a queue-status panel without sending prompts'), false);
+});

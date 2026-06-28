@@ -8,7 +8,7 @@ const { buildCapabilities } = require('./src/shared/capabilities');
 const { buildConfirmationPlan } = require('./src/shared/operation-confirmation');
 const { executeCommand, listCommands } = require('./integrations/openclaw-traecn-plugin/lib/command-set');
 const { TraeCNApiClient } = require('./integrations/openclaw-traecn-plugin/lib/traecnapi-client');
-const { getGatewayContext } = require('./src/shared/utils');
+const { getGatewayContext, isGenericQueueProbeTask } = require('./src/shared/utils');
 const mcpAuth = require('./src/shared/mcp-auth');
 
 const SERVER_INFO = Object.freeze({ name: 'traecnclaw', version: require('./package.json').version });
@@ -512,8 +512,22 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
     case 'preflight':
       return asMcpContent(await skill.preflight(args));
     case 'run_task':
+      if (isGenericQueueProbeTask(args && args.task)) {
+        return asMcpContent({
+          ok: false,
+          error: 'generic_queue_probe_task_rejected',
+          message: 'Do not send queue probe prompts to Trae. Use preflight, queue_status, or wait_task for local waiting.'
+        });
+      }
       return asMcpContent(await skill.run(args.task, args));
     case 'queue_task':
+      if (isGenericQueueProbeTask(args && args.task)) {
+        return asMcpContent({
+          ok: false,
+          error: 'generic_queue_probe_task_rejected',
+          message: 'Do not send queue probe prompts to Trae. Use preflight, queue_status, or wait_task for local waiting.'
+        });
+      }
       return asMcpContent(await skill.queue(args.task, args));
     case 'poll_task':
       return asMcpContent(await skill.poll(args.taskId || null));
