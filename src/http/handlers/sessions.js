@@ -1,6 +1,7 @@
 'use strict';
 
 const { parseBody } = require('../request-gate');
+const { isGenericQueueProbeTask } = require('../../shared/utils');
 
 /**
  * sessions handlers.
@@ -91,6 +92,12 @@ function handleGetSession(req, res, ctx, sessionId) {
 }
 async function handleDelegate(req, res, ctx, sessionId) {
   const body = await parseBody(req);
+  if (isGenericQueueProbeTask(body && body.task)) {
+    return ctx._json(req, res, {
+      error: 'generic_queue_probe_task_rejected',
+      message: 'Do not send queue probe prompts to Trae. Use /api/queue-status, /api/preflight, or wait_task for local waiting.'
+    }, 400);
+  }
   if (!body.task) {
     return ctx._json(req, res, { error: 'task is required' }, 400);
   }

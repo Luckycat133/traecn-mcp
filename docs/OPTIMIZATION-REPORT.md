@@ -298,13 +298,13 @@ Pattern: `Promise.all(asyncTests).then(summary)` → `pendingAsyncTests().then(s
 - `clickByText(client, selectors, text)`：原有，已迁移 2 sites
 - `clickByTextRadix(client, selectors, text)`：新增，已迁移 4 sites
 
-### 3.5 当前度量（Round 7 终版）
+### 3.5 当前度量（main 合并后最终版）
 
 | 指标 | 值 |
 |---|---|
-| `npm test` PASS 数 | **780** + 1 intentional fail（test-runner 自检） |
+| `npm test` PASS 数 | **817** + 1 intentional fail（test-runner 自检） |
 | 套件（test files） | 42 |
-| 总 commits in this milestone | **41**（自 b099a2e baseline 之后） |
+| 总 commits in this milestone | **52**（自 b099a2e baseline 之后） |
 | gateway.js | **3429 行**（原 5075，−32.6%） |
 | dom-driver.js | **450 行**（原 3755，−88.0%） |
 | task-queue-service.js | **119 行**（原 614，−80.6%） |
@@ -313,24 +313,33 @@ Pattern: `Promise.all(asyncTests).then(summary)` → `pendingAsyncTests().then(s
 | 新 queue 领域服务 | 3（queue-state-machine, batch-executor, recovery-helper） |
 | browser-dom.test.js cases | 20（原 7 + 13 新） |
 | driver Runtime.evaluate sites migrated | 42（10 drivers，settings 13 + editor 4 全量迁移） |
+| new methods added | `deleteSoloChats` + 3 locator helpers in dom-handlers/solo-chat.js |
 | system-test 自然退出 | < 1s |
 | Gateway 启动 | 9.6 ms |
 
-### 3.6 Round 5-7 新增（bucket 续-6/7/8/9/10）
+### 3.6 Round 5-8 + main merge
 
 | Round | 内容 | commit | 测试增量 |
 |---|---|---|---|
 | Round 5 | gateway `_handleRequestImpl` 285 行 dispatch → route-table 驱动 | `6981cc8` | 持平（gateway 127/127） |
-| Round 6 | dom-driver.js 拆分（3755 → 450 + 11 modules） | `5bf77b6` | 持平（49/49） |
+| Round 6 | dom-driver.js 拆分（3755 → 450 + 11 modules） | `5bf77b6` | 持平（51/51） |
 | Round 7 | task-queue-service 拆 3 领域服务 + 25 新单测 | `6105ed0` | +25 |
+| Round 8 | main 分支合并 + `deleteSoloChats` 实现 + listSoloChats shape 修复 | `864ceaa` + `361c712` + `f04c3fc` | +37（780→817） |
 
 **Round 4.5 bugfix（用户报告）**：
 - `5c0e511`: gateway 默认 `TRAECN_AUTO_START_TRAE=0` + `TRAECN_AUTO_RECOVER=0`（解决"关闭 Trae 后自动重启"）
 - `b6572b6`: `scripts/quickstart.js` / `start-traecn.js` 改为 opt-in 启动；新增 `scripts/stop-traecn.js`（解决"开发时关不掉 Trae"——根因是 Trae 官方的 TRAE SOLO CN 独立 App）
 
-### 3.7 后续 worktree 候选（已完成全部，无未做项）
+**main 合并冲突解决**：
+- 12 个源文件（src/cdp/* + src/http/gateway.js）：取 systematic-optimization 版本（49 个优化 commit，780 PASS）
+- `src/shared/utils.js` + `utils.test.js`：取 main 的 queue-probe 工具函数 + 追加 systematic-optimization 的 `sanitizeLog`/`getGatewayContext` + 9 个新测试
+- `package.json`/`package-lock.json`：取 ours（worktree-systematic-optimization），main 还有已删除的 playwright 死代码
+- `src/http/gateway.test.js`：取 systematic-optimization 版本（127/127 passing）；main 的版本有 17 个引用未实现 WIP 特性（cleanup_foreign_solo_queue 端点、queueProbe 拦截、soloChat 目标选择）的测试，这些 WIP 代码未提交，保留在 git reflog (`a2ff51e`)
+
+### 3.7 后续 worktree 候选（已完成全部计划项）
 
 所有计划项已落地。下一阶段可考虑：
+- **恢复 WIP 特性（commit `a2ff51e`）**：用户 main worktree 的未提交工作 — SoloChatManager 类、queueProbe 拦截逻辑、`/api/solo/chats/cleanup-foreign-queue` 端点。可作为单独 PR 重新引入，配套补回 17 个 gateway.test.js 用例
 - **OpenAPI 自动从 route-table 生成**：当前 openapi.js 手工维护 9 个 driver 端点，可改为遍历 `ROUTES` 自动生成（risk: 中）
 - **WebSocket 协议层**：`websocket-handler.js` 仍是单文件
 - **CDP client 错误分类扩展**：当前只在 driver 层做，可在 client.js 内层做（risk: 中）

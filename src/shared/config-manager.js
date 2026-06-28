@@ -59,6 +59,110 @@ const CONFIG_SCHEMA = {
       description: 'Enable CORS support'
     }
   },
+  server: {
+    host: {
+      type: 'string',
+      default: '127.0.0.1',
+      description: 'Gateway server listen host'
+    },
+    port: {
+      type: 'number',
+      min: 1024,
+      max: 65535,
+      default: 8788,
+      description: 'Gateway server listen port'
+    },
+    token: {
+      type: 'string',
+      default: '',
+      description: 'API authentication token'
+    },
+    authHeader: {
+      type: 'string',
+      default: 'Authorization',
+      description: 'Authentication HTTP header name'
+    }
+  },
+  traeControl: {
+    autoStart: {
+      type: 'boolean',
+      default: true,
+      description: 'Whether to auto-start the Trae process'
+    },
+    recoveryCooldownMs: {
+      type: 'number',
+      min: 5000,
+      max: 300000,
+      default: 30000,
+      description: 'Trae recovery cooldown in milliseconds'
+    },
+    recoveryWaitMs: {
+      type: 'number',
+      min: 10000,
+      max: 600000,
+      default: 60000,
+      description: 'Trae recovery wait timeout in milliseconds'
+    }
+  },
+  autoRecover: {
+    enabled: {
+      type: 'boolean',
+      default: false,
+      description: 'Enable automatic CDP recovery'
+    },
+    probeIntervalMs: {
+      type: 'number',
+      min: 5000,
+      max: 300000,
+      default: 30000,
+      description: 'Health probe interval in milliseconds'
+    },
+    maxRecoveries: {
+      type: 'number',
+      min: 1,
+      max: 20,
+      default: 5,
+      description: 'Maximum recovery attempts'
+    },
+    probeTimeoutMs: {
+      type: 'number',
+      min: 1000,
+      max: 30000,
+      default: 5000,
+      description: 'Health probe timeout in milliseconds'
+    }
+  },
+  queue: {
+    flickerGraceMs: {
+      type: 'number',
+      min: 10000,
+      max: 300000,
+      default: 45000,
+      description: 'Queue status flicker grace period in milliseconds'
+    },
+    persistencePath: {
+      type: 'string',
+      default: '',
+      description: 'Queue persistence file path (empty = OS default)'
+    }
+  },
+  features: {
+    debugEndpoints: {
+      type: 'boolean',
+      default: false,
+      description: 'Enable debug endpoints'
+    },
+    mockBridge: {
+      type: 'boolean',
+      default: false,
+      description: 'Enable mock bridge mode'
+    },
+    enforceOperationConfirmation: {
+      type: 'boolean',
+      default: false,
+      description: 'Enforce operation confirmation'
+    }
+  },
   plugins: {
     type: 'object',
     default: {},
@@ -88,6 +192,32 @@ const DEFAULT_CONFIG = {
   cors: {
     allowedOrigins: '',
     enabled: true
+  },
+  server: {
+    host: '127.0.0.1',
+    port: 8788,
+    token: '',
+    authHeader: 'Authorization'
+  },
+  traeControl: {
+    autoStart: true,
+    recoveryCooldownMs: 30000,
+    recoveryWaitMs: 60000
+  },
+  autoRecover: {
+    enabled: false,
+    probeIntervalMs: 30000,
+    maxRecoveries: 5,
+    probeTimeoutMs: 5000
+  },
+  queue: {
+    flickerGraceMs: 45000,
+    persistencePath: ''
+  },
+  features: {
+    debugEndpoints: false,
+    mockBridge: false,
+    enforceOperationConfirmation: false
   },
   plugins: {},
   secrets: {}
@@ -124,13 +254,78 @@ class ConfigManager extends EventEmitter {
     this._auditLog = [];
     this._auditId = 0;
 
+    // Load from config file first (lowest priority among explicit sources).
     if (this.configFile) {
       this._loadFromFile();
     }
 
+    // Then apply env-var overrides (env vars take precedence over file).
+    this._applyEnvOverrides();
+
     if (this.watchEnabled) {
       this._startWatching();
     }
+  }
+
+  /**
+   * Apply environment-variable overrides on top of the file-loaded config.
+   * Each mapping entry describes: configPath -> [envVarNames], transformer.
+   * Env vars are checked in order; the first defined one wins.
+   */
+  _applyEnvOverrides() {
+    const mappings = [
+      // Server
+      { path: 'server.host', env: ['TRAECN_HOST', 'HOST', 'TRAE_HOST'] },
+      { path: 'server.port', env: ['TRAECN_PORT', 'PORT', 'TRAE_PORT'], transform: (v) => parseInt(v, 10) },
+      { path: 'server.token', env: ['TRAECN_GATEWAY_TOKEN', 'TRAE_GATEWAY_TOKEN'] },
+      { path: 'server.authHeader', env: ['TRAECN_AUTH_HEADER', 'TRAE_AUTH_HEADER'] },
+      // CORS
+      { path: 'cors.allowedOrigins', env: ['TRAECN_ALLOWED_ORIGINS', 'TRAE_ALLOWED_ORIGINS'] },
+      // Trae control
+      { path: 'traeControl.autoStart', env: ['TRAECN_AUTO_START_TRAE', 'TRAE_AUTO_START_TRAE'], transform: (v) => v !== '0' },
+      { path: 'traeControl.recoveryCooldownMs', env: ['TRAECN_TRAE_RECOVERY_COOLDOWN_MS', 'TRAE_TRAE_RECOVERY_COOLDOWN_MS'], transform: (v) => parseInt(v, 10) },
+      { path: 'traeControl.recoveryWaitMs', env: ['TRAECN_TRAE_RECOVERY_WAIT_MS', 'TRAE_TRAE_RECOVERY_WAIT_MS'], transform: (v) => parseInt(v, 10) },
+      // Auto recover
+      { path: 'autoRecover.enabled', env: ['TRAECN_AUTO_RECOVER', 'TRAE_AUTO_RECOVER'], transform: (v) => v === '1' },
+      { path: 'autoRecover.probeIntervalMs', env: ['TRAECN_AUTO_RECOVER_PROBE_MS', 'TRAE_AUTO_RECOVER_PROBE_MS'], transform: (v) => parseInt(v, 10) },
+      { path: 'autoRecover.maxRecoveries', env: ['TRAECN_AUTO_RECOVER_MAX', 'TRAE_AUTO_RECOVER_MAX'], transform: (v) => parseInt(v, 10) },
+      { path: 'autoRecover.probeTimeoutMs', env: ['TRAECN_AUTO_RECOVER_PROBE_TIMEOUT_MS', 'TRAE_AUTO_RECOVER_PROBE_TIMEOUT_MS'], transform: (v) => parseInt(v, 10) },
+      // Queue
+      { path: 'queue.flickerGraceMs', env: ['TRAECN_QUEUE_FLICKER_GRACE_MS', 'TRAE_QUEUE_FLICKER_GRACE_MS'], transform: (v) => parseInt(v, 10) },
+      { path: 'queue.persistencePath', env: ['TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH', 'TRAE_ACTIVE_QUEUE_PERSISTENCE_PATH'] },
+      // Features
+      { path: 'features.debugEndpoints', env: ['TRAECN_ENABLE_DEBUG_ENDPOINTS', 'TRAE_ENABLE_DEBUG_ENDPOINTS'], transform: (v) => v === '1' },
+      { path: 'features.mockBridge', env: ['TRAECN_ENABLE_MOCK_BRIDGE', 'TRAE_ENABLE_MOCK_BRIDGE'], transform: (v) => v === '1' },
+      { path: 'features.enforceOperationConfirmation', env: ['TRAECN_ENFORCE_OPERATION_CONFIRMATION', 'TRAE_ENFORCE_OPERATION_CONFIRMATION'], transform: (v) => v === '1' },
+      // Rate limit
+      { path: 'rateLimit.windowMs', env: ['TRAECN_RATE_LIMIT_WINDOW_MS', 'TRAE_RATE_LIMIT_WINDOW_MS'], transform: (v) => parseInt(v, 10) },
+      { path: 'rateLimit.maxRequests', env: ['TRAECN_RATE_LIMIT_MAX_REQUESTS', 'TRAE_RATE_LIMIT_MAX_REQUESTS'], transform: (v) => parseInt(v, 10) },
+    ];
+
+    for (const { path: configPath, env: envNames, transform } of mappings) {
+      let rawValue;
+      let found = false;
+      for (const name of envNames) {
+        if (process.env[name] !== undefined) {
+          rawValue = process.env[name];
+          found = true;
+          break;
+        }
+      }
+      if (!found) continue;
+      const value = transform ? transform(rawValue) : rawValue;
+      this._setNestedValue(configPath, value);
+    }
+  }
+
+  _setNestedValue(configPath, value) {
+    const parts = configPath.split('.');
+    let current = this._config;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!current[parts[i]]) current[parts[i]] = {};
+      current = current[parts[i]];
+    }
+    current[parts[parts.length - 1]] = value;
   }
 
   _isEncryptionEnabled() {
@@ -303,6 +498,80 @@ class ConfigManager extends EventEmitter {
               current: secretValue.length
             });
           }
+        }
+      }
+    }
+
+    // Server config validation
+    if (config.server !== undefined && typeof config.server === 'object') {
+      if (config.server.port !== undefined) {
+        if (typeof config.server.port !== 'number') {
+          errors.push({ path: 'server.port', message: 'Value must be a number', current: typeof config.server.port });
+        } else if (config.server.port < 1024) {
+          errors.push({ path: 'server.port', message: 'Value must be >= 1024', current: config.server.port, min: 1024 });
+        } else if (config.server.port > 65535) {
+          errors.push({ path: 'server.port', message: 'Value must be <= 65535', current: config.server.port, max: 65535 });
+        }
+      }
+    }
+
+    // TraeControl config validation
+    if (config.traeControl !== undefined && typeof config.traeControl === 'object') {
+      if (config.traeControl.autoStart !== undefined && typeof config.traeControl.autoStart !== 'boolean') {
+        errors.push({ path: 'traeControl.autoStart', message: 'Value must be a boolean', current: typeof config.traeControl.autoStart });
+      }
+      if (config.traeControl.recoveryCooldownMs !== undefined) {
+        if (typeof config.traeControl.recoveryCooldownMs !== 'number') {
+          errors.push({ path: 'traeControl.recoveryCooldownMs', message: 'Value must be a number' });
+        } else if (config.traeControl.recoveryCooldownMs < 5000 || config.traeControl.recoveryCooldownMs > 300000) {
+          errors.push({ path: 'traeControl.recoveryCooldownMs', message: 'Value must be between 5000 and 300000', current: config.traeControl.recoveryCooldownMs });
+        }
+      }
+      if (config.traeControl.recoveryWaitMs !== undefined) {
+        if (typeof config.traeControl.recoveryWaitMs !== 'number') {
+          errors.push({ path: 'traeControl.recoveryWaitMs', message: 'Value must be a number' });
+        } else if (config.traeControl.recoveryWaitMs < 10000 || config.traeControl.recoveryWaitMs > 600000) {
+          errors.push({ path: 'traeControl.recoveryWaitMs', message: 'Value must be between 10000 and 600000', current: config.traeControl.recoveryWaitMs });
+        }
+      }
+    }
+
+    // AutoRecover config validation
+    if (config.autoRecover !== undefined && typeof config.autoRecover === 'object') {
+      if (config.autoRecover.enabled !== undefined && typeof config.autoRecover.enabled !== 'boolean') {
+        errors.push({ path: 'autoRecover.enabled', message: 'Value must be a boolean' });
+      }
+      if (config.autoRecover.probeIntervalMs !== undefined) {
+        if (typeof config.autoRecover.probeIntervalMs !== 'number' || config.autoRecover.probeIntervalMs < 5000 || config.autoRecover.probeIntervalMs > 300000) {
+          errors.push({ path: 'autoRecover.probeIntervalMs', message: 'Value must be a number between 5000 and 300000' });
+        }
+      }
+      if (config.autoRecover.maxRecoveries !== undefined) {
+        if (typeof config.autoRecover.maxRecoveries !== 'number' || config.autoRecover.maxRecoveries < 1 || config.autoRecover.maxRecoveries > 20) {
+          errors.push({ path: 'autoRecover.maxRecoveries', message: 'Value must be a number between 1 and 20' });
+        }
+      }
+      if (config.autoRecover.probeTimeoutMs !== undefined) {
+        if (typeof config.autoRecover.probeTimeoutMs !== 'number' || config.autoRecover.probeTimeoutMs < 1000 || config.autoRecover.probeTimeoutMs > 30000) {
+          errors.push({ path: 'autoRecover.probeTimeoutMs', message: 'Value must be a number between 1000 and 30000' });
+        }
+      }
+    }
+
+    // Queue config validation
+    if (config.queue !== undefined && typeof config.queue === 'object') {
+      if (config.queue.flickerGraceMs !== undefined) {
+        if (typeof config.queue.flickerGraceMs !== 'number' || config.queue.flickerGraceMs < 10000 || config.queue.flickerGraceMs > 300000) {
+          errors.push({ path: 'queue.flickerGraceMs', message: 'Value must be a number between 10000 and 300000' });
+        }
+      }
+    }
+
+    // Features config validation
+    if (config.features !== undefined && typeof config.features === 'object') {
+      for (const [featKey, featValue] of Object.entries(config.features)) {
+        if (typeof featValue !== 'boolean') {
+          errors.push({ path: `features.${featKey}`, message: 'Feature flag must be a boolean' });
         }
       }
     }

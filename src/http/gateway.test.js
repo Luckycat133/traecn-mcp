@@ -2958,8 +2958,9 @@ asyncTest('Gateway open-project returns 404 when no TraeCN binary is resolvable'
 asyncTest('Gateway auto-recovery respects cooldown and does not thrash', async () => {
   const gateway = new Gateway();
   gateway.autoStartTrae = true;
-  gateway.traeRecoveryCooldownMs = 60000;
-  gateway.lastTraeRecoveryAt = Date.now();
+  gateway.traeControl.autoStartTrae = true;
+  gateway.traeControl.recoveryCooldownMs = 60000;
+  gateway.traeControl.lastRecoveryAt = Date.now();
   const result = await gateway._attemptTraeRecovery(new Error('cdp gone'));
   assert.strictEqual(result, false, 'cooldown should suppress the second call');
 });
@@ -2967,6 +2968,7 @@ asyncTest('Gateway auto-recovery respects cooldown and does not thrash', async (
 asyncTest('Gateway auto-recovery bails early when autoStartTrae is off', async () => {
   const gateway = new Gateway();
   gateway.autoStartTrae = false;
+  gateway.traeControl.autoStartTrae = false;
   const result = await gateway._attemptTraeRecovery(new Error('cdp gone'));
   assert.strictEqual(result, false, 'autoStartTrae=false should suppress recovery');
 });
