@@ -304,6 +304,10 @@ class DomDriver {
     return soloChatModule.switchSoloChat(this, criteria);
   }
 
+  async deleteSoloChats(options = {}) {
+    return soloChatModule.deleteSoloChats(this, options);
+  }
+
   /**
    * Mode-aware switchMode.
    * Finds mode tabs by text content (not hardcoded index), clicks the matching tab,
