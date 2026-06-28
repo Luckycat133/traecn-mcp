@@ -72,6 +72,7 @@
     "doctor": "node scripts/doctor.js",
     "quickstart": "node scripts/quickstart.js",
     "start:traecn": "node scripts/start-traecn.js",
+    "stop:traecn": "node scripts/stop-traecn.js",
     "start:gateway": "node scripts/start-gateway.js",
     "service:install": "node scripts/gateway-service.js install",
     "service:start": "node scripts/gateway-service.js start",
