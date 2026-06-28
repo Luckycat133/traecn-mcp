@@ -91,48 +91,19 @@ function saveConfig(newConfig) {
   }
 }
 
+// Thin compatibility shim. The TraeCNApiClient (openclaw integration lib)
+// owns the canonical HTTP client; this wrapper just adapts the CLI's
+// loadConfig() shape to the client constructor so the rest of the file
+// keeps its (method, endpoint, body) call sites unchanged.
 function apiRequest(method, endpoint, body) {
-  return new Promise((resolve, reject) => {
-    const cfg = loadConfig();
-    const options = {
-      hostname: cfg.host,
-      port: cfg.port,
-      path: endpoint,
-      method,
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      timeout: 60000
-    };
-
-    if (cfg.token) {
-      options.headers['Authorization'] = `Bearer ${cfg.token}`;
-    }
-
-    const req = http.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          resolve({ status: res.statusCode, data: json });
-        } catch {
-          resolve({ status: res.statusCode, data: data });
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('Request timeout'));
-    });
-
-    if (body) {
-      req.write(JSON.stringify(body));
-    }
-    req.end();
+  const cfg = loadConfig();
+  const client = new TraeCNApiClient({
+    host: cfg.host,
+    port: cfg.port,
+    token: cfg.token,
+    timeoutMs: 60000
   });
+  return client._request(method, endpoint, body);
 }
 
 function showProgress(current, total, label = '') {

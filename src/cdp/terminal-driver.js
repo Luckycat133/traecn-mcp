@@ -2,7 +2,7 @@
 
 const { sleep, safeJsValue } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
-const { BaseDriver } = require('./base-driver');
+const { evaluate, evaluateJSON } = require('./browser-dom');
 
 /**
  * TerminalDriver — drive TraeCN's integrated terminal panel.
@@ -14,7 +14,24 @@ const { BaseDriver } = require('./base-driver');
  *  - Read output via the xterm-rows innerText.
  *  - Track multiple terminals by aria-label / title in the terminal tab list.
  */
-class TerminalDriver extends BaseDriver {
+class TerminalDriver {
+  constructor(client, config = {}, deps = {}) {
+    this.client = client;
+    this.config = config;
+    this.palette = deps.palette || null;
+  }
+
+  setPalette(palette) {
+    this.palette = palette;
+  }
+
+  _viaPalette(commandId) {
+    if (!this.palette) {
+      throw new TraeCNAutomationError('CommandPaletteDriver required', 'PALETTE_REQUIRED', { commandId });
+    }
+    return this.palette.run(commandId);
+  }
+
   // ── Open / close / new (command palette) ───────────────────────────
 
   toggleTerminal() { return this._viaPalette('workbench.action.terminal.toggleTerminal'); }
@@ -30,28 +47,31 @@ class TerminalDriver extends BaseDriver {
    * Get a snapshot of the current terminal state.
    */
   async snapshot() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
-        const wrappers = document.querySelectorAll('.terminal-wrapper');
-        if (!wrappers.length) return JSON.stringify({ ok: false, error: 'no terminal' });
-        const active = Array.from(wrappers).find(w => w.offsetParent !== null) || wrappers[0];
-        const xterm = active.querySelector('.xterm');
-        const rows = active.querySelector('.xterm-rows');
-        const tabs = Array.from(document.querySelectorAll('[class*="terminal-tab"]')).map(t => ({
-          title: t.title || t.getAttribute('aria-label') || (t.innerText || '').trim(),
-          active: (t.className || '').includes('active') || t.getAttribute('aria-selected') === 'true'
-        }));
-        return JSON.stringify({
-          ok: true,
-          present: true,
-          output: rows ? (rows.innerText || '').slice(-8000) : '',
-          rowCount: rows ? rows.children.length : 0,
-          tabs
-        });
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return { ok: false, error: 'parse failed' }; }
+    try {
+      return await evaluateJSON(
+        this.client,
+        `() => {
+          const wrappers = document.querySelectorAll('.terminal-wrapper');
+          if (!wrappers.length) return { ok: false, error: 'no terminal' };
+          const active = Array.from(wrappers).find(w => w.offsetParent !== null) || wrappers[0];
+          const xterm = active.querySelector('.xterm');
+          const rows = active.querySelector('.xterm-rows');
+          const tabs = Array.from(document.querySelectorAll('[class*="terminal-tab"]')).map(t => ({
+            title: t.title || t.getAttribute('aria-label') || (t.innerText || '').trim(),
+            active: (t.className || '').includes('active') || t.getAttribute('aria-selected') === 'true'
+          }));
+          return {
+            ok: true,
+            present: true,
+            output: rows ? (rows.innerText || '').slice(-8000) : '',
+            rowCount: rows ? rows.querySelectorAll('.xterm-rows > div').length : 0,
+            tabs
+          };
+        }`
+      );
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
   }
 
   /**
@@ -146,28 +166,20 @@ class TerminalDriver extends BaseDriver {
       throw new TraeCNAutomationError('title required', 'INVALID_INPUT', {});
     }
     const safe = safeJsValue(title);
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
-        const tabs = document.querySelectorAll('[class*="terminal-tab"]');
-        for (const t of tabs) {
-          const tabTitle = t.title || t.getAttribute('aria-label') || (t.innerText || '').trim();
-          if (tabTitle === ${safe}) {
-            t.click();
-            return 'clicked: ' + tabTitle;
-          }
-        }
-        return 'not found';
-      })()`,
-      returnByValue: true
-    });
-    return { ok: r.result.value !== 'not found', action: r.result.value };
+    const action = await evaluate(
+      this.client,
+      '(title) => { const tabs = document.querySelectorAll("[class*=\"terminal-tab\"]"); for (const t of tabs) { const tabTitle = t.title || t.getAttribute("aria-label") || (t.innerText || "").trim(); if (tabTitle === title) { t.click(); return "clicked: " + tabTitle; } } return "not found"; }',
+      [title]
+    );
+    return { ok: action !== 'not found', action };
   }
 
   // ── Helpers ────────────────────────────────────────────────────────
 
   async _focusActiveTerminal() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
+    return evaluate(
+      this.client,
+      `() => {
         const wrappers = document.querySelectorAll('.terminal-wrapper');
         for (const w of wrappers) {
           if (w.offsetParent === null) continue;
@@ -178,9 +190,8 @@ class TerminalDriver extends BaseDriver {
           return true;
         }
         return false;
-      })()`,
-      returnByValue: true
-    });
+      }`
+    );
     return !!r.result.value;
   }
 }

@@ -2,33 +2,10 @@
 
 const assert = require('assert');
 const { MockDriver } = require('../cdp/mock-driver');
+const { createRunner } = require('../shared/test-runner');
 
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
-
-async function asyncTest(name, fn) {
-  try {
-    await fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const r = createRunner('mock-driver.test.js');
+const { test, asyncTest, summary } = r;
 
 console.log('\n[mock-driver.test.js] Running tests...\n');
 
@@ -167,6 +144,6 @@ test('MockDriver constructor accepts custom responses', () => {
     assert.strictEqual(readiness.ready, false);
   });
 
-  console.log(`\n[mock-driver.test.js] Results: ${passed} passed, ${failed} failed\n`);
-  process.exit(failed > 0 ? 1 : 0);
+  summary();
+  process.exit(r.failed > 0 ? 1 : 0);
 })();

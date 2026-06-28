@@ -1,25 +1,8 @@
 'use strict';
 
-/**
- * DomDriver — lightweight coordinator that delegates to specialized handler classes.
- *
- * Refactored from a 4000+ line god class into a thin facade that composes:
- *   - DOMHelper              (DOM operations & element finding)
- *   - ModeDetector           (solo/ide mode detection)
- *   - TextExtractor          (text capture from various DOM regions)
- *   - SetupWizardHandler     (initial setup wizard flow)
- *   - WorkspaceGuideHandler  (workspace guide blockers & dismissal)
- *   - MessageHandler         (message typing, sending, agent switching)
- *   - TaskStateManager       (task state querying from sidebar/IDE panel)
- *   - DialogHandler          (approval dialogs, review gates, restricted mode)
- *   - ModelManager           (AI model selection & queue status)
- *   - SoloChatManager        (SOLO sidebar chat list/switch/delete)
- *   - ResponsePoller         (response polling & collection)
- *
- * Public API is fully backward-compatible with the original implementation.
- */
-
+const http = require('http');
 const { TraeCNAutomationError } = require('./errors');
+const { CDPClient } = require('./client');
 const { SettingsDriver } = require('./settings-driver');
 const { CommandPaletteDriver } = require('./command-palette-driver');
 const { EditorDriver } = require('./editor-driver');
@@ -30,654 +13,341 @@ const { SearchDriver } = require('./search-driver');
 const { DiagnosticsDriver } = require('./diagnostics-driver');
 const { SnapshotDriver } = require('./snapshot-driver');
 const { ExtensionDriver } = require('./extension-driver');
-const { sleep, safeJsValue } = require('../shared/utils');
-const {
-  DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS,
-  DEFAULT_RESPONSE_SELECTORS, DEFAULT_ACTIVITY_SELECTORS,
-  DEFAULT_NEW_CHAT_SELECTORS, DEFAULT_MODE_TAB_SELECTORS,
-  getConfig, sanitizeActivityText, isTruncationSignal
-} = require('./driver-config');
-
-// Refactored handler classes
-const { DOMHelper } = require('./dom-helper');
-const { ModeDetector } = require('./mode-detector');
-const { TextExtractor } = require('./text-extractor');
-const { SetupWizardHandler } = require('./setup-wizard-handler');
-const { WorkspaceGuideHandler } = require('./workspace-guide-handler');
-const { MessageHandler } = require('./message-handler');
-const { TaskStateManager } = require('./task-state-manager');
-const { DialogHandler } = require('./dialog-handler');
-const { ModelManager } = require('./model-manager');
-const { SoloChatManager } = require('./solo-chat-manager');
-const { ResponsePoller } = require('./response-poller');
-
-// Re-export shared utilities for backward compatibility
-const {
-  hasCompletionMarker,
-  cleanAssistantResultText,
-  DIALOG_BUTTON_SELECTOR
-} = require('./dom-driver-utils');
+const { getConfig } = require('./driver-config');
+const setupModule = require('./dom-handlers/setup');
+const modeModule = require('./dom-handlers/mode-detection');
+const panelModule = require('./dom-handlers/panel-capture');
+const dialogsModule = require('./dom-handlers/dialogs');
+const answerQuestionModule = require('./dom-handlers/answer-question');
+const restrictedModule = require('./dom-handlers/restricted-mode');
+const messagingModule = require('./dom-handlers/messaging');
+const reviewGateModule = require('./dom-handlers/review-gate');
+const responseModule = require('./dom-handlers/response-collection');
+const soloChatModule = require('./dom-handlers/solo-chat');
+const modelModule = require('./dom-handlers/model');
 
 class DomDriver {
   constructor(client, config) {
     this.client = client;
     this.config = config || getConfig();
-
-    // Shared mutable state (accessed by multiple handlers via the coordinator)
     this._lastTaskText = '';
     this._pendingUserTask = '';
-    this._preSendSnapshot = '';
-
-    // Compose specialized handlers
-    this._domHelper = new DOMHelper(this.client, this.config);
-    this._modeDetector = new ModeDetector(this.client, this.config);
-    this._textExtractor = new TextExtractor(this.client, this.config);
-    this._setupWizardHandler = new SetupWizardHandler(this.client, this.config, this._domHelper, this._modeDetector);
-    this._workspaceGuideHandler = new WorkspaceGuideHandler(this.client, this.config, this._domHelper, this);
-    this._dialogHandler = new DialogHandler(this.client, this.config, this._domHelper);
-    this._messageHandler = new MessageHandler(this.client, this.config, this._domHelper, this._dialogHandler);
-    this._taskStateManager = new TaskStateManager(this.client, this.config, this._modeDetector);
-    this._modelManager = new ModelManager(this.client, this.config, this._domHelper, this);
-    this._soloChatManager = new SoloChatManager(this.client, this.config, this._domHelper);
-    this._responsePoller = new ResponsePoller(
-      this.client, this.config,
-      this._modeDetector, this._taskStateManager,
-      this._dialogHandler, this._textExtractor, this
-    );
+    this._preSendSnapshot = ''; // body text snapshot before sending task
+    this._cachedMode = null;    // cached mode detection result
+    this._cachedModeTs = 0;
+    this._modeCacheTtl = 5000;  // re-detect after 5s
   }
 
   // ── Mode detection ─────────────────────────────────────────────────────
 
   async detectMode() {
-    return this._modeDetector.detectMode();
+    return modeModule.detectMode(this);
   }
 
   _invalidateModeCache() {
-    this._modeDetector.invalidateCache();
+    return modeModule._invalidateModeCache(this);
   }
 
-  // ── Setup wizard ───────────────────────────────────────────────────────
+  /**
+   * Inject `window.__enhancedClick` into the page so that repeated inline
+   * click-dispatcher code can be replaced with a single function call.
+   * The helper searches for the first matching clickable element by text
+   * and dispatches PointerEvent → MouseEvent → el.click().
+   *
+   * @param {string} targetText  - exact text to match against element content
+   * @param {boolean} [normalizeText=false] - collapse whitespace before comparing
+   * @returns {{ clicked: boolean, text: string }}
+   */
+  async _ensureClickHelper() {
+    return setupModule._ensureClickHelper(this);
+  }
 
   async inspectSetupWizard() {
-    return this._setupWizardHandler.inspectSetupWizard();
+    return setupModule.inspectSetupWizard(this);
   }
 
   async completeSetupIfPresent(options = {}) {
-    return this._setupWizardHandler.completeSetupIfPresent(options);
+    return setupModule.completeSetupIfPresent(this, options);
   }
 
-  // ── Workspace guide ────────────────────────────────────────────────────
-
   async inspectWorkspaceBlockers() {
-    return this._workspaceGuideHandler.inspectWorkspaceBlockers();
+    return setupModule.inspectWorkspaceBlockers(this);
   }
 
   async dismissWorkspaceGuideIfPresent(options = {}) {
-    return this._workspaceGuideHandler.dismissWorkspaceGuideIfPresent(options);
+    return setupModule.dismissWorkspaceGuideIfPresent(this, options);
   }
 
-  // ── Text capture ───────────────────────────────────────────────────────
+  // ── Sidebar / panel text capture ───────────────────────────────────────
 
   async _captureSidebarText() {
-    return this._textExtractor.captureSidebarText();
+    return panelModule._captureSidebarText(this);
   }
 
+  /**
+   * Capture text from the IDE chat panel (used instead of sidebar in IDE mode).
+   */
   async _captureIdePanelText() {
-    return this._textExtractor.captureIdePanelText();
+    return panelModule._captureIdePanelText(this);
   }
 
+  /**
+   * Capture all visible text in the main content area (excluding sidebar & composer).
+   */
   async _captureVisibleText() {
-    return this._textExtractor.captureVisibleText();
+    return panelModule._captureVisibleText(this);
   }
 
+  /**
+   * Capture document.body innerText as a broad snapshot for text diffing.
+   */
   async _captureBodyText() {
-    return this._textExtractor.captureBodyText();
+    return panelModule._captureBodyText(this);
   }
 
+  /**
+   * Scan only the content area for text-containing elements.
+   */
   async _scanContentArea() {
-    return this._textExtractor.scanContentArea();
+    return panelModule._scanContentArea(this);
   }
 
-  // ── Task state ─────────────────────────────────────────────────────────
+  // ── Task sidebar / panel querying ──────────────────────────────────────
 
+  /**
+   * Query the SOLO sidebar for task state.
+   * Only meaningful in SOLO mode — returns null in IDE mode.
+   */
   async _queryTaskSidebar(skipText) {
-    return this._taskStateManager.queryTaskSidebar(skipText);
+    return panelModule._queryTaskSidebar(this, skipText);
   }
 
+  /**
+   * Query the IDE chat panel for task state.
+   * Used instead of _queryTaskSidebar() in IDE mode.
+   */
   async _queryIdeTaskPanel(skipText) {
-    return this._taskStateManager.queryIdeTaskPanel(skipText);
+    return panelModule._queryIdeTaskPanel(this, skipText);
   }
 
   _extractLatestIdeAssistantState(panelState, skipText) {
-    return this._taskStateManager._extractLatestIdeAssistantState(panelState, skipText);
+    return panelModule._extractLatestIdeAssistantState(panelState, skipText);
   }
 
   _isIncompleteResponseText(text) {
-    return this._taskStateManager.isIncompleteResponseText(text);
+    return panelModule._isIncompleteResponseText(text);
   }
 
   _isModelErrorResponseText(text) {
-    return this._taskStateManager.isModelErrorResponseText(text);
+    return panelModule._isModelErrorResponseText(text);
   }
 
+  /**
+   * Mode-aware version: tries sidebar in SOLO mode, chat panel in IDE mode.
+   */
   async _queryTaskSource(skipText) {
-    return this._taskStateManager.queryTaskSource(skipText);
+    return panelModule._queryTaskSource(this, skipText);
   }
 
   async findTaskResponse() {
-    return this._taskStateManager.findTaskResponse(this._lastTaskText);
+    return panelModule.findTaskResponse(this);
   }
 
   // ── Element finders ────────────────────────────────────────────────────
 
   async findComposer() {
-    return this._domHelper.findComposer();
+    return modeModule.findComposer(this);
   }
 
   async findSendButton() {
-    return this._domHelper.findSendButton();
+    return modeModule.findSendButton(this);
   }
 
   async findResponseRegion() {
-    return this._domHelper.findResponseRegion();
+    return modeModule.findResponseRegion(this);
   }
 
   async _findVisibleElementRuntime(selectors, options = {}) {
-    return this._domHelper.findVisibleElementRuntime(selectors, options);
+    return modeModule._findVisibleElementRuntime(this, selectors, options);
   }
 
+  /**
+   * Find new chat button — tries SOLO selectors first, falls back to IDE selectors.
+   */
   async findNewChatButton() {
-    return this._domHelper.findNewChatButton();
+    return modeModule.findNewChatButton(this);
   }
 
+  /**
+   * Find mode tabs by selector; uses text matching to avoid false positives
+   * from elements that match the selector but aren't mode tabs (e.g., editor tabs).
+   */
   async findModeTabs() {
-    return this._domHelper.findModeTabs();
+    return modeModule.findModeTabs(this);
   }
-
-  // ── Click helper ───────────────────────────────────────────────────────
-
-  async _ensureClickHelper() {
-    return this._domHelper.ensureClickHelper();
-  }
-
-  // ── Dialog / review gate / restricted mode ─────────────────────────────
 
   async checkTaskReviewGate() {
-    return this._dialogHandler.checkTaskReviewGate();
+    return reviewGateModule.checkTaskReviewGate(this);
   }
 
   async resolveTaskReviewGate(preferredAction = 'keep_all') {
-    return this._dialogHandler.resolveTaskReviewGate(preferredAction);
-  }
-
-  async checkForApprovalDialog() {
-    return this._dialogHandler.checkForApprovalDialog();
-  }
-
-  async approveDialog(action) {
-    return this._dialogHandler.approveDialog(action);
-  }
-
-  async answerQuestionDialog(answer) {
-    return this._dialogHandler.answerQuestionDialog(answer);
-  }
-
-  _getButtonLabelsForAction(action) {
-    return this._dialogHandler._getButtonLabelsForAction(action);
-  }
-
-  _summarizeRestrictedModeState(snapshot = {}) {
-    return this._dialogHandler._summarizeRestrictedModeState(snapshot);
-  }
-
-  async clickRestrictedModeTrust() {
-    return this._dialogHandler.clickRestrictedModeTrust();
-  }
-
-  async checkRestrictedMode() {
-    return this._dialogHandler.checkRestrictedMode();
+    return reviewGateModule.resolveTaskReviewGate(this, preferredAction);
   }
 
   // ── Message UX ─────────────────────────────────────────────────────────
 
   async typeMessage(text) {
-    return this._messageHandler.typeMessage(text);
+    return messagingModule.typeMessage(this, text);
   }
 
   async sendMessage(text) {
-    return this._messageHandler.sendMessage(text);
+    return messagingModule.sendMessage(this, text);
   }
 
   async stopGeneration() {
-    return this._messageHandler.stopGeneration();
+    return messagingModule.stopGeneration(this);
+  }
+
+  // ── Core polling ───────────────────────────────────────────────────────
+
+  /**
+   * Core polling method. Checks multiple response sources in priority order:
+   * 1. Mode-specific response selectors (sidebar for SOLO, chat panel for IDE)
+   * 2. Configured response selectors (generic fallback)
+   * 3. Broad content area scan (heuristic-based)
+   * 4. Body text diffing (last resort)
+   */
+  async _pollResponseState() {
+    return responseModule._pollResponseState(this);
+  }
+
+  async checkForApprovalDialog() {
+    return dialogsModule.checkForApprovalDialog(this);
+  }
+
+  // ── Delegation ─────────────────────────────────────────────────────────
+
+  /**
+   * Mode-aware response collection.
+   * In SOLO mode: reads sidebar + heuristics (existing logic).
+   * In IDE mode: reads chat panel messages + body text diff.
+   */
+  async collectResponse() {
+    return responseModule.collectResponse(this);
+  }
+
+
+  /**
+   * Approve / dismiss a detected dialog by clicking the matching button.
+   * @param {string} action - 'trust' | 'allow' | 'confirm' | 'approve' | 'deny' | 'cancel' | 'dismiss'
+   * @returns {Promise<{success: boolean, action: string, buttonClicked?: string, error?: string}>}
+   */
+  async approveDialog(action) {
+    return dialogsModule.approveDialog(this, action);
+  }
+
+  async answerQuestionDialog(answer) {
+    return answerQuestionModule.answerQuestionDialog(this, answer);
+  }
+
+  /**
+   * Map an approve action to the list of button label patterns to search for.
+   * Supports CN and EN labels.
+   */
+  _getButtonLabelsForAction(action) {
+    return dialogsModule._getButtonLabelsForAction(action);
+  }
+
+  _summarizeRestrictedModeState(snapshot = {}) {
+    return restrictedModule._summarizeRestrictedModeState(snapshot);
+  }
+
+  /**
+   * Check for restricted mode and click the Trust button if found.
+   * Returns the result of the operation.
+   */
+  async clickRestrictedModeTrust() {
+    return restrictedModule.clickRestrictedModeTrust(this);
   }
 
   async switchAgent(agentName) {
-    return this._messageHandler.switchAgent(agentName);
+    return messagingModule.switchAgent(this, agentName);
   }
 
-  // ── Response polling ───────────────────────────────────────────────────
-
-  async _pollResponseState() {
-    // Sync shared state before polling
-    this._responsePoller._lastTaskText = this._lastTaskText;
-    this._responsePoller._pendingUserTask = this._pendingUserTask;
-    this._responsePoller._preSendSnapshot = this._preSendSnapshot;
-    return this._responsePoller._pollResponseState();
+  /**
+   * Mode-aware delegation.
+   * - Detects current UI mode.
+   * - SOLO: uses sidebar (toggles sidebar visibility), tracks task via sidebar.
+   * - IDE: no sidebar toggle needed, tracks task via chat panel.
+   */
+  async delegate(task, options = {}) {
+    return messagingModule.delegate(this, task, options);
   }
 
-  async collectResponse() {
-    // Sync shared state before collecting
-    this._responsePoller._lastTaskText = this._lastTaskText;
-    this._responsePoller._pendingUserTask = this._pendingUserTask;
-    this._responsePoller._preSendSnapshot = this._preSendSnapshot;
-    return this._responsePoller.collectResponse();
+  async _waitForExpression(expression, timeoutMs = 5000, pollMs = 200) {
+    return messagingModule._waitForExpression(this, expression, timeoutMs, pollMs);
+  }
+
+  async newChat() {
+    return messagingModule.newChat(this);
+  }
+
+  async listSoloChats() {
+    return soloChatModule.listSoloChats(this);
+  }
+
+  async getActiveSoloChat() {
+    return soloChatModule.getActiveSoloChat(this);
+  }
+
+  async switchSoloChat(criteria = {}) {
+    return soloChatModule.switchSoloChat(this, criteria);
+  }
+
+  /**
+   * Mode-aware switchMode.
+   * Finds mode tabs by text content (not hardcoded index), clicks the matching tab,
+   * waits for UI to re-render, and verifies the switch.
+   *
+   * @param {'solo'|'ide'} mode - Target mode.
+   * @returns {Promise<{success: boolean, previousMode?: string, currentMode?: string}>}
+   */
+  async switchMode(mode) {
+    return modeModule.switchMode(this, mode);
   }
 
   // ── Model management ───────────────────────────────────────────────────
 
-  static get KNOWN_MODELS() {
-    return ModelManager.KNOWN_MODELS;
-  }
+  static KNOWN_MODELS = modelModule.KNOWN_MODELS;
 
   async checkQueueStatus(timeoutMs = 5000) {
-    return this._modelManager.checkQueueStatus(timeoutMs);
+    return modelModule.checkQueueStatus(this, timeoutMs);
   }
 
   async _checkQueueStatusRaw() {
-    return this._modelManager._checkQueueStatusRaw();
+    return modelModule._checkQueueStatusRaw(this);
   }
 
   async getCurrentModel() {
-    return this._modelManager.getCurrentModel();
+    return modelModule.getCurrentModel(this);
   }
 
   _normalizeModelName(name) {
-    return this._modelManager._normalizeModelName(name);
+    return modelModule._normalizeModelName(name);
   }
 
   async switchModel(modelName) {
-    return this._modelManager.switchModel(modelName);
+    return modelModule.switchModel(this, modelName);
   }
 
-  // ── SOLO chat management ───────────────────────────────────────────────
-
-  async listSoloChats() {
-    return this._soloChatManager.listSoloChats();
-  }
-
-  async _findSoloChatActionPoint(candidate = {}) {
-    return this._soloChatManager._findSoloChatActionPoint(candidate);
-  }
-
-  async _findSoloDeleteMenuPoint(anchorPoint = {}) {
-    return this._soloChatManager._findSoloDeleteMenuPoint(anchorPoint);
-  }
-
-  async _findSoloDeleteConfirmPoint() {
-    return this._soloChatManager._findSoloDeleteConfirmPoint();
-  }
-
-  _normalizeSoloChatDeleteMatchText(value) {
-    return this._soloChatManager._normalizeSoloChatDeleteMatchText(value);
-  }
-
-  _soloChatMatchesDeleteCandidate(chat = {}, candidate = {}) {
-    return this._soloChatManager._soloChatMatchesDeleteCandidate(chat, candidate);
-  }
-
-  async deleteSoloChats(options = {}) {
-    return this._soloChatManager.deleteSoloChats(options);
-  }
-
-  async getActiveSoloChat() {
-    return this._soloChatManager.getActiveSoloChat();
-  }
-
-  async switchSoloChat(criteria = {}) {
-    const result = await this._soloChatManager.switchSoloChat(criteria);
-    if (result.success) {
-      this._lastTaskText = '';
-      this._pendingUserTask = '';
-      this._preSendSnapshot = '';
-    }
-    return result;
-  }
-
-  // ── Mouse helpers ──────────────────────────────────────────────────────
-
-  async _dispatchTrustedMouseClick(point, options = {}) {
-    return this._domHelper.dispatchTrustedMouseClick(point, options);
-  }
-
-  async _waitForExpression(expression, timeoutMs = 5000, pollMs = 200) {
-    return this._domHelper.waitForExpression(expression, timeoutMs, pollMs);
-  }
-
-  // ── Mode switching ─────────────────────────────────────────────────────
-
-  async switchMode(mode) {
-    this._invalidateModeCache();
-    const currentModeInfo = await this.detectMode();
-
-    const modeLower = mode.toLowerCase();
-    if (currentModeInfo.mode === modeLower) {
-      return { success: true, previousMode: currentModeInfo.mode, currentMode: modeLower, alreadyInMode: true };
-    }
-
-    const modeTabs = await this.findModeTabs();
-
-    const relevantTabs = modeTabs.filter(t => {
-      const lower = t.text.toLowerCase();
-      return lower.includes('solo') || lower.includes('ide') || lower.includes('编辑器');
-    });
-
-    const targetTextKeywords = modeLower === 'solo' ? ['solo', '编辑器'] : ['ide'];
-    const target = relevantTabs.find(t => {
-      const lower = t.text.toLowerCase();
-      return targetTextKeywords.some(k => lower.includes(k));
-    });
-
-    if (!target) {
-      const activeTab = relevantTabs.find(t => {
-        return currentModeInfo.indicators.some(i => i.includes(t.text.toLowerCase()));
-      });
-      const otherTab = relevantTabs.find(t => {
-        if (!activeTab) return t.text.toLowerCase().includes(modeLower);
-        return t.nodeId !== activeTab.nodeId;
-      });
-
-      if (otherTab) {
-        await this.client.send('Runtime.evaluate', {
-          expression: `
-            (function() {
-              var el = document.querySelector('[node-id="${otherTab.nodeId}"]');
-              if (!el) {
-                var items = document.querySelectorAll('.icube-mode-tab-item, [class*="icube-mode-tab-item"], [class*="mode-tab"]');
-                for (var i = 0; i < items.length; i++) {
-                  var t = items[i].textContent.trim().toLowerCase();
-                  if (t.indexOf('${modeLower}') > -1) {
-                    items[i].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                    return 'clicked by text match';
-                  }
-                }
-                return 'target tab not found';
-              }
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-              return 'clicked by node-id';
-            })()
-          `,
-          returnByValue: true
-        });
-        await sleep(this.config.modeSwitchWaitMs);
-      } else {
-        return { success: false, previousMode: currentModeInfo.mode, error: 'Target mode tab not found' };
-      }
-    } else {
-      await this.client.send('DOM.focus', { nodeId: target.nodeId });
-      await this.client.send('Runtime.evaluate', {
-        expression: `
-          (function() {
-            var items = document.querySelectorAll('.icube-mode-tab-item');
-            for (var i = 0; i < items.length; i++) {
-              var t = items[i].textContent.trim().toLowerCase();
-              if (t.indexOf('${modeLower}') > -1) {
-                items[i].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                return 'clicked tab: ' + items[i].textContent.trim();
-              }
-            }
-            return 'tab click attempted';
-          })()
-        `,
-        returnByValue: true
-      });
-      await sleep(this.config.modeSwitchWaitMs);
-    }
-
-    this._invalidateModeCache();
-    const maxWait = this.config.modeSwitchWaitMs + 3000;
-    const pollStart = Date.now();
-    let switchedToMode = null;
-
-    while (Date.now() - pollStart < maxWait) {
-      const verifyInfo = await this.detectMode();
-      if (verifyInfo.mode === modeLower) {
-        switchedToMode = verifyInfo.mode;
-        break;
-      }
-      await sleep(300);
-    }
-
-    if (switchedToMode === modeLower) {
-      return { success: true, previousMode: currentModeInfo.mode, currentMode: modeLower };
-    }
-
-    return { success: true, previousMode: currentModeInfo.mode, currentMode: modeLower, verifyLimited: true };
-  }
-
-  // ── Task delegation ────────────────────────────────────────────────────
-
-  async delegate(task, options = {}) {
-    await this.newChat();
-    this._invalidateModeCache();
-
-    const modeInfo = await this.detectMode();
-    const isIdeMode = modeInfo.mode === 'ide';
-
-    if (!isIdeMode) {
-      await this.client.send('Runtime.evaluate', {
-        expression: `
-          (function() {
-            var sidebar = document.querySelector('.soloaisidebar');
-            if (!sidebar || sidebar.offsetHeight < 100) {
-              document.body.focus();
-              document.body.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 't', code: 'KeyT',
-                ctrlKey: true, metaKey: true, bubbles: true
-              }));
-              return 'toggled sidebar';
-            }
-            return 'sidebar already visible';
-          })()
-        `,
-        returnByValue: true
-      });
-      await sleep(500);
-
-      const beforeSidebar = await this._captureSidebarText();
-      this._lastTaskText = beforeSidebar;
-    } else {
-      const beforePanel = await this._captureIdePanelText();
-      this._lastTaskText = beforePanel;
-    }
-
-    if (options.agent) {
-      await this.switchAgent(options.agent);
-    }
-
-    var effectiveTask = task;
-    if (options.mode) {
-      var modeRaw = options.mode.startsWith('/') ? options.mode.slice(1) : options.mode;
-      if (isIdeMode) {
-        var modeHints = {
-          plan: '请先制定详细的实施方案和计划，然后逐步执行：',
-          spec: '请编写详细的技术规格说明和设计方案：',
-          review: '请审查以下内容，指出问题、风险和改进建议：',
-          fix: '请修复以下问题，确保代码正确运行：',
-          test: '请编写全面的单元测试覆盖以下功能：',
-          explain: '请解释以下代码的工作原理和各部分作用：'
-        };
-        var hint = modeHints[modeRaw];
-        effectiveTask = hint ? (hint + ' ' + task) : task;
-      } else {
-        effectiveTask = '/' + modeRaw + ' ' + task;
-      }
-    }
-
-    const beforeBody = await this._captureBodyText();
-    this._preSendSnapshot = beforeBody;
-
-    const dialogBefore = await this.checkForApprovalDialog();
-    if (dialogBefore.needsApproval) {
-      return { text: '', stable: false, elapsedMs: 0, needsApproval: true, question: dialogBefore.question, dialogType: dialogBefore.dialogType };
-    }
-
-    await this.sendMessage(effectiveTask);
-    const response = await this.collectResponse();
-
-    if (response && response.text) {
-      this._lastTaskText = response.text;
-    }
-    this._pendingUserTask = '';
-
-    if (response.timedOut && !response.text) {
-      throw TraeCNAutomationError.responseTimeout(this.config.timeoutMs);
-    }
-
-    return response;
-  }
-
-  async newChat() {
-    const existingReviewGate = await this.checkTaskReviewGate();
-    if (existingReviewGate.awaitingReview && existingReviewGate.reviewCount !== 0) {
-      const gateResolution = await this.resolveTaskReviewGate('keep_all');
-      if (!gateResolution.success) {
-        throw new Error(`Task review gate blocked new chat: ${gateResolution.reason || gateResolution.error || 'unknown'}`);
-      }
-      await sleep(this.config.postActionDelayMs * 2);
-    }
-
-    const previousPanelText = await this._captureIdePanelText();
-
-    await this.client.send('Input.dispatchKeyEvent', {
-      type: 'keyDown', key: 'n', code: 'KeyN', modifiers: 6
-    });
-    await this.client.send('Input.dispatchKeyEvent', {
-      type: 'keyUp', key: 'n', code: 'KeyN', modifiers: 6
-    });
-
-    const safeComposerSels = safeJsValue(this.config.composerSelectors);
-    const ready = await this._waitForExpression(
-      `(function(){var s=${safeComposerSels};for(var i=0;i<s.length;i++){var e=document.querySelector(s[i]);if(e&&e.getBoundingClientRect().width>20&&e.offsetParent!==null)return true;}return false;})()`,
-      4000, 200
-    );
-    if (!ready) await sleep(2000);
-
-    let panelChanged = false;
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const panelText = await this._captureIdePanelText();
-      if (!previousPanelText || !panelText || panelText !== previousPanelText) {
-        panelChanged = true;
-        break;
-      }
-      await sleep(250);
-    }
-
-    if (!panelChanged) {
-      const newChatButton = await this.findNewChatButton();
-      if (newChatButton && newChatButton.nodeId) {
-        const dom = require('./browser-dom');
-        await dom.clickNode(this.client, newChatButton.nodeId);
-        await sleep(this.config.postActionDelayMs * 2);
-        for (let attempt = 0; attempt < 8; attempt++) {
-          const panelText = await this._captureIdePanelText();
-          if (!previousPanelText || !panelText || panelText !== previousPanelText) {
-            panelChanged = true;
-            break;
-          }
-          await sleep(250);
-        }
-      }
-    }
-
-    if (!panelChanged && previousPanelText) {
-      throw new Error('Failed to open a fresh chat while an existing task was still active');
-    }
-
-    this._lastTaskText = '';
-    this._pendingUserTask = '';
-    this._preSendSnapshot = '';
-    return true;
-  }
-
-  // ── Readiness check ────────────────────────────────────────────────────
 
   async checkReadiness() {
-    let composer = await this.findComposer();
-    let sendBtn = await this.findSendButton();
-    let response = await this.findResponseRegion();
-    let workspaceGuide = null;
-    let composerFallback = null;
-    let sendBtnFallback = null;
-
-    if (!(composer && sendBtn)) {
-      workspaceGuide = await this.dismissWorkspaceGuideIfPresent();
-      if (workspaceGuide.dismissed > 0 || workspaceGuide.success) {
-        composer = await this.findComposer();
-        sendBtn = await this.findSendButton();
-        response = await this.findResponseRegion();
-      }
-    }
-
-    if (!composer) {
-      composerFallback = await this._findVisibleElementRuntime(this.config.composerSelectors, { allowDisabled: true });
-    }
-    if (!sendBtn) {
-      sendBtnFallback = await this._findVisibleElementRuntime(this.config.sendButtonSelectors, { allowDisabled: true });
-    }
-
-    let modeInfo = null;
-    try {
-      modeInfo = await this.detectMode();
-    } catch(e) {
-      modeInfo = { mode: 'unknown', confidence: 0, indicators: [] };
-    }
-
-    const blockers = await this.inspectWorkspaceBlockers();
-    const restricted = await this.checkRestrictedMode();
-    const dialog = await this.checkForApprovalDialog();
-    let blocker = null;
-    const composerReady = !!(composer || composerFallback);
-    const sendButtonReady = !!(sendBtn || sendBtnFallback);
-    if (!(composerReady && sendButtonReady)) {
-      if (dialog.needsApproval) blocker = 'approval_dialog';
-      else if (restricted.restricted) blocker = 'trust_workspace';
-      else if (blockers.guideVisible) blocker = 'workspace_guide';
-      else if (blockers.loginVisible) blocker = 'login_required';
-      else if (blockers.newTaskVisible) blocker = 'open_task_panel';
-      else blocker = 'composer_unavailable';
-    }
-
-    return {
-      ready: !!(composerReady && sendButtonReady),
-      composer: composer ? { matchedSelector: composer.matchedSelector } : (composerFallback ? {
-        matchedSelector: composerFallback.matchedSelector,
-        runtimeFallback: true
-      } : null),
-      sendButton: sendBtn ? { matchedSelector: sendBtn.matchedSelector } : (sendBtnFallback ? {
-        matchedSelector: sendBtnFallback.matchedSelector,
-        runtimeFallback: true,
-        disabled: sendBtnFallback.disabled === true
-      } : null),
-      responseRegion: response ? { matchedSelector: response.matchedSelector } : null,
-      mode: modeInfo,
-      blocker,
-      workspaceGuide: workspaceGuide ? {
-        success: workspaceGuide.success === true,
-        dismissed: workspaceGuide.dismissed || 0,
-        guideVisible: workspaceGuide.guideVisible === true,
-        reason: workspaceGuide.reason || null
-      } : null,
-      blockers: {
-        guideVisible: blockers.guideVisible === true,
-        guideButtons: Array.isArray(blockers.guideButtons) ? blockers.guideButtons.map(item => item.text).slice(0, 6) : [],
-        loginVisible: blockers.loginVisible === true,
-        newTaskVisible: blockers.newTaskVisible === true
-      }
-    };
+    return dialogsModule.checkReadiness(this);
   }
 
-  // ── Sub-driver accessors (lazy initialization) ─────────────────────────
+  async checkRestrictedMode() {
+    return restrictedModule.checkRestrictedMode(this);
+  }
 
   get settings() {
     if (!this._settingsDriver) {
@@ -750,11 +420,18 @@ class DomDriver {
   }
 }
 
+const DEFAULT_COMPOSER_SELECTORS = require('./driver-config').DEFAULT_COMPOSER_SELECTORS;
+const DEFAULT_SEND_BUTTON_SELECTORS = require('./driver-config').DEFAULT_SEND_BUTTON_SELECTORS;
+const DEFAULT_RESPONSE_SELECTORS = require('./driver-config').DEFAULT_RESPONSE_SELECTORS;
+const DEFAULT_ACTIVITY_SELECTORS = require('./driver-config').DEFAULT_ACTIVITY_SELECTORS;
+const DEFAULT_NEW_CHAT_SELECTORS = require('./driver-config').DEFAULT_NEW_CHAT_SELECTORS;
+const DEFAULT_MODE_TAB_SELECTORS = require('./driver-config').DEFAULT_MODE_TAB_SELECTORS;
+const sanitizeActivityText = require('./driver-config').sanitizeActivityText;
+
 module.exports = {
   DomDriver,
   getConfig,
   sanitizeActivityText,
-  isTruncationSignal,
   DEFAULT_COMPOSER_SELECTORS,
   DEFAULT_SEND_BUTTON_SELECTORS,
   DEFAULT_RESPONSE_SELECTORS,

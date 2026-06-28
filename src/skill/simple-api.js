@@ -1,156 +1,97 @@
 'use strict';
 
+/**
+ * Simple API facade for the TraeCN Skill.
+ *
+ * Previously this file duplicated the body of every method on top of a local
+ * singleton; it now re-exports the layered `index.js` surface as a flat set of
+ * function aliases so the documented public shape (runTask, queueTask, ...) is
+ * preserved while delegating the actual work to a single implementation.
+ *
+ * Two helpers that have no direct equivalent in `index.js` (vibeWorkflow,
+ * getCapabilities, planOperation) go through the underlying TraeCNSkill
+ * instance — they're informational/configuration methods rather than task
+ * runners, so they don't need the error-mapping wrappers the basic layer has.
+ */
+
+const layered = require('./index');
 const { TraeCNSkill } = require('./traecn-skill');
-const promptLayers = require('./prompt-layers');
 const { buildCodeReviewTask } = require('./review');
+const promptLayers = require('./prompt-layers');
 
 let _instance = null;
-
-function getSkill(context = {}) {
-  if (!_instance) {
-    _instance = new TraeCNSkill(context);
-  }
+function _skill() {
+  if (!_instance) _instance = new TraeCNSkill();
   return _instance;
 }
 
-async function runTask(task, opts = {}) {
-  const skill = getSkill();
-  const result = await skill.run(task, opts);
-  if (result.error) {
-    throw new Error(result.error);
-  }
-  return result.text;
-}
-
-async function queueTask(task, opts = {}) {
-  const skill = getSkill();
-  const result = await skill.queue(task, opts);
-  return result.taskId;
-}
-
-async function pollTask(taskId = null) {
-  const skill = getSkill();
-  const result = await skill.poll(taskId);
-  return result;
-}
-
-async function waitTask(taskId = null, opts = {}) {
-  const skill = getSkill();
-  return await skill.wait(taskId, opts);
-}
+// ── Errors-out wrappers around `advanced.*` (index.js namespacing) ─────
 
 async function cancelTask(taskId = null) {
-  const skill = getSkill();
-  return await skill.cancel(taskId);
+  return layered.advanced.cancelTask(taskId);
 }
-
-async function checkStatus() {
-  const skill = getSkill();
-  const status = await skill.status();
-  return status.connected;
-}
-
-async function getCapabilities() {
-  const skill = getSkill();
-  return await skill.getCapabilities();
-}
-
-async function planOperation(command, params = {}, opts = {}) {
-  const skill = getSkill();
-  return await skill.planOperation(command, params, opts);
-}
-
-async function preflight(options = {}) {
-  const skill = getSkill();
-  return await skill.preflight(options);
-}
-
-async function switchModel(name) {
-  const skill = getSkill();
-  return await skill.switchModel(name);
-}
-
 async function switchMode(m) {
-  const skill = getSkill();
-  return await skill.switchMode(m);
+  return layered.advanced.switchMode(m);
 }
-
 async function newChat() {
-  const skill = getSkill();
-  return await skill.newChat();
+  return layered.advanced.newChat();
 }
-
 async function listSoloChats() {
-  const skill = getSkill();
-  return await skill.listSoloChats();
+  return layered.advanced.listSoloChats();
 }
-
 async function switchSoloChat(criteria = {}) {
-  const skill = getSkill();
-  return await skill.switchSoloChat(criteria);
+  return layered.advanced.switchSoloChat(criteria);
+}
+async function submitSoloChatTask(task, opts = {}) {
+  const result = await layered.advanced.submitSoloChatTask(task, opts);
+  return result && typeof result === 'object' ? result.taskId : result;
+}
+async function openProject(p) {
+  return layered.advanced.openProject(p);
 }
 
-async function submitSoloChatTask(task, opts = {}) {
-  const skill = getSkill();
-  const result = await skill.submitSoloChatTask(task, opts);
-  return result.taskId;
-}
+// ── Config + dialog + batch passthroughs ─────────────────────────────────
 
 async function getSettings(section = null) {
-  const skill = getSkill();
-  return await skill.getSettings(section);
+  return layered.config.getSettings(section);
 }
-
 async function setSetting(label, value, section = null) {
-  const skill = getSkill();
-  return await skill.setSetting(label, value, section);
+  return layered.config.setSetting(label, value, section);
 }
-
 async function approveDialog(action = 'auto', wait = false) {
-  const skill = getSkill();
-  return await skill.approveDialog(action, wait);
+  return layered.dialog.approveDialog(action, wait);
 }
-
 async function checkDialog() {
-  const skill = getSkill();
-  return await skill.checkDialog();
+  return layered.dialog.checkDialog();
 }
-
 async function checkQueue() {
-  const skill = getSkill();
-  return await skill.queueStatus();
+  return layered.batch.checkQueue();
 }
 
-async function openProject(path) {
-  const skill = getSkill();
-  return await skill.openProject(path);
-}
+// ── Methods that only exist on TraeCNSkill (not surfaced by index.js) ────
 
-async function reviewCode(input, opts = {}) {
-  const skill = getSkill();
-  const result = await skill.reviewCode(input, opts);
-  return opts.queue === true ? result.taskId : result.text;
+async function getCapabilities() {
+  return _skill().getCapabilities();
 }
-
-async function vibeWorkflow(input, opts = {}) {
-  const skill = getSkill();
-  const result = await skill.vibeWorkflow({ ...input, ...opts });
+async function planOperation(command, params = {}, opts = {}) {
+  return _skill().planOperation(command, params, opts);
+}
+async function vibeWorkflow(input = {}, opts = {}) {
+  const result = await _skill().vibeWorkflow({ ...input, ...opts });
   return result.taskId;
 }
 
-function reset() {
-  _instance = null;
-}
+// ── Flat single-letter aliases (kept for backward compatibility) ─────────
 
-const t = runTask;
-const q = queueTask;
-const p = pollTask;
-const w = waitTask;
-const s = checkStatus;
+const t = layered.runTask;
+const q = layered.queueTask;
+const p = layered.pollTask;
+const w = layered.waitTask;
+const s = layered.checkStatus;
 const capabilities = getCapabilities;
 const plan = planOperation;
-const pf = preflight;
-const model = switchModel;
+const pf = layered.preflight;
+const model = layered.switchModel;
 const mode = switchMode;
 const soloChats = listSoloChats;
 const soloSwitch = switchSoloChat;
@@ -162,58 +103,50 @@ const dialog = checkDialog;
 const queueCheck = checkQueue;
 const open = openProject;
 const cancel = cancelTask;
-const review = reviewCode;
+const review = layered.reviewCode;
 const vibe = vibeWorkflow;
 
 module.exports = {
-  runTask,
-  queueTask,
-  pollTask,
-  waitTask,
+  // basic
+  runTask: layered.runTask,
+  queueTask: layered.queueTask,
+  pollTask: layered.pollTask,
+  waitTask: layered.waitTask,
   cancelTask,
-  checkStatus,
+  checkStatus: layered.checkStatus,
   getCapabilities,
   planOperation,
-  preflight,
-  switchModel,
+  preflight: layered.preflight,
+  switchModel: layered.switchModel,
   switchMode,
   newChat,
   listSoloChats,
   switchSoloChat,
   submitSoloChatTask,
+  // config + dialog
   getSettings,
   setSetting,
   approveDialog,
   checkDialog,
   checkQueue,
   openProject,
-  reviewCode,
+  // higher level
+  reviewCode: layered.reviewCode,
   vibeWorkflow,
-  reset,
-  getSkill,
-  TraeCNSkill,
+  // lifecycle
+  reset: layered.reset,
+  getSkill: layered.getSkill,
+  // types + raw skill
+  TraeCNSkill: layered.TraeCNSkill,
   buildCodeReviewTask,
-  t,
-  q,
-  p,
-  w,
-  s,
-  capabilities,
-  plan,
-  pf,
-  model,
-  mode,
-  soloChats,
-  soloSwitch,
-  soloSubmit,
-  settings,
-  set,
-  approve,
-  dialog,
-  queueCheck,
-  open,
-  cancel,
-  review,
-  vibe,
-  promptLayers
+  // prompt layers (informational)
+  promptLayers,
+  // flat aliases
+  t, q, p, w, s,
+  capabilities, plan, pf,
+  model, mode,
+  soloChats, soloSwitch, soloSubmit,
+  settings, set,
+  approve, dialog, queueCheck,
+  open, cancel, review, vibe,
 };

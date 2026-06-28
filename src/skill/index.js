@@ -7,7 +7,6 @@
 
 const { TraeCNSkill, TraeCNSkillError } = require('./traecn-skill');
 const promptLayers = require('./prompt-layers');
-const { buildCodeReviewTask } = require('./review');
 
 // ============ 核心层 (Core Layer) ============
 // 最基础的功能，所有AI都应该使用

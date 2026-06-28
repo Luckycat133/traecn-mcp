@@ -1,7 +1,12 @@
 'use strict';
 
-const { safeJsValue } = require('../shared/utils');
-const { BaseDriver } = require('./base-driver');
+const { sleep, safeJsValue } = require('../shared/utils');
+const { TraeCNAutomationError } = require('./errors');
+const {
+  evaluate,
+  evaluateJSON,
+  clickByPredicate
+} = require('./browser-dom');
 
 /**
  * EditorDriver — drives the Monaco / TraeCN code editor for accept/reject,
@@ -15,7 +20,24 @@ const { BaseDriver } = require('./base-driver');
  *
  * All VS Code command IDs are documented in command-palette-driver.js.
  */
-class EditorDriver extends BaseDriver {
+class EditorDriver {
+  constructor(client, config = {}, deps = {}) {
+    this.client = client;
+    this.config = config;
+    this.palette = deps.palette || null;
+  }
+
+  setPalette(palette) {
+    this.palette = palette;
+  }
+
+  _viaPalette(commandId) {
+    if (!this.palette) {
+      throw new TraeCNAutomationError('CommandPaletteDriver is required for this operation', 'PALETTE_REQUIRED', { commandId });
+    }
+    return this.palette.run(commandId);
+  }
+
   // ── AI Edit Accept / Reject (TraeCN-specific) ────────────────────────
 
   /**
@@ -23,34 +45,29 @@ class EditorDriver extends BaseDriver {
    * Returns one or more apply containers with their visible buttons.
    */
   async _findApplyContainers() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
-        const containers = document.querySelectorAll('.icube-apply-action-container');
-        const out = [];
-        for (const c of containers) {
-          if (c.offsetParent === null) continue;
-          const buttons = Array.from(c.querySelectorAll('button, [role="button"], .action-label'))
-            .filter(b => b.offsetParent !== null)
-            .map(b => ({
-              text: (b.innerText || '').trim(),
-              title: b.title || '',
-              aria: b.getAttribute('aria-label') || '',
-              class: b.className || ''
-            }));
-          out.push({
-            container: c,
-            containerClass: c.className,
-            buttons
-          });
-        }
-        return JSON.stringify(out);
-      })()`,
-      returnByValue: true
-    });
     try {
-      const parsed = JSON.parse(r.result.value);
-      // Strip the `container` element since it's a DOM node, not serializable
-      return parsed.map(c => ({ containerClass: c.containerClass, buttons: c.buttons }));
+      const parsed = await evaluateJSON(
+        this.client,
+        `() => {
+          const containers = document.querySelectorAll('.icube-apply-action-container');
+          const out = [];
+          for (const c of containers) {
+            if (c.offsetParent === null) continue;
+            const buttons = Array.from(c.querySelectorAll('button, [role="button"], .action-label'))
+              .filter(b => b.offsetParent !== null)
+              .map(b => ({
+                text: (b.innerText || '').trim(),
+                title: b.title || '',
+                aria: b.getAttribute('aria-label') || '',
+                class: b.className || ''
+              }));
+            // Strip the DOM node; only serialize metadata.
+            out.push({ containerClass: c.className, buttons });
+          }
+          return out;
+        }`
+      );
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -58,32 +75,50 @@ class EditorDriver extends BaseDriver {
 
   /**
    * Click a button in an apply-action container by fuzzy text/aria match.
+   *
+   * Migration: now routes through `clickByPredicate` with the caller's
+   * predicate serialised as JS source. The selector list is the same
+   * as the legacy implementation, and the radix click helper is
+   * auto-installed by the helper so callers no longer need to invoke
+   * `_ensureClickHelper` first.
    */
   async _clickApplyButton(predicate) {
-    await this._ensureClickHelper();
-    const safePred = predicate.toString();
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
-        const containers = document.querySelectorAll('.icube-apply-action-container');
-        for (const c of containers) {
-          if (c.offsetParent === null) continue;
-          const buttons = Array.from(c.querySelectorAll('button, [role="button"], .action-label'))
-            .filter(b => b.offsetParent !== null);
-          for (const b of buttons) {
-            const text = (b.innerText || '').trim();
-            const title = b.title || '';
-            const aria = b.getAttribute('aria-label') || '';
-            if ((${safePred})(text, title, aria)) {
-              window.__radixClick(b);
-              return 'clicked: ' + (text || aria || title);
-            }
-          }
-        }
-        return 'not found';
-      })()`,
-      returnByValue: true
-    });
-    return r.result.value;
+    const predicateSource = predicate.toString();
+    const result = await clickByPredicate(
+      this.client,
+      predicateSource,
+      {
+        selectors: [
+          '.icube-apply-action-container button',
+          '.icube-apply-action-container [role="button"]',
+          '.icube-apply-action-container .action-label'
+        ],
+        click: 'radix'
+      }
+    );
+    if (result.ok) return 'clicked: ' + result.matchedText;
+    if (result.reason === 'not_found') return 'not found';
+    return result.reason || 'unknown';
+  }
+
+  async _ensureClickHelper() {
+    // Centralised in browser-dom's clickByTextEx / clickByPredicate.
+    // Kept as a no-op for callers that still rely on the explicit
+    // pre-call. The new helpers auto-install the radix shim on demand,
+    // so this method is safe to leave as a thin wrapper.
+    return evaluate(
+      this.client,
+      `() => {
+        if (window.__radixClick) return;
+        window.__radixClick = function(el) {
+          if (!el) return;
+          el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, button: 0}));
+          el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0}));
+          el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
+          el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
+        };
+      }`
+    );
   }
 
   /**
@@ -202,12 +237,15 @@ class EditorDriver extends BaseDriver {
 
   /**
    * Read the active editor's text content.
+   *
+   * Migration: page-side function returns the object directly;
+   * `evaluateJSON` handles the JSON-stringify/parse transport.
    */
   async readActive() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
+    try {
+      return await evaluateJSON(this.client, `() => {
         const monaco = window.monaco?.editor;
-        if (!monaco) return JSON.stringify({ ok: false, error: 'monaco not present' });
+        if (!monaco) return { ok: false, error: 'monaco not present' };
         const editors = monaco.getEditors ? monaco.getEditors() : [];
         let active = editors.find(e => { try { return e.hasTextFocus && e.hasTextFocus(); } catch { return false; } });
         if (!active && editors.length > 0) active = editors[0];
@@ -226,41 +264,46 @@ class EditorDriver extends BaseDriver {
               ? models.find(m => m.uri && m.uri.toString() === uriAttr)
               : (models.find(m => m.getLineCount() > 0) || null);
             if (model) {
-              return JSON.stringify({
+              return {
                 ok: true,
                 value: model.getValue(),
                 language: model.getLanguageId ? model.getLanguageId() : undefined,
                 source: 'model-fallback',
                 uri: model.uri && model.uri.toString()
-              });
+              };
             }
           }
         }
-        if (!active) return JSON.stringify({ ok: false, error: 'no editor' });
+        if (!active) return { ok: false, error: 'no editor' };
         const model = active.getModel();
-        if (!model) return JSON.stringify({ ok: false, error: 'no model' });
-        return JSON.stringify({
+        if (!model) return { ok: false, error: 'no model' };
+        return {
           ok: true,
           value: model.getValue(),
           language: model.getLanguageId ? model.getLanguageId() : undefined,
           source: 'editor',
           uri: model.uri && model.uri.toString()
-        });
-      })()`,
-      returnByValue: true
-    });
-    return this._parseResult(r.result.value, { ok: false, error: 'parse failed' });
+        };
+      }`);
+    } catch {
+      return { ok: false, error: 'parse failed' };
+    }
   }
 
   /**
    * Replace the active editor's text content.
+   *
+   * Migration: keeps the `safeJsValue` step (Pattern D) — `value` must
+   * reach the page as a JS literal, not a string arg, because it's
+   * spliced directly into the `applyEdits` text field. The page-side
+   * function now returns an object directly.
    */
   async writeActive(value) {
     const safeValue = safeJsValue(value);
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
+    try {
+      return await evaluateJSON(this.client, `() => {
         const monaco = window.monaco?.editor;
-        if (!monaco) return JSON.stringify({ ok: false, error: 'monaco not present' });
+        if (!monaco) return { ok: false, error: 'monaco not present' };
         const editors = monaco.getEditors ? monaco.getEditors() : [];
         let active = editors.find(e => { try { return e.hasTextFocus && e.hasTextFocus(); } catch { return false; } });
         if (!active && editors.length > 0) active = editors[0];
@@ -278,28 +321,31 @@ class EditorDriver extends BaseDriver {
               : (models.find(m => m.getLineCount() > 0) || null);
           }
         }
-        if (!model) return JSON.stringify({ ok: false, error: 'no model' });
+        if (!model) return { ok: false, error: 'no model' };
         const fullRange = model.getFullModelRange();
         model.applyEdits([{ range: fullRange, text: ${safeValue}, forceMoveMarkers: true }]);
-        return JSON.stringify({
+        return {
           ok: true,
           length: ${safeValue}.length,
           uri: model.uri && model.uri.toString()
-        });
-      })()`,
-      returnByValue: true
-    });
-    return this._parseResult(r.result.value, { ok: false, error: 'parse failed' });
+        };
+      }`);
+    } catch {
+      return { ok: false, error: 'parse failed' };
+    }
   }
 
   /**
    * List the languages currently in use across open editors.
+   *
+   * Migration: uses `evaluateJSON` so the page can return the array
+   * of editor rows directly.
    */
   async listActive() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
+    try {
+      const rows = await evaluateJSON(this.client, `() => {
         const monaco = window.monaco?.editor;
-        if (!monaco) return JSON.stringify([]);
+        if (!monaco) return [];
         const editors = monaco.getEditors ? monaco.getEditors() : [];
         const editorRows = editors.map(e => ({
           id: e.getId(),
@@ -328,11 +374,12 @@ class EditorDriver extends BaseDriver {
             });
           }
         }
-        return JSON.stringify(editorRows);
-      })()`,
-      returnByValue: true
-    });
-    return this._parseResult(r.result.value, []);
+        return editorRows;
+      }`);
+      return Array.isArray(rows) ? rows : [];
+    } catch {
+      return [];
+    }
   }
 }
 

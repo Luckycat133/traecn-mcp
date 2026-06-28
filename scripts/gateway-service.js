@@ -60,6 +60,8 @@ function readExistingLaunchdEnv() {
     'TRAECN_QUICKSTART_PROFILE_MODE',
     'TRAECN_QUICKSTART_USE_ISOLATED_PROFILE',
     'TRAECN_TRAE_RECOVERY_NEW_INSTANCE',
+    'TRAECN_AUTO_START_TRAE',
+    'TRAECN_AUTO_RECOVER',
     'HOST',
     'PORT'
   ]) {
@@ -80,13 +82,21 @@ function readExistingLaunchdEnv() {
 function buildEnvironmentVariables() {
   const quickstart = getQuickstartConfig();
   const existingEnv = readExistingLaunchdEnv();
+  // IMPORTANT: TRAECN_AUTO_START_TRAE and TRAECN_AUTO_RECOVER default to '0'.
+  // When '1', the gateway will relaunch Trae CN whenever its CDP target
+  // disappears (e.g. user manually quits Trae). That auto-restart is the
+  // reason Trae CN "comes back on its own" after being closed. Keep these
+  // off by default; operators who want unattended recovery should set them
+  // to '1' explicitly in the plist (or via `launchctl setenv`).
   const env = {
     TRAECN_ENABLE_MOCK_BRIDGE: process.env.TRAECN_ENABLE_MOCK_BRIDGE || existingEnv.TRAECN_ENABLE_MOCK_BRIDGE || '0',
     TRAECN_REMOTE_DEBUGGING_PORT: process.env.TRAECN_REMOTE_DEBUGGING_PORT || existingEnv.TRAECN_REMOTE_DEBUGGING_PORT || quickstart.remoteDebuggingPort || '9334',
     TRAECN_RESPONSE_TIMEOUT_MS: process.env.TRAECN_RESPONSE_TIMEOUT_MS || existingEnv.TRAECN_RESPONSE_TIMEOUT_MS || '600000',
     TRAECN_QUICKSTART_PROFILE_MODE: process.env.TRAECN_QUICKSTART_PROFILE_MODE || existingEnv.TRAECN_QUICKSTART_PROFILE_MODE || quickstart.profileMode || 'existing',
     TRAECN_QUICKSTART_USE_ISOLATED_PROFILE: process.env.TRAECN_QUICKSTART_USE_ISOLATED_PROFILE || existingEnv.TRAECN_QUICKSTART_USE_ISOLATED_PROFILE || (quickstart.useIsolatedProfile ? '1' : '0'),
-    TRAECN_TRAE_RECOVERY_NEW_INSTANCE: process.env.TRAECN_TRAE_RECOVERY_NEW_INSTANCE || existingEnv.TRAECN_TRAE_RECOVERY_NEW_INSTANCE || '0'
+    TRAECN_TRAE_RECOVERY_NEW_INSTANCE: process.env.TRAECN_TRAE_RECOVERY_NEW_INSTANCE || existingEnv.TRAECN_TRAE_RECOVERY_NEW_INSTANCE || '0',
+    TRAECN_AUTO_START_TRAE: process.env.TRAECN_AUTO_START_TRAE || existingEnv.TRAECN_AUTO_START_TRAE || '0',
+    TRAECN_AUTO_RECOVER: process.env.TRAECN_AUTO_RECOVER || existingEnv.TRAECN_AUTO_RECOVER || '0'
   };
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined || value === '') continue;
