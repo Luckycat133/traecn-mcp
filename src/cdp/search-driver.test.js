@@ -4,22 +4,9 @@ const assert = require('assert');
 const { SearchDriver } = require('./search-driver');
 const { CommandPaletteDriver } = require('./command-palette-driver');
 
-let passed = 0, failed = 0;
-const asyncTests = [];
-
-function test(name, fn) {
-  try {
-    const r = fn();
-    if (r && typeof r.then === 'function') {
-      asyncTests.push(
-        Promise.resolve(r)
-          .then(() => { passed++; console.log(`  PASS: ${name}`); })
-          .catch(err => { failed++; console.error(`  FAIL: ${name}: ${err.message}`); })
-      );
-    } else { passed++; console.log(`  PASS: ${name}`); }
-  } catch (err) { failed++; console.error(`  FAIL: ${name}: ${err.message}`); }
-}
-
+const { createRunner } = require('../shared/test-runner');
+const runner = createRunner('search-driver.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 function mockClient() {
   const calls = [];
   return {
@@ -66,7 +53,8 @@ test('readResults parses search-result rows', () => {
   });
 });
 
-Promise.all(asyncTests).then(() => {
-  console.log(`\n  Results: ${passed} passed, ${failed} failed\n`);
-  process.exit(failed > 0 ? 1 : 0);
+Promise.resolve().then(async () => {
+  await pendingAsyncTests();
+  summary();
+  if (runner.failed > 0) process.exit(1);
 });

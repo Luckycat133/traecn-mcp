@@ -3,25 +3,13 @@
 const assert = require('assert');
 const mcpAuth = require('./mcp-auth');
 const { ApiKeyManager } = require('./api-key-manager');
+const { createRunner } = require('./test-runner');
+const runner = createRunner('mcp-auth.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
 
 // ApiKeyManager reads TRAECN_API_KEYS_ENABLED from the environment, so the
 // tests that need an enabled manager must flip the env var first.
 process.env.TRAECN_API_KEYS_ENABLED = '1';
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
 
 console.log('\n[mcp-auth.test.js] Running tests...\n');
 
@@ -183,5 +171,5 @@ test('assertValidPermission recognizes known permission levels', () => {
   assert.strictEqual(mcpAuth.assertValidPermission(''), false);
 });
 
-console.log(`\n[mcp-auth.test.js] Results: ${passed} passed, ${failed} failed\n`);
-process.exit(failed > 0 ? 1 : 0);
+summary();
+if (runner.failed > 0) process.exit(1);

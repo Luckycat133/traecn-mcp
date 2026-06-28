@@ -25,6 +25,9 @@ const SETTINGS_SECTIONS = {
 };
 
 /** 有效模式列表 */
+// (Currently informational only — mode validation lives inside TraeCNSkill's
+// switchMode/constructor. Kept here as documentation; remove if it stays
+// unused in the next refactor pass.)
 const VALID_MODES = ['solo', 'ide'];
 
 /**
@@ -118,6 +121,10 @@ class TraeCNSkill {
       autoModelFallback,
       modelProbeIntervalMs
     } = opts;
+    // autoApproveDialog is consumed downstream via opts in delegate(); keeping
+    // the explicit destructure here makes the supported option surface
+    // self-documenting. No-op reference so eslint no-unused-vars is satisfied.
+    void autoApproveDialog;
 
     if (mode) {
       await this.switchMode(mode).catch(() => {});

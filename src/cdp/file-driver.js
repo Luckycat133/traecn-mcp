@@ -2,7 +2,7 @@
 
 const { sleep, safeJsValue } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
-const { BaseDriver } = require('./base-driver');
+const { evaluate } = require('./browser-dom');
 const nodeFs = require('fs');
 
 /**
@@ -18,13 +18,26 @@ const nodeFs = require('fs');
  *    to Node-side `fs` (since the IDE's runtime cannot read arbitrary
  *    disk paths outside its sandbox).
  */
-class FileDriver extends BaseDriver {
+class FileDriver {
   constructor(client, config = {}, deps = {}) {
-    super(client, config, deps);
+    this.client = client;
+    this.config = config;
+    this.palette = deps.palette || null;
     this.fs = deps.fs || require('fs').promises; // optional injected for test
     this.path = deps.path || require('path');
     this.allowUnsafeDiskAccess = config.allowUnsafeDiskAccess === true;
     this.allowedRoots = this._normalizeAllowedRoots(config.fileAllowedRoots || config.diskAllowedRoots);
+  }
+
+  setPalette(palette) {
+    this.palette = palette;
+  }
+
+  _viaPalette(commandId) {
+    if (!this.palette) {
+      throw new TraeCNAutomationError('CommandPaletteDriver is required for this operation', 'PALETTE_REQUIRED', { commandId });
+    }
+    return this.palette.run(commandId);
   }
 
   // ── Open / close / new (via command palette) ────────────────────────
@@ -34,21 +47,18 @@ class FileDriver extends BaseDriver {
    * path pre-typed, so the user can confirm.
    */
   async openFileByPath(filePath) {
-    this._requirePalette('workbench.action.quickOpen');
+    if (!this.palette) {
+      throw new TraeCNAutomationError('CommandPaletteDriver required for openFileByPath', {
+        code: 'PALETTE_REQUIRED'
+      });
+    }
     await this.palette.open();
     // Quick Open (not command palette) uses Ctrl+P / Cmd+P
-    const safe = safeJsValue(filePath);
-    await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
-        const input = document.querySelector('.quick-input-widget input.input');
-        if (!input) return false;
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        setter.call(input, ${safe});
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
-      })()`,
-      returnByValue: true
-    });
+    await evaluate(
+      this.client,
+      '(value) => { const input = document.querySelector(".quick-input-widget input.input"); if (!input) return false; const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; setter.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); return true; }',
+      [filePath]
+    );
     await sleep(200);
     await this.client.send('Input.dispatchKeyEvent', {
       type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13
@@ -77,24 +87,25 @@ class FileDriver extends BaseDriver {
    * List the current open editors (file paths and languages).
    */
   async listOpenEditors() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
-        const editors = window.monaco?.editor?.getEditors?.() || [];
-        return JSON.stringify(editors.map(e => {
-          const m = e.getModel();
-          return {
-            id: e.getId(),
-            path: m?.uri?.toString?.() || m?.uri?.path || '',
-            fsPath: m?.uri?.fsPath || '',
-            language: m?.getLanguageId?.(),
-            lineCount: m?.getLineCount?.() || 0,
-            hasFocus: !!(e.hasTextFocus && e.hasTextFocus())
-          };
-        }));
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return []; }
+    try {
+      return await evaluate(
+        this.client,
+        `() => {
+          const editors = window.monaco?.editor?.getEditors?.() || [];
+          return editors.map(e => {
+            const m = e.getModel();
+            return {
+              id: e.getId(),
+              path: m?.uri?.toString?.() || m?.uri?.path || '',
+              fsPath: m?.uri?.fsPath || '',
+              language: m?.getLanguageId?.(),
+              lineCount: m?.getLineCount?.() || 0,
+              hasFocus: !!(e.hasTextFocus && e.hasTextFocus())
+            };
+          });
+        }`
+      );
+    } catch { return []; }
   }
 
   /**
@@ -102,21 +113,22 @@ class FileDriver extends BaseDriver {
    * Reads from the rendered tree DOM, not a reliable source for very large trees.
    */
   async listExplorerVisible() {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(()=>{
-        const tree = document.querySelector('.explorer-viewlet .monaco-list, .explorer-viewlet [class*="list"]');
-        if (!tree) return JSON.stringify({ ok: false, error: 'no explorer' });
-        const rows = Array.from(tree.querySelectorAll('.monaco-list-row, [role="treeitem"]'));
-        const items = rows.slice(0, 500).map(r => ({
-          label: (r.querySelector('.label-name')?.innerText || r.innerText || '').trim().slice(0, 200),
-          aria: r.getAttribute('aria-label') || '',
-          expanded: r.getAttribute('aria-expanded') === 'true'
-        }));
-        return JSON.stringify({ ok: true, items });
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return { ok: false, error: 'parse failed' }; }
+    try {
+      return await evaluate(
+        this.client,
+        `() => {
+          const tree = document.querySelector('.explorer-viewlet .monaco-list, .explorer-viewlet [class*="list"]');
+          if (!tree) return { ok: false, error: 'no explorer' };
+          const rows = Array.from(tree.querySelectorAll('.monaco-list-row, [role="treeitem"]'));
+          const items = rows.slice(0, 500).map(r => ({
+            label: (r.querySelector('.label-name')?.innerText || r.innerText || '').trim().slice(0, 200),
+            aria: r.getAttribute('aria-label') || '',
+            expanded: r.getAttribute('aria-expanded') === 'true'
+          }));
+          return { ok: true, items };
+        }`
+      );
+    } catch { return { ok: false, error: 'parse failed' }; }
   }
 
   // ── Direct disk read/write (side-channel) ───────────────────────────
@@ -252,33 +264,26 @@ class FileDriver extends BaseDriver {
   }
 
   /**
-   * Recursively list a directory tree (depth-limited). Symlinks are not
-   * followed to avoid infinite loops on circular links.
+   * Recursively list a directory tree (depth-limited).
    */
   async listTreeDisk(rootPath, opts = {}) {
     let resolvedRoot;
     const maxDepth = opts.maxDepth || 4;
     const ignore = opts.ignore || ['node_modules', '.git', 'dist', 'build', '.cache', 'coverage', '.next', 'out'];
     const out = [];
-    const fsPromises = this.fs;
-    const pathLib = this.path;
     async function walk(dir, depth) {
       if (depth > maxDepth) return;
       let entries;
       try {
-        entries = await fsPromises.readdir(dir, { withFileTypes: true });
+        entries = await require('fs').promises.readdir(dir, { withFileTypes: true });
       } catch (err) {
         out.push({ type: 'error', path: dir, error: err.message });
         return;
       }
       for (const e of entries) {
         if (ignore.includes(e.name)) continue;
-        const full = pathLib.join(dir, e.name);
-        if (e.isSymbolicLink()) {
-          // Record but don't recurse into symlinks — avoids infinite loops
-          // on circular symlinks and keeps the tree bounded.
-          out.push({ type: 'symlink', path: full, name: e.name });
-        } else if (e.isDirectory()) {
+        const full = require('path').join(dir, e.name);
+        if (e.isDirectory()) {
           out.push({ type: 'dir', path: full, name: e.name });
           await walk(full, depth + 1);
         } else if (e.isFile()) {

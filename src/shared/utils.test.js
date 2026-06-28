@@ -11,7 +11,10 @@ const {
   isQueueProbeCommandText,
   isGenericQueueProbeTask,
   isForeignQueueProbeText,
-  safeClose
+  safeClose,
+  sanitizeLog,
+  getGatewayContext,
+  SENSITIVE_LOG_KEYS
 } = require('../shared/utils');
 
 let passed = 0;
@@ -173,3 +176,76 @@ test('isForeignQueueProbeText recognizes contaminated Solo titles with menu text
   console.log(`\n[utils.test.js] Results: ${passed} passed, ${failed} failed\n`);
   process.exit(failed > 0 ? 1 : 0);
 })();
+
+// ── sanitizeLog (added by systematic-optimization Round 1) ──────────────
+test('sanitizeLog redacts top-level sensitive keys', () => {
+  const input = { user: 'jack', password: 'secret123', apikey: 'abc', token: 't0k' };
+  const out = sanitizeLog(input);
+  assert.strictEqual(out.user, 'jack');
+  assert.strictEqual(out.password, '[REDACTED]');
+  assert.strictEqual(out.apikey, '[REDACTED]');
+  assert.strictEqual(out.token, '[REDACTED]');
+});
+
+test('sanitizeLog recursively redacts nested objects and arrays', () => {
+  const input = { req: { headers: { authorization: 'Bearer x', cookie: 'sid=1' }, body: 'ok' } };
+  const out = sanitizeLog(input);
+  assert.strictEqual(out.req.headers.authorization, '[REDACTED]');
+  assert.strictEqual(out.req.headers.cookie, '[REDACTED]');
+  assert.strictEqual(out.req.body, 'ok');
+});
+
+test('sanitizeLog leaves non-sensitive keys alone and primitives as-is', () => {
+  assert.strictEqual(sanitizeLog(null), null);
+  assert.strictEqual(sanitizeLog('plain string'), 'plain string');
+  const out = sanitizeLog({ a: 1, b: 'two', c: true });
+  assert.deepStrictEqual(out, { a: 1, b: 'two', c: true });
+});
+
+test('sanitizeLog is case-insensitive on key match', () => {
+  const out = sanitizeLog({ Authorization: 'a', PASSWORD: 'b', apiKey: 'c' });
+  assert.strictEqual(out.Authorization, '[REDACTED]');
+  assert.strictEqual(out.PASSWORD, '[REDACTED]');
+  assert.strictEqual(out.apiKey, '[REDACTED]');
+});
+
+test('SENSITIVE_LOG_KEYS is frozen and longest-first', () => {
+  assert.strictEqual(Object.isFrozen(SENSITIVE_LOG_KEYS), true);
+  assert.strictEqual(SENSITIVE_LOG_KEYS[0], 'authorization');
+  assert.strictEqual(SENSITIVE_LOG_KEYS[1], 'set-cookie');
+});
+
+// ── getGatewayContext (added by systematic-optimization Round 1) ────────
+test('getGatewayContext reads TRAECN_* env vars with TRAE_* fallback', () => {
+  const ctx = getGatewayContext({
+    TRAECN_GATEWAY_HOST: '1.2.3.4',
+    TRAECN_GATEWAY_PORT: '9000',
+    TRAECN_GATEWAY_TOKEN: 'abc',
+    TRAECN_GATEWAY_TIMEOUT_MS: '45000'
+  });
+  assert.deepStrictEqual(ctx, { host: '1.2.3.4', port: 9000, token: 'abc', timeout: 45000 });
+});
+
+test('getGatewayContext falls back to TRAE_* when TRAECN_* missing', () => {
+  const ctx = getGatewayContext({
+    TRAE_GATEWAY_HOST: '5.6.7.8',
+    TRAE_GATEWAY_PORT: '7000',
+    TRAE_GATEWAY_TOKEN: 'xyz'
+  });
+  assert.strictEqual(ctx.host, '5.6.7.8');
+  assert.strictEqual(ctx.port, 7000);
+  assert.strictEqual(ctx.token, 'xyz');
+});
+
+test('getGatewayContext uses safe defaults (127.0.0.1:8787, 30s timeout)', () => {
+  const ctx = getGatewayContext({});
+  assert.strictEqual(ctx.host, '127.0.0.1');
+  assert.strictEqual(ctx.port, 8787);
+  assert.strictEqual(ctx.token, '');
+  assert.strictEqual(ctx.timeout, 30000);
+});
+
+test('getGatewayContext clamps invalid numeric values to defaults', () => {
+  const ctx = getGatewayContext({ TRAECN_GATEWAY_PORT: 'not-a-number' });
+  assert.strictEqual(ctx.port, 8787);
+});

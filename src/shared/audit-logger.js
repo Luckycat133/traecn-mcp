@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getEnvWithFallback } = require('./utils');
+const { getEnvWithFallback, SENSITIVE_LOG_KEYS } = require('./utils');
 
 const SENSITIVE_ACTIONS = [
   'key.create',
@@ -14,7 +14,10 @@ const SENSITIVE_ACTIONS = [
   'delegate'
 ];
 
-const SENSITIVE_PARAMS = ['token', 'password', 'secret', 'key', 'credential', 'authorization', 'apiKey', 'api_key'];
+// Match is substring-based (`key.toLowerCase().includes(token)`). The list
+// lives in shared/utils.js so sanitizeLog() uses the exact same set; both
+// redaction surfaces must agree or one of them will leak.
+const SENSITIVE_PARAMS = SENSITIVE_LOG_KEYS;
 
 // Default cap on in-memory log entries. Without a bound, a long-running
 // process accumulates entries indefinitely. Oldest entries are dropped first.

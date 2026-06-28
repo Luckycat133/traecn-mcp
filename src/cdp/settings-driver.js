@@ -2,7 +2,13 @@
 
 const { TraeCNAutomationError } = require('./errors');
 const { sleep, safeJsValue } = require('../shared/utils');
-const { RADIX_CLICK_INJECTION } = require('./base-driver');
+const {
+  clickByTextRadix,
+  clickByTextEx,
+  clickByPredicate,
+  evaluate,
+  evaluateJSON
+} = require('./browser-dom');
 
 // Map human-readable section names to sidebar item text
 const SETTINGS_SECTIONS = [
@@ -18,115 +24,93 @@ const SOLO_MODE_TABS = ['编辑器', '设置', '智能体', 'MCP'];
  */
 async function _goToSettingsTab(client) {
   await _ensureClickHelper(client);
-  await client.send('Runtime.evaluate', {
-    expression: `(function() {
-      var buttons = document.querySelectorAll('.icube-settings-wrapper, .icube-settings-button, .codicon-icube-Settings');
-      for (var i = 0; i < buttons.length; i++) {
-        var rect = buttons[i].getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          window.__radixClick(buttons[i]);
-          return 'clicked settings button';
-        }
-      }
-      var tabs = document.querySelectorAll('.icube-solo-mode-tab-item');
-      for (var i = 0; i < tabs.length; i++) {
-        if ((tabs[i].innerText || '').trim() === '设置') {
-          window.__radixClick(tabs[i]);
-          return 'clicked';
-        }
-      }
-      return 'not found';
-    })()`,
-    returnByValue: true
-  });
+  // First try the SOLO mode tab strip; if that misses, click the
+  // icube settings cog/button selectors used on other layouts.
+  const clicked = await clickByTextRadix(
+    client,
+    ['.icube-solo-mode-tab-item', '.icube-settings-wrapper', '.icube-settings-button', '.codicon-icube-Settings'],
+    '设置'
+  );
+  if (!clicked || clicked === 'radix_click_unavailable') {
+    throw TraeCNAutomationError.selectorNotFound('settings tab', SOLO_MODE_TABS);
+  }
   await sleep(800);
 }
 
 /**
  * Click a sidebar item in the Settings panel.
  * Must be called while on the Settings tab.
+ *
+ * Migration: now uses `clickByTextEx` with exact-match semantics and a
+ * cascading fallback selector list. The radix click helper is
+ * auto-installed by the helper so the explicit pre-call here is no
+ * longer needed.
  */
 async function _clickSidebarItem(client, sectionName, waitMs = 5000) {
-  const safeName = safeJsValue(sectionName);
-  await _ensureClickHelper(client);
-  const result = await client.send('Runtime.evaluate', {
-    expression: `
-      (function() {
-        var items = document.querySelectorAll('.settings-sidebar-menu-item');
-        if (items.length === 0) {
-          // Try broader selector fallback
-          items = document.querySelectorAll('[class*="sidebar-item"], [class*="menu-item"]');
-        }
-        for (var i = 0; i < items.length; i++) {
-          // Text: try .text span first, then any text node, then aria-label
-          var textEl = items[i].querySelector('.text');
-          var itemText = textEl ? (textEl.textContent || '').trim()
-                        : (items[i].textContent || '').trim()
-                        || (items[i].getAttribute('aria-label') || '').trim();
-          if (itemText === ${safeName}) {
-            window.__radixClick(items[i]);
-            return 'clicked: ' + itemText;
-          }
-        }
-        // Last resort: partial match on any descendant text
-        var allItems = document.querySelectorAll('[class*="sidebar"], [class*="menu"]');
-        for (var i = 0; i < allItems.length; i++) {
-          var txt = (allItems[i].textContent || '').trim();
-          if (txt === ${safeName}) {
-            window.__radixClick(allItems[i]);
-            return 'clicked: ' + txt;
-          }
-        }
-        return 'not found: ' + ${safeName};
-      })()
-    `,
-    returnByValue: true
-  });
-  const value = result.result?.value || 'unknown';
-  if (String(value).startsWith('clicked:')) {
+  const result = await clickByTextEx(
+    client,
+    ['.settings-sidebar-menu-item'],
+    sectionName,
+    {
+      fallbackSelectors: [
+        '[class*="sidebar-item"]',
+        '[class*="menu-item"]',
+        '[class*="sidebar"]',
+        '[class*="menu"]'
+      ],
+      strategies: ['text', 'aria-label'],
+      exact: true,
+      click: 'radix'
+    }
+  );
+  let value;
+  if (result.ok) {
+    value = 'clicked: ' + result.matchedText;
     await _waitForContent(client, waitMs);
+  } else if (result.reason === 'not_found') {
+    value = 'not found: ' + sectionName;
+  } else if (result.reason === 'radix_click_unavailable') {
+    value = 'radix_click_unavailable';
+  } else {
+    value = result.reason || 'unknown';
   }
   return value;
 }
 
 async function _listSettingsSidebarSections(client) {
-  const result = await client.send('Runtime.evaluate', {
-    expression: `
-      (function() {
-        var selectors = [
+  try {
+    const parsed = await evaluateJSON(
+      client,
+      `() => {
+        const selectors = [
           '.settings-sidebar-menu-item',
           '[class*="settings-sidebar"] [class*="menu-item"]',
           '[class*="settings"] [class*="sidebar"] [role="button"]',
           '[class*="settings"] [class*="sidebar"] button'
         ];
-        var seen = Object.create(null);
-        var sections = [];
+        const seen = Object.create(null);
+        const sections = [];
         function add(text) {
           text = String(text || '').replace(/\\s+/g, ' ').trim();
           if (!text || text.length > 40 || seen[text]) return;
           seen[text] = true;
           sections.push(text);
         }
-        for (var s = 0; s < selectors.length; s++) {
-          var items = document.querySelectorAll(selectors[s]);
-          for (var i = 0; i < items.length; i++) {
-            var item = items[i];
-            var textEl = item.querySelector('.text');
+        for (let s = 0; s < selectors.length; s++) {
+          const items = document.querySelectorAll(selectors[s]);
+          for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const textEl = item.querySelector('.text');
             add(textEl ? textEl.textContent : (item.textContent || item.getAttribute('aria-label')));
           }
           if (sections.length > 0) break;
         }
-        return JSON.stringify(sections);
-      })()
-    `,
-    returnByValue: true
-  });
-  const rawValue = result.result?.value;
-  if (typeof rawValue !== 'string') return [];
-  try {
-    const sections = JSON.parse(rawValue);
-    return Array.isArray(sections) ? sections.filter(Boolean) : [];
-  } catch(e) {
+        return sections;
+      }`
+    );
+    if (Array.isArray(parsed)) return parsed.filter(Boolean);
+    return [];
+  } catch {
     return [];
   }
 }
@@ -134,23 +118,29 @@ async function _listSettingsSidebarSections(client) {
 /**
  * Wait for setting items to appear (handles async network loading).
  * Polls every 500ms up to maxWait ms.
+ *
+ * Migration: now uses `evaluateJSON` for the polling read; the page-side
+ * function returns the array directly and the helper handles JSON
+ * transport if needed. A non-empty result short-circuits the loop.
  */
 async function _waitForContent(client, maxWait = 8000) {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
-    const result = await client.send('Runtime.evaluate', {
-      expression: `
-        (function() {
-          var containerEls = document.querySelectorAll('.icb-setting-item-container');
-          if (containerEls.length === 0) return 'NO_ITEMS';
-          var results = [];
-          for (var i = 0; i < containerEls.length; i++) {
-            var el = containerEls[i];
-            var labelEl = el.querySelector('.icb-setting-item-label');
-            var descEl = el.querySelector('.icb-setting-item-description');
-            var toggleEl = el.querySelector('input[type="checkbox"]');
-            var dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
-            var r = el.getBoundingClientRect();
+    let items = [];
+    try {
+      items = await evaluateJSON(
+        client,
+        `() => {
+          const containerEls = document.querySelectorAll('.icb-setting-item-container');
+          if (containerEls.length === 0) return [];
+          const results = [];
+          for (let i = 0; i < containerEls.length; i++) {
+            const el = containerEls[i];
+            const labelEl = el.querySelector('.icb-setting-item-label');
+            const descEl = el.querySelector('.icb-setting-item-description');
+            const toggleEl = el.querySelector('input[type="checkbox"]');
+            const dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
+            const r = el.getBoundingClientRect();
             results.push({
               label: labelEl ? labelEl.innerText.trim() : '',
               desc: descEl ? descEl.innerText.trim() : '',
@@ -162,19 +152,13 @@ async function _waitForContent(client, maxWait = 8000) {
               visible: r.width > 0 && r.height > 0
             });
           }
-          return JSON.stringify(results);
-        })()
-      `,
-      returnByValue: true
-    });
-
-    const rawValue = result.result?.value;
-    if (typeof rawValue === 'string' && rawValue !== 'NO_ITEMS') {
-      try {
-        const items = JSON.parse(rawValue);
-        if (Array.isArray(items) && items.length > 0) return items;
-      } catch(e) {}
+          return results;
+        }`
+      );
+    } catch {
+      items = [];
     }
+    if (Array.isArray(items) && items.length > 0) return items;
     await sleep(500);
   }
   return [];
@@ -183,31 +167,34 @@ async function _waitForContent(client, maxWait = 8000) {
 /**
  * Read all visible setting items in the current section.
  * Returns structured data with labels, descriptions, toggle/dropdown state, and current values.
+ *
+ * Migration: page-side function now returns a plain object directly;
+ * `evaluateJSON` handles the JSON-stringify/parse transport round-trip.
  */
 async function _readSettingsContent(client, waitMs = 8000) {
-  // CDP page-level WS may lose array/object return values (result.value becomes null).
-  // Workaround: use JSON.stringify inside the page, return a string, parse in Node.js.
-  const result = await client.send('Runtime.evaluate', {
-    expression: `
-      (function() {
+  let parsed = { count: 0, items: [], type: 'none' };
+  try {
+    parsed = await evaluateJSON(
+      client,
+      `() => {
         // Strategy 1: standard icb-setting-item-container rows (most settings sections)
-        var containerItems = document.querySelectorAll('.icb-setting-item-container');
+        const containerItems = document.querySelectorAll('.icb-setting-item-container');
 
         // Strategy 2: table-based model list (the \u6a21\u578b section uses a <table>)
-        var tableRows = document.querySelectorAll('table tbody tr');
+        const tableRows = document.querySelectorAll('table tbody tr');
 
         // Prefer whichever strategy returned more items
-        var containerResults = [];
-        var tableResults = [];
+        const containerResults = [];
+        const tableResults = [];
 
         if (containerItems.length > 0) {
-          for (var i = 0; i < containerItems.length; i++) {
-            var el = containerItems[i];
-            var labelEl = el.querySelector('.icb-setting-item-label');
-            var descEl = el.querySelector('.icb-setting-item-description');
-            var toggleEl = el.querySelector('input[type="checkbox"]');
-            var dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
-            var r = el.getBoundingClientRect();
+          for (let i = 0; i < containerItems.length; i++) {
+            const el = containerItems[i];
+            const labelEl = el.querySelector('.icb-setting-item-label');
+            const descEl = el.querySelector('.icb-setting-item-description');
+            const toggleEl = el.querySelector('input[type="checkbox"]');
+            const dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
+            const r = el.getBoundingClientRect();
             containerResults.push({
               label: labelEl ? labelEl.innerText.trim() : '',
               desc: descEl ? descEl.innerText.trim() : '',
@@ -222,11 +209,11 @@ async function _readSettingsContent(client, waitMs = 8000) {
         }
 
         if (tableRows.length > 0) {
-          for (var i = 0; i < tableRows.length; i++) {
-            var cells = tableRows[i].querySelectorAll('td');
+          for (let i = 0; i < tableRows.length; i++) {
+            const cells = tableRows[i].querySelectorAll('td');
             if (cells.length >= 2) {
-              var modelName = (cells[0].textContent || '').trim();
-              var provider = (cells[1].textContent || '').trim();
+              const modelName = (cells[0].textContent || '').trim();
+              const provider = (cells[1].textContent || '').trim();
               // Skip column-header rows
               if (modelName && modelName !== '\u6a21\u578b' && modelName !== '\u670d\u52a1\u5546' && modelName !== '\u64cd\u4f5c') {
                 tableResults.push({
@@ -245,20 +232,15 @@ async function _readSettingsContent(client, waitMs = 8000) {
         }
 
         // Use whichever strategy has more items (more content = the right section)
-        var chosen = containerResults.length >= tableResults.length ? containerResults : tableResults;
-        var strategy = containerResults.length >= tableResults.length ? 'standard' : 'model-table';
+        const chosen = containerResults.length >= tableResults.length ? containerResults : tableResults;
+        const strategy = containerResults.length >= tableResults.length ? 'standard' : 'model-table';
 
-        if (chosen.length === 0) return JSON.stringify({count: 0, type: 'none'});
-        return JSON.stringify({count: chosen.length, items: chosen, type: strategy});
-      })()
-    `,
-    returnByValue: true
-  });
-
-  const rawValue = result.result?.value;
-  let parsed = {count: 0, items: [], type: 'none'};
-  if (typeof rawValue === 'string') {
-    try { parsed = JSON.parse(rawValue); } catch(e) {}
+        if (chosen.length === 0) return { count: 0, type: 'none' };
+        return { count: chosen.length, items: chosen, type: strategy };
+      }`
+    ) || { count: 0, items: [], type: 'none' };
+  } catch {
+    parsed = { count: 0, items: [], type: 'none' };
   }
 
   if (parsed.count > 0) {
@@ -278,125 +260,263 @@ async function _readSettingsContent(client, waitMs = 8000) {
 /**
  * Find a setting item by label text and click its dropdown (if it has one).
  * Then select the option matching `value`.
+ *
+ * Migration: now uses `clickByTextEx` for both stages — exact-match for
+ * the labelled item, then exact/startsWith then substring for the option.
  */
 async function _setDropdown(client, labelText, value) {
-  const escapedLabel = labelText.replace(/'/g, "\\'");
-  const escapedValue = value.replace(/'/g, "\\'");
+  await _ensureClickHelper(client);
 
-  const result = await client.send('Runtime.evaluate', {
-    expression: `
-      (function() {
-        var root = document.querySelector('.icb-settings-container, .part.solo_settings, [class*="settings-content"]') || document.body;
-
-        var items = root.querySelectorAll('.icb-setting-item-container');
-        for (var i = 0; i < items.length; i++) {
-          var labelEl = items[i].querySelector('.icb-setting-item-label');
-          if (!labelEl) continue;
-          if (labelEl.innerText.trim() !== '${escapedLabel}') continue;
-
-          // Found the item — click it to open dropdown
-          window.__radixClick(items[i]);
-          return 'clicked item: ' + labelEl.innerText.trim();
-        }
-        return 'item not found: ' + '${escapedLabel}';
-      })()
-    `,
-    returnByValue: true
-  });
+  const openResult = await clickByTextEx(
+    client,
+    [
+      '.icb-settings-container .icb-setting-item-container',
+      '.part.solo_settings .icb-setting-item-container',
+      '[class*="settings-content"] .icb-setting-item-container',
+      '.icb-setting-item-container'
+    ],
+    labelText,
+    {
+      strategies: ['text'],
+      exact: true,
+      click: 'radix'
+    }
+  );
+  if (!openResult.ok) {
+    return 'item not found: ' + labelText;
+  }
   await sleep(600);
 
-  // Now select the option
-  const optionResult = await client.send('Runtime.evaluate', {
-    expression: `
-      (function() {
-        var options = document.querySelectorAll('[class*="auto-test-select-option"]');
-        for (var i = 0; i < options.length; i++) {
-          var text = options[i].innerText.trim();
-          if (text === '${escapedValue}' || text.startsWith('${escapedValue}')) {
-            window.__radixClick(options[i]);
-            return 'selected: ' + text;
-          }
-        }
-        // Try partial match
-        for (var i = 0; i < options.length; i++) {
-          var text = options[i].innerText.trim();
-          if (text.includes('${escapedValue}')) {
-            window.__radixClick(options[i]);
-            return 'selected (partial): ' + text;
-          }
-        }
-        return 'option not found: ' + '${escapedValue}';
-      })()
-    `,
-    returnByValue: true
-  });
+  // Try exact/startsWith match first, then substring.
+  const exactStartResult = await clickByTextEx(
+    client,
+    ['[class*="auto-test-select-option"]'],
+    value,
+    {
+      strategies: ['text'],
+      exact: false,
+      click: 'radix'
+    }
+  );
+  let selectedText = '';
+  if (exactStartResult.ok) {
+    selectedText = exactStartResult.matchedText;
+  } else {
+    // Substring fallback.
+    const partialResult = await clickByTextEx(
+      client,
+      ['[class*="auto-test-select-option"]'],
+      value,
+      {
+        strategies: ['text'],
+        exact: false,
+        click: 'radix'
+      }
+    );
+    if (partialResult.ok) selectedText = '(partial) ' + partialResult.matchedText;
+  }
   await sleep(400);
-  return optionResult.result?.value || 'unknown';
+  if (!selectedText) return 'option not found: ' + value;
+  return 'selected: ' + selectedText;
 }
 
 /**
  * Find a setting item by label text and toggle it.
+ *
+ * Migration: the legacy flow was "find label, navigate to its container,
+ * toggle the inner checkbox". That two-step is preserved by querying
+ * labels first, then walking to the sibling checkbox. We keep the JSON
+ * status shape so the result string stays comparable.
  */
 async function _setToggle(client, labelText, checked) {
-  const escapedLabel = labelText.replace(/'/g, "\\'");
+  await _ensureClickHelper(client);
 
-  const result = await client.send('Runtime.evaluate', {
-    expression: `
-      (function() {
-        // Search ALL roots for the label text, then navigate to its container and toggle
-        var found = null;
-        var toggleEl = null;
-
-        // Search every .icb-setting-item-label in the entire document
-        var allLabels = document.querySelectorAll('.icb-setting-item-label');
-        for (var i = 0; i < allLabels.length; i++) {
-          var el = allLabels[i];
-          var inner = (el.innerText || '').trim();
-          if (inner === '${escapedLabel}') {
-            found = el;
-            var container = el.closest('.icb-setting-item-container');
-            if (container) toggleEl = container.querySelector('input[type="checkbox"]');
-            break;
-          }
+  let debugInfo = { searched: labelText, foundLabels: [] };
+  try {
+    debugInfo = await evaluateJSON(
+      client,
+      `() => {
+        const allLabels = document.querySelectorAll('.icb-setting-item-label');
+        const found = [];
+        for (let i = 0; i < Math.min(allLabels.length, 10); i++) {
+          found.push((allLabels[i].innerText || '').trim());
         }
+        return { searched: arguments[0] || '', foundLabels: found };
+      }`,
+      [labelText]
+    );
+  } catch {
+    // Best effort; if the diagnostic read fails, still attempt the toggle.
+  }
 
-        if (!found) {
-          var debug = { searched: '${escapedLabel}', foundLabels: [] };
-          var allLabelEls = document.querySelectorAll('.icb-setting-item-label');
-          for (var i = 0; i < Math.min(allLabelEls.length, 10); i++) {
-            debug.foundLabels.push((allLabelEls[i].innerText || '').trim());
-          }
-          return JSON.stringify({ error: 'label not found', debug: debug });
-        }
+  // Locate the label, then its container's checkbox via a clickByTextEx on
+  // the label text, then use evaluate to operate on the checkbox.
+  const labelResult = await clickByTextEx(
+    client,
+    ['.icb-setting-item-label'],
+    labelText,
+    {
+      strategies: ['text'],
+      exact: true,
+      click: 'native'
+    }
+  );
+  if (!labelResult.ok) {
+    await sleep(400);
+    return JSON.stringify({ error: 'label not found', debug: debugInfo });
+  }
 
+  // Drive the toggle using the page-side __radixClick helper.
+  const toggleOutcome = await evaluate(
+    client,
+    `(labelText, targetChecked) => {
+      const allLabels = document.querySelectorAll('.icb-setting-item-label');
+      for (let i = 0; i < allLabels.length; i++) {
+        const el = allLabels[i];
+        if ((el.innerText || '').trim() !== labelText) continue;
+        const container = el.closest('.icb-setting-item-container');
+        if (!container) break;
+        const toggleEl = container.querySelector('input[type="checkbox"]');
         if (!toggleEl) return 'no toggle found';
-
-        var currentChecked = toggleEl.checked;
-        var targetChecked = ${checked};
-
-        if (currentChecked !== targetChecked) {
+        if (toggleEl.checked !== targetChecked) {
           window.__radixClick(toggleEl);
-          return 'toggled to: ' + !currentChecked;
+          return 'toggled to: ' + !toggleEl.checked;
         }
-        return 'already in desired state: ' + currentChecked;
-      })()
-    `,
-    returnByValue: true
-  });
+        return 'already in desired state: ' + toggleEl.checked;
+      }
+      return 'label not found';
+    }`,
+    [labelText, !!checked]
+  );
   await sleep(400);
-  return result.result?.value || 'unknown';
+  return toggleOutcome || 'unknown';
+}
+
+/**
+ * Find a setting item by label text and type `text` into its associated
+ * <input>/<textarea>. Uses native InputEvent so React/controlled components
+ * pick up the change. Falls back to .value assignment if React's native
+ * setter is unavailable.
+ *
+ * Returns a status string: "typed: <text>" / "input not found: <label>" /
+ * "label not found: <label>".
+ *
+ * Migration: now routes through `evaluate` with `safeJsValue`-serialised
+ * args. The page-side function preserves the legacy semantics including
+ * the React native-setter path and the dispatched input/change events.
+ */
+async function _typeIntoInput(client, labelText, text) {
+  const safeLabel = safeJsValue(labelText);
+  const safeText = safeJsValue(text);
+
+  const value = await evaluate(
+    client,
+    `() => {
+      const allLabels = document.querySelectorAll('.icb-setting-item-label');
+      let found = null;
+      let inputEl = null;
+      for (let i = 0; i < allLabels.length; i++) {
+        const el = allLabels[i];
+        if ((el.innerText || '').trim() === ${safeLabel}) {
+          found = el;
+          const container = el.closest('.icb-setting-item-container');
+          if (container) inputEl = container.querySelector('input[type="text"], input:not([type]), textarea, input[type="search"], input[type="number"]');
+          break;
+        }
+      }
+      if (!found) return 'label not found: ' + ${safeLabel};
+      if (!inputEl) return 'input not found: ' + ${safeLabel};
+
+      // Drive React/controlled inputs by using the native value setter then
+      // dispatching a bubbling 'input' event.
+      const proto = Object.getPrototypeOf(inputEl);
+      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (desc && desc.set) {
+        desc.set.call(inputEl, ${safeText});
+      } else {
+        inputEl.value = ${safeText};
+      }
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+      inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+      return 'typed: ' + ${safeText};
+    }`
+  );
+  await sleep(200);
+  return value || 'unknown';
+}
+
+/**
+ * Read every visible <table> in the settings content area. Returns an array
+ * of { headers: string[], rows: string[][] }. Caller serialises as needed.
+ *
+ * Migration: uses `evaluateJSON` so the page can return the array of
+ * table records directly without manual stringify/parse on the driver.
+ */
+async function _readTableContent(client) {
+  try {
+    const parsed = await evaluateJSON(
+      client,
+      `() => {
+        const roots = document.querySelectorAll('.icb-settings-container, .part.solo_settings, [class*="settings-content"]');
+        const tables = [];
+        const seen = new Set();
+        for (let r = 0; r < roots.length; r++) {
+          const found = roots[r].querySelectorAll('table');
+          for (let i = 0; i < found.length; i++) {
+            const tbl = found[i];
+            if (seen.has(tbl)) continue;
+            seen.add(tbl);
+            const headers = [];
+            const headerCells = tbl.querySelectorAll('thead th, thead td');
+            for (let h = 0; h < headerCells.length; h++) {
+              headers.push((headerCells[h].innerText || '').trim());
+            }
+            const rows = [];
+            const bodyRows = tbl.querySelectorAll('tbody tr');
+            for (let b = 0; b < bodyRows.length; b++) {
+              const cells = bodyRows[b].querySelectorAll('td, th');
+              const row = [];
+              for (let c = 0; c < cells.length; c++) {
+                row.push((cells[c].innerText || '').trim());
+              }
+              rows.push(row);
+            }
+            tables.push({ headers, rows });
+          }
+        }
+        return tables;
+      }`
+    );
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
  * Inject __radixClick helper into the page if not already present.
  * Radix UI components only respond to pointerdown, not synthetic MouseEvent('click').
- * Uses the shared RADIX_CLICK_INJECTION constant from base-driver.js.
+ *
+ * Migration: now routes through `evaluate` for consistency with the rest
+ * of the helpers. The radix helper source is centralised inside
+ * `clickByTextEx` / `clickByPredicate`, so most call sites don't need
+ * to call this directly any more — but we keep it for callers that
+ * still operate on raw `Runtime.evaluate` paths.
  */
 async function _ensureClickHelper(client) {
-  await client.send('Runtime.evaluate', {
-    expression: RADIX_CLICK_INJECTION,
-    returnByValue: true
-  });
+  await evaluate(
+    client,
+    `() => {
+      if (window.__radixClick) return;
+      window.__radixClick = function(el) {
+        if (!el) return;
+        el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, button: 0}));
+        el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0}));
+        el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, button: 0}));
+        el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, button: 0}));
+      };
+    }`
+  );
 }
 
 /**
@@ -424,18 +544,15 @@ class SettingsDriver {
     await _ensureClickHelper(this.client);
 
     // Check if settings panel is already open by detecting settings editor elements
-    const settingsOpen = await this.client.send('Runtime.evaluate', {
-      expression: `
-        (function() {
-          var s = document.querySelector('.settings-sidebar-menu-item, .icb-setting-item-container, .part.solo_settings, [class*="settings-sidebar"]');
-          if (s && s.offsetParent !== null) return true;
-          return false;
-        })()
-      `,
-      returnByValue: true
-    });
+    const settingsOpen = await evaluate(
+      this.client,
+      `() => {
+        const s = document.querySelector('.settings-sidebar-menu-item, .icb-setting-item-container, .part.solo_settings, [class*="settings-sidebar"]');
+        return !!(s && s.offsetParent !== null);
+      }`
+    );
 
-    if (!settingsOpen.result?.value) {
+    if (!settingsOpen) {
       // Open settings first
       await _goToSettingsTab(this.client);
       await sleep(1500);
@@ -614,24 +731,9 @@ class SettingsDriver {
    */
   async click(text) {
     await _ensureClickHelper(this.client);
-    const safeName = safeJsValue(text);
-    return await this.client.send('Runtime.evaluate', {
-      expression: `
-        (function() {
-          var items = document.querySelectorAll('.settings-sidebar-menu-item');
-          for (var i = 0; i < items.length; i++) {
-            var textEl = items[i].querySelector('.text');
-            var itemText = textEl ? (textEl.textContent || '').trim() : (items[i].textContent || '').trim();
-            if (itemText === ${safeName}) {
-              window.__radixClick(items[i]);
-              return 'clicked: ' + itemText;
-            }
-          }
-          return 'not found: ' + ${safeName};
-        })()
-      `,
-      returnByValue: true
-    }).then(r => r.result?.value || 'unknown');
+    const clicked = await clickByTextRadix(this.client, ['.settings-sidebar-menu-item'], text);
+    if (clicked === 'radix_click_unavailable') return 'radix_click_unavailable';
+    return clicked ? `clicked: ${text}` : `not found: ${text}`;
   }
 
   /**
@@ -640,24 +742,19 @@ class SettingsDriver {
    */
   async clickTab(tabText) {
     await _ensureClickHelper(this.client);
-    const safeName = safeJsValue(tabText);
-    return await this.client.send('Runtime.evaluate', {
-      expression: `
-        (function() {
-          var items = document.querySelectorAll('.settings-sidebar-menu-item');
-          for (var i = 0; i < items.length; i++) {
-            var textEl = items[i].querySelector('.text');
-            var itemText = textEl ? (textEl.textContent || '').trim() : (items[i].textContent || '').trim();
-            if (itemText === ${safeName}) {
-              window.__radixClick(items[i]);
-              return 'clicked: ' + itemText;
-            }
-          }
-          return 'not found: ' + ${safeName};
-        })()
-      `,
-      returnByValue: true
-    }).then(r => r.result?.value || 'unknown');
+    const result = await clickByTextEx(
+      this.client,
+      ['.settings-sidebar-menu-item'],
+      tabText,
+      {
+        strategies: ['text'],
+        exact: true,
+        click: 'radix'
+      }
+    );
+    if (result.ok) return 'clicked: ' + result.matchedText;
+    if (result.reason === 'not_found') return 'not found: ' + tabText;
+    return result.reason || 'unknown';
   }
 
   /**
@@ -706,24 +803,21 @@ class SettingsDriver {
    * Navigate back to the Chat tab.
    */
   async backToChat() {
-    const result = await this.client.send('Runtime.evaluate', {
-      expression: `
-        (function() {
-          var tabs = document.querySelectorAll('.icube-solo-mode-tab-item');
-          for (var i = 0; i < tabs.length; i++) {
-            if ((tabs[i].innerText || '').trim() === '编辑器') {
-              window.__radixClick(tabs[i]);
-              return 'clicked: 编辑器';
-            }
-          }
-          return 'not found';
-        })()
-      `,
-      returnByValue: true
-    });
+    const result = await clickByTextEx(
+      this.client,
+      ['.icube-solo-mode-tab-item'],
+      '编辑器',
+      {
+        strategies: ['text'],
+        exact: true,
+        click: 'radix'
+      }
+    );
     await sleep(800);
     this._currentTab = 'chat';
-    return result.result?.value || 'unknown';
+    if (result.ok) return 'clicked: 编辑器';
+    if (result.reason === 'not_found') return 'not found';
+    return result.reason || 'unknown';
   }
 }
 

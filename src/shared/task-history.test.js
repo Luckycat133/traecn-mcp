@@ -13,9 +13,11 @@ try {
 } catch {}
 
 const { TaskHistoryStore, getGlobalStore, resetGlobalStore } = require('./task-history');
+const { createRunner } = require('../shared/test-runner');
 
-let passed = 0;
-let failed = 0;
+const r = createRunner('task-history.test.js');
+const _baseTest = r.test;
+const { asyncTest, summary } = r;
 
 function resetPersistentState() {
   resetGlobalStore();
@@ -24,22 +26,17 @@ function resetPersistentState() {
   } catch {}
 }
 
+// Wrap the runner's test() so each case resets persistent state around it —
+// preserves the original "clean slate per test" guarantee.
 function test(name, fn) {
-  try {
+  _baseTest(name, () => {
     resetPersistentState();
-    fn();
-    resetPersistentState();
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    resetPersistentState();
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-    if (err.stack) {
-      console.error(`        ${err.stack.split('\n')[1] || ''}`);
+    try {
+      fn();
+    } finally {
+      resetPersistentState();
     }
-  }
+  });
 }
 
 console.log('\n[task-history.test.js] Running tests...\n');
@@ -431,6 +428,6 @@ test('step details are stored correctly', () => {
   store.shutdown();
 });
 
-console.log(`\n[task-history.test.js] Results: ${passed} passed, ${failed} failed\n`);
+summary();
 fs.rmSync(TEST_HISTORY_DIR, { recursive: true, force: true });
-process.exit(failed > 0 ? 1 : 0);
+process.exit(r.failed > 0 ? 1 : 0);

@@ -47,8 +47,9 @@ function request(port, method, path, body = null, headers = {}) {
 
 (async () => {
   let server;
+  let close;
   try {
-    ({ server } = await startGateway({ host: '127.0.0.1', port: 0 }));
+    ({ server, close } = await startGateway({ host: '127.0.0.1', port: 0 }));
     const port = server.address().port;
     const auth = { Authorization: 'Bearer system-test-token' };
 
@@ -146,7 +147,19 @@ function request(port, method, path, body = null, headers = {}) {
     console.error('[system-test] FAIL:', err.message);
     process.exitCode = 1;
   } finally {
-    if (server) {
+    // Always go through the gateway's full shutdown path — that drains
+    // background polling, the CDP health watcher, the WebSocket heartbeat,
+    // and the CDP client before letting the HTTP server close. Without this,
+    // intervals keep the event loop alive past the assertions and the
+    // process hangs until the OS SIGKILLs it (exit code 137).
+    if (typeof close === 'function') {
+      try {
+        await close();
+      } catch (e) {
+        console.error('[system-test] shutdown error:', e.message);
+      }
+    } else if (server) {
+      // Defensive fallback for older startGateway return shapes.
       if (typeof server.closeAllConnections === 'function') {
         server.closeAllConnections();
       }

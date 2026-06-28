@@ -2,7 +2,7 @@
 
 const { sleep } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
-const { BaseDriver } = require('./base-driver');
+const { evaluate, evaluateJSON } = require('./browser-dom');
 
 /**
  * SearchDriver — drive the Search panel and Find in Files.
@@ -14,7 +14,22 @@ const { BaseDriver } = require('./base-driver');
  *    `.search-widget .input`, press Enter to trigger.
  *  - Read results from `.search-results .monaco-list-row` rows.
  */
-class SearchDriver extends BaseDriver {
+class SearchDriver {
+  constructor(client, config = {}, deps = {}) {
+    this.client = client;
+    this.config = config;
+    this.palette = deps.palette || null;
+  }
+
+  setPalette(palette) { this.palette = palette; }
+
+  _viaPalette(commandId) {
+    if (!this.palette) {
+      throw new TraeCNAutomationError('CommandPaletteDriver required', 'PALETTE_REQUIRED', { commandId });
+    }
+    return this.palette.run(commandId);
+  }
+
   // ── Open / focus (command palette) ──────────────────────────────────
 
   openSearch() { return this._viaPalette('workbench.view.search'); }
@@ -76,60 +91,61 @@ class SearchDriver extends BaseDriver {
    * Read the current search results from the rendered DOM.
    */
   async readResults(maxResults = 200) {
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
-        const rows = document.querySelectorAll('.search-results .monaco-list-row');
-        const out = [];
-        for (let i = 0; i < Math.min(rows.length, ${maxResults}); i++) {
-          const row = rows[i];
-          const file = row.querySelector('.file')?.innerText?.trim() || '';
-          const line = row.querySelector('.line')?.innerText?.trim() || '';
-          const match = row.querySelector('.match')?.innerText?.trim() || (row.innerText || '').trim();
-          const aria = row.getAttribute('aria-label') || '';
-          out.push({ file, line, match: match.slice(0, 400), aria });
-        }
-        const count = document.querySelector('.search-message')?.innerText?.trim() ||
-                      document.querySelector('[class*="result-count"]')?.innerText?.trim() || '';
-        return JSON.stringify({ ok: true, count: out.length, items: out, countText: count });
-      })()`,
-      returnByValue: true
-    });
-    try { return JSON.parse(r.result.value); } catch { return { ok: false, count: 0, items: [] }; }
+    try {
+      return await evaluateJSON(
+        this.client,
+        `(maxResults) => {
+          const rows = document.querySelectorAll('.search-results .monaco-list-row');
+          const out = [];
+          for (let i = 0; i < Math.min(rows.length, maxResults); i++) {
+            const row = rows[i];
+            const file = row.querySelector('.file')?.innerText?.trim() || '';
+            const line = row.querySelector('.line')?.innerText?.trim() || '';
+            const match = row.querySelector('.match')?.innerText?.trim() || (row.innerText || '').trim();
+            const aria = row.getAttribute('aria-label') || '';
+            out.push({ file, line, match: match.slice(0, 400), aria });
+          }
+          const count = document.querySelector('.search-message')?.innerText?.trim() ||
+                        document.querySelector('[class*="result-count"]')?.innerText?.trim() || '';
+          return { ok: true, count: out.length, items: out, countText: count };
+        }`,
+        [maxResults]
+      );
+    } catch (err) {
+      return { ok: false, count: 0, items: [] };
+    }
   }
 
   async _typeIntoSearchInput(query, include, exclude) {
-    const safeQ = JSON.stringify(query);
-    const safeI = include ? JSON.stringify(include) : '""';
-    const safeE = exclude ? JSON.stringify(exclude) : '""';
-    const r = await this.client.send('Runtime.evaluate', {
-      expression: `(function() {
+    return evaluate(
+      this.client,
+      `(args) => {
         const view = document.querySelector('.search-view');
         if (!view) return false;
         const searchInput = view.querySelector('.search-widget .input[aria-label*="Search" i], .search-widget input.input');
         const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
         if (searchInput) {
-          setter.call(searchInput, ${safeQ});
+          setter.call(searchInput, args.query);
           searchInput.dispatchEvent(new Event('input', { bubbles: true }));
         }
-        if (${safeI}) {
+        if (args.include) {
           const includeInput = view.querySelector('input[aria-label*="Include" i], input[placeholder*="Include" i]');
           if (includeInput) {
-            setter.call(includeInput, ${safeI});
+            setter.call(includeInput, args.include);
             includeInput.dispatchEvent(new Event('input', { bubbles: true }));
           }
         }
-        if (${safeE}) {
+        if (args.exclude) {
           const excludeInput = view.querySelector('input[aria-label*="Exclude" i], input[placeholder*="Exclude" i]');
           if (excludeInput) {
-            setter.call(excludeInput, ${safeE});
+            setter.call(excludeInput, args.exclude);
             excludeInput.dispatchEvent(new Event('input', { bubbles: true }));
           }
         }
         return !!searchInput;
-      })()`,
-      returnByValue: true
-    });
-    return !!r.result.value;
+      }`,
+      [{ query, include, exclude }]
+    );
   }
 }
 

@@ -2,31 +2,10 @@
 
 const assert = require('assert');
 const { DomDriver, getConfig, sanitizeActivityText, DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS, DEFAULT_RESPONSE_SELECTORS } = require('./dom-driver');
+const { createRunner } = require('../shared/test-runner');
 
-let passed = 0;
-let failed = 0;
-const pendingAsyncTests = [];
-
-function test(name, fn) {
-  try {
-    const result = fn();
-    if (result && typeof result.then === 'function') {
-      pendingAsyncTests.push({
-        name,
-        promise: Promise.resolve(result)
-          .then(() => ({ ok: true }))
-          .catch((err) => ({ ok: false, err }))
-      });
-      return;
-    }
-    passed++;
-    console.log(`  PASS: ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
-  }
-}
+const r = createRunner('dom-driver.test.js');
+const { test, asyncTest, pendingAsyncTests, summary } = r;
 
 console.log('\n[dom-driver.test.js] Running tests...\n');
 
@@ -1165,22 +1144,9 @@ test('getConfig falls back to TRAE_COMPOSER_SELECTORS', () => {
 });
 
 (async () => {
-  for (const { name, promise } of pendingAsyncTests) {
-    try {
-      const result = await promise;
-      if (!result.ok) throw result.err;
-      passed++;
-      console.log(`  PASS: ${name}`);
-    } catch (err) {
-      failed++;
-      console.error(`  FAIL: ${name}`);
-      console.error(`        ${err.message}`);
-    }
-  }
-
-  console.log(`\n[dom-driver.test.js] Results: ${passed} passed, ${failed} failed\n`);
-
-  if (failed > 0) {
+  await pendingAsyncTests();
+  summary();
+  if (r.failed > 0) {
     process.exit(1);
   }
 })().catch((err) => {

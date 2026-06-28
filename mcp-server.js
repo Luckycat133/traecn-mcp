@@ -8,16 +8,21 @@ const { buildCapabilities } = require('./src/shared/capabilities');
 const { buildConfirmationPlan } = require('./src/shared/operation-confirmation');
 const { executeCommand, listCommands } = require('./integrations/openclaw-traecn-plugin/lib/command-set');
 const { TraeCNApiClient } = require('./integrations/openclaw-traecn-plugin/lib/traecnapi-client');
+const { getGatewayContext } = require('./src/shared/utils');
 const mcpAuth = require('./src/shared/mcp-auth');
 
 const SERVER_INFO = Object.freeze({ name: 'traecnclaw', version: require('./package.json').version });
 
 function envContext() {
+  // getGatewayContext handles TRAECN_* and TRAE_* keys with sane defaults;
+  // we override the defaults here for the MCP server's higher port/timeout.
+  const ctx = getGatewayContext();
+  const env = process.env;
   return {
-    host: process.env.TRAECN_HOST || process.env.HOST || '127.0.0.1',
-    port: Number(process.env.TRAECN_PORT || process.env.PORT || 8788),
-    token: process.env.TRAECN_GATEWAY_TOKEN || process.env.TRAECN_API_KEY || '',
-    timeout: Number(process.env.TRAECN_TIMEOUT || 120000)
+    host: env.TRAECN_HOST || ctx.host,
+    port: Number(env.TRAECN_PORT || env.PORT || 8788),
+    token: env.TRAECN_GATEWAY_TOKEN || env.TRAECN_API_KEY || ctx.token,
+    timeout: Number(env.TRAECN_TIMEOUT || 120000)
   };
 }
 
