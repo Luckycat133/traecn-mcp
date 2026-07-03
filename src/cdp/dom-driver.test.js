@@ -976,6 +976,18 @@ test('deleteSoloChats deletes matched Solo queue probe and verifies by title', a
       assert.strictEqual(method, 'Runtime.evaluate');
       const expression = payload.expression || '';
       runtimeExpressions.push(expression);
+      if (expression.includes("MouseEvent('contextmenu'") || expression.includes('MouseEvent("contextmenu"')) {
+        return {
+          result: {
+            value: {
+              success: true,
+              x: 169,
+              y: 150,
+              title: 'Wait for Trae Queue 进行中 14:07'
+            }
+          }
+        };
+      }
       if (expression.includes('var candidate =')) {
         assert.strictEqual(payload.awaitPromise, true);
         assert.ok(expression.includes('"Wait for Trae Queue 进行中 14:07"'));
@@ -993,7 +1005,7 @@ test('deleteSoloChats deletes matched Solo queue probe and verifies by title', a
           }
         };
       }
-      if (expression.includes('var anchor =')) {
+      if (expression.includes('var anchor =') || expression.includes("querySelectorAll('.context-menu-container")) {
         return {
           result: {
             value: {
@@ -1051,7 +1063,12 @@ test('deleteSoloChats deletes matched Solo queue probe and verifies by title', a
   assert.strictEqual(result.attempts[0].success, true);
   assert.strictEqual(result.attempts[0].deletePoint.nodeText, '删除任务');
   assert.strictEqual(result.attempts[0].confirmPoint.nodeText, '删除');
-  assert.ok(mouseEvents.some(event => event.type === 'mousePressed' && event.x === 169 && event.y === 150));
+  assert.ok(
+    runtimeExpressions.some(expression =>
+      expression.includes("MouseEvent('contextmenu'") || expression.includes('MouseEvent("contextmenu"')
+    ),
+    'should open row context menu via contextmenu event, not left-click'
+  );
   assert.ok(mouseEvents.some(event => event.type === 'mousePressed' && event.x === 99 && event.y === 273));
   assert.ok(mouseEvents.some(event => event.type === 'mousePressed' && event.x === 879 && event.y === 488));
   assert.ok(runtimeExpressions.some(expression => expression.includes('.soloaisidebar')));
@@ -1063,6 +1080,13 @@ test('deleteSoloChats does not treat menu text insertion as deletion success', a
       if (method === 'Input.dispatchMouseEvent') return {};
       assert.strictEqual(method, 'Runtime.evaluate');
       const expression = payload.expression || '';
+      if (expression.includes("MouseEvent('contextmenu'") || expression.includes('MouseEvent("contextmenu"')) {
+        return {
+          result: {
+            value: { success: true, x: 169, y: 150, title: 'Wait for Trae Queue 进行中 14:11' }
+          }
+        };
+      }
       if (expression.includes('var candidate =')) {
         return {
           result: {
@@ -1075,7 +1099,7 @@ test('deleteSoloChats does not treat menu text insertion as deletion success', a
           }
         };
       }
-      if (expression.includes('var anchor =')) {
+      if (expression.includes('var anchor =') || expression.includes("querySelectorAll('.context-menu-container")) {
         return {
           result: {
             value: {
