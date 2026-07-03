@@ -3,22 +3,9 @@
 const assert = require('assert');
 const { GitDriver } = require('./git-driver');
 const { CommandPaletteDriver } = require('./command-palette-driver');
-
-let passed = 0, failed = 0;
-const asyncTests = [];
-
-function test(name, fn) {
-  try {
-    const r = fn();
-    if (r && typeof r.then === 'function') {
-      asyncTests.push(
-        Promise.resolve(r)
-          .then(() => { passed++; console.log(`  PASS: ${name}`); })
-          .catch(err => { failed++; console.error(`  FAIL: ${name}: ${err.message}`); })
-      );
-    } else { passed++; console.log(`  PASS: ${name}`); }
-  } catch (err) { failed++; console.error(`  FAIL: ${name}: ${err.message}`); }
-}
+const { createRunner } = require('../shared/test-runner');
+const runner = createRunner('git-driver.test.js');
+const { test, pendingAsyncTests, summary } = runner;
 
 function mockClient() {
   const calls = [];
@@ -107,7 +94,8 @@ test('execGit with deps.exec calls it', () => {
   });
 });
 
-Promise.all(asyncTests).then(() => {
-  console.log(`\n  Results: ${passed} passed, ${failed} failed\n`);
-  process.exit(failed > 0 ? 1 : 0);
+Promise.resolve().then(async () => {
+  await pendingAsyncTests();
+  summary();
+  if (runner.failed > 0) process.exit(1);
 });

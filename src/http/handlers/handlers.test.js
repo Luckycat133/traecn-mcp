@@ -87,14 +87,16 @@ test('handlers: tasks module routes resolve via matchRoute', () => {
   }
 });
 
-summary();
-if (runner.failed > 0) process.exit(1);
 // ── Queue-probe guard (regression test for "wait for Trae queue" spam) ──
 const { handleDelegateAsync } = require('./delegate');
-const { handleSubmitSoloChatTask } = require('./solo-chat');
+const { handleSubmitSoloChatTask, handleCleanupForeignQueue } = require('./solo-chat');
 const { handleDelegate: handleSessionDelegate } = require('./sessions');
 const { handleBatchSubmit } = require('./batch');
 const { isGenericQueueProbeTask } = require('../../shared/utils');
+
+function jsonReq(body) {
+  return require('stream').Readable.from([Buffer.from(JSON.stringify(body))]);
+}
 
 function fakeCtx() {
   return {
@@ -103,7 +105,7 @@ function fakeCtx() {
 }
 
 asyncTest('handleDelegateAsync rejects "wait for Trae queue" with 400', async () => {
-  const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ task: 'wait for Trae queue' }))]);
+  const req = jsonReq({ task: 'wait for Trae queue' });
   const res = {};
   const ctx = fakeCtx();
   await handleDelegateAsync(req, res, ctx);
@@ -112,7 +114,7 @@ asyncTest('handleDelegateAsync rejects "wait for Trae queue" with 400', async ()
 });
 
 asyncTest('handleSubmitSoloChatTask rejects "Wait for Trae Queue 进行中 17:34" with 400', async () => {
-  const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ task: 'Wait for Trae Queue 进行中 17:34' }))]);
+  const req = jsonReq({ task: 'Wait for Trae Queue 进行中 17:34' });
   const res = {};
   const ctx = fakeCtx();
   await handleSubmitSoloChatTask(req, res, ctx);
@@ -121,7 +123,7 @@ asyncTest('handleSubmitSoloChatTask rejects "Wait for Trae Queue 进行中 17:34
 });
 
 asyncTest('handleSessionDelegate rejects layered queue probes', async () => {
-  const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ task: '现在已经排到了' }))]);
+  const req = jsonReq({ task: '现在已经排到了' });
   const res = {};
   const ctx = fakeCtx();
   await handleSessionDelegate(req, res, ctx, 'test-session');
@@ -130,7 +132,7 @@ asyncTest('handleSessionDelegate rejects layered queue probes', async () => {
 });
 
 asyncTest('handleBatchSubmit rejects a batch containing a queue-probe task', async () => {
-  const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ tasks: [{ task: 'real work' }, { task: 'wait for Trae queue' }] }))]);
+  const req = jsonReq({ tasks: [{ task: 'real work' }, { task: 'wait for Trae queue' }] });
   const res = {};
   const ctx = fakeCtx();
   await handleBatchSubmit(req, res, ctx);
@@ -140,7 +142,7 @@ asyncTest('handleBatchSubmit rejects a batch containing a queue-probe task', asy
 });
 
 asyncTest('handleDelegateAsync still accepts legitimate tasks (regression: not over-blocking)', async () => {
-  const req = require('stream').Readable.from([Buffer.from(JSON.stringify({ task: 'implement the queue status panel without sending prompts' }))]);
+  const req = jsonReq({ task: 'implement the queue status panel without sending prompts' });
   const res = {};
   const ctx = {
     _json: (req, res, body, status) => { res.status = status; res.body = body; return res; },
@@ -160,4 +162,95 @@ test('isGenericQueueProbeTask detects the canonical probe string', () => {
   assert.strictEqual(isGenericQueueProbeTask('Wait for Trae Queue 进行中 17:34'), true);
   assert.strictEqual(isGenericQueueProbeTask('Please implement a queue-status panel'), false);
   assert.strictEqual(isGenericQueueProbeTask('implement a queue-status panel without sending prompts'), false);
+});
+
+asyncTest('handleCleanupForeignQueue dry-run lists queue-probe Solo chats without deleting', async () => {
+  let deleted = false;
+  const req = jsonReq({ dryRun: true });
+  const res = {};
+  const ctx = {
+    client: { isConnected: true },
+    _ensureConnection: async () => {},
+    _json: (req, res, body, status) => { res.status = status; res.body = body; return res; },
+    driver: {
+      listSoloChats: async () => ({
+        mode: 'solo',
+        chats: [
+          { index: 0, title: 'normal feature work', text: 'implementation notes' },
+          { index: 1, title: 'wait for Trae queue', text: '排队中 ...' }
+        ],
+        count: 2
+      }),
+      deleteSoloChats: async () => { deleted = true; return { deleted: 1 }; }
+    }
+  };
+
+  await handleCleanupForeignQueue(req, res, ctx);
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.matched, 1);
+  assert.strictEqual(res.body.deleted, 0);
+  assert.strictEqual(res.body.dryRun, true);
+  assert.strictEqual(res.body.support, 'delete_supported');
+  assert.strictEqual(res.body.candidates[0].index, 1);
+  assert.strictEqual(deleted, false);
+});
+
+asyncTest('handleCleanupForeignQueue execute deletes matched queue-probe chats', async () => {
+  const seenCandidates = [];
+  const req = jsonReq({ execute: true });
+  const res = {};
+  const ctx = {
+    client: { isConnected: true },
+    _ensureConnection: async () => {},
+    _json: (req, res, body, status) => { res.status = status; res.body = body; return res; },
+    driver: {
+      listSoloChats: async () => ({
+        mode: 'solo',
+        chats: [{ index: 0, title: 'Wait for Trae Queue 进行中 17:34', text: '' }],
+        count: 1
+      }),
+      deleteSoloChats: async ({ candidates }) => {
+        seenCandidates.push(...candidates);
+        return { deleted: candidates.length, attempts: [{ success: true }] };
+      }
+    }
+  };
+
+  await handleCleanupForeignQueue(req, res, ctx);
+
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.body.deleted, 1);
+  assert.strictEqual(res.body.dryRun, false);
+  assert.strictEqual(res.body.passes.length, 1);
+  assert.strictEqual(seenCandidates[0].title, 'Wait for Trae Queue 进行中 17:34');
+});
+
+asyncTest('handleCleanupForeignQueue execute returns 501 when deletion is unsupported', async () => {
+  const req = jsonReq({ execute: true });
+  const res = {};
+  const ctx = {
+    client: { isConnected: true },
+    _ensureConnection: async () => {},
+    _json: (req, res, body, status) => { res.status = status; res.body = body; return res; },
+    driver: {
+      listSoloChats: async () => ({
+        mode: 'solo',
+        chats: [{ index: 0, title: 'wait for Trae queue', text: '' }],
+        count: 1
+      })
+    }
+  };
+
+  await handleCleanupForeignQueue(req, res, ctx);
+
+  assert.strictEqual(res.status, 501);
+  assert.strictEqual(res.body.code, 'DRIVER_METHOD_MISSING');
+  assert.strictEqual(res.body.candidates[0].title, 'wait for Trae queue');
+});
+
+Promise.resolve().then(async () => {
+  await pendingAsyncTests();
+  summary();
+  if (runner.failed > 0) process.exit(1);
 });

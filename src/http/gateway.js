@@ -596,6 +596,7 @@ class Gateway {
     const now = Date.now();
     const task = {
       taskId: historyTaskId,
+      sessionId: typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : null,
       chatId: body.chatId || null,
       soloChat: this._normalizeSoloChatTarget(body.soloChat || body.soloChatTarget || {
         index: body.soloChatIndex,
@@ -652,6 +653,23 @@ class Gateway {
     this._syncTaskHistoryMirror(task);
     this._persistActiveQueue();
     return task;
+  }
+
+  _appendSessionMessage(sessionId, message = {}) {
+    if (!sessionId) return false;
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    const role = message.role === 'assistant' ? 'assistant' : 'user';
+    const content = typeof message.content === 'string' ? message.content : '';
+    if (!content && role === 'assistant') return false;
+    session.messages.push({
+      role,
+      content,
+      timestamp: new Date().toISOString(),
+      ...(message.taskId ? { taskId: message.taskId } : {}),
+      ...(message.status ? { status: message.status } : {})
+    });
+    return true;
   }
 
   _maybeExtendQueuedTaskDeadline(task, queueStatus = {}) {
@@ -1223,6 +1241,20 @@ class Gateway {
     if (payload.reviewDecision !== undefined) task.reviewDecision = payload.reviewDecision;
     if (payload.reviewNotes !== undefined) task.reviewNotes = payload.reviewNotes;
     if (payload.nextTaskId !== undefined) task.nextTaskId = payload.nextTaskId;
+
+    if (task.sessionId && !task.sessionResultRecorded && ['done', 'awaiting_review', 'approval_required', 'review_rejected', 'queue_timeout', 'error', 'cancelled'].includes(status)) {
+      const resultText = typeof task.result?.text === 'string' ? task.result.text.trim() : '';
+      const errorText = task.error ? `Error: ${task.error}` : '';
+      const content = resultText || errorText || `Task ${status}`;
+      if (this._appendSessionMessage(task.sessionId, {
+        role: 'assistant',
+        content,
+        taskId,
+        status
+      })) {
+        task.sessionResultRecorded = true;
+      }
+    }
 
     this.taskHistoryStore.recordStep(taskId, status, {
       success: status !== 'error' && status !== 'queue_timeout',
@@ -2114,6 +2146,14 @@ class Gateway {
 
   async _handleSwitchSoloChat(req, res) {
     return soloChatHandlers.handleSwitchSoloChat(req, res, this);
+  }
+
+  async _handleDeleteSoloChats(req, res) {
+    return soloChatHandlers.handleDeleteSoloChats(req, res, this);
+  }
+
+  async _handleCleanupForeignQueue(req, res) {
+    return soloChatHandlers.handleCleanupForeignQueue(req, res, this);
   }
 
   _normalizeSoloChatTarget(value = {}) {
