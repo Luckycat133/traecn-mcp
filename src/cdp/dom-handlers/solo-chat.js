@@ -18,71 +18,115 @@ const { safeJsValue } = require('../../shared/utils');
 async function listSoloChats(driver) {
   const result = await driver.client.send('Runtime.evaluate', {
     expression: `
-      (function() {
+      (async function() {
         function findScrollHost(el) {
-          var scanned = 'none';
-          var node = el;
-          while (node && node !== document.body) {
-            if (node === document.documentElement || node === document.scrollingElement) {
-              scanned = 'scroll';
-              break;
-            }
-            var style = node.ownerDocument && node.ownerDocument.defaultView
-              ? node.ownerDocument.defaultView.getComputedStyle(node)
-              : null;
-            if (style) {
-              var oy = style.overflowY;
-              if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') {
-                scanned = 'scroll';
-                break;
-              }
-            }
-            node = node.parentElement;
+          var ancestors = [];
+          var current = el;
+          while (current && current !== document.documentElement) {
+            ancestors.push(current);
+            current = current.parentElement;
           }
-          return { host: node || document.scrollingElement, scanned: scanned };
+          var nodes = ancestors
+            .concat(Array.from(el.querySelectorAll('*')))
+            .concat([document.scrollingElement, document.documentElement, document.body])
+            .filter(Boolean);
+          var seenNodes = new Set();
+          var candidates = nodes.map(function(node) {
+            if (!node || seenNodes.has(node) || (node !== document.body && node !== document.documentElement && node.offsetParent === null)) return null;
+            seenNodes.add(node);
+            var clientHeight = node === document.body || node === document.documentElement
+              ? Math.max(node.clientHeight || 0, window.innerHeight || 0)
+              : (node.clientHeight || 0);
+            if (clientHeight < 80) return null;
+            var scrollable = (node.scrollHeight || 0) - clientHeight;
+            var style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+            var overflow = style ? [style.overflowY, style.overflow].join(' ') : '';
+            var taskCount = node.querySelectorAll ? node.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]').length : 0;
+            var likelyScroller = /(auto|scroll|overlay)/i.test(overflow) || taskCount > 1 || node === el;
+            if (scrollable <= 24 && !likelyScroller) return null;
+            return { el: node, scrollable: scrollable, taskCount: taskCount, likelyScroller: likelyScroller };
+          }).filter(Boolean).sort(function(a, b) {
+            if ((b.scrollable > 24) !== (a.scrollable > 24)) return (b.scrollable > 24 ? 1 : 0) - (a.scrollable > 24 ? 1 : 0);
+            if (b.taskCount !== a.taskCount) return b.taskCount - a.taskCount;
+            return b.scrollable - a.scrollable;
+          });
+          return candidates.length && candidates[0].scrollable > 24
+            ? { host: candidates[0].el, scanned: 'scroll' }
+            : { host: null, scanned: 'visible' };
+        }
+        function settle() {
+          return new Promise(function(resolve) {
+            requestAnimationFrame(function() { requestAnimationFrame(resolve); });
+          });
         }
         var sidebar = document.querySelector('.soloaisidebar');
         if (!sidebar || sidebar.offsetParent === null) {
           return { mode: 'not_solo', chats: [], count: 0, reason: 'solo_sidebar_not_visible' };
         }
-        var nodes = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
-          .filter(function(el) {
-            if (!el || el.offsetParent === null) return false;
-            var cls = (el.className || '').toString();
-            if (/task-items-list|task-item-info|task-item-title|task-item-desc/i.test(cls)) return false;
-            var rect = el.getBoundingClientRect();
-            if (rect.width < 40 || rect.height < 20) return false;
-            var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-            if (!text) return false;
-            if (/^\\s*(新任务|New Task|New Chat|新对话)/i.test(text) && text.length < 30) return false;
-            return true;
-          });
         var seen = new Set();
         var chats = [];
-        for (var i = 0; i < nodes.length; i++) {
-          var el = nodes[i];
-          var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-          if (!text || seen.has(text)) continue;
-          seen.add(text);
-          var cls = (el.className || '').toString();
-          var active = /active|selected|current|focus/i.test(cls) || el.getAttribute('aria-selected') === 'true';
-          var status = text.includes('进行中') || text.includes('思考中') ? 'running'
-            : (text.includes('任务完成') || text.includes('已完成') ? 'done' : 'unknown');
-          var scrollInfo = findScrollHost(el);
-          var scrollTop = scrollInfo.host ? scrollInfo.host.scrollTop : 0;
-          chats.push({
-            index: chats.length,
-            text: text.slice(0, 500),
-            title: text.slice(0, 120),
-            status: status,
-            active: active,
-            className: cls.slice(0, 200),
-            scrollHost: scrollInfo.host ? (scrollInfo.host.tagName || 'host') : null,
-            scrollTop: scrollTop,
-            scanned: 'scroll'
+        function visibleChatNodes() {
+          return Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
+            .filter(function(el) {
+              if (!el || el.offsetParent === null) return false;
+              var cls = (el.className || '').toString();
+              if (/task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
+              var rect = el.getBoundingClientRect();
+              if (rect.width < 40 || rect.height < 20) return false;
+              var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+              if (!text) return false;
+              if (/^\\s*(新任务|New Task|New Chat|新对话)/i.test(text) && text.length < 30) return false;
+              return true;
+            });
+        }
+        function collectVisible(scrollInfo) {
+          visibleChatNodes().forEach(function(el) {
+            var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!text || seen.has(text)) return;
+            seen.add(text);
+            var cls = (el.className || '').toString();
+            var active = /active|selected|current|focus/i.test(cls) || el.getAttribute('aria-selected') === 'true';
+            var status = text.includes('进行中') || text.includes('思考中') ? 'running'
+              : (text.includes('任务完成') || text.includes('已完成') ? 'done' : 'unknown');
+            var scrollTop = scrollInfo.host ? scrollInfo.host.scrollTop : 0;
+            chats.push({
+              index: chats.length,
+              text: text.slice(0, 500),
+              title: text.slice(0, 120),
+              status: status,
+              active: active,
+              className: cls.slice(0, 200),
+              scrollHost: scrollInfo.host ? (scrollInfo.host.tagName || 'host') : null,
+              scrollTop: scrollTop,
+              scanned: scrollInfo.scanned
+            });
           });
         }
-        return { mode: 'solo', chats: chats, count: chats.length };
+        var scrollInfo = findScrollHost(sidebar);
+        if (!scrollInfo.host) {
+          collectVisible(scrollInfo);
+          return { mode: 'solo', chats: chats, count: chats.length, scanned: 'visible' };
+        }
+        var scrollHost = scrollInfo.host;
+        var originalTop = scrollHost.scrollTop;
+        var maxTop = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
+        var step = Math.max(120, Math.floor(scrollHost.clientHeight * 0.75));
+        try {
+          scrollHost.scrollTop = 0;
+          await settle();
+          collectVisible(scrollInfo);
+          var previousTop = -1;
+          for (var guard = 0; guard < 80 && scrollHost.scrollTop < maxTop && scrollHost.scrollTop !== previousTop; guard++) {
+            previousTop = scrollHost.scrollTop;
+            scrollHost.scrollTop = Math.min(maxTop, scrollHost.scrollTop + step);
+            await settle();
+            collectVisible(scrollInfo);
+            maxTop = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
+          }
+        } finally {
+          scrollHost.scrollTop = originalTop;
+        }
+        return { mode: 'solo', chats: chats, count: chats.length, scanned: 'scroll', scrollHeight: scrollHost.scrollHeight, clientHeight: scrollHost.clientHeight };
       })()
     `,
     returnByValue: true,
@@ -204,6 +248,62 @@ async function _clickAt(driver, x, y, button = 'left') {
 }
 
 /**
+ * Open the row's context menu by dispatching a `contextmenu` event on the
+ * row element. This avoids `Input.dispatchMouseEvent` left-click that would
+ * otherwise activate the chat and (in some Trae builds) auto-resubmit the
+ * cached prompt — which is exactly what queue-probe spam relies on.
+ */
+async function _openRowContextMenu(driver, candidate) {
+  const expression = `
+    (function() {
+      var sidebar = document.querySelector('.soloaisidebar');
+      if (!sidebar) return { success: false, reason: 'sidebar_not_visible' };
+      var items = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
+        .filter(function(el) {
+          if (!el || el.offsetParent === null) return false;
+          var cls = (el.className || '').toString();
+          if (/task-items-list|task-item-info|task-item-title|task-item-desc/i.test(cls)) return false;
+          var rect = el.getBoundingClientRect();
+          if (rect.width < 40 || rect.height < 20) return false;
+          return true;
+        });
+      var target = null;
+      for (var i = 0; i < items.length; i++) {
+        var text = (items[i].innerText || items[i].textContent || '').replace(/\\s+/g, ' ').trim();
+        if (candidate.title && text.indexOf(candidate.title) !== -1) { target = items[i]; break; }
+      }
+      if (!target && Number.isInteger(candidate.index) && items[candidate.index]) target = items[candidate.index];
+      if (!target) return { success: false, reason: 'row_not_found', count: items.length };
+      var rect = target.getBoundingClientRect();
+      var x = rect.x + rect.width / 2;
+      var y = rect.y + rect.height / 2;
+      // Use the canonical contextmenu event so Trae shows its native right-click
+      // menu (with "删除" / "重命名" / etc.) — left-click would activate the chat.
+      try {
+        var ev = new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          button: 2,
+          buttons: 2,
+          clientX: x,
+          clientY: y
+        });
+        target.dispatchEvent(ev);
+      } catch (e) {
+        return { success: false, reason: 'dispatch_failed', error: e && e.message };
+      }
+      return { success: true, x: x, y: y, title: (target.innerText || '').slice(0, 80) };
+    })()
+  `;
+  return await driver.client.send('Runtime.evaluate', {
+    expression,
+    returnByValue: true,
+    awaitPromise: true
+  }).then(r => r.result?.value || { success: false, reason: 'evaluate_failed' });
+}
+
+/**
  * Locate the action point of a Solo sidebar candidate row.
  *
  * The expression first finds the sidebar item whose text matches
@@ -213,75 +313,129 @@ async function _clickAt(driver, x, y, button = 'left') {
  */
 async function _locateCandidateRow(driver, candidate) {
   const expression = `
-    (function() {
+    (async function() {
       function findScrollHost(el) {
-        var node = el;
-        while (node && node !== document.body) {
-          if (node === document.documentElement || node === document.scrollingElement) {
-            return { host: node, scanned: 'scroll' };
-          }
-          var view = node.ownerDocument && node.ownerDocument.defaultView;
-          var style = view ? view.getComputedStyle(node) : null;
-          if (style) {
-            var oy = style.overflowY;
-            if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') {
-              return { host: node, scanned: 'scroll' };
-            }
-          }
-          node = node.parentElement;
+        var ancestors = [];
+        var current = el;
+        while (current && current !== document.documentElement) {
+          ancestors.push(current);
+          current = current.parentElement;
         }
-        return { host: document.scrollingElement, scanned: 'scroll' };
+        var nodes = ancestors
+          .concat(Array.from(el.querySelectorAll('*')))
+          .concat([document.scrollingElement, document.documentElement, document.body])
+          .filter(Boolean);
+        var seenNodes = new Set();
+        var candidates = nodes.map(function(node) {
+          if (!node || seenNodes.has(node) || (node !== document.body && node !== document.documentElement && node.offsetParent === null)) return null;
+          seenNodes.add(node);
+          var clientHeight = node === document.body || node === document.documentElement
+            ? Math.max(node.clientHeight || 0, window.innerHeight || 0)
+            : (node.clientHeight || 0);
+          if (clientHeight < 80) return null;
+          var scrollable = (node.scrollHeight || 0) - clientHeight;
+          var style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+          var overflow = style ? [style.overflowY, style.overflow].join(' ') : '';
+          var taskCount = node.querySelectorAll ? node.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]').length : 0;
+          var likelyScroller = /(auto|scroll|overlay)/i.test(overflow) || taskCount > 1 || node === el;
+          if (scrollable <= 24 && !likelyScroller) return null;
+          return { el: node, scrollable: scrollable, taskCount: taskCount, likelyScroller: likelyScroller };
+        }).filter(Boolean).sort(function(a, b) {
+          if ((b.scrollable > 24) !== (a.scrollable > 24)) return (b.scrollable > 24 ? 1 : 0) - (a.scrollable > 24 ? 1 : 0);
+          if (b.taskCount !== a.taskCount) return b.taskCount - a.taskCount;
+          return b.scrollable - a.scrollable;
+        });
+        return candidates.length && candidates[0].scrollable > 24 ? candidates[0].el : document.scrollingElement;
+      }
+      function settle() {
+        return new Promise(function(resolve) {
+          requestAnimationFrame(function() { requestAnimationFrame(resolve); });
+        });
+      }
+      function norm(value) {
+        return String(value || '').replace(/[\\u00a0\\t\\r\\n]+/g, ' ').replace(/\\s+/g, ' ').trim().toLowerCase();
       }
       var sidebar = document.querySelector('.soloaisidebar');
       if (!sidebar || sidebar.offsetParent === null) {
         return { error: 'sidebar_not_visible' };
       }
       var candidate = ${safeJsValue(candidate)};
-      var nodes = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
-        .filter(function(el) {
-          if (!el || el.offsetParent === null) return false;
-          var cls = (el.className || '').toString();
-          if (/task-items-list|task-item-info|task-item-title|task-item-desc/i.test(cls)) return false;
-          var rect = el.getBoundingClientRect();
-          if (rect.width < 40 || rect.height < 20) return false;
-          return true;
-        });
-      var seen = new Set();
-      var matches = [];
-      for (var i = 0; i < nodes.length; i++) {
-        var el = nodes[i];
-        var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-        if (!text || seen.has(text)) continue;
-        seen.add(text);
-        matches.push({ el: el, text: text });
-      }
-      var target = null;
-      if (typeof candidate.title === 'string' && candidate.title) {
-        for (var j = 0; j < matches.length; j++) {
-          if (matches[j].text.indexOf(candidate.title) !== -1) {
-            target = matches[j];
-            break;
-          }
+      function visibleItems() {
+        var nodes = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
+          .filter(function(el) {
+            if (!el || el.offsetParent === null) return false;
+            var cls = String(el.className || '');
+            if (/task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
+            var rect = el.getBoundingClientRect();
+            var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+            return rect.width > 40 && rect.height > 20 && text;
+          });
+        var seen = new Set();
+        var items = [];
+        for (var i = 0; i < nodes.length; i++) {
+          var text = (nodes[i].innerText || nodes[i].textContent || '').replace(/\\s+/g, ' ').trim();
+          if (!text || seen.has(text)) continue;
+          seen.add(text);
+          items.push({ el: nodes[i], text: text, index: items.length });
         }
+        return items;
       }
-      if (!target && typeof candidate.index === 'number' && matches[candidate.index]) {
-        target = matches[candidate.index];
+      function findTarget() {
+        var items = visibleItems();
+        var target = null;
+        if (candidate.title) target = items.find(function(item) { return norm(item.text).indexOf(norm(candidate.title)) !== -1; });
+        if (!target && candidate.text) target = items.find(function(item) { return norm(item.text).indexOf(norm(candidate.text)) !== -1; });
+        if (!target && Number.isInteger(candidate.index)) target = items.find(function(item) { return item.index === candidate.index; });
+        return target;
       }
-      if (!target) return { error: 'candidate_not_found', count: matches.length };
-      var rect = target.el.getBoundingClientRect();
-      var rowPoint = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, kind: 'row' };
-      var scrollInfo = findScrollHost(target.el);
-      var scrollHost = scrollInfo.host;
-      var scrollTop = scrollHost ? scrollHost.scrollTop : 0;
-      var actionPoint = { x: rowPoint.x + rect.width - 24, y: rowPoint.y, kind: 'action' };
-      return {
-        index: matches.indexOf(target),
-        title: target.text.slice(0, 120),
-        actionPoint: actionPoint,
-        rowPoint: rowPoint,
-        scrollTop: scrollTop,
-        scrollHost: scrollHost ? (scrollHost.tagName || 'host') : null
-      };
+      function pointForTarget(target) {
+        if (!target) return null;
+        try { target.el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+        var rect = target.el.getBoundingClientRect();
+        var action = target.el.querySelector('[class*="task-item-actions-wrap"], [class*="task-item-action"]');
+        var actionRect = action && action.getBoundingClientRect ? action.getBoundingClientRect() : null;
+        var rowPoint = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, kind: 'row' };
+        var actionPoint = actionRect && actionRect.width >= 8 && actionRect.height >= 8
+          ? { x: actionRect.x + actionRect.width / 2, y: actionRect.y + actionRect.height / 2, kind: 'action' }
+          : { x: rect.x + rect.width - 24, y: rowPoint.y, kind: 'row-right' };
+        var scrollHost = findScrollHost(sidebar);
+        var scrollTop = scrollHost ? scrollHost.scrollTop : 0;
+        return {
+          index: target.index,
+          title: target.text.slice(0, 120),
+          actionPoint: actionPoint,
+          rowPoint: rowPoint,
+          scrollTop: scrollTop,
+          scrollHost: scrollHost ? (scrollHost.tagName || 'host') : null
+        };
+      }
+      var target = findTarget();
+      if (target) return pointForTarget(target);
+      var scrollHost = findScrollHost(sidebar);
+      if (!scrollHost || (!candidate.title && !candidate.text)) {
+        return { error: 'candidate_not_found', count: visibleItems().length };
+      }
+      var originalTop = scrollHost.scrollTop;
+      var maxTop = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
+      var step = Math.max(120, Math.floor(scrollHost.clientHeight * 0.75));
+      try {
+        scrollHost.scrollTop = 0;
+        await settle();
+        target = findTarget();
+        if (target) return pointForTarget(target);
+        var previousTop = -1;
+        for (var guard = 0; guard < 80 && scrollHost.scrollTop < maxTop && scrollHost.scrollTop !== previousTop; guard++) {
+          previousTop = scrollHost.scrollTop;
+          scrollHost.scrollTop = Math.min(maxTop, scrollHost.scrollTop + step);
+          await settle();
+          target = findTarget();
+          if (target) return pointForTarget(target);
+          maxTop = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
+        }
+      } finally {
+        scrollHost.scrollTop = originalTop;
+      }
+      return { error: 'candidate_not_found', count: visibleItems().length };
     })()
   `;
   const result = await driver.client.send('Runtime.evaluate', {
@@ -293,37 +447,45 @@ async function _locateCandidateRow(driver, candidate) {
 }
 
 /**
- * Locate the "删除任务" item inside an open Solo context menu.
+ * Locate the "删除任务" / "删除对话" / "删除" item inside an open Solo context menu.
+ *
+ * Trae ships several menu translations across versions ("删除任务" earlier,
+ * "删除对话" in newer builds, and a bare "删除" as a final fallback). We try
+ * the most specific first, then fall back to the generic single-character
+ * "删除" so we don't break when the menu renames an item.
  */
 async function _locateDeleteMenuPoint(driver) {
   const expression = `
     (function() {
       var containers = Array.from(document.querySelectorAll('.context-menu-container, [class*="context-menu"]'));
-      var anchor = null;
-      for (var i = 0; i < containers.length; i++) {
-        var container = containers[i];
+      var MENU_PATTERNS = [/^\\s*删除任务\\s*$/, /^\\s*删除对话\\s*$/, /^\\s*删除\\s*$/];
+      for (var c = 0; c < containers.length; c++) {
+        var container = containers[c];
         if (container.offsetParent === null) continue;
-        var labels = Array.from(container.querySelectorAll('*'))
+        var items = Array.from(container.querySelectorAll('*'))
           .filter(function(el) {
             if (!el || el.offsetParent === null) return false;
-            return /删除任务/.test((el.innerText || el.textContent || '').trim());
+            var text = (el.innerText || el.textContent || '').trim();
+            return text && text.length < 20;
           });
-        if (labels.length > 0) {
-          var labelEl = labels[labels.length - 1];
-          var containerEl = labelEl.closest('.context-menu-container-delete') || labelEl.closest('[class*="delete"]') || container;
-          var rect = containerEl.getBoundingClientRect();
-          anchor = {
-            x: rect.x + rect.width / 2,
-            y: rect.y + rect.height / 2,
-            score: 160,
-            nodeText: (labelEl.innerText || labelEl.textContent || '').trim(),
-            nodeClass: (containerEl.className || '').toString(),
-            clickClass: 'context-menu-container-delete'
-          };
-          break;
+        for (var p = 0; p < MENU_PATTERNS.length; p++) {
+          var match = items.find(function(el) { return MENU_PATTERNS[p].test((el.innerText || el.textContent || '').trim()); });
+          if (match) {
+            var containerEl = match.closest('.context-menu-container-delete') || match.closest('[class*="delete"]') || match;
+            var rect = containerEl.getBoundingClientRect();
+            return {
+              x: rect.x + rect.width / 2,
+              y: rect.y + rect.height / 2,
+              score: 160 - p * 20,
+              nodeText: (match.innerText || match.textContent || '').trim(),
+              nodeClass: (containerEl.className || '').toString(),
+              clickClass: 'context-menu-container-delete',
+              patternIndex: p
+            };
+          }
         }
       }
-      return anchor;
+      return null;
     })()
   `;
   const result = await driver.client.send('Runtime.evaluate', {
@@ -423,9 +585,16 @@ async function deleteSoloChats(driver, options = {}) {
       }
       attempt.actionPoint = located.actionPoint || null;
 
-      // 1. Open the row's context menu by left-clicking on its action point.
-      if (located.actionPoint) {
-        await _clickAt(driver, located.actionPoint.x, located.actionPoint.y, 'left');
+      // 1. Open the row's context menu by dispatching a native contextmenu
+      //    event. Using a left-click would activate the chat and (for some
+      //    Trae builds) auto-resubmit the cached prompt, which is exactly
+      //    what we are trying to stop.
+      const open = await _openRowContextMenu(driver, candidate);
+      attempt.contextMenuOpened = open && open.success === true;
+      if (!open || open.success !== true) {
+        attempt.reason = (open && open.reason) || 'context_menu_open_failed';
+        attempts.push(attempt);
+        continue;
       }
       await sleep(driver.config.postActionDelayMs || 200);
 
