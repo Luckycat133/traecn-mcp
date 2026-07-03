@@ -346,8 +346,16 @@ async function main() {
   const mcpToolNames = MCP_TOOLS.map(tool => tool.name);
   const gatewaySource = readFile('src/http/gateway.js');
   const utilsSource = readFile('src/shared/utils.js');
+  const httpHandlerSource = [
+    readFile('src/http/handlers/delegate.js'),
+    readFile('src/http/handlers/sessions.js'),
+    readFile('src/http/handlers/solo-chat.js'),
+    readFile('src/http/handlers/batch.js')
+  ].join('\n');
   const gatewayTestSource = readFile('src/http/gateway.test.js');
   const domDriverSource = readFile('src/cdp/dom-driver.js');
+  const soloChatHandlerSource = readFile('src/cdp/dom-handlers/solo-chat.js');
+  const soloCleanupSource = `${domDriverSource}\n${soloChatHandlerSource}`;
   const domDriverTestSource = readFile('src/cdp/dom-driver.test.js');
   const liveUatSource = readFile('scripts/live-uat.js');
   const longQueueProofSource = readFile('scripts/long-queue-proof.js');
@@ -373,8 +381,8 @@ async function main() {
   });
 
   add(results, 'queue_probe_guard', (
-    gatewaySource.includes('generic_queue_probe_task_rejected')
-      && gatewaySource.includes('_isGenericQueueProbeTask')
+    httpHandlerSource.includes('generic_queue_probe_task_rejected')
+      && utilsSource.includes('function isGenericQueueProbeTask')
       && utilsSource.includes('isForeignQueueProbeText')
       && utilsSource.includes('isQueueProbeStatusSuffix')
       && liveUatSource.includes('queue-probe-guard')
@@ -385,12 +393,12 @@ async function main() {
     statusTitleVariant: liveUatSource.includes('Wait for Trae Queue 进行中 17:34')
   });
 
-  const titleBeforeIndex = domDriverSource.indexOf('candidate.title') >= 0
-    && domDriverSource.indexOf('candidate.index') >= 0
-    && domDriverSource.indexOf('candidate.title') < domDriverSource.indexOf('candidate.index');
+  const titleBeforeIndex = soloCleanupSource.indexOf('candidate.title') >= 0
+    && soloCleanupSource.indexOf('candidate.index') >= 0
+    && soloCleanupSource.indexOf('candidate.title') < soloCleanupSource.indexOf('candidate.index');
   add(results, 'solo_cleanup_full_scan', (
-    hasAll(domDriverSource, ['async listSoloChats', 'findScrollHost', 'scrollTop', 'awaitPromise: true', "scanned: 'scroll'"])
-      && hasAll(domDriverSource, ['async _findSoloChatActionPoint', 'candidate.title', 'candidate.text', 'candidate.index'])
+    hasAll(soloCleanupSource, ['async function listSoloChats', 'findScrollHost', 'scrollTop', 'awaitPromise: true', "scanned: 'scroll'"])
+      && hasAll(soloCleanupSource, ['async function _locateCandidateRow', 'candidate.title', 'candidate.text', 'candidate.index'])
       && titleBeforeIndex
       && hasAll(domDriverTestSource, [
         'deleteSoloChats deletes matched Solo queue probe and verifies by title',
@@ -401,8 +409,8 @@ async function main() {
       ])
       && gatewayTestSource.includes('Gateway cleanup endpoint repeats passes for queue probes revealed after deletion')
   ) ? 'passed' : 'missing', 'Solo queue cleanup scans beyond the currently visible sidebar rows and verifies deletion by stable title/text matching.', {
-    listScrollScan: domDriverSource.includes('findScrollHost') && domDriverSource.includes('scrollTop') && domDriverSource.includes("scanned: 'scroll'"),
-    asyncRuntimeEvaluation: domDriverSource.includes('awaitPromise: true'),
+    listScrollScan: soloCleanupSource.includes('findScrollHost') && soloCleanupSource.includes('scrollTop') && soloCleanupSource.includes("scanned: 'scroll'"),
+    asyncRuntimeEvaluation: soloCleanupSource.includes('awaitPromise: true'),
     titleBeforeIndex,
     deleteVerificationRegression: domDriverTestSource.includes('deleteSoloChats does not treat menu text insertion as deletion success'),
     repeatedCleanupPasses: gatewayTestSource.includes('Gateway cleanup endpoint repeats passes for queue probes revealed after deletion')

@@ -109,7 +109,7 @@ async function handleDelegate(req, res, ctx, sessionId) {
 
   const session = ctx.sessions.get(sessionId);
   if (session) {
-    session.messages.push({ role: 'user', content: body.task, timestamp: new Date().toISOString() });
+    ctx._appendSessionMessage(sessionId, { role: 'user', content: body.task });
   }
 
   const queueStatus = typeof ctx.driver.checkQueueStatus === 'function'
@@ -137,7 +137,18 @@ async function handleDelegate(req, res, ctx, sessionId) {
       autoApproveDialog: body.autoApproveDialog,
       includeProcessText: body.includeProcessText === true,
       notifyUrl: body.notifyUrl,
-      chatId: body.chatId
+      chatId: body.chatId,
+      sessionId,
+      fallbackModels: body.fallbackModels,
+      autoModelFallback: body.autoModelFallback === true,
+      modelProbeIntervalMs: body.modelProbeIntervalMs,
+      maxQueueWaitMs: body.maxQueueWaitMs,
+      queueMaxWaitMs: body.queueMaxWaitMs,
+      soloChat: body.soloChat || body.soloChatTarget || {
+        index: body.soloChatIndex,
+        titleIncludes: body.soloChatTitleIncludes,
+        textIncludes: body.soloChatTextIncludes
+      }
     }, queueStatus);
     ctx._ensureBackgroundPolling();
     return ctx._json(req, res, {
@@ -155,7 +166,7 @@ async function handleDelegate(req, res, ctx, sessionId) {
   const result = await ctx.driver.delegate(ctx._taskWithProjectContext(body.task, body.projectPath));
 
   if (session) {
-    session.messages.push({ role: 'assistant', content: result.text, timestamp: new Date().toISOString() });
+    ctx._appendSessionMessage(sessionId, { role: 'assistant', content: result.text });
   }
 
   const responseData = {

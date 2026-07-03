@@ -67,6 +67,9 @@ const ROUTES = [
   { method: 'GET', path: '/api/solo/chats', handler: '_handleListSoloChats', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'POST', path: '/api/solo/chats/switch', handler: '_handleSwitchSoloChat', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'POST', path: '/api/solo/chats/submit', handler: '_handleSubmitSoloChatTask', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
+  { method: 'POST', path: '/api/solo/chats/delete', handler: '_handleDeleteSoloChats', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
+  { method: 'POST', path: '/api/solo/chats/cleanup-foreign-queue', handler: '_handleCleanupForeignQueue', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
+  { method: 'POST', path: '/api/solo/chats/cleanup_foreign_solo_queue', handler: '_handleCleanupForeignQueue', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 
   // Trae control
   { method: 'POST', path: '/api/trae/stop-generation', handler: '_handleStopGeneration', requiresAuth: true, requiresRateLimit: true, requiresBody: false },

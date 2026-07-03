@@ -35,6 +35,8 @@ const cliSource = fs.readFileSync(path.join(root, 'scripts/traecn-cli.js'), 'utf
 const longQueueProofSource = fs.readFileSync(path.join(root, 'scripts/long-queue-proof.js'), 'utf8');
 const gatewayTestSource = fs.readFileSync(path.join(root, 'src/http/gateway.test.js'), 'utf8');
 const domDriverSource = fs.readFileSync(path.join(root, 'src/cdp/dom-driver.js'), 'utf8');
+const soloChatHandlerSource = fs.readFileSync(path.join(root, 'src/cdp/dom-handlers/solo-chat.js'), 'utf8');
+const soloCleanupSource = `${domDriverSource}\n${soloChatHandlerSource}`;
 const domDriverTestSource = fs.readFileSync(path.join(root, 'src/cdp/dom-driver.test.js'), 'utf8');
 const mcpTestSource = fs.readFileSync(path.join(root, 'mcp-server.test.js'), 'utf8');
 const skillTestSource = fs.readFileSync(path.join(root, 'src/skill/skill.test.js'), 'utf8');
@@ -138,9 +140,9 @@ assert.ok(acceptanceAuditSource.includes('real_long_queue_result_retrieval'), 'a
 assert.ok(acceptanceAuditSource.includes('GLM-5.2'), 'acceptance audit must distinguish GLM-5.2 evidence');
 assert.ok(acceptanceAuditSource.includes('long_queue_proof_runner'), 'acceptance audit must track the guarded long-queue proof runner');
 assert.ok(acceptanceAuditSource.includes('solo_cleanup_full_scan'), 'acceptance audit must track full-scan Solo cleanup coverage');
-assert.ok(domDriverSource.includes('findScrollHost') && domDriverSource.includes('scrollTop') && domDriverSource.includes('awaitPromise: true'), 'Solo chat cleanup must scan scrollable sidebars, not only visible rows');
-assert.ok(domDriverSource.includes('parentElement') && domDriverSource.includes('document.scrollingElement'), 'Solo chat cleanup must probe ancestor/document scroll containers, not only sidebar descendants');
-assert.ok(domDriverSource.indexOf('candidate.title') >= 0 && domDriverSource.indexOf('candidate.title') < domDriverSource.indexOf('candidate.index'), 'Solo cleanup deletion should prefer stable title/text matching before index fallback');
+assert.ok(soloCleanupSource.includes('findScrollHost') && soloCleanupSource.includes('scrollTop') && soloCleanupSource.includes('awaitPromise: true'), 'Solo chat cleanup must scan scrollable sidebars, not only visible rows');
+assert.ok(soloCleanupSource.includes('parentElement') && soloCleanupSource.includes('document.scrollingElement'), 'Solo chat cleanup must probe ancestor/document scroll containers, not only sidebar descendants');
+assert.ok(soloCleanupSource.indexOf('candidate.title') >= 0 && soloCleanupSource.indexOf('candidate.title') < soloCleanupSource.indexOf('candidate.index'), 'Solo cleanup deletion should prefer stable title/text matching before index fallback');
 assert.ok(domDriverTestSource.includes('deleteSoloChats does not treat menu text insertion as deletion success'), 'DOM driver tests must prevent menu-text false deletion success');
 assert.ok(acceptanceAuditSource.includes('app_settings_control_contract'), 'acceptance audit must track app settings/model/mode control');
 assert.ok(acceptanceAuditSource.includes('multi_session_result_isolation'), 'acceptance audit must track multi-session result isolation');

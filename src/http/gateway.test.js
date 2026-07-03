@@ -447,6 +447,99 @@ asyncTest('Gateway submits Solo chat task and captures chat target for result co
   assert.ok(calls.some(call => call[0] === 'sendMessage' && call[1].includes('/tmp/solo-project')));
 });
 
+asyncTest('Gateway cleanup endpoint repeats passes for queue probes revealed after deletion', async () => {
+  const gateway = new Gateway();
+  let listCalls = 0;
+  const deletedTitles = [];
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    listSoloChats: async () => {
+      listCalls++;
+      if (listCalls === 1) {
+        return { mode: 'solo', chats: [{ index: 0, title: 'wait for Trae queue', text: '排队中 A' }], count: 1 };
+      }
+      if (listCalls === 2) {
+        return { mode: 'solo', chats: [{ index: 0, title: 'Wait for Trae Queue 进行中 17:34', text: '排队中 B' }], count: 1 };
+      }
+      return { mode: 'solo', chats: [], count: 0 };
+    },
+    deleteSoloChats: async ({ candidates }) => {
+      deletedTitles.push(...candidates.map(candidate => candidate.title));
+      return { deleted: candidates.length, attempts: candidates.map(candidate => ({ success: true, candidate })) };
+    }
+  };
+
+  const { req, res } = makeReqRes({}, '/api/solo/chats/cleanup-foreign-queue', 'POST', {
+    execute: true,
+    maxPasses: 3,
+    settleMs: 0
+  });
+
+  await gateway.handleRequest(req, res);
+
+  const payload = JSON.parse(res._body);
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(payload.deleted, 2);
+  assert.strictEqual(payload.passes.length, 2);
+  assert.deepStrictEqual(deletedTitles, ['wait for Trae queue', 'Wait for Trae Queue 进行中 17:34']);
+});
+
+asyncTest('Gateway keeps parallel queued session Solo results isolated when completion is out of order', async () => {
+  const gateway = new Gateway();
+  gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
+  gateway._emitTaskNotification = async () => {};
+  gateway.taskHistoryStore = {
+    createTask: (() => {
+      let index = 0;
+      return () => `task_session_${++index}`;
+    })(),
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway.sessions.set('session_a', { id: 'session_a', createdAt: new Date().toISOString(), messages: [] });
+  gateway.sessions.set('session_b', { id: 'session_b', createdAt: new Date().toISOString(), messages: [] });
+  gateway._appendSessionMessage('session_a', { role: 'user', content: 'TRAECN_SESSION_A_001 implement A' });
+  gateway._appendSessionMessage('session_b', { role: 'user', content: 'TRAECN_SESSION_B_001 implement B' });
+
+  const taskA = gateway._createQueuedTask({
+    sessionId: 'session_a',
+    task: 'TRAECN_SESSION_A_001 implement A',
+    soloChat: { titleIncludes: 'Session A' }
+  }, { queued: false });
+  const taskB = gateway._createQueuedTask({
+    sessionId: 'session_b',
+    task: 'TRAECN_SESSION_B_001 implement B',
+    soloChat: { titleIncludes: 'Session B' }
+  }, { queued: false });
+  taskA.status = 'executing';
+  taskA.submittedToTrae = true;
+  taskB.status = 'executing';
+  taskB.submittedToTrae = true;
+
+  await gateway._finalizeCollectedBackgroundResult(taskB.taskId, taskB, {
+    text: 'TRAECN_SESSION_B_001 Final report: implementation B complete, tests passed, and ownership marker confirms session B.',
+    stable: true,
+    elapsedMs: 1000
+  });
+  await gateway._finalizeCollectedBackgroundResult(taskA.taskId, taskA, {
+    text: 'TRAECN_SESSION_A_001 Final report: implementation A complete, tests passed, and ownership marker confirms session A.',
+    stable: true,
+    elapsedMs: 1000
+  });
+
+  const sessionA = gateway.sessions.get('session_a');
+  const sessionB = gateway.sessions.get('session_b');
+  assert.strictEqual(sessionA.messages[1].taskId, taskA.taskId);
+  assert.strictEqual(sessionB.messages[1].taskId, taskB.taskId);
+  assert.ok(sessionA.messages[1].content.includes('TRAECN_SESSION_A_001'));
+  assert.ok(sessionB.messages[1].content.includes('TRAECN_SESSION_B_001'));
+  assert.ok(!sessionA.messages[1].content.includes('TRAECN_SESSION_B_001'));
+  assert.ok(!sessionB.messages[1].content.includes('TRAECN_SESSION_A_001'));
+});
+
 test('Gateway queued tasks wait indefinitely by default for external model queues', () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1234 } };
