@@ -24,6 +24,36 @@ const dom = require('../browser-dom');
 const { TraeCNAutomationError } = require('../errors');
 const { sleep, safeJsValue } = require('../../shared/utils');
 
+function jsStringLiteral(value) {
+  return JSON.stringify(String(value || ''))
+    .replace(/</g, '\\u003C')
+    .replace(/>/g, '\\u003E')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function runtimeValue(result, fallbackReason = 'no runtime value') {
+  if (result && result.result && Object.prototype.hasOwnProperty.call(result.result, 'value')) {
+    return result.result.value || {};
+  }
+  const exception = result && result.exceptionDetails;
+  if (exception) {
+    return {
+      ok: false,
+      reason: exception.text || exception.exception?.description || fallbackReason
+    };
+  }
+  return { ok: false, reason: fallbackReason };
+}
+
+function composerFailureReason(inputInfo) {
+  if (!inputInfo) return 'unknown';
+  if (inputInfo.reason) return inputInfo.reason;
+  if (inputInfo.normalized) return inputInfo.normalized;
+  if (inputInfo.text) return inputInfo.text;
+  return 'unknown';
+}
+
 async function typeMessage(driver, text) {
   const composer = await driver.findComposer();
   if (!composer) {
@@ -65,7 +95,7 @@ async function sendMessage(driver, text) {
     `,
     returnByValue: true
   });
-  const focusInfo = focusResult.result?.value || {};
+  const focusInfo = runtimeValue(focusResult, 'composer focus produced no result');
   if (!focusInfo.ok) {
     throw TraeCNAutomationError.composerFocusFailed(focusInfo.reason || 'unknown');
   }
@@ -85,7 +115,7 @@ async function sendMessage(driver, text) {
         var value = el ? (el.innerText || el.textContent || '').trim() : '';
         var normalized = value.replace(/\\s+/g, ' ').trim();
         return {
-          ok: normalized === ${safeJsValue(normalizedExpected)},
+          ok: normalized === ${jsStringLiteral(normalizedExpected)},
           text: value,
           normalized: normalized
         };
@@ -94,7 +124,7 @@ async function sendMessage(driver, text) {
     returnByValue: true
   });
 
-  let inputInfo = inputResult.result?.value || {};
+  let inputInfo = runtimeValue(inputResult, 'composer verification produced no result');
   if (!inputInfo.ok) {
     await driver.typeMessage(text);
     inputResult = await driver.client.send('Runtime.evaluate', {
@@ -104,7 +134,7 @@ async function sendMessage(driver, text) {
           var value = el ? (el.innerText || el.textContent || '').trim() : '';
           var normalized = value.replace(/\\s+/g, ' ').trim();
           return {
-            ok: normalized === ${safeJsValue(normalizedExpected)},
+            ok: normalized === ${jsStringLiteral(normalizedExpected)},
             text: value,
             normalized: normalized
           };
@@ -112,10 +142,10 @@ async function sendMessage(driver, text) {
       `,
       returnByValue: true
     });
-    inputInfo = inputResult.result?.value || {};
+    inputInfo = runtimeValue(inputResult, 'composer verification produced no result after fallback typing');
   }
   if (!inputInfo.ok) {
-    throw TraeCNAutomationError.composerInputFailed(inputInfo.normalized || inputInfo.text || 'unknown');
+    throw TraeCNAutomationError.composerInputFailed(composerFailureReason(inputInfo));
   }
   await sleep(driver.config.postActionDelayMs * 2);
 

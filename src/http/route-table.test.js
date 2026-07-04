@@ -41,6 +41,20 @@ test('route-table: taskId with URL-encoded characters is decoded', () => {
   assert.strictEqual(result.params.taskId, 'abc/123');
 });
 
+test('route-table: exact static paths match percent-encoded unreserved characters', () => {
+  const result = matchRoute('GET', '/api/tasks/histo%72y');
+  assert.ok(result);
+  assert.strictEqual(result.route.handler, '_handleTasksHistory');
+  assert.deepStrictEqual(result.params, {});
+});
+
+test('route-table: encoded slash stays inside path params', () => {
+  const result = matchRoute('GET', '/api/tasks/abc%2F123');
+  assert.ok(result);
+  assert.strictEqual(result.route.handler, '_handleGetTask');
+  assert.strictEqual(result.params.taskId, 'abc/123');
+});
+
 test('route-table: distinguishes taskId from replay', () => {
   const result = matchRoute('GET', '/api/tasks/abc123/replay');
   assert.ok(result);

@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const { DomDriver, getConfig, sanitizeActivityText, DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS, DEFAULT_RESPONSE_SELECTORS } = require('./dom-driver');
+const { cleanAssistantResultText } = require('./dom-handlers/response-collection');
 const { createRunner } = require('../shared/test-runner');
 
 const r = createRunner('dom-driver.test.js');
@@ -60,6 +61,48 @@ test('getConfig sendTrigger defaults to button', () => {
   assert.strictEqual(config.sendTrigger, 'button');
 });
 
+asyncTest('sendMessage verifies debug prompts containing angle brackets and arrows', async () => {
+  const text = 'Debug route -> 500 and inspect <handler> without editing files';
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const expressions = [];
+  const insertTexts = [];
+  const fakeClient = {
+    async send(method, payload = {}) {
+      if (method === 'Runtime.evaluate') {
+        const expression = payload.expression || '';
+        expressions.push(expression);
+        if (expression.includes('el.focus()')) {
+          return { result: { value: { ok: true } } };
+        }
+        if (expression.includes('normalized ===')) {
+          return { result: { value: { ok: true, text: normalized, normalized } } };
+        }
+        if (expression.includes('button.chat-input-v2-send-button')) {
+          return { result: { value: 'send via mouse events' } };
+        }
+        return { result: { value: {} } };
+      }
+      if (method === 'Input.insertText') {
+        insertTexts.push(payload.text);
+        return {};
+      }
+      if (method === 'Input.dispatchKeyEvent') return {};
+      throw new Error(`unexpected CDP method ${method}`);
+    }
+  };
+  const driver = new DomDriver(fakeClient, { ...getConfig(), postActionDelayMs: 0, sendTrigger: 'button' });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, reviewCount: 0 });
+  driver.findSendButton = async () => ({ nodeId: 1 });
+
+  await driver.sendMessage(text);
+
+  const verification = expressions.find(expression => expression.includes('normalized ==='));
+  assert.ok(verification.includes('\\u003E'));
+  assert.ok(verification.includes('\\u003C'));
+  assert.ok(!verification.includes('normalized === ,'));
+  assert.deepStrictEqual(insertTexts, [text]);
+});
+
 test('checkQueueStatus ignores historical queue text without visible queue notice', async () => {
   let expression = '';
   const fakeClient = {
@@ -111,6 +154,22 @@ test('sanitizeActivityText handles empty input', () => {
 test('sanitizeActivityText collapses whitespace', () => {
   const result = sanitizeActivityText('hello   world');
   assert.strictEqual(result, 'hello world');
+});
+
+test('cleanAssistantResultText extracts Trae final bug report from process transcript', () => {
+  const result = cleanAssistantResultText([
+    'TRAECNclaw/src/http',
+    'Thought 在工作区搜索 route-table',
+    'GET /api/tasks/histo%72y -> _handleGetTask params={"taskId":"history"}',
+    'ThoughtBug found (TRAECN_DEBUG_SYNC_GLM52) Likely bug: URL-encoded path segments bypass exact routing.',
+    'Root cause: matchRoute compares the raw pathname before decoding unreserved characters.',
+    'Suggested patch: normalize exact-match paths while preserving encoded slashes in params.'
+  ].join(' '));
+
+  assert.ok(result.startsWith('Bug found (TRAECN_DEBUG_SYNC_GLM52)'));
+  assert.ok(result.includes('Likely bug: URL-encoded path segments'));
+  assert.ok(!result.includes('Thought 在工作区搜索'));
+  assert.ok(!result.includes('GET /api/tasks/histo%72y'));
 });
 
 test('DEFAULT_COMPOSER_SELECTORS includes textarea', () => {

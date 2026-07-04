@@ -16,7 +16,7 @@ const { DriverRouter, DRIVER_SPEC } = require('./driver-router');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
-const { getEnvWithFallback, parsePositiveInt, sanitizeLog } = require('../shared/utils');
+const { getEnvWithFallback, parsePositiveInt, sanitizeLog, isGenericQueueProbeTask } = require('../shared/utils');
 const { errorToHttpStatus, errorToBody } = require('./error-mapping');
 const { ConfigManager } = require('../shared/config-manager');
 const { getGlobalStore } = require('../shared/task-history');
@@ -310,6 +310,7 @@ class Gateway {
     if (!this.activeQueuePersistencePath) return;
     const activeTasks = Array.from(this.taskQueue.entries())
       .filter(([, task]) => !this._isTerminalTaskStatus(task.status))
+      .filter(([, task]) => !isGenericQueueProbeTask(task && task.task))
       .map(([taskId, task]) => ({ taskId, ...task }));
 
     try {
@@ -381,8 +382,13 @@ class Gateway {
       const parsed = JSON.parse(raw);
       const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
       const now = Date.now();
+      let skippedQueueProbes = 0;
       for (const item of tasks) {
         if (!item || !item.taskId || this._isTerminalTaskStatus(item.status)) continue;
+        if (isGenericQueueProbeTask(item.task)) {
+          skippedQueueProbes++;
+          continue;
+        }
         const restored = { ...item };
         if (restored.status === 'executing' && restored.submittedToTrae !== true) {
           restored.status = 'queued';
@@ -406,6 +412,10 @@ class Gateway {
         restored.result = restored.result || null;
         this.taskQueue.set(restored.taskId, restored);
         this._syncTaskHistoryMirror(restored);
+      }
+      if (skippedQueueProbes > 0) {
+        console.warn(`[QueuePersistence] Dropped ${skippedQueueProbes} generic queue-probe task(s) from active queue restore`);
+        this._persistActiveQueue();
       }
     } catch (err) {
       console.error('[QueuePersistence] Failed to restore active queue:', err.message);
@@ -443,7 +453,8 @@ class Gateway {
         if (this._hasCompletionChecks(completionChecks)) normalized.completionChecks = completionChecks;
         return normalized;
       })
-      .filter(item => item && item.task && item.task.length <= 100000);
+      .filter(item => item && item.task && item.task.length <= 100000)
+      .filter(item => !isGenericQueueProbeTask(item.task));
   }
 
   _normalizeAutoApproveDialog(value) {
@@ -551,6 +562,9 @@ class Gateway {
   }
 
   _createQueuedTask(body, queueStatus = {}) {
+    if (isGenericQueueProbeTask(body && body.task)) {
+      throw TraeCNAutomationError.invalidInput('task', '[generic queue probe]', 'generic_queue_probe_task_rejected');
+    }
     const reviewRequired = body.reviewRequired === true;
     const autoContinue = body.autoContinue === true;
     const followupTasks = this._normalizeFollowupTasks(body.followupTasks);
@@ -2242,6 +2256,36 @@ class Gateway {
     return requiredSignals.some(signal => text.includes(signal.text));
   }
 
+  _soloChatMatchesActive(soloChat, active) {
+    if (!soloChat || !active) return false;
+    const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+    const activeText = normalize([active.title, active.text].filter(Boolean).join(' '));
+    const candidates = [
+      soloChat.titleIncludes,
+      soloChat.textIncludes,
+      ...(Array.isArray(soloChat.candidates) ? soloChat.candidates : [])
+    ]
+      .map(normalize)
+      .filter(value => value.length >= 3);
+
+    if (activeText && candidates.some(candidate => activeText.includes(candidate))) {
+      return true;
+    }
+    return candidates.length === 0 && Number.isInteger(soloChat.index) && soloChat.index === active.index;
+  }
+
+  _findSubmittedTaskForActiveSoloChat(active) {
+    if (!active) return null;
+    for (const [taskId, task] of this.taskQueue.entries()) {
+      if (!task || this._isTerminalTaskStatus(task.status)) continue;
+      if (task.submittedToTrae !== true) continue;
+      if (this._soloChatMatchesActive(task.soloChat, active)) {
+        return { taskId, task };
+      }
+    }
+    return null;
+  }
+
   _keepSubmittedTaskWaitingForOwnedResult(taskId, task, result, reason) {
     task.result = result;
     task.status = 'executing';
@@ -3202,6 +3246,13 @@ class Gateway {
         
         for (const [taskId, task] of this.taskQueue) {
           if (this.taskLocks.has(taskId)) continue;
+
+          if (isGenericQueueProbeTask(task && task.task)) {
+            await this._finalizeBackgroundTask(taskId, task, 'cancelled', {
+              error: 'generic_queue_probe_task_rejected'
+            });
+            continue;
+          }
 
           if (task.status === 'executing' && task.submittedToTrae === true) {
             this.taskLocks.add(taskId);

@@ -245,6 +245,48 @@ async function handleAdoptCurrentTask(req, res, ctx) {
     }, 409);
   }
 
+  let activeSnapshot = null;
+  if (ctx.driver && typeof ctx.driver.getActiveSoloChat === 'function') {
+    try {
+      activeSnapshot = await ctx.driver.getActiveSoloChat();
+    } catch (err) {
+      ctx.taskHistoryStore?.recordStep?.('adopt-current', 'active_solo_chat_probe_failed', {
+        success: false,
+        error: err.message
+      });
+    }
+  }
+  const existing = ctx._findSubmittedTaskForActiveSoloChat?.(activeSnapshot?.active || null);
+  if (existing) {
+    const existingTask = existing.task;
+    existingTask.queueMessage = queueStatus.queueMessage || queueStatus.message || existingTask.queueMessage || 'adopted existing Trae request';
+    existingTask.currentModel = queueStatus.currentModel || existingTask.currentModel || null;
+    existingTask.queuePosition = queueStatus.queuePosition || queueStatus.position || existingTask.queuePosition || null;
+    existingTask.queueEstimatedWait = queueStatus.queueEstimatedWait || existingTask.queueEstimatedWait || null;
+    existingTask.queueCanSubmit = queueStatus.canSubmit === true;
+    existingTask.queueState = queueStatus.running ? 'running' : (queueStatus.queued ? 'queued' : (existingTask.queueState || 'running'));
+    ctx._syncTaskHistoryMirror(existingTask);
+    ctx._persistActiveQueue();
+    ctx._ensureBackgroundPolling();
+    return ctx._json(req, res, {
+      taskId: existing.taskId,
+      status: existingTask.status,
+      submittedToTrae: true,
+      deduped: true,
+      reviewRequired: existingTask.reviewRequired,
+      followupCount: existingTask.followupTasks?.length || 0,
+      queueDetails: {
+        state: existingTask.queueState || (queueStatus.running ? 'running' : 'queued'),
+        currentModel: existingTask.currentModel || queueStatus.currentModel || null,
+        queuePosition: existingTask.queuePosition || null,
+        queueEstimatedWait: existingTask.queueEstimatedWait || null,
+        queueMessage: existingTask.queueMessage || null,
+        canSubmit: existingTask.queueCanSubmit === true
+      },
+      message: '当前 Trae 请求已被本地任务接管；返回已有 taskId，不重复创建任务'
+    }, 200);
+  }
+
   const task = ctx._createQueuedTask({
     task: taskText,
     projectPath: body.projectPath || null,
