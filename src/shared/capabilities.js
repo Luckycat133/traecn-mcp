@@ -83,17 +83,25 @@ function compactCommands(commands) {
   }));
 }
 
-function compactTools(tools = []) {
+function compactTools(tools = [], metadata = {}) {
   return tools.map(tool => ({
     name: tool.name,
     description: tool.description,
-    required: tool.inputSchema?.required || []
+    required: tool.inputSchema?.required || [],
+    layer: metadata[tool.name]?.layer,
+    profile: metadata[tool.name]?.profile,
+    risk: metadata[tool.name]?.risk,
+    alternative: metadata[tool.name]?.alternative,
+    annotations: tool.annotations
   }));
 }
 
 function buildCapabilities(options = {}) {
   const commands = options.commands || [];
   const mcpTools = options.mcpTools || [];
+  const mcpToolProfile = options.mcpToolProfile || 'public';
+  const mcpToolProfiles = options.mcpToolProfiles || {};
+  const mcpToolMetadata = options.mcpToolMetadata || {};
   const operations = options.includeHttpOperations === false ? undefined : buildHttpOperations();
 
   return {
@@ -101,8 +109,8 @@ function buildCapabilities(options = {}) {
     version: packageInfo.version,
     contractVersion: 1,
     tokenStrategy: {
-      prefer: ['traecn_capabilities', 'preflight', 'delegate_async', 'wait_task', 'task_status'],
-      preflight: 'Call preflight once before side-effecting work instead of separate status/readiness/queue/dialog checks.',
+      prefer: ['traecn_get_capabilities', 'traecn_preflight', 'traecn_queue_task', 'traecn_wait_task', 'traecn_poll_task'],
+      preflight: 'Call traecn_preflight once before side-effecting work instead of separate status/readiness/queue/dialog checks.',
       avoid: 'Fetch /openapi.json only when schema detail is needed.',
       maxTaskBytes: 100000,
       asyncPolling: true,
@@ -128,7 +136,9 @@ function buildCapabilities(options = {}) {
     http: operations,
     commands: compactCommands(commands),
     mcp: {
-      tools: compactTools(mcpTools),
+      toolProfile: mcpToolProfile,
+      toolProfiles: mcpToolProfiles,
+      tools: compactTools(mcpTools, mcpToolMetadata),
       prompts: promptLayers.listMcpPrompts().map(prompt => ({ name: prompt.name, description: prompt.description })),
       resources: promptLayers.listMcpResources().map(resource => ({ uri: resource.uri, description: resource.description }))
     },

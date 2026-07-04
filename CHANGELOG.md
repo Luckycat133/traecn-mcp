@@ -31,12 +31,20 @@ Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No be
 
 ### Added
 
+- Added the portable `.codex/skills/traecnclaw-mcp` Agent Skill for MCP-capable
+  clients.
+- Added `npm run pack:skill` to generate direct-download skill release
+  artifacts and checksums under `dist/`.
+- Added distribution and launch-kit documentation for public catalog
+  submissions and social announcements.
 - Added production documentation covering usage, development, deployment, environment configuration, and release acceptance checks.
 - Added mock-mode system testing and documentation/OpenAPI UAT validation scripts.
 - Added explicit OpenAPI coverage for settings read/write and self-update status endpoints.
 
 ### Changed
 
+- Standardized stdio MCP public tool names under the `traecn_*` prefix and
+  grouped the tool surface into `public`, `ops`, and `full` profiles.
 - Improved gateway response headers, CORS handling, status version reporting, numeric environment parsing, and background queue polling lifecycle.
 - Improved the built-in chat UI with safer DOM rendering, clearer error handling, responsive layout, token persistence, and status metadata.
 - Updated OpenClaw plugin metadata to match registered tools.

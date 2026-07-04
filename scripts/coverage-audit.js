@@ -52,7 +52,7 @@ function commandEnumFromOpenClawManifest() {
 }
 
 function commandEnumFromMcpTool() {
-  const commandTool = findTool(MCP_TOOLS, 'traecn_command');
+  const commandTool = findTool(MCP_TOOLS, 'traecn_run_command');
   return commandTool?.inputSchema?.properties?.command?.enum || [];
 }
 
@@ -86,22 +86,22 @@ assert.strictEqual(capabilities.coverage.settingsAutomation, true);
 assert.strictEqual(capabilities.coverage.modelAndModeControl, true);
 assert.strictEqual(capabilities.coverage.projectOpening, true);
 assert.strictEqual(capabilities.coverage.historyReplay, true);
-assertArrayIncludesAll(capabilities.tokenStrategy.prefer, ['traecn_capabilities', 'preflight', 'delegate_async', 'task_status'], 'tokenStrategy.prefer');
+assertArrayIncludesAll(capabilities.tokenStrategy.prefer, ['traecn_get_capabilities', 'traecn_preflight', 'traecn_queue_task', 'traecn_wait_task'], 'tokenStrategy.prefer');
 
 assertArrayIncludesAll(MCP_TOOLS.map(tool => tool.name), [
-  'traecn_capabilities',
-  'traecn_command_set',
-  'traecn_command',
-  'preflight',
-  'plan_operation',
-  'run_task',
-  'queue_task',
-  'poll_task',
-  'cleanup_foreign_solo_queue',
-  'cleanup_queue_watch_status',
-  'review_code',
-  'check_queue',
-  'check_dialog'
+  'traecn_get_capabilities',
+  'traecn_list_commands',
+  'traecn_run_command',
+  'traecn_preflight',
+  'traecn_plan_operation',
+  'traecn_run_task',
+  'traecn_queue_task',
+  'traecn_poll_task',
+  'traecn_cleanup_queue_probe_chats',
+  'traecn_get_cleanup_watch_status',
+  'traecn_review_code',
+  'traecn_get_queue_status',
+  'traecn_get_dialog_status'
 ], 'MCP tools');
 
 assertArrayIncludesAll(openClawManifest.tools.map(tool => tool.name), [
@@ -164,7 +164,7 @@ const docs = [
   read('docs/QUICK-REFERENCE.md'),
   read('docs/openclaw-command-set.md')
 ].join('\n');
-assertArrayIncludesAll(docs, ['preflight', 'reviewCode', 'queueTask', 'plan_operation', 'traecn_command'], 'docs');
+assertArrayIncludesAll(docs, ['traecn_preflight', 'reviewCode', 'queueTask', 'traecn_plan_operation', 'traecn_run_command'], 'docs');
 assert.ok(commandNames.includes('cleanup_foreign_solo_queue'), 'command-set must include cleanup_foreign_solo_queue');
 assert.ok(commandNames.includes('cleanup_queue_watch_status'), 'command-set must include cleanup_queue_watch_status');
 assert.ok(specPaths.includes('/api/solo/chats/cleanup-foreign-queue'), 'OpenAPI must include Solo cleanup route');

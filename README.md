@@ -12,6 +12,7 @@ Local HTTP bridge, OpenClaw tool integration, and AI Skill module for TraeCN des
 - [API](#api)
 - [Testing](#testing)
 - [Security](#security)
+- [Distribution](#distribution)
 - [Documentation](#documentation)
 - [Maintainers](#maintainers)
 - [License](#license)
@@ -42,7 +43,7 @@ Important environment variables:
 - `TRAECN_REMOTE_DEBUGGING_PORT`: TraeCN CDP port.
 - `TRAECN_QUICKSTART_PROFILE_MODE`: `existing` by default so live automation reuses your logged-in Trae CN profile instead of a fresh isolated one. Set `isolated` only for disposable test profiles.
 - `TRAECN_TRAE_RECOVERY_NEW_INSTANCE`: defaults to `0`; keep it disabled to avoid opening a new unauthenticated Trae window during gateway recovery.
-- `TRAECN_AUTO_START_TRAE`: defaults to `1`; when the gateway loses CDP it will try to relaunch Trae CN and reconnect automatically.
+- `TRAECN_AUTO_START_TRAE`: defaults to `0`; set it to `1` only when the gateway should relaunch Trae CN after CDP disappears.
 - `TRAECN_QUEUE_MAX_WAIT_MS`: optional. Leave unset to let external TraeCN model queues wait indefinitely in the local gateway; set it only when you want a local queue timeout.
 - `TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH`: optional path for persisted async queue state. By default macOS uses `~/Library/Application Support/TRAECNclaw/active-queue.json`.
 - `TRAECN_ENABLE_MOCK_BRIDGE`: set to `1` for local system tests without TraeCN.
@@ -143,14 +144,46 @@ Any MCP-capable agent can connect through the bundled stdio server:
       "env": {
         "TRAECN_HOST": "127.0.0.1",
         "TRAECN_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": ""
+        "TRAECN_GATEWAY_TOKEN": "",
+        "TRAECN_MCP_TOOL_PROFILE": "public"
       }
     }
   }
 }
 ```
 
-The MCP server exposes `preflight`, `run_task`, `queue_task`, `poll_task`, `review_code`, settings/dialog/model controls, `long_queue_proof_status/start/cancel`, and the generic `traecn_command` catalog for full command coverage.
+The MCP server exposes a profile-scoped tool surface. By default,
+`TRAECN_MCP_TOOL_PROFILE=public` lists the 20 common tools:
+`traecn_preflight`, `traecn_run_task`, `traecn_queue_task`,
+`traecn_poll_task`, `traecn_review_code`, settings/dialog/model controls,
+`traecn_run_unattended_workflow`, and the generic `traecn_run_command` catalog
+for full command coverage. Use `TRAECN_MCP_TOOL_PROFILE=ops` for recovery,
+cleanup, Solo conversation control, and long-queue proof tools; use `full` for
+compatibility audits and every explicit shortcut.
+
+### Agent Skill Distribution
+
+The portable cross-agent skill lives at `.codex/skills/traecnclaw-mcp`. It
+teaches agents how to configure the stdio MCP server, choose the right profile,
+and prefer MCP tools over GUI control.
+
+Install the skill globally for Codex-compatible clients:
+
+```sh
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+cp -R .codex/skills/traecnclaw-mcp "${CODEX_HOME:-$HOME/.codex}/skills/"
+```
+
+Build release artifacts for direct download:
+
+```sh
+npm run pack:skill
+```
+
+This writes `dist/traecnclaw-mcp-skill.tgz`, a zip artifact when `zip` is
+available, and `dist/traecnclaw-mcp-release.json` with checksums. See
+[Distribution](docs/DISTRIBUTION.md) for catalog submission fields and
+[Launch Kit](docs/LAUNCH-KIT.md) for public announcement copy.
 
 ### Layered Architecture
 
@@ -198,7 +231,7 @@ The OpenAPI schema is served at `/openapi.json`. Primary endpoints:
 - `GET /openapi.json`
 - MCP stdio tools through `mcp-server.js`
 
-Agents should call `GET /api/capabilities` or MCP `traecn_capabilities` first for a compact command, endpoint, token strategy, model, settings, and confirmation catalog. Before side-effecting operations, call `POST /api/preflight` or MCP `preflight` once to combine status, current `surface` (`setup` vs `workspace`), readiness, queue, dialog, and optional command-plan state. For a dry confirmation-only check, call `POST /api/confirm/plan` or MCP `plan_operation`. Fetch `/openapi.json` only when full request/response schemas are needed.
+Agents should call `GET /api/capabilities` or MCP `traecn_get_capabilities` first for a compact command, endpoint, token strategy, model, settings, and confirmation catalog. Before side-effecting operations, call `POST /api/preflight` or MCP `traecn_preflight` once to combine status, current `surface` (`setup` vs `workspace`), readiness, queue, dialog, and optional command-plan state. For a dry confirmation-only check, call `POST /api/confirm/plan` or MCP `traecn_plan_operation`. Fetch `/openapi.json` only when full request/response schemas are needed.
 
 For unattended local waiting on macOS, start the gateway as a LaunchAgent:
 
@@ -215,8 +248,8 @@ probe alternate models while the task waits. The agent can then release its
 context after receiving `taskId`; the local gateway persists the queue, refreshes
 `modelProbeResults`, and sends webhook/OpenClaw notifications when the task
 reaches review or completion.
-For a single local process that waits quietly until completion, use MCP/OpenClaw
-`wait_task` or the CLI. Add `--detach` when the wait should continue under a
+For a single local process that waits quietly until completion, use MCP
+`traecn_wait_task`, OpenClaw `traecn_delegate`, or the CLI. Add `--detach` when the wait should continue under a
 local `screen` session after the calling agent releases context:
 
 ```sh
@@ -245,7 +278,7 @@ cleanup, preflight readiness, evidence paths, and that no local task is active
 before a quota-consuming TraeCN submission.
 
 Use `traecnclaw cleanup-queue --status --json`, MCP
-`cleanup_queue_watch_status`, or OpenClaw `traecn_cleanup_watch_status` to
+`traecn_get_cleanup_watch_status`, or OpenClaw `traecn_cleanup_watch_status` to
 inspect the local queue-probe cleanup watcher without touching TraeCN. The
 watcher is singleton-locked, so repeat detached starts return
 `alreadyRunning: true` instead of creating extra background cleanup processes.
@@ -273,17 +306,27 @@ npm run audit:prod
 
 `npm test` runs unit and integration tests. `test:system` starts the gateway in mock mode and verifies the HTTP flow. `test:uat` verifies documentation, OpenAPI coverage, and the machine-readable acceptance audit required for release acceptance. `npm run acceptance:audit` prints the current requirement-by-requirement status; add `-- --require-complete` before declaring the full unattended TraeCN goal complete.
 `test:live` runs safe real Trae CN/CDP smoke checks when a live remote-debugging endpoint is available; otherwise it reports `SKIP` and exits successfully. Use `node scripts/live-uat.js --strict` when a live desktop instance is required, `--require-ready` when the UI must be logged in and automation-ready, and `--cleanup-queue-probes` when accidental `wait for Trae queue` Solo chats should be stopped, deleted, and rechecked to `matched: 0`. `--strict` fails if those queue-probe chats remain. Add `--delegate` only when sending a real test prompt is acceptable. `--delegate` is readiness-gated and fails with diagnostics instead of sending a prompt to an unready UI.
-`npm run proof:long-queue` is the guarded GLM-5.2 proof runner. It defaults to dry-run, verifies preflight readiness, refuses to start when queue-probe Solo chats or local tasks remain, and prints the exact evidence paths. Add `-- --execute --detach --allow-quota-spend` only when a real long-queue TraeCN submission is explicitly approved; execute mode automatically stops/deletes accidental queue-probe Solo chats and requires consecutive clean dry-runs before submitting. Tune that gate with `-- --cleanup-stabilize-checks <n> --cleanup-stabilize-delay-ms <ms> --cleanup-max-attempts <n>`. Re-running with the same marker resumes the existing task from the evidence log instead of submitting again; add `-- --force-new` only when an intentional new submission is acceptable. Use `npm run proof:status`, MCP `long_queue_proof_status`, OpenClaw `traecn_long_queue_proof_status`, CLI `traecnclaw proof status`, or `npm run proof:cancel -- --marker <id>` to inspect or stop detached proof runs without creating another TraeCN conversation.
+`npm run proof:long-queue` is the guarded GLM-5.2 proof runner. It defaults to dry-run, verifies preflight readiness, refuses to start when queue-probe Solo chats or local tasks remain, and prints the exact evidence paths. Add `-- --execute --detach --allow-quota-spend` only when a real long-queue TraeCN submission is explicitly approved; execute mode automatically stops/deletes accidental queue-probe Solo chats and requires consecutive clean dry-runs before submitting. Tune that gate with `-- --cleanup-stabilize-checks <n> --cleanup-stabilize-delay-ms <ms> --cleanup-max-attempts <n>`. Re-running with the same marker resumes the existing task from the evidence log instead of submitting again; add `-- --force-new` only when an intentional new submission is acceptable. Use `npm run proof:status`, MCP `traecn_get_long_queue_proof_status`, OpenClaw `traecn_long_queue_proof_status`, CLI `traecnclaw proof status`, or `npm run proof:cancel -- --marker <id>` to inspect or stop detached proof runs without creating another TraeCN conversation.
 
 ## Security
 
 Bind the gateway to `127.0.0.1`, set `TRAECN_GATEWAY_TOKEN` before exposing protected endpoints to browser or tool clients, and configure `TRAECN_ALLOWED_ORIGINS` when using the chat UI from a browser origin other than the gateway. Set `TRAECN_ENFORCE_OPERATION_CONFIRMATION=1` in production to require a matching confirmation plan ID for high-risk settings and dialog operations. Logs redact common sensitive keys such as tokens, passwords, secrets, credentials, and authorization values.
+
+## Distribution
+
+Before public distribution, make the repository or release artifact public,
+verify the skill with `quick_validate.py`, run the maintained test suite, and
+scan the current tree and git history for secrets. Public catalog submissions
+should point to `.codex/skills/traecnclaw-mcp` for the skill and `mcp-server.js`
+or `traecnclaw-mcp` for the server entrypoint.
 
 ## Documentation
 
 - [User Manual](docs/user-manual.md)
 - [Development Guide](docs/development.md)
 - [Deployment Guide](docs/deployment.md)
+- [Distribution Guide](docs/DISTRIBUTION.md)
+- [Launch Kit](docs/LAUNCH-KIT.md)
 - [Layered Architecture Guide](docs/LAYERED-ARCHITECTURE.md)
 - [AI Usage Guide](docs/AI-USAGE-GUIDE.md)
 - [MCP Server Guide](docs/MCP-SERVER-GUIDE.md)

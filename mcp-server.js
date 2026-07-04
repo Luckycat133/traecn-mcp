@@ -70,27 +70,27 @@ const WORKFLOW_STEP_SCHEMA = Object.freeze({
   ]
 });
 
-const MCP_TOOLS = Object.freeze([
+const RAW_MCP_TOOLS = Object.freeze([
   {
-    name: 'traecn_capabilities',
+    name: 'traecn_get_capabilities',
     description: 'Return a compact agent-facing capability catalog for low-token discovery.',
     inputSchema: schema()
   },
   {
-    name: 'traecn_command_set',
+    name: 'traecn_list_commands',
     description: 'List every stable TraeCNclaw command exposed to agents.',
     inputSchema: schema()
   },
   {
-    name: 'traecn_command',
-    description: 'Execute any stable TraeCNclaw command by name. Use traecn_command_set for parameters.',
+    name: 'traecn_run_command',
+    description: 'Execute a stable TraeCNclaw command by name. Use traecn_list_commands for parameters.',
     inputSchema: schema({
       command: { type: 'string', enum: listCommands().map(item => item.command) },
       params: { type: 'object', description: 'Command-specific parameters.' }
     }, ['command'])
   },
   {
-    name: 'plan_operation',
+    name: 'traecn_plan_operation',
     description: 'Create a compact confirmation/preflight plan before executing a side-effecting TraeCN command.',
     inputSchema: schema({
       command: { type: 'string' },
@@ -99,7 +99,7 @@ const MCP_TOOLS = Object.freeze([
     }, ['command'])
   },
   {
-    name: 'preflight',
+    name: 'traecn_preflight',
     description: 'Return one compact status/readiness/queue/dialog summary plus optional command confirmation plan.',
     inputSchema: schema({
       command: { type: 'string' },
@@ -108,7 +108,7 @@ const MCP_TOOLS = Object.freeze([
     })
   },
   {
-    name: 'run_task',
+    name: 'traecn_run_task',
     description: 'Delegate a task to TraeCN and wait for the final response when possible.',
     inputSchema: schema({
       task: { type: 'string' },
@@ -134,7 +134,7 @@ const MCP_TOOLS = Object.freeze([
     }, ['task'])
   },
   {
-    name: 'queue_task',
+    name: 'traecn_queue_task',
     description: 'Submit a task for queue-aware background processing and return a taskId.',
     inputSchema: schema({
       task: { type: 'string' },
@@ -175,12 +175,12 @@ const MCP_TOOLS = Object.freeze([
     }, ['task'])
   },
   {
-    name: 'poll_task',
+    name: 'traecn_poll_task',
     description: 'Poll a queued TraeCN task by taskId.',
     inputSchema: schema({ taskId: { type: 'string' } })
   },
   {
-    name: 'wait_task',
+    name: 'traecn_wait_task',
     description: 'Wait locally for a queued TraeCN task to reach a terminal or decision-required state.',
     inputSchema: schema({
       taskId: { type: 'string' },
@@ -195,7 +195,7 @@ const MCP_TOOLS = Object.freeze([
     }, ['taskId'])
   },
   {
-    name: 'adopt_current_task',
+    name: 'traecn_adopt_current_task',
     description: 'Recover tracking for the currently queued/running TraeCN request without resending the prompt.',
     inputSchema: schema({
       task: { type: 'string' },
@@ -220,32 +220,32 @@ const MCP_TOOLS = Object.freeze([
     })
   },
   {
-    name: 'cancel_task',
+    name: 'traecn_cancel_task',
     description: 'Cancel a queued or review-waiting TraeCN background task.',
     inputSchema: schema({ taskId: { type: 'string' } }, ['taskId'])
   },
   {
-    name: 'stop_generation',
+    name: 'traecn_stop_generation',
     description: 'Stop the current TraeCN generation or queued model request.',
     inputSchema: schema()
   },
   {
-    name: 'review_gate_status',
+    name: 'traecn_get_review_gate_status',
     description: 'Inspect whether TraeCN is blocked on its internal keep/revert review gate.',
     inputSchema: schema()
   },
   {
-    name: 'resolve_review_gate',
+    name: 'traecn_resolve_review_gate',
     description: 'Resolve TraeCN internal keep/revert review gate.',
     inputSchema: schema({ action: { type: 'string', enum: ['keep_all', 'revert_all', 'keep', 'discard'] } })
   },
   {
-    name: 'dismiss_dialog',
+    name: 'traecn_dismiss_dialog',
     description: 'Dismiss the current TraeCN dialog.',
     inputSchema: schema()
   },
   {
-    name: 'restart_trae_debug',
+    name: 'traecn_restart_debug_session',
     description: 'Restart TraeCN with remote debugging enabled using the existing logged-in profile.',
     inputSchema: schema({
       confirmationPhrase: { type: 'string' },
@@ -256,7 +256,7 @@ const MCP_TOOLS = Object.freeze([
     })
   },
   {
-    name: 'review_code',
+    name: 'traecn_review_code',
     description: 'Ask TraeCN to review code, a diff, or a review instruction with findings-first output.',
     inputSchema: schema({
       instruction: { type: 'string' },
@@ -281,12 +281,12 @@ const MCP_TOOLS = Object.freeze([
     }, ['instruction'])
   },
   {
-    name: 'check_status',
+    name: 'traecn_get_status',
     description: 'Check whether the TraeCN gateway is connected.',
     inputSchema: schema()
   },
   {
-    name: 'switch_model',
+    name: 'traecn_switch_model',
     description: 'Switch the active TraeCN model with fuzzy matching.',
     inputSchema: schema({
       name: { type: 'string' },
@@ -294,22 +294,22 @@ const MCP_TOOLS = Object.freeze([
     }, ['name'])
   },
   {
-    name: 'switch_mode',
+    name: 'traecn_switch_mode',
     description: 'Switch TraeCN between SOLO and IDE modes.',
     inputSchema: schema({ mode: { type: 'string', enum: ['solo', 'ide'] } }, ['mode'])
   },
   {
-    name: 'new_chat',
+    name: 'traecn_create_chat',
     description: 'Create a new TraeCN chat.',
     inputSchema: schema()
   },
   {
-    name: 'list_solo_chats',
+    name: 'traecn_list_solo_chats',
     description: 'List real Solo-mode TraeCN conversations from the Solo sidebar.',
     inputSchema: schema()
   },
   {
-    name: 'switch_solo_chat',
+    name: 'traecn_switch_solo_chat',
     description: 'Switch to a real Solo-mode TraeCN conversation by index or visible text.',
     inputSchema: schema({
       index: { type: 'number' },
@@ -318,7 +318,7 @@ const MCP_TOOLS = Object.freeze([
     })
   },
   {
-    name: 'cleanup_foreign_solo_queue',
+    name: 'traecn_cleanup_queue_probe_chats',
     description: 'Find and optionally delete accidental queue-probe Solo conversations without sending another prompt to TraeCN.',
     inputSchema: schema({
       dryRun: { type: 'boolean' },
@@ -328,14 +328,14 @@ const MCP_TOOLS = Object.freeze([
     })
   },
   {
-    name: 'cleanup_queue_watch_status',
+    name: 'traecn_get_cleanup_watch_status',
     description: 'Read local cleanup watcher lock/PID/stale status without contacting TraeCN or creating conversations.',
     inputSchema: schema({
       lockFile: { type: 'string' }
     })
   },
   {
-    name: 'long_queue_proof_start',
+    name: 'traecn_start_long_queue_proof',
     description: 'Start the guarded GLM-5.2 long-queue proof. Defaults to dry-run; execute=true plus allowQuotaSpend=true is required for a new real TraeCN submission.',
     inputSchema: schema({
       marker: { type: 'string' },
@@ -356,7 +356,7 @@ const MCP_TOOLS = Object.freeze([
     })
   },
   {
-    name: 'long_queue_proof_status',
+    name: 'traecn_get_long_queue_proof_status',
     description: 'Read the latest or marker-scoped GLM-5.2 proof status without sending any TraeCN prompt.',
     inputSchema: schema({
       marker: { type: 'string' },
@@ -364,7 +364,7 @@ const MCP_TOOLS = Object.freeze([
     })
   },
   {
-    name: 'long_queue_proof_cancel',
+    name: 'traecn_cancel_long_queue_proof',
     description: 'Cancel the latest or marker-scoped GLM-5.2 proof watcher/task tracking without resubmitting a prompt.',
     inputSchema: schema({
       marker: { type: 'string' },
@@ -373,7 +373,7 @@ const MCP_TOOLS = Object.freeze([
     })
   },
   {
-    name: 'submit_solo_chat_task',
+    name: 'traecn_submit_solo_task',
     description: 'Submit a task into a real Solo conversation and return a taskId; background polling switches back to that conversation to collect queued results.',
     inputSchema: schema({
       task: { type: 'string' },
@@ -410,38 +410,38 @@ const MCP_TOOLS = Object.freeze([
     }, ['task'])
   },
   {
-    name: 'get_settings',
+    name: 'traecn_get_settings',
     description: 'Read TraeCN settings from the current or named section.',
     inputSchema: schema({ section: { type: 'string' } })
   },
   {
-    name: 'set_setting',
+    name: 'traecn_set_setting',
     description: 'Set a TraeCN setting by label.',
     inputSchema: schema({ label: { type: 'string' }, value: {}, section: { type: 'string' } }, ['label', 'value'])
   },
   {
-    name: 'approve_dialog',
-    description: 'Approve, deny, confirm, or dismiss the current TraeCN dialog.',
+    name: 'traecn_respond_dialog',
+    description: 'Respond to the current TraeCN dialog by approving, denying, confirming, answering, or dismissing it.',
     inputSchema: schema({ action: { type: 'string' }, wait: { type: 'boolean' } })
   },
   {
-    name: 'check_dialog',
+    name: 'traecn_get_dialog_status',
     description: 'Check whether TraeCN is showing a dialog that needs user confirmation.',
     inputSchema: schema()
   },
   {
-    name: 'check_queue',
+    name: 'traecn_get_queue_status',
     description: 'Check current model queue/busy status.',
     inputSchema: schema()
   },
   {
-    name: 'open_project',
+    name: 'traecn_open_project',
     description: 'Open a local project path in TraeCN.',
     inputSchema: schema({ projectPath: { type: 'string' } }, ['projectPath'])
   },
   {
-    name: 'vibe_workflow',
-    description: 'Start an unattended vibe coding workflow: initial task plus auto-continued follow-up tasks.',
+    name: 'traecn_run_unattended_workflow',
+    description: 'Run an unattended TraeCN workflow: initial task plus auto-continued follow-up tasks.',
     inputSchema: schema({
       task: { type: 'string' },
       steps: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
@@ -467,12 +467,218 @@ const MCP_TOOLS = Object.freeze([
   }
 ]);
 
+const DEFAULT_MCP_TOOL_PROFILE = 'public';
+
+const PUBLIC_MCP_TOOL_NAMES = Object.freeze([
+  'traecn_get_capabilities',
+  'traecn_list_commands',
+  'traecn_run_command',
+  'traecn_plan_operation',
+  'traecn_preflight',
+  'traecn_run_task',
+  'traecn_queue_task',
+  'traecn_poll_task',
+  'traecn_wait_task',
+  'traecn_cancel_task',
+  'traecn_review_code',
+  'traecn_switch_model',
+  'traecn_switch_mode',
+  'traecn_create_chat',
+  'traecn_get_settings',
+  'traecn_set_setting',
+  'traecn_respond_dialog',
+  'traecn_get_dialog_status',
+  'traecn_open_project',
+  'traecn_run_unattended_workflow'
+]);
+
+const OPS_MCP_TOOL_NAMES = Object.freeze([
+  ...PUBLIC_MCP_TOOL_NAMES,
+  'traecn_adopt_current_task',
+  'traecn_stop_generation',
+  'traecn_get_review_gate_status',
+  'traecn_resolve_review_gate',
+  'traecn_restart_debug_session',
+  'traecn_list_solo_chats',
+  'traecn_switch_solo_chat',
+  'traecn_cleanup_queue_probe_chats',
+  'traecn_get_cleanup_watch_status',
+  'traecn_start_long_queue_proof',
+  'traecn_get_long_queue_proof_status',
+  'traecn_cancel_long_queue_proof'
+]);
+
+const TOOL_METADATA = Object.freeze({
+  traecn_get_capabilities: { layer: 'discovery', profile: 'public', risk: 'read' },
+  traecn_list_commands: { layer: 'discovery', profile: 'public', risk: 'read' },
+  traecn_run_command: { layer: 'escape-hatch', profile: 'public', risk: 'dynamic' },
+  traecn_plan_operation: { layer: 'planning', profile: 'public', risk: 'read' },
+  traecn_preflight: { layer: 'planning', profile: 'public', risk: 'read' },
+  traecn_run_task: { layer: 'task', profile: 'public', risk: 'delegate' },
+  traecn_queue_task: { layer: 'task', profile: 'public', risk: 'delegate' },
+  traecn_poll_task: { layer: 'task', profile: 'public', risk: 'read' },
+  traecn_wait_task: { layer: 'task', profile: 'public', risk: 'read-or-delegate' },
+  traecn_cancel_task: { layer: 'task', profile: 'public', risk: 'delegate' },
+  traecn_review_code: { layer: 'review', profile: 'public', risk: 'delegate' },
+  traecn_switch_model: { layer: 'control', profile: 'public', risk: 'write' },
+  traecn_switch_mode: { layer: 'control', profile: 'public', risk: 'write' },
+  traecn_create_chat: { layer: 'control', profile: 'public', risk: 'write' },
+  traecn_get_settings: { layer: 'settings', profile: 'public', risk: 'read' },
+  traecn_set_setting: { layer: 'settings', profile: 'public', risk: 'admin' },
+  traecn_respond_dialog: { layer: 'dialog', profile: 'public', risk: 'delegate' },
+  traecn_get_dialog_status: { layer: 'dialog', profile: 'public', risk: 'read' },
+  traecn_open_project: { layer: 'control', profile: 'public', risk: 'delegate' },
+  traecn_run_unattended_workflow: { layer: 'workflow', profile: 'public', risk: 'delegate' },
+
+  traecn_adopt_current_task: { layer: 'recovery', profile: 'ops', risk: 'delegate' },
+  traecn_stop_generation: { layer: 'recovery', profile: 'ops', risk: 'delegate' },
+  traecn_get_review_gate_status: { layer: 'recovery', profile: 'ops', risk: 'read' },
+  traecn_resolve_review_gate: { layer: 'recovery', profile: 'ops', risk: 'delegate' },
+  traecn_restart_debug_session: { layer: 'recovery', profile: 'ops', risk: 'delegate' },
+  traecn_list_solo_chats: { layer: 'solo', profile: 'ops', risk: 'read' },
+  traecn_switch_solo_chat: { layer: 'solo', profile: 'ops', risk: 'write' },
+  traecn_cleanup_queue_probe_chats: { layer: 'cleanup', profile: 'ops', risk: 'delegate' },
+  traecn_get_cleanup_watch_status: { layer: 'cleanup', profile: 'ops', risk: 'read' },
+  traecn_start_long_queue_proof: { layer: 'acceptance', profile: 'ops', risk: 'delegate' },
+  traecn_get_long_queue_proof_status: { layer: 'acceptance', profile: 'ops', risk: 'read' },
+  traecn_cancel_long_queue_proof: { layer: 'acceptance', profile: 'ops', risk: 'delegate' },
+
+  traecn_get_status: { layer: 'diagnostics', profile: 'full', risk: 'read', alternative: 'traecn_preflight' },
+  traecn_get_queue_status: { layer: 'diagnostics', profile: 'full', risk: 'read', alternative: 'traecn_preflight' },
+  traecn_dismiss_dialog: { layer: 'dialog', profile: 'full', risk: 'delegate', alternative: 'traecn_respond_dialog' },
+  traecn_submit_solo_task: { layer: 'solo', profile: 'full', risk: 'delegate', alternative: 'traecn_queue_task' }
+});
+
+const TOOL_ANNOTATIONS = Object.freeze({
+  read: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  write: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  delegate: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  admin: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  dynamic: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  'read-or-delegate': { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+});
+
+const DESTRUCTIVE_MCP_TOOLS = new Set([
+  'traecn_cancel_task',
+  'traecn_stop_generation',
+  'traecn_resolve_review_gate',
+  'traecn_dismiss_dialog',
+  'traecn_restart_debug_session',
+  'traecn_cleanup_queue_probe_chats',
+  'traecn_cancel_long_queue_proof'
+]);
+
+function decorateTool(tool) {
+  const metadata = TOOL_METADATA[tool.name] || { layer: 'misc', profile: 'full', risk: 'dynamic' };
+  const annotations = {
+    ...(TOOL_ANNOTATIONS[metadata.risk] || TOOL_ANNOTATIONS.dynamic),
+    destructiveHint: DESTRUCTIVE_MCP_TOOLS.has(tool.name)
+  };
+  return Object.freeze({
+    ...tool,
+    annotations
+  });
+}
+
+const MCP_TOOLS = Object.freeze(RAW_MCP_TOOLS.map(decorateTool));
+
+const FULL_MCP_TOOL_NAMES = Object.freeze(MCP_TOOLS.map(tool => tool.name));
+
+const MCP_TOOL_PROFILES = Object.freeze({
+  public: Object.freeze(PUBLIC_MCP_TOOL_NAMES.slice()),
+  ops: Object.freeze(OPS_MCP_TOOL_NAMES.slice()),
+  full: FULL_MCP_TOOL_NAMES
+});
+
+const MCP_TOOL_PROFILE_DESCRIPTIONS = Object.freeze({
+  public: 'Default profile for general MCP clients. Keeps high-signal task, review, settings, dialog, and workflow tools visible.',
+  ops: 'Operational profile for recovery, cleanup, Solo conversation management, and long-queue proof workflows.',
+  full: 'Complete explicit tool surface, including diagnostics and compatibility shortcuts that public clients can usually reach through traecn_preflight or traecn_run_command.'
+});
+
+function normalizeMcpToolProfile(profile) {
+  const normalized = String(profile || DEFAULT_MCP_TOOL_PROFILE).trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(MCP_TOOL_PROFILES, normalized) ? normalized : DEFAULT_MCP_TOOL_PROFILE;
+}
+
+function getMcpToolsForProfile(profile = DEFAULT_MCP_TOOL_PROFILE) {
+  const normalized = normalizeMcpToolProfile(profile);
+  const names = new Set(MCP_TOOL_PROFILES[normalized]);
+  return MCP_TOOLS.filter(tool => names.has(tool.name));
+}
+
+function getMcpToolMetadata(toolName) {
+  return TOOL_METADATA[toolName] || { layer: 'misc', profile: 'full', risk: 'dynamic' };
+}
+
+function getMcpToolProfileSummary() {
+  return Object.fromEntries(Object.entries(MCP_TOOL_PROFILES).map(([name, tools]) => [
+    name,
+    {
+      default: name === DEFAULT_MCP_TOOL_PROFILE,
+      count: tools.length,
+      description: MCP_TOOL_PROFILE_DESCRIPTIONS[name],
+      tools: tools.slice()
+    }
+  ]));
+}
+
+function envToolProfile() {
+  return normalizeMcpToolProfile(process.env.TRAECN_MCP_TOOL_PROFILE);
+}
+
+const MCP_TOOL_INTERNAL_NAMES = Object.freeze({
+  traecn_get_capabilities: 'traecn_capabilities',
+  traecn_list_commands: 'traecn_command_set',
+  traecn_run_command: 'traecn_command',
+  traecn_plan_operation: 'plan_operation',
+  traecn_preflight: 'preflight',
+  traecn_run_task: 'run_task',
+  traecn_queue_task: 'queue_task',
+  traecn_poll_task: 'poll_task',
+  traecn_wait_task: 'wait_task',
+  traecn_adopt_current_task: 'adopt_current_task',
+  traecn_cancel_task: 'cancel_task',
+  traecn_stop_generation: 'stop_generation',
+  traecn_get_review_gate_status: 'review_gate_status',
+  traecn_resolve_review_gate: 'resolve_review_gate',
+  traecn_dismiss_dialog: 'dismiss_dialog',
+  traecn_restart_debug_session: 'restart_trae_debug',
+  traecn_review_code: 'review_code',
+  traecn_get_status: 'check_status',
+  traecn_switch_model: 'switch_model',
+  traecn_switch_mode: 'switch_mode',
+  traecn_create_chat: 'new_chat',
+  traecn_list_solo_chats: 'list_solo_chats',
+  traecn_switch_solo_chat: 'switch_solo_chat',
+  traecn_cleanup_queue_probe_chats: 'cleanup_foreign_solo_queue',
+  traecn_get_cleanup_watch_status: 'cleanup_queue_watch_status',
+  traecn_start_long_queue_proof: 'long_queue_proof_start',
+  traecn_get_long_queue_proof_status: 'long_queue_proof_status',
+  traecn_cancel_long_queue_proof: 'long_queue_proof_cancel',
+  traecn_submit_solo_task: 'submit_solo_chat_task',
+  traecn_get_settings: 'get_settings',
+  traecn_set_setting: 'set_setting',
+  traecn_respond_dialog: 'approve_dialog',
+  traecn_get_dialog_status: 'check_dialog',
+  traecn_get_queue_status: 'check_queue',
+  traecn_open_project: 'open_project',
+  traecn_run_unattended_workflow: 'vibe_workflow'
+});
+
+function internalMcpToolName(toolName) {
+  return MCP_TOOL_INTERNAL_NAMES[toolName] || null;
+}
+
 function asMcpContent(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   return { content: [{ type: 'text', text }] };
 }
 
-async function callTool(name, args = {}, context = envContext(), authContext = {}) {
+async function callTool(name, args = {}, context = envContext(), authContext = {}, options = {}) {
+  const internalName = internalMcpToolName(name);
+  if (!internalName) throw new Error(`Unknown tool: ${name}`);
+
   // Authorize before any side effects. The auth layer is a no-op when the
   // API key manager is not enabled, preserving single-user setups.
   const decision = mcpAuth.authorizeTool({
@@ -497,9 +703,15 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
 
   const skill = new TraeCNSkill(context);
 
-  switch (name) {
+  switch (internalName) {
     case 'traecn_capabilities':
-      return asMcpContent(buildCapabilities({ commands: listCommands(), mcpTools: MCP_TOOLS }));
+      return asMcpContent(buildCapabilities({
+        commands: listCommands(),
+        mcpTools: getMcpToolsForProfile(options.toolProfile || envToolProfile()),
+        mcpToolProfile: normalizeMcpToolProfile(options.toolProfile || envToolProfile()),
+        mcpToolProfiles: getMcpToolProfileSummary(),
+        mcpToolMetadata: Object.fromEntries(MCP_TOOLS.map(tool => [tool.name, getMcpToolMetadata(tool.name)]))
+      }));
     case 'traecn_command_set':
       return asMcpContent({ commands: listCommands() });
     case 'traecn_command': {
@@ -516,7 +728,7 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
         return asMcpContent({
           ok: false,
           error: 'generic_queue_probe_task_rejected',
-          message: 'Do not send queue probe prompts to Trae. Use preflight, queue_status, or wait_task for local waiting.'
+          message: 'Do not send queue probe prompts to Trae. Use traecn_preflight, queue_status, or traecn_wait_task for local waiting.'
         });
       }
       return asMcpContent(await skill.run(args.task, args));
@@ -525,7 +737,7 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
         return asMcpContent({
           ok: false,
           error: 'generic_queue_probe_task_rejected',
-          message: 'Do not send queue probe prompts to Trae. Use preflight, queue_status, or wait_task for local waiting.'
+          message: 'Do not send queue probe prompts to Trae. Use traecn_preflight, queue_status, or traecn_wait_task for local waiting.'
         });
       }
       return asMcpContent(await skill.queue(args.task, args));
@@ -639,7 +851,8 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
   }
 }
 
-function createMcpHandlers(context = envContext(), authContext = {}) {
+function createMcpHandlers(context = envContext(), authContext = {}, options = {}) {
+  const toolProfile = normalizeMcpToolProfile(options.toolProfile || envToolProfile());
   return {
     async handle(message) {
       const { method, params = {} } = message;
@@ -650,8 +863,10 @@ function createMcpHandlers(context = envContext(), authContext = {}) {
           serverInfo: SERVER_INFO
         };
       }
-      if (method === 'tools/list') return { tools: MCP_TOOLS };
-      if (method === 'tools/call') return callTool(params.name, params.arguments || {}, context, authContext);
+      if (method === 'tools/list') return { tools: getMcpToolsForProfile(toolProfile) };
+      if (method === 'tools/call') {
+        return callTool(params.name, params.arguments || {}, context, authContext, { toolProfile });
+      }
       if (method === 'prompts/list') return { prompts: promptLayers.listMcpPrompts() };
       if (method === 'prompts/get') return promptLayers.getMcpPrompt(params.name, params.arguments || {});
       if (method === 'resources/list') return { resources: promptLayers.listMcpResources() };
@@ -717,11 +932,17 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DEFAULT_MCP_TOOL_PROFILE,
+  MCP_TOOL_PROFILES,
   MCP_TOOLS,
   SERVER_INFO,
   callTool,
   createMcpHandlers,
   envContext,
+  getMcpToolMetadata,
+  getMcpToolProfileSummary,
+  getMcpToolsForProfile,
+  normalizeMcpToolProfile,
   startStdioServer,
   mcpAuth
 };

@@ -107,7 +107,7 @@ TRAECN_GATEWAY_TOKEN=
 | `TRAECN_BIN` | 否 | `/Applications/Trae CN.app` | 自动探测 macOS / Win 路径 |
 | `TRAECN_REMOTE_DEBUGGING_PORT` | 是 | `9222` | CDP 端口 |
 | `TRAECN_QUICKSTART_PROFILE_MODE` | 否 | `existing` | `existing` 复用登录态；`isolated` 用临时 profile |
-| `TRAECN_AUTO_START_TRAE` | 否 | `1` | CDP 失效自动重启 TraeCN |
+| `TRAECN_AUTO_START_TRAE` | 否 | `0` | 设为 `1` 后 CDP 失效才自动重启 TraeCN |
 | `TRAECN_ENABLE_MOCK_BRIDGE` | 否 | `0` | `1` = mock（无 TraeCN 也能跑测试） |
 | `TRAECN_GATEWAY_TOKEN` | 否 | 空 | bearer token |
 | `TRAECN_ALLOWED_ORIGINS` | 否 | 空 | CORS 白名单 |
@@ -228,14 +228,13 @@ python3 -m json.tool ~/.openclaw/openclaw.json > /dev/null && echo "JSON valid"
 
 ### 3.4 验证 MCP 注册成功
 
-OpenClaw 重读配置后，agent 应能列出 **21 个 tool**（12 个 v0.3.x + 9 个 v0.4.0 driver）：
+OpenClaw 重读配置后，agent 应能列出当前 OpenClaw wrapper tools：
 
 ```
-traecn_editor / traecn_file / traecn_terminal / traecn_git /
-traecn_search / traecn_diagnostics / traecn_snapshot /
-traecn_extension / traecn_command                     ← v0.4.0 新
-traecn_capabilities / traecn_command_set / preflight /
-run_task / queue_task / poll_task / review_code / ...
+traecn_capabilities / traecn_command_set / traecn_preflight /
+traecn_command / traecn_delegate / traecn_task_status /
+traecn_vibe_workflow / traecn_plan_operation /
+traecn_settings_read / traecn_settings_set / traecn_switch_model / ...
 ```
 
 ### 3.5 非 OpenClaw 客户端
@@ -372,14 +371,14 @@ curl -s http://127.0.0.1:8788/api/capabilities | jq .
 ### 5.2 MCP
 
 ```json
-{ "tool": "traecn_capabilities", "arguments": {} }
+{ "tool": "traecn_get_capabilities", "arguments": {} }
 ```
 
 ### 5.3 推荐调用顺序
 
 ```
-1. traecn_capabilities / GET /api/capabilities   ← 低 token 拿目录
-2. traecn_preflight   / POST /api/preflight      ← 状态+就绪+队列+弹窗综合
+1. traecn_get_capabilities / GET /api/capabilities  ← 低 token 拿目录
+2. traecn_preflight      / POST /api/preflight      ← 状态+就绪+队列+弹窗综合
 3. <具体操作>                                    ← 真正干活
 4. (可选) GET /openapi.json                       ← 完整 schema
 ```
@@ -724,7 +723,7 @@ try {
       });
       return mcp.call('traecn_editor', { action: 'acceptAll' });
     case 'UNKNOWN_ACTION':
-      await mcp.call('traecn_capabilities', {});
+      await mcp.call('traecn_get_capabilities', {});
       break;
     default:
       throw e;
@@ -751,8 +750,8 @@ curl -s http://127.0.0.1:9222/json/version          # CDP 通吗？
 **解决**：
 
 ```sh
-# A. TRAECNclaw 自动重启（TRAECN_AUTO_START_TRAE=1）
-npm run quickstart
+# A. TRAECNclaw 自动重启（显式设置 TRAECN_AUTO_START_TRAE=1）
+TRAECN_AUTO_START_TRAE=1 npm run quickstart -- --launch-trae
 
 # B. 手工 quit 后用 existing profile 启动
 osascript -e 'tell application "Trae CN" to quit'
@@ -869,7 +868,7 @@ node -e "require('/absolute/path/to/TRAECNclaw/mcp-server.js')"   # 测依赖
 TRAECN_ENABLE_MOCK_BRIDGE=0
 ```
 
-或在 mock 模式下**只**用 `traecn_capabilities` / `preflight` / `traecn_command_set`，不要调 driver action。
+或在 mock 模式下**只**用 `traecn_get_capabilities` / `traecn_preflight` / `traecn_list_commands`，不要调 driver action。
 
 ### 9.8 不走 MCP，直调 HTTP
 

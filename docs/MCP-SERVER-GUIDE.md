@@ -76,19 +76,30 @@ TRAECNclaw 自带零依赖 stdio MCP 服务器：`mcp-server.js`。MCP 客户端
 
 ## MCP 工具定义
 
-运行 `node -e "console.log(require('./mcp-server').MCP_TOOLS.map(t => t.name))"` 可查看当前工具列表。核心工具包括：
+运行 `node -e "console.log(require('./mcp-server').MCP_TOOLS.map(t => t.name))"` 可查看完整工具全集。运行时 `tools/list` 会按 `TRAECN_MCP_TOOL_PROFILE` 分层返回：
 
-- `run_task`: 委派任务并尽量等待最终结果
-- `queue_task`: 提交后台队列任务并返回 `taskId`
-- `poll_task`: 查询队列任务状态
-- `review_code`: 对代码、diff 或指定文件范围生成 findings-first 审查
-- `check_status`, `check_queue`, `check_dialog`: 状态、队列、确认弹窗检查
-- `switch_model`, `switch_mode`, `new_chat`, `open_project`: TraeCN 控制
-- `get_settings`, `set_setting`, `approve_dialog`: 设置与确认操作
-- `traecn_capabilities`: 返回低 token 能力目录，包括命令、端点、模型、设置分区和建议调用顺序
-- `preflight`: 一次调用返回状态、就绪度、队列、弹窗和可选命令确认计划
-- `plan_operation`: 在执行有副作用命令前生成风险、确认和预检计划，不操作 TraeCN
-- `traecn_command_set`, `traecn_command`: 枚举并调用完整稳定命令集
+| Profile | 数量 | 说明 |
+| --- | ---: | --- |
+| `public` | 20 | 默认发布面，适合通用 agent。 |
+| `ops` | 32 | 增加恢复、cleanup、Solo 对话和长队列证明工具。 |
+| `full` | 36 | 暴露所有显式工具，包括诊断/兼容快捷入口。 |
+
+核心工具包括：
+
+- `traecn_run_task`: 委派任务并尽量等待最终结果
+- `traecn_queue_task`: 提交后台队列任务并返回 `taskId`
+- `traecn_poll_task`: 查询队列任务状态
+- `traecn_review_code`: 对代码、diff 或指定文件范围生成 findings-first 审查
+- `traecn_preflight`: 默认状态、队列、弹窗和确认计划入口
+- `traecn_get_dialog_status`: 直接检查确认弹窗
+- `traecn_switch_model`, `traecn_switch_mode`, `traecn_create_chat`, `traecn_open_project`: TraeCN 控制
+- `traecn_get_settings`, `traecn_set_setting`, `traecn_respond_dialog`: 设置与确认操作
+- `traecn_get_capabilities`: 返回低 token 能力目录，包括命令、端点、模型、设置分区和建议调用顺序
+- `traecn_plan_operation`: 在执行有副作用命令前生成风险、确认和预检计划，不操作 TraeCN
+- `traecn_list_commands`, `traecn_run_command`: 枚举并调用完整稳定命令集
+
+`traecn_get_status` 和 `traecn_get_queue_status` 属于 `full` 兼容诊断工具；默认
+agent 应优先用 `traecn_preflight`。
 
 ## 环境变量
 
