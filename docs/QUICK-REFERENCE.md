@@ -46,7 +46,7 @@ await waitTask(taskId, { pollMs: 30000, timeoutMs: 0 });  // 本地静默等待
 ```javascript
 getCapabilities()        // npm simple API
 // HTTP: GET /api/capabilities
-// MCP: traecn_capabilities
+// MCP: traecn_get_capabilities
 // CLI: traecn capabilities
 // OpenClaw command: capabilities
 ```
@@ -55,7 +55,7 @@ getCapabilities()        // npm simple API
 ```javascript
 preflight({ command, params }) // npm simple API
 // HTTP: POST /api/preflight
-// MCP: preflight
+// MCP: traecn_preflight
 // CLI: traecn preflight delegate_async '{"task":"..."}'
 // OpenClaw command/tool: preflight / traecn_preflight
 // 返回 surface，可区分当前处于 setup 还是 workspace

@@ -131,7 +131,7 @@ getSkill()                // 获取实例
 }
 ```
 
-MCP 工具中优先使用 `traecn_capabilities` 做一次低 token 能力发现，再用 `preflight` 合并状态、就绪度、队列、弹窗和可选确认计划。常见工作用 `run_task`、`queue_task`、`poll_task`、`review_code` 执行。执行 `settings_set`、`approve_dialog`、`open_project`、`delegate`、批量取消等有副作用操作前，优先用 `preflight` 或 `plan_operation` 获取风险等级、确认要求和预检步骤。需要覆盖完整命令面时，先调用 `traecn_command_set` 获取命令目录，再用 `traecn_command` 传入命令名和参数。
+MCP 工具中优先使用 `traecn_get_capabilities` 做一次低 token 能力发现，再用 `traecn_preflight` 合并状态、就绪度、队列、弹窗和可选确认计划。常见工作用 `traecn_run_task`、`traecn_queue_task`、`traecn_poll_task`、`traecn_review_code` 执行。执行 `settings_set`、`approve_dialog`、`open_project`、`delegate`、批量取消等有副作用 command 前，优先用 `traecn_preflight` 或 `traecn_plan_operation` 获取风险等级、确认要求和预检步骤。需要覆盖完整命令面时，先调用 `traecn_list_commands` 获取命令目录，再用 `traecn_run_command` 传入 command 名和参数。
 
 ### 无人值守排队与回传
 

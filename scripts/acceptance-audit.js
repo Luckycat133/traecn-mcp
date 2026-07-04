@@ -372,8 +372,8 @@ async function main() {
     capabilities.commands.some(command => command.command === 'delegate_async')
       && commandNames.includes('cleanup_foreign_solo_queue')
       && commandNames.includes('cleanup_queue_watch_status')
-      && mcpToolNames.includes('cleanup_foreign_solo_queue')
-      && mcpToolNames.includes('cleanup_queue_watch_status')
+      && mcpToolNames.includes('traecn_cleanup_queue_probe_chats')
+      && mcpToolNames.includes('traecn_get_cleanup_watch_status')
       && openClawTools.includes('traecn_cleanup_queue')
       && openClawTools.includes('traecn_cleanup_watch_status')
   ) ? 'passed' : 'missing', 'HTTP, MCP, CLI/OpenClaw command surfaces expose delegation and cleanup controls.', {
@@ -445,7 +445,7 @@ async function main() {
       && hasAll(capabilities.apiFamilies.settings || [], ['/api/settings/read', '/api/settings/read-all', '/api/settings/set', '/api/settings/switch-tab', '/api/settings/back-to-chat'])
       && hasAll(capabilities.apiFamilies.control || [], ['/api/detect-mode', '/api/switch-mode', '/api/switch-model'])
       && hasAll(commandNames, ['settings_read', 'settings_read_all', 'settings_set', 'settings_navigate', 'settings_back', 'switch_mode', 'switch_model', 'confirm_plan'])
-      && hasAll(mcpToolNames, ['plan_operation', 'switch_model', 'switch_mode', 'get_settings'])
+      && hasAll(mcpToolNames, ['traecn_plan_operation', 'traecn_switch_model', 'traecn_switch_mode', 'traecn_get_settings'])
       && hasAll(openClawTools, ['traecn_plan_operation', 'traecn_settings_action', 'traecn_settings_read', 'traecn_settings_set', 'traecn_switch_mode', 'traecn_switch_model'])
       && hasAll(openClawCommandEnum, ['settings_read', 'settings_read_all', 'settings_set', 'settings_navigate', 'settings_back', 'switch_mode', 'switch_model'])
       && liveUatSource.includes('settings-read-model')
@@ -457,7 +457,7 @@ async function main() {
     settingsPaths: ['/api/settings/read', '/api/settings/read-all', '/api/settings/set', '/api/settings/switch-tab', '/api/settings/back-to-chat']
       .filter(apiPath => Boolean(spec.paths[apiPath])),
     controlPaths: ['/api/detect-mode', '/api/switch-mode', '/api/switch-model'].filter(apiPath => Boolean(spec.paths[apiPath])),
-    mcpTools: mcpToolNames.filter(name => ['plan_operation', 'switch_model', 'switch_mode', 'get_settings'].includes(name)),
+    mcpTools: mcpToolNames.filter(name => ['traecn_plan_operation', 'traecn_switch_model', 'traecn_switch_mode', 'traecn_get_settings'].includes(name)),
     openClawTools: openClawTools.filter(name => ['traecn_plan_operation', 'traecn_settings_action', 'traecn_settings_read', 'traecn_settings_set', 'traecn_switch_mode', 'traecn_switch_model'].includes(name)),
     liveSettingsRead: liveUatSource.includes('settings-read-model'),
     liveConfirmationGate: liveUatSource.includes('confirmation-gate')
@@ -488,20 +488,20 @@ async function main() {
   });
 
   add(results, 'unattended_wait_task_flow', (
-    mcpToolNames.includes('wait_task')
+    mcpToolNames.includes('traecn_wait_task')
       && openClawTools.includes('traecn_delegate')
       && hasAll(readFile('scripts/traecn-cli.js'), ['wait-task', 'autoApproveDialog', 'finalFile'])
-  ) ? 'passed' : 'missing', 'Local wait_task and quiet/detached CLI waiting are available for unattended long waits.', {
-    waitTaskMcp: mcpToolNames.includes('wait_task')
+  ) ? 'passed' : 'missing', 'MCP traecn_wait_task and quiet/detached CLI waiting are available for unattended long waits.', {
+    waitTaskMcp: mcpToolNames.includes('traecn_wait_task')
   });
 
   const asyncDelegateAccepts = capabilities.http.find(operation => operation.path === '/api/delegate-async' && operation.method === 'POST')?.accepts || [];
   add(results, 'unattended_vibe_workflow_contract', (
     commandNames.includes('vibe_workflow')
-      && mcpToolNames.includes('vibe_workflow')
+      && mcpToolNames.includes('traecn_run_unattended_workflow')
       && openClawTools.includes('traecn_vibe_workflow')
       && hasAll(asyncDelegateAccepts, ['autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'forceBackground'])
-      && hasAll(mcpSource, ['name: \'vibe_workflow\'', 'followupTasks', 'completionChecks', 'autoApproveDialog'])
+      && hasAll(mcpSource, ['name: \'traecn_run_unattended_workflow\'', 'followupTasks', 'completionChecks', 'autoApproveDialog'])
       && hasAll(commandSetSource, ['case COMMANDS.VIBE_WORKFLOW', 'autoContinue: true', 'followupTasks', 'completionChecks', 'autoApproveDialog'])
       && hasAll(skillSource, ['async vibeWorkflow', 'autoContinue: true', 'autoApproveDialog: input.autoApproveDialog === undefined ? \'auto\'', 'followupTasks'])
       && hasAll(cliSource, ['case \'vibe\'', 'autoContinue: true', 'completionChecks', 'followupTasks'])
@@ -509,9 +509,9 @@ async function main() {
       && skillTestSource.includes('vibeWorkflow queues unattended follow-up workflow')
       && gatewayTestSource.includes('Gateway auto-continues reviewable workflow followups without human review')
       && gatewayTestSource.includes('Gateway resubmits completed-looking task when completion checks fail')
-  ) ? 'passed' : 'missing', 'Unattended vibe workflow is exposed across MCP/OpenClaw/CLI/Skill/Gateway with follow-ups, completion checks, auto-continue, and auto dialog approval.', {
+  ) ? 'passed' : 'missing', 'Unattended workflow is exposed across MCP/OpenClaw/CLI/Skill/Gateway with follow-ups, completion checks, auto-continue, and auto dialog approval.', {
     command: commandNames.includes('vibe_workflow'),
-    mcpTool: mcpToolNames.includes('vibe_workflow'),
+    mcpTool: mcpToolNames.includes('traecn_run_unattended_workflow'),
     openClawTool: openClawTools.includes('traecn_vibe_workflow'),
     delegateAsyncAccepts: asyncDelegateAccepts.filter(name => ['autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'forceBackground'].includes(name)),
     skillRegression: skillTestSource.includes('vibeWorkflow queues unattended follow-up workflow'),
@@ -526,16 +526,16 @@ async function main() {
       && hasAll(longQueueProofSource, ['proof_lock_acquired', 'proofLockEvidencePayload', 'stale_lock', 'lock_error'])
       && hasAll(longQueueProofSource, ['requestWithRetry', 'gateway_transient_retry', '--gateway-retry-attempts', '--gateway-retry-delay-ms'])
 	      && hasAll(commandNames, ['long_queue_proof_start', 'long_queue_proof_status', 'long_queue_proof_cancel'])
-	      && hasAll(mcpToolNames, ['long_queue_proof_start', 'long_queue_proof_status', 'long_queue_proof_cancel'])
+	      && hasAll(mcpToolNames, ['traecn_start_long_queue_proof', 'traecn_get_long_queue_proof_status', 'traecn_cancel_long_queue_proof'])
 	      && hasAll(openClawTools, ['traecn_long_queue_proof_start', 'traecn_long_queue_proof_status', 'traecn_long_queue_proof_cancel'])
 	      && listCommands().find(command => command.command === 'long_queue_proof_start')?.optional?.includes('allowQuotaSpend')
-	      && MCP_TOOLS.find(tool => tool.name === 'long_queue_proof_start')?.inputSchema?.properties?.allowQuotaSpend
+	      && MCP_TOOLS.find(tool => tool.name === 'traecn_start_long_queue_proof')?.inputSchema?.properties?.allowQuotaSpend
 	      && openClawManifest.tools.find(tool => tool.name === 'traecn_long_queue_proof_start')?.parameters?.properties?.allowQuotaSpend
 	      && hasAll(cliSource, ['proof status', 'buildProofCliArgs', 'long-queue-proof.js'])
   ) ? 'passed' : 'missing', 'A guarded GLM-5.2 long-queue proof runner exists, defaults to dry-run, and is exposed through MCP/OpenClaw/CLI.', {
     script: packageJsonScript('proof:long-queue') || null,
 	    commands: commandNames.filter(name => name.startsWith('long_queue_proof_')),
-	    mcpTools: mcpToolNames.filter(name => name.startsWith('long_queue_proof_')),
+	    mcpTools: mcpToolNames.filter(name => ['traecn_start_long_queue_proof', 'traecn_get_long_queue_proof_status', 'traecn_cancel_long_queue_proof'].includes(name)),
 	    openClawTools: openClawTools.filter(name => name.startsWith('traecn_long_queue_proof_')),
     cliProof: cliSource.includes('buildProofCliArgs'),
     duplicateProofGuard: longQueueProofSource.includes('alreadyRunning') && longQueueProofSource.includes('findProofScreens'),

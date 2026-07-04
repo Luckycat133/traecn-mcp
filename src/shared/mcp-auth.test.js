@@ -14,30 +14,30 @@ process.env.TRAECN_API_KEYS_ENABLED = '1';
 console.log('\n[mcp-auth.test.js] Running tests...\n');
 
 test('requiredPermissionFor returns read for read-only tools', () => {
-  assert.strictEqual(mcpAuth.requiredPermissionFor('check_status'), 'read');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('check_queue'), 'read');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('get_settings'), 'read');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_capabilities'), 'read');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('wait_task'), 'read');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('wait_task', { autoApproveDialog: 'auto' }), 'delegate');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_get_status'), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_get_queue_status'), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_get_settings'), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_get_capabilities'), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_wait_task'), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_wait_task', { autoApproveDialog: 'auto' }), 'delegate');
 });
 
 test('requiredPermissionFor returns write for state-changing non-task tools', () => {
-  assert.strictEqual(mcpAuth.requiredPermissionFor('switch_model'), 'write');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('switch_mode'), 'write');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('new_chat'), 'write');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_switch_model'), 'write');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_switch_mode'), 'write');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_create_chat'), 'write');
 });
 
 test('requiredPermissionFor returns delegate for task-running tools', () => {
-  assert.strictEqual(mcpAuth.requiredPermissionFor('run_task'), 'delegate');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('queue_task'), 'delegate');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('review_code'), 'delegate');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('open_project'), 'delegate');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('approve_dialog'), 'delegate');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_run_task'), 'delegate');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_queue_task'), 'delegate');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_review_code'), 'delegate');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_open_project'), 'delegate');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_respond_dialog'), 'delegate');
 });
 
 test('requiredPermissionFor returns admin for set_setting', () => {
-  assert.strictEqual(mcpAuth.requiredPermissionFor('set_setting'), 'admin');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_set_setting'), 'admin');
 });
 
 test('resolveCommandPermission treats read-prefixed commands as read', () => {
@@ -52,21 +52,21 @@ test('resolveCommandPermission defaults to delegate for unknown commands', () =>
   assert.strictEqual(mcpAuth.resolveCommandPermission('open_project'), 'delegate');
 });
 
-test('requiredPermissionFor on traecn_command infers from the command argument', () => {
-  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', { command: 'check_status' }), 'read');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', { command: 'wait_task' }), 'read');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', {
+test('requiredPermissionFor on traecn_run_command infers from the command argument', () => {
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_run_command', { command: 'check_status' }), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_run_command', { command: 'wait_task' }), 'read');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_run_command', {
     command: 'wait_task',
     params: { autoApproveDialog: 'auto' }
   }), 'delegate');
-  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_command', { command: 'approve_dialog' }), 'delegate');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_run_command', { command: 'approve_dialog' }), 'delegate');
 });
 
 test('authorizeTool allows all calls when auth layer is disabled', () => {
   const decision = mcpAuth.authorizeTool({
     apiKeyManager: { enabled: false },
     keyId: null,
-    toolName: 'run_task',
+    toolName: 'traecn_run_task',
     args: {}
   });
   assert.strictEqual(decision.ok, true);
@@ -77,7 +77,7 @@ test('authorizeTool allows all calls when apiKeyManager is null', () => {
   const decision = mcpAuth.authorizeTool({
     apiKeyManager: null,
     keyId: null,
-    toolName: 'run_task',
+    toolName: 'traecn_run_task',
     args: {}
   });
   assert.strictEqual(decision.ok, true);
@@ -88,7 +88,7 @@ test('authorizeTool rejects missing keyId when auth is enabled', () => {
   const decision = mcpAuth.authorizeTool({
     apiKeyManager: manager,
     keyId: null,
-    toolName: 'run_task',
+    toolName: 'traecn_run_task',
     args: {}
   });
   assert.strictEqual(decision.ok, false);
@@ -102,7 +102,7 @@ test('authorizeTool rejects when key lacks the required permission', () => {
   const decision = mcpAuth.authorizeTool({
     apiKeyManager: manager,
     keyId,
-    toolName: 'run_task',
+    toolName: 'traecn_run_task',
     args: {}
   });
   assert.strictEqual(decision.ok, false);
@@ -116,7 +116,7 @@ test('authorizeTool accepts read key on read tool', () => {
   const decision = mcpAuth.authorizeTool({
     apiKeyManager: manager,
     keyId,
-    toolName: 'check_status',
+    toolName: 'traecn_get_status',
     args: {}
   });
   assert.strictEqual(decision.ok, true);
@@ -127,7 +127,7 @@ test('authorizeTool accepts read key on read tool', () => {
 test('authorizeTool accepts admin key on any tool', () => {
   const manager = new ApiKeyManager({ enabled: true });
   const { keyId } = manager.createKey({ name: 'root', permissions: ['admin'] });
-  for (const tool of ['check_status', 'switch_model', 'run_task', 'set_setting']) {
+  for (const tool of ['traecn_get_status', 'traecn_switch_model', 'traecn_run_task', 'traecn_set_setting']) {
     const decision = mcpAuth.authorizeTool({
       apiKeyManager: manager,
       keyId,
@@ -138,14 +138,14 @@ test('authorizeTool accepts admin key on any tool', () => {
   }
 });
 
-test('authorizeTool resolves traecn_command permission from arguments', () => {
+test('authorizeTool resolves traecn_run_command permission from arguments', () => {
   const manager = new ApiKeyManager({ enabled: true });
   const { keyId } = manager.createKey({ name: 'writer', permissions: ['read', 'write'] });
   // read+write is enough for a read-prefixed command (and write commands).
   const ok = mcpAuth.authorizeTool({
     apiKeyManager: manager,
     keyId,
-    toolName: 'traecn_command',
+    toolName: 'traecn_run_command',
     args: { command: 'check_status' }
   });
   assert.strictEqual(ok.ok, true);
@@ -154,7 +154,7 @@ test('authorizeTool resolves traecn_command permission from arguments', () => {
   const denied = mcpAuth.authorizeTool({
     apiKeyManager: manager,
     keyId,
-    toolName: 'traecn_command',
+    toolName: 'traecn_run_command',
     args: { command: 'open_project' }
   });
   assert.strictEqual(denied.ok, false);
