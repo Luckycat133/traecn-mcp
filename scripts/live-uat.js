@@ -59,7 +59,9 @@ function request(port, method, route, body = null, token = '', timeoutMs = 20000
         let data = responseBody;
         try {
           data = responseBody ? JSON.parse(responseBody) : {};
-        } catch {}
+        } catch {
+          // Keep raw text for non-JSON responses.
+        }
         resolve({ status: res.statusCode, data });
       });
     });

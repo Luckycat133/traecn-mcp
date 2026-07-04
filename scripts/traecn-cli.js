@@ -539,7 +539,9 @@ function acquireCleanupWatchLock(options = {}) {
   if (existing && (!isPidRunning(existing.pid) || options.replace === true || existing.error)) {
     try {
       fs.unlinkSync(lockFile);
-    } catch {}
+    } catch {
+      // Best-effort stale lock cleanup.
+    }
   }
 
   const payload = {
@@ -562,7 +564,9 @@ function acquireCleanupWatchLock(options = {}) {
       if (current && current.pid === process.pid) {
         try {
           fs.unlinkSync(lockFile);
-        } catch {}
+        } catch {
+          // Best-effort lock release.
+        }
       }
     };
     return {
@@ -1180,7 +1184,9 @@ async function cmdCleanupQueue(args) {
       if (existingLock && (replace === true || existingLock.error || !isPidRunning(existingLock.pid))) {
         try {
           fs.unlinkSync(cleanupLockFile);
-        } catch {}
+        } catch {
+          // Best-effort stale lock cleanup.
+        }
       }
       for (const filePath of [detached.logFile, detached.finalFile, detached.stderrFile]) {
         if (filePath) fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -1540,7 +1546,7 @@ async function cmdBatch(args) {
         console.log(color('dim', `Status: ${result.data.status}`));
 
         let completed = 0;
-        let total = tasks.length;
+        const total = tasks.length;
 
         while (true) {
           await new Promise(r => setTimeout(r, 1000));

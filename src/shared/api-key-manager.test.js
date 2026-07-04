@@ -218,6 +218,36 @@ test('ApiKeyManager IP whitelist - null allows all', () => {
   assert.ok(manager.checkIPWhitelist('192.168.1.1'), 'All IPs should be allowed when whitelist is null');
 });
 
+test('ApiKeyManager IP whitelist supports CIDR ranges', () => {
+  const manager = new ApiKeyManager({
+    enabled: true,
+    allowedIPs: [{ type: 'cidr', value: '192.168.1.0/24' }]
+  });
+
+  assert.strictEqual(manager.checkIPWhitelist('192.168.1.42'), true);
+  assert.strictEqual(manager.checkIPWhitelist('192.168.2.42'), false);
+});
+
+test('ApiKeyManager IP whitelist rejects invalid CIDR without throwing', () => {
+  const manager = new ApiKeyManager({
+    enabled: true,
+    allowedIPs: [{ type: 'cidr', value: '192.168.1.0/not-a-mask' }]
+  });
+
+  assert.doesNotThrow(() => manager.checkIPWhitelist('192.168.1.42'));
+  assert.strictEqual(manager.checkIPWhitelist('192.168.1.42'), false);
+});
+
+test('ApiKeyManager IP whitelist rejects malformed IPv4 values', () => {
+  const manager = new ApiKeyManager({
+    enabled: true,
+    allowedIPs: [{ type: 'cidr', value: '192.168.1.0/24' }]
+  });
+
+  assert.strictEqual(manager.checkIPWhitelist('192.168.1.bad'), false);
+  assert.strictEqual(manager.checkIPWhitelist('999.168.1.1'), false);
+});
+
 test('ApiKeyManager verifySignature validates correctly', () => {
   const manager = new ApiKeyManager({ enabled: true, signatureSecret: 'test-secret' });
   const timestamp = Date.now().toString();

@@ -1,6 +1,7 @@
 'use strict';
 
 const { parseBody } = require('../request-gate');
+const { sanitizeLog } = require('../../shared/utils');
 
 /**
  * config handlers.
@@ -61,21 +62,12 @@ function handleGetConfig(req, res, ctx) {
   const config = ctx.configManager.getConfig();
   const auditLog = ctx.configManager.getAuditLog();
   ctx._json(req, res, {
-    config,
-    auditLog: auditLog.slice(-10)
+    config: sanitizeLog(config),
+    auditLog: sanitizeLog(auditLog.slice(-10))
   });
 }
 function handleGetConfigSchema(req, res, ctx) {
   const schema = ctx.configManager.getSchema();
-  const diff = (prev, curr) => {
-    const result = {};
-    for (const key of Object.keys(schema)) {
-      if (JSON.stringify(prev[key]) !== JSON.stringify(curr[key])) {
-        result[key] = { previous: prev[key], current: curr[key] };
-      }
-    }
-    return result;
-  };
   ctx._json(req, res, {
     schema,
     defaults: {
@@ -100,7 +92,7 @@ async function handleUpdateConfig(req, res, ctx) {
   const body = await parseBody(req);
   try {
     const result = ctx.configManager.update(body);
-    ctx._json(req, res, result);
+    ctx._json(req, res, sanitizeLog(result));
   } catch (err) {
     if (err.name === 'ConfigValidationError') {
       ctx._json(req, res, {
@@ -115,7 +107,7 @@ async function handleUpdateConfig(req, res, ctx) {
 }
 async function handleResetConfig(req, res, ctx) {
   const result = ctx.configManager.reset();
-  ctx._json(req, res, result);
+  ctx._json(req, res, sanitizeLog(result));
 }
 function handleConfigDiff(req, res, ctx) {
   const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
@@ -149,8 +141,8 @@ function handleConfigDiff(req, res, ctx) {
   const diff = ctx.configManager.getDiff(previousConfig);
   const history = ctx.configManager.getHistory();
   ctx._json(req, res, {
-    diff,
-    history: history.slice(-20)
+    diff: sanitizeLog(diff),
+    history: sanitizeLog(history.slice(-20))
   });
 }
 

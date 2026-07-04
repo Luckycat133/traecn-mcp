@@ -85,7 +85,7 @@ function extractFinalAssistantResultText(text) {
 }
 
 function cleanAssistantResultText(text) {
-  let value = extractFinalAssistantResultText(text);
+  const value = extractFinalAssistantResultText(text);
   if (!value) return '';
   return value
     .replace(/^(Agent|Assistant)\s*(Thought|思考过程)\s*/i, '')

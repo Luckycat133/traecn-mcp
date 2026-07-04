@@ -29,7 +29,9 @@ class SnapshotDriver {
   async _ensureDir() {
     try {
       await fs.mkdir(this.screenshotDir, { recursive: true });
-    } catch {}
+    } catch {
+      // Screenshot capture will report the filesystem error if writing fails.
+    }
   }
 
   /**

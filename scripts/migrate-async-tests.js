@@ -131,7 +131,7 @@ if (!targets.length) {
 for (const file of targets) {
   const absFile = path.resolve(file);
   const rel = path.relative(ROOT, absFile);
-  let text = fs.readFileSync(absFile, 'utf8');
+  const text = fs.readFileSync(absFile, 'utf8');
 
   if (text.includes('createRunner')) {
     console.log(`SKIP (already migrated): ${rel}`);

@@ -39,17 +39,20 @@ class ApiKeyManager {
   _ipToBuffer(ip) {
     const parts = ip.split('.');
     if (parts.length !== 4) return null;
-    return Buffer.from(parts.map(p => parseInt(p, 10)));
+    const octets = parts.map(p => Number(p));
+    if (octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+      return null;
+    }
+    return Buffer.from(octets);
   }
 
   _cidrToRange(cidr) {
     const [ip, bitsStr] = cidr.split('/');
-    const bits = parseInt(bitsStr, 10);
+    let bits = Number(bitsStr);
     const ipBuffer = this._ipToBuffer(ip);
-    if (!ipBuffer) return null;
+    if (!ipBuffer || !Number.isInteger(bits) || bits < 0 || bits > 32) return null;
 
     const mask = Buffer.alloc(4);
-    const hostBits = 32 - bits;
     for (let i = 0; i < 4; i++) {
       mask[i] = bits >= 8 ? 0xFF : (bits > 0 ? (0xFF << (8 - bits)) & 0xFF : 0);
       bits = Math.max(0, bits - 8);

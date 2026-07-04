@@ -65,7 +65,13 @@ test('handlers: combined ROUTES slice matches the central route-table', () => {
   for (const route of composed) {
     const found = CENTRAL_ROUTES.find(r => r.method === route.method && r.path === route.path);
     assert.ok(found, `route ${route.method} ${route.path} not registered in route-table.js`);
-    assert.strictEqual(found.handler, route.handler);
+    for (const field of ['handler', 'requiresAuth', 'requiresRateLimit', 'requiresBody', 'debugOnly']) {
+      assert.deepStrictEqual(
+        found[field],
+        route[field],
+        `route ${route.method} ${route.path} field ${field} differs from route-table.js`
+      );
+    }
   }
 });
 
@@ -111,6 +117,56 @@ asyncTest('handleDelegateAsync rejects "wait for Trae queue" with 400', async ()
   await handleDelegateAsync(req, res, ctx);
   assert.strictEqual(res.status, 400);
   assert.strictEqual(res.body.error, 'generic_queue_probe_task_rejected');
+});
+
+asyncTest('handleDelegateAsync with chatId sends OpenClaw notification', async () => {
+  const originalFetch = global.fetch;
+  let capturedNotification = null;
+  global.fetch = async (url, options) => {
+    capturedNotification = { url, body: JSON.parse(options.body) };
+    return { ok: true, text: async () => '' };
+  };
+
+  const req = jsonReq({ task: 'say hello', chatId: 'chat-123' });
+  const res = {};
+  const timeoutIds = new Set();
+  const ctx = {
+    ...fakeCtx(),
+    _normalizeFallbackModels: () => [],
+    _modelProbeIntervalMs: () => 60000,
+    _ensureConnection: async () => {},
+    _taskWithProjectContext: task => task,
+    _setTimeout: (cb, delay) => {
+      const id = setTimeout(cb, delay);
+      timeoutIds.add(id);
+      return id;
+    },
+    _clearTimeout: id => {
+      clearTimeout(id);
+      timeoutIds.delete(id);
+    },
+    _isSuccessfulResult: result => result && result.stable === true,
+    _normalizeFollowupTasks: () => [],
+    _storeIdempotency: () => {},
+    driver: {
+      checkQueueStatus: async () => ({ queued: false, running: false, canSubmit: true }),
+      delegate: async () => ({ text: 'hello from Trae', stable: true, elapsedMs: 12 })
+    }
+  };
+
+  try {
+    req.headers = {};
+    await handleDelegateAsync(req, res, ctx);
+  } finally {
+    global.fetch = originalFetch;
+    for (const id of timeoutIds) clearTimeout(id);
+  }
+
+  assert.strictEqual(res.status, undefined);
+  assert.strictEqual(res.body.status, 'done');
+  assert.ok(capturedNotification, 'expected OpenClaw notification');
+  assert.strictEqual(capturedNotification.body.chatId, 'chat-123');
+  assert.ok(capturedNotification.body.text.includes('hello from Trae'));
 });
 
 asyncTest('handleSubmitSoloChatTask rejects "Wait for Trae Queue 进行中 17:34" with 400', async () => {

@@ -1,6 +1,8 @@
 'use strict';
 
 const { parseBody } = require('../request-gate');
+const { buildConfirmationPlan } = require('../../shared/operation-confirmation');
+const { listCommands } = require('../../../integrations/openclaw-traecn-plugin/lib/command-set');
 
 /**
  * preflight handlers.

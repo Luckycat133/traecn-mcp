@@ -454,7 +454,7 @@ const toolDefinitions = [
       }
 
       // Try sync first (fast path when model is ready)
-      let result = await client.delegate(params.task, {
+      const result = await client.delegate(params.task, {
         projectPath: params.projectPath,
         sessionId: params.sessionId,
         allowAutoStart: params.allowAutoStart,

@@ -237,7 +237,7 @@ class ModelManager {
 
     let openResult = 'not attempted';
     for (let retry = 0; retry < 3; retry++) {
-      var itemsNow = await this.client.send('Runtime.evaluate', {
+      const itemsNow = await this.client.send('Runtime.evaluate', {
         expression: `
           (function() {
             var all = Array.from(document.querySelectorAll('.chat-modelPicker-item,.icube-model-select-portal-model-item,[role="option"],[class*="modelPicker"],[class*="model-picker"],[class*="model-item"],[class*="model"][class*="item"]'));
@@ -249,7 +249,7 @@ class ModelManager {
         `,
         returnByValue: true
       });
-      var count = itemsNow.result?.value || 0;
+      const count = itemsNow.result?.value || 0;
       if (count > 0) break;
 
       const clicked = await this.client.send('Runtime.evaluate', {

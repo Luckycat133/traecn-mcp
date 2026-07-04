@@ -1,5 +1,6 @@
 'use strict';
 
+const packageInfo = require('../../../package.json');
 const { parseBody } = require('../request-gate');
 
 /**

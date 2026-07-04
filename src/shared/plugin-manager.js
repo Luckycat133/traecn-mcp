@@ -242,6 +242,7 @@ class PluginManager {
       try {
         delete require.cache[require.resolve('../../plugins/' + name)];
       } catch {
+        // Plugin may not have been resolved before this load pass.
       }
 
       const plugin = module.default || module;

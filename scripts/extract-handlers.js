@@ -70,7 +70,7 @@ function findHandlerRange(lines, name) {
 
 function transformBody(text) {
   // Rename the method and rewrite `this.` to `ctx.`. Detect async.
-  const isAsync = /^  async /.test(text);
+  const isAsync = /^ {2}async /.test(text);
   // Strip the leading 2-space indent on every line.
   let out = text.split('\n').map(l => l.startsWith('  ') ? l.slice(2) : l).join('\n');
   // Replace `_handleFoo(req, res)` with `function handleFoo(req, res, ctx)`.
@@ -153,7 +153,7 @@ function main() {
     // We capture the param list as text, then call the module function with
     // (req, res, this, ...pathParams).
     const sig = lines[r.start];
-    const isAsync = /^  async /.test(sig);
+    const isAsync = /^ {2}async /.test(sig);
     const paramListMatch = sig.match(/\(([^)]*)\)/);
     const rawParams = paramListMatch ? paramListMatch[1].trim() : 'req, res';
     // Split off the leading "req, res" — anything after is path-params.

@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const secretVault = require('./secret-vault');
+const { sanitizeLog } = require('./utils');
 
 const LOG_LEVELS = ['error', 'warn', 'info', 'debug', 'trace'];
 
@@ -623,11 +624,12 @@ class ConfigManager extends EventEmitter {
   }
 
   _logAudit(action, changes, source = 'api') {
+    const sanitizedChanges = sanitizeLog(changes);
     const entry = {
       id: ++this._auditId,
       timestamp: new Date().toISOString(),
       action,
-      changes,
+      changes: sanitizedChanges,
       source,
       hash: crypto.randomBytes(8).toString('hex')
     };
@@ -637,7 +639,7 @@ class ConfigManager extends EventEmitter {
       this._auditLog.shift();
     }
 
-    console.log(`[ConfigManager] Audit: ${action}`, JSON.stringify(changes));
+    console.log(`[ConfigManager] Audit: ${action}`, JSON.stringify(sanitizedChanges));
   }
 
   update(updates, source = 'api') {
