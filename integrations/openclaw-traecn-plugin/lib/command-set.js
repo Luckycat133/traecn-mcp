@@ -412,13 +412,17 @@ function parseProofJson(stdout, stderr) {
     if (!text) continue;
     try {
       return JSON.parse(text);
-    } catch {}
+    } catch {
+      // Try extracting the JSON object from mixed stdout/stderr below.
+    }
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
     if (start !== -1 && end > start) {
       try {
         return JSON.parse(text.slice(start, end + 1));
-      } catch {}
+      } catch {
+        // Ignore malformed embedded JSON and continue with the next stream.
+      }
     }
   }
   return null;
@@ -508,7 +512,9 @@ async function executeCommand(client, command, params = {}) {
         try {
           const response = await client.getCapabilities();
           if (response.status >= 200 && response.status < 300) return response;
-        } catch {}
+        } catch {
+          // Fall back to local static capabilities.
+        }
       }
       return { status: 200, data: buildCapabilities({ commands: listCommands() }) };
     case COMMANDS.PREFLIGHT:
@@ -533,7 +539,9 @@ async function executeCommand(client, command, params = {}) {
             forceConfirm: params.forceConfirm === true
           });
           if (response.status >= 200 && response.status < 300) return response;
-        } catch {}
+        } catch {
+          // Fall back to local confirmation plan generation.
+        }
       }
       return { status: 200, data: buildConfirmationPlan(params) };
     case COMMANDS.RESTART_TRAE_DEBUG:

@@ -197,73 +197,63 @@ class Gateway {
 
   _applyConfigChanges(changes) {
     const config = this.configManager.getConfig();
+    const fullRefresh = Boolean(changes && (changes['*'] || (changes.previous && changes.next)));
+    const changed = (section) => fullRefresh || Boolean(changes && changes[section]);
 
     // Rate limit — rebuild the limiter with new values.
-    if (changes.rateLimit) {
+    if (changed('rateLimit')) {
       this.rateLimiter = new RateLimiter(config.rateLimit.windowMs, config.rateLimit.maxRequests);
     }
 
     // CORS
-    if (changes.cors) {
+    if (changed('cors')) {
       this.allowedOrigins = config.cors.allowedOrigins;
     }
 
     // Server auth
-    if (changes.server) {
-      if (changes.server.token !== undefined) {
-        this.token = config.server.token;
-      }
-      if (changes.server.authHeader !== undefined) {
-        this.authHeader = config.server.authHeader;
-      }
+    if (changed('server')) {
+      this.token = config.server.token;
+      this.authHeader = config.server.authHeader;
     }
 
     // Trae control
-    if (changes.traeControl) {
-      if (changes.traeControl.autoStart !== undefined) {
-        this.autoStartTrae = config.traeControl.autoStart;
-        this.traeControl.autoStartTrae = config.traeControl.autoStart;
-      }
-      if (changes.traeControl.recoveryCooldownMs !== undefined) {
-        this.traeRecoveryCooldownMs = config.traeControl.recoveryCooldownMs;
-        this.traeControl.recoveryCooldownMs = config.traeControl.recoveryCooldownMs;
-      }
-      if (changes.traeControl.recoveryWaitMs !== undefined) {
-        this.traeRecoveryWaitMs = config.traeControl.recoveryWaitMs;
-        this.traeControl.recoveryWaitMs = config.traeControl.recoveryWaitMs;
-      }
+    if (changed('traeControl')) {
+      this.autoStartTrae = config.traeControl.autoStart;
+      this.traeControl.autoStartTrae = config.traeControl.autoStart;
+      this.traeRecoveryCooldownMs = config.traeControl.recoveryCooldownMs;
+      this.traeControl.recoveryCooldownMs = config.traeControl.recoveryCooldownMs;
+      this.traeRecoveryWaitMs = config.traeControl.recoveryWaitMs;
+      this.traeControl.recoveryWaitMs = config.traeControl.recoveryWaitMs;
     }
 
     // Auto recover
-    if (changes.autoRecover) {
-      if (changes.autoRecover.enabled !== undefined) {
-        this.autoRecover = config.autoRecover.enabled;
-        this.healthWatcher.enabled = config.autoRecover.enabled;
-      }
-      if (changes.autoRecover.probeIntervalMs !== undefined) {
-        this.autoRecoverProbeMs = config.autoRecover.probeIntervalMs;
-        this.healthWatcher.probeIntervalMs = config.autoRecover.probeIntervalMs;
-      }
-      if (changes.autoRecover.maxRecoveries !== undefined) {
-        this.autoRecoverMax = config.autoRecover.maxRecoveries;
-        this.healthWatcher.maxRecoveries = config.autoRecover.maxRecoveries;
-      }
-      if (changes.autoRecover.probeTimeoutMs !== undefined) {
-        this.autoRecoverProbeTimeoutMs = config.autoRecover.probeTimeoutMs;
-        this.healthWatcher.probeTimeoutMs = config.autoRecover.probeTimeoutMs;
-      }
+    if (changed('autoRecover')) {
+      this.autoRecover = config.autoRecover.enabled;
+      this.healthWatcher.enabled = config.autoRecover.enabled;
+      this.autoRecoverProbeMs = config.autoRecover.probeIntervalMs;
+      this.healthWatcher.probeIntervalMs = config.autoRecover.probeIntervalMs;
+      this.autoRecoverMax = config.autoRecover.maxRecoveries;
+      this.healthWatcher.maxRecoveries = config.autoRecover.maxRecoveries;
+      this.autoRecoverProbeTimeoutMs = config.autoRecover.probeTimeoutMs;
+      this.healthWatcher.probeTimeoutMs = config.autoRecover.probeTimeoutMs;
     }
 
     // Feature flags
-    if (changes.features) {
-      if (changes.features.debugEndpoints !== undefined) {
-        this.debugEndpoints = config.features.debugEndpoints;
-      }
-      if (changes.features.mockBridge !== undefined) {
-        this.mockBridge = config.features.mockBridge;
-      }
-      if (changes.features.enforceOperationConfirmation !== undefined) {
-        this.enforceOperationConfirmation = config.features.enforceOperationConfirmation;
+    if (changed('features')) {
+      this.debugEndpoints = config.features.debugEndpoints;
+      this.mockBridge = config.features.mockBridge;
+      this.enforceOperationConfirmation = config.features.enforceOperationConfirmation;
+    }
+
+    if (changed('queue')) {
+      const nextPath = this._resolveActiveQueuePersistencePath(config.queue.persistencePath);
+      if (nextPath !== this.activeQueuePersistencePath) {
+        this._persistActiveQueue();
+        this.activeQueuePersistencePath = nextPath;
+        this.taskQueueService.persistencePath = nextPath;
+        if (this.taskQueueService.recoveryHelper) {
+          this.taskQueueService.recoveryHelper.persistencePath = nextPath;
+        }
       }
     }
   }
@@ -420,11 +410,6 @@ class Gateway {
     } catch (err) {
       console.error('[QueuePersistence] Failed to restore active queue:', err.message);
     }
-  }
-
-  _clearInterval(timer) {
-    clearInterval(timer);
-    this.activeTimers.delete(timer);
   }
 
   async _attemptTraeRecovery(reason) {
@@ -1656,8 +1641,8 @@ class Gateway {
 
     // Single-source-of-truth route lookup. Public endpoints (requiresAuth: false)
     // are dispatched before the auth check to preserve the pre-refactor behavior
-    // where /api/status, /api/capabilities, /api/config*, /, /openapi.json,
-    // /metrics, and /metrics.json were served without authentication.
+    // where public endpoints such as /api/status, /api/capabilities, /,
+    // /openapi.json, /metrics, and /metrics.json bypassed authentication.
     const match = matchRoute(method, pathname);
     if (!match) {
       this._finishRequestLog(req, res, 404);
@@ -2023,22 +2008,13 @@ class Gateway {
     const config = this.configManager.getConfig();
     const auditLog = this.configManager.getAuditLog();
     this._json(req, res, {
-      config,
-      auditLog: auditLog.slice(-10)
+      config: sanitizeLog(config),
+      auditLog: sanitizeLog(auditLog.slice(-10))
     });
   }
 
   _handleGetConfigSchema(req, res) {
     const schema = this.configManager.getSchema();
-    const diff = (prev, curr) => {
-      const result = {};
-      for (const key of Object.keys(schema)) {
-        if (JSON.stringify(prev[key]) !== JSON.stringify(curr[key])) {
-          result[key] = { previous: prev[key], current: curr[key] };
-        }
-      }
-      return result;
-    };
     this._json(req, res, {
       schema,
       defaults: {
@@ -2064,7 +2040,7 @@ class Gateway {
     const body = await parseBody(req);
     try {
       const result = this.configManager.update(body);
-      this._json(req, res, result);
+      this._json(req, res, sanitizeLog(result));
     } catch (err) {
       if (err.name === 'ConfigValidationError') {
         this._json(req, res, {
@@ -2080,7 +2056,7 @@ class Gateway {
 
   async _handleResetConfig(req, res) {
     const result = this.configManager.reset();
-    this._json(req, res, result);
+    this._json(req, res, sanitizeLog(result));
   }
 
   _handleConfigDiff(req, res) {
@@ -2115,8 +2091,8 @@ class Gateway {
     const diff = this.configManager.getDiff(previousConfig);
     const history = this.configManager.getHistory();
     this._json(req, res, {
-      diff,
-      history: history.slice(-20)
+      diff: sanitizeLog(diff),
+      history: sanitizeLog(history.slice(-20))
     });
   }
 

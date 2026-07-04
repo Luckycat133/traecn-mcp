@@ -276,12 +276,12 @@ async function delegate(driver, task, options = {}) {
   //            These are understood by the SOLO agent task system.
   // IDE mode:  Trae CN IDE chat has no native /slash commands;
   //            translate mode to a natural language directive instead.
-  var effectiveTask = task;
+  let effectiveTask = task;
   if (options.mode) {
-    var modeRaw = options.mode.startsWith('/') ? options.mode.slice(1) : options.mode;
+    const modeRaw = options.mode.startsWith('/') ? options.mode.slice(1) : options.mode;
     if (isIdeMode) {
       // IDE mode: use natural language prelude instead of /slash
-      var modeHints = {
+      const modeHints = {
         plan: '请先制定详细的实施方案和计划，然后逐步执行：',
         spec: '请编写详细的技术规格说明和设计方案：',
         review: '请审查以下内容，指出问题、风险和改进建议：',
@@ -289,7 +289,7 @@ async function delegate(driver, task, options = {}) {
         test: '请编写全面的单元测试覆盖以下功能：',
         explain: '请解释以下代码的工作原理和各部分作用：'
       };
-      var hint = modeHints[modeRaw];
+      const hint = modeHints[modeRaw];
       effectiveTask = hint ? (hint + ' ' + task) : task;
     } else {
       // SOLO mode: keep native /slash command

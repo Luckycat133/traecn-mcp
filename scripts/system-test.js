@@ -31,7 +31,9 @@ function request(port, method, path, body = null, headers = {}) {
         let data = responseBody;
         try {
           data = responseBody ? JSON.parse(responseBody) : {};
-        } catch {}
+        } catch {
+          // Keep raw text for non-JSON responses.
+        }
         resolve({ status: res.statusCode, headers: res.headers, data });
       });
     });

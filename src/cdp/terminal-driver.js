@@ -165,10 +165,9 @@ class TerminalDriver {
     if (!this.palette && !title) {
       throw new TraeCNAutomationError('title required', 'INVALID_INPUT', {});
     }
-    const safe = safeJsValue(title);
     const action = await evaluate(
       this.client,
-      '(title) => { const tabs = document.querySelectorAll("[class*=\"terminal-tab\"]"); for (const t of tabs) { const tabTitle = t.title || t.getAttribute("aria-label") || (t.innerText || "").trim(); if (tabTitle === title) { t.click(); return "clicked: " + tabTitle; } } return "not found"; }',
+      '(title) => { const tabs = document.querySelectorAll(\'[class*="terminal-tab"]\'); for (const t of tabs) { const tabTitle = t.title || t.getAttribute("aria-label") || (t.innerText || "").trim(); if (tabTitle === title) { t.click(); return "clicked: " + tabTitle; } } return "not found"; }',
       [title]
     );
     return { ok: action !== 'not found', action };
@@ -192,7 +191,6 @@ class TerminalDriver {
         return false;
       }`
     );
-    return !!r.result.value;
   }
 }
 

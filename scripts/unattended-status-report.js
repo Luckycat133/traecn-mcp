@@ -195,7 +195,9 @@ function gatewayRequest(options, method, route, body = null, timeoutMs = DEFAULT
         let data = responseBody;
         try {
           data = responseBody ? JSON.parse(responseBody) : {};
-        } catch {}
+        } catch {
+          // Keep raw text for non-JSON responses.
+        }
         resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, data });
       });
     });

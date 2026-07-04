@@ -67,13 +67,23 @@ function escapeJsString(str) {
 function safeJsValue(value) {
   try {
     if (typeof value === 'undefined') return 'undefined';
-    if (typeof value === 'string' && /[<>\x00-\x1f]/.test(value)) return '';
+    if (typeof value === 'string' && hasUnsafeJsValueChars(value)) return '';
     const encoded = JSON.stringify(value);
     if (typeof encoded === 'undefined') return 'undefined';
     return encoded;
   } catch {
     return '';
   }
+}
+
+function hasUnsafeJsValueChars(value) {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (value[index] === '<' || value[index] === '>' || code <= 31) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function normalizeQueueProbeText(value) {

@@ -93,7 +93,7 @@ function extractFinalAssistantResultText(text) {
 }
 
 function cleanAssistantResultText(text) {
-  let value = extractFinalAssistantResultText(text);
+  const value = extractFinalAssistantResultText(text);
   if (!value) return '';
   return value
     .replace(/^(Agent|Assistant)\s*(Thought|思考过程)\s*/i, '')
@@ -287,7 +287,7 @@ async function collectResponse(driver) {
   const truncationTimeout = 20000;
   let hasCheckedInitialSnapshot = false;
 
-  let streamingBuffer = [];
+  const streamingBuffer = [];
   let streamingGrowthFrames = 0;
   const STREAMING_GROWTH_THRESHOLD = 3;
 
@@ -327,7 +327,9 @@ async function collectResponse(driver) {
     try {
       driver.client.off('Log.entryAdded', () => {});
       driver.client.off('Runtime.consoleAPICalled', () => {});
-    } catch (_) {}
+    } catch {
+      // Listener cleanup is best-effort across CDP client implementations.
+    }
   };
 
   try {
@@ -465,8 +467,8 @@ async function collectResponse(driver) {
         }
       }
 
-      var queuePosition = null;
-      var queueMatch = currentText && currentText.match(/排在第\s*(\d+)\s*位/);
+      let queuePosition = null;
+      const queueMatch = currentText && currentText.match(/排在第\s*(\d+)\s*位/);
       if (queueMatch) queuePosition = parseInt(queueMatch[1], 10);
 
       const isQueued = currentText && (
@@ -481,10 +483,6 @@ async function collectResponse(driver) {
         if (!inQueueSince) inQueueSince = Date.now();
         // Wait indefinitely until queue clears - no timeout on queue
         // The point is to persist until the request goes through
-        if (false && Date.now() - inQueueSince > queueWaitTimeout) {
-          cleanup();
-          return { text: currentText, stable: false, elapsedMs: Date.now() - startTime, queued: true, queuePosition: queuePosition, queueElapsedMs: Date.now() - inQueueSince, timedOut: true };
-        }
         lastText = currentText; await sleep(queuePollInterval); continue;
       }
 

@@ -701,7 +701,11 @@ function startStdioServer() {
         })
         .catch(error => {
           let id = null;
-          try { id = JSON.parse(raw).id ?? null; } catch {}
+          try {
+            id = JSON.parse(raw).id ?? null;
+          } catch {
+            // Keep id=null when the request body itself is invalid JSON.
+          }
           writeMessage({ jsonrpc: '2.0', id, error: { code: -32000, message: error.message } });
         });
     }

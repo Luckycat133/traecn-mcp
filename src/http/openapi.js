@@ -130,6 +130,7 @@ function generateOpenAPISpec() {
         get: {
           summary: 'Read runtime gateway configuration',
           operationId: 'getConfig',
+          security: [{ bearerAuth: [] }],
           responses: {
             '200': { description: 'Current config and recent audit log' }
           }
@@ -139,6 +140,7 @@ function generateOpenAPISpec() {
         get: {
           summary: 'Read runtime configuration schema and defaults',
           operationId: 'getConfigSchema',
+          security: [{ bearerAuth: [] }],
           responses: {
             '200': { description: 'Config schema and default values' }
           }
@@ -148,6 +150,7 @@ function generateOpenAPISpec() {
         post: {
           summary: 'Update runtime gateway configuration',
           operationId: 'updateConfig',
+          security: [{ bearerAuth: [] }],
           requestBody: {
             content: {
               'application/json': {
@@ -165,6 +168,7 @@ function generateOpenAPISpec() {
         post: {
           summary: 'Reset runtime configuration to defaults',
           operationId: 'resetConfig',
+          security: [{ bearerAuth: [] }],
           responses: {
             '200': { description: 'Config reset result' }
           }
@@ -174,6 +178,7 @@ function generateOpenAPISpec() {
         get: {
           summary: 'Compare current config with defaults or a previous audit entry',
           operationId: 'getConfigDiff',
+          security: [{ bearerAuth: [] }],
           parameters: [
             { name: 'previous', in: 'query', required: false, schema: { type: 'string' } }
           ],

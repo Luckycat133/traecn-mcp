@@ -151,7 +151,9 @@ class FileDriver {
       let real = resolved;
       try {
         real = nodeFs.realpathSync.native(resolved);
-      } catch (_) {}
+      } catch {
+        // Non-existent roots are normalized as resolved paths.
+      }
       if (!normalized.includes(real)) normalized.push(real);
     }
     return normalized;
@@ -166,7 +168,9 @@ class FileDriver {
     if (this.fs && typeof this.fs.realpath === 'function') {
       try {
         return await this.fs.realpath(targetPath);
-      } catch (_) {}
+      } catch {
+        // Fall back to resolving the nearest existing parent.
+      }
     }
 
     let parent = this.path.dirname(targetPath);
@@ -175,7 +179,9 @@ class FileDriver {
         try {
           const realParent = await this.fs.realpath(parent);
           return this.path.join(realParent, this.path.relative(parent, targetPath));
-        } catch (_) {}
+        } catch {
+          // Keep walking upward until an existing parent resolves.
+        }
       }
       parent = this.path.dirname(parent);
     }

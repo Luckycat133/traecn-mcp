@@ -47,7 +47,9 @@ function isTraeCNRunning() {
       const result = execSync('tasklist /FI "IMAGENAME eq Trae CN.exe"', { encoding: 'utf-8' });
       return result.includes('Trae CN.exe');
     }
-  } catch {}
+  } catch {
+    // Process probes can fail when platform tools are unavailable.
+  }
   return false;
 }
 

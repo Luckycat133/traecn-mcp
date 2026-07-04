@@ -144,7 +144,9 @@ function request(method, route, body = null, timeoutMs = 8000) {
         let data = responseBody;
         try {
           data = responseBody ? JSON.parse(responseBody) : {};
-        } catch {}
+        } catch {
+          // Keep the raw response body when the gateway returns non-JSON text.
+        }
         resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, data });
       });
     });

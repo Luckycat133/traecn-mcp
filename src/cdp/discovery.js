@@ -205,7 +205,7 @@ function scoreTarget(target, titleKeywords) {
   // Slight bonus for titles that look like a real file tab: e.g.
   // "src/foo.js — myproject" or just "myproject". This pushes the IDE
   // workbench ahead of a generic "Trae CN" / "TraeCNClaw" target.
-  if (/[\w\/\\]+\.\w+/.test(title) || /^[\w.\-]+$/.test(title)) {
+  if (/[\w/\\]+\.\w+/.test(title) || /^[\w.-]+$/.test(title)) {
     score += 5;
   }
 

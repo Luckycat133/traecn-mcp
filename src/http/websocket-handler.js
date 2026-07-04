@@ -255,7 +255,7 @@ class WebSocketHandler {
         this._sendJson(ws, { type: 'pong', timestamp: Date.now() });
         this._setHeartbeat(ws);
         break;
-      case 'unsubscribe':
+      case 'unsubscribe': {
         clientInfo.subscribed = false;
         const subs = this.taskSubscriptions.get(taskId);
         if (subs) {
@@ -266,7 +266,8 @@ class WebSocketHandler {
         }
         this._sendJson(ws, { type: 'unsubscribed', taskId });
         break;
-      case 'getStatus':
+      }
+      case 'getStatus': {
         const task = this.gateway.taskQueue.get(taskId);
         if (task) {
           this._sendTaskUpdate(taskId, task);
@@ -278,6 +279,7 @@ class WebSocketHandler {
           });
         }
         break;
+      }
       default:
         this._sendJson(ws, { type: 'error', message: `Unknown message type: ${msg.type}` });
     }
@@ -448,6 +450,7 @@ class WebSocketHandler {
       try {
         ws.send(JSON.stringify(data));
       } catch {
+        // Ignore send failures for sockets closed between readyState and send.
       }
     }
   }
@@ -600,6 +603,7 @@ class WebSocketHandler {
       try {
         clientInfo.ws.close(1001, 'Server shutting down');
       } catch {
+        // Ignore sockets already closed by the peer.
       }
     }
 

@@ -45,7 +45,7 @@ async function main() {
 async function gracefulShutdown(signal) {
   console.log(`[TRAECNclaw] Received ${signal}, shutting down gracefully...`);
   
-  let forcedShutdownTimeout = setTimeout(() => {
+  const forcedShutdownTimeout = setTimeout(() => {
     console.error('[TRAECNclaw] Forced shutdown after timeout');
     process.exit(1);
   }, 10000);

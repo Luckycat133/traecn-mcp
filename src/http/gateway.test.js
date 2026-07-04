@@ -199,6 +199,81 @@ test('Gateway authenticates X-TraeCN-Token header', () => {
   assert.strictEqual(gateway._authenticate({ headers: { 'x-traecn-token': 'secret' } }), true);
 });
 
+asyncTest('Gateway protects /api/config routes when a token is configured', async () => {
+  const gateway = new Gateway();
+  gateway.token = 'secret';
+
+  const { req, res } = makeReqRes({}, '/api/config', 'GET');
+  await gateway.handleRequest(req, res);
+
+  assert.strictEqual(res.statusCode, 401);
+  assert.deepStrictEqual(JSON.parse(res._body), { error: 'Unauthorized' });
+});
+
+asyncTest('Gateway redacts config secrets in config responses and audit logs', async () => {
+  const gateway = new Gateway();
+  gateway.configManager.update({
+    server: { token: 'super-secret-token' },
+    secrets: { providerApiKey: 'sk-test-secret' }
+  }, 'test');
+
+  const { req, res } = makeReqRes({ authorization: 'Bearer super-secret-token' }, '/api/config', 'GET');
+  await gateway.handleRequest(req, res);
+
+  assert.strictEqual(res.statusCode, 200);
+  const payload = JSON.parse(res._body);
+  assert.strictEqual(payload.config.server.token, '[REDACTED]');
+  assert.strictEqual(payload.config.secrets, '[REDACTED]');
+  assert.ok(payload.auditLog.length > 0);
+  assert.strictEqual(payload.auditLog[payload.auditLog.length - 1].changes.server.next.token, '[REDACTED]');
+  assert.strictEqual(payload.auditLog[payload.auditLog.length - 1].changes.secrets, '[REDACTED]');
+});
+
+asyncTest('Gateway applies runtime server auth changes from ConfigManager section events', async () => {
+  const gateway = new Gateway();
+  gateway.token = 'old-secret';
+  gateway.authHeader = 'Authorization';
+
+  const { req, res } = makeReqRes(
+    { authorization: 'Bearer old-secret' },
+    '/api/config/update',
+    'POST',
+    { server: { token: 'new-secret', authHeader: 'X-New-Token' } }
+  );
+  await gateway.handleRequest(req, res);
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(gateway.token, 'new-secret');
+  assert.strictEqual(gateway.authHeader, 'X-New-Token');
+  const payload = JSON.parse(res._body);
+  assert.strictEqual(payload.config.server.token, '[REDACTED]');
+
+  const { req: oldReq, res: oldRes } = makeReqRes({ authorization: 'Bearer old-secret' }, '/api/status', 'GET');
+  await gateway.handleRequest(oldReq, oldRes);
+  assert.strictEqual(oldRes.statusCode, 200, 'status remains public');
+
+  const { req: protectedReq, res: protectedRes } = makeReqRes({ 'x-new-token': 'Bearer new-secret' }, '/api/config', 'GET');
+  await gateway.handleRequest(protectedReq, protectedRes);
+  assert.strictEqual(protectedRes.statusCode, 200);
+});
+
+test('Gateway applies full config reset events to runtime auth state', () => {
+  const gateway = new Gateway();
+  gateway.configManager.update({
+    server: { token: 'temporary-token', authHeader: 'X-Temporary-Token' },
+    features: { mockBridge: true }
+  }, 'test');
+  assert.strictEqual(gateway.token, 'temporary-token');
+  assert.strictEqual(gateway.authHeader, 'X-Temporary-Token');
+  assert.strictEqual(gateway.mockBridge, true);
+
+  gateway.configManager.reset();
+
+  assert.strictEqual(gateway.token, '');
+  assert.strictEqual(gateway.authHeader, 'Authorization');
+  assert.strictEqual(gateway.mockBridge, false);
+});
+
 test('Gateway honors documented HOST and PORT fallbacks', () => {
   const previousHost = process.env.HOST;
   const previousPort = process.env.PORT;
@@ -285,6 +360,7 @@ test('Gateway normalizes followup tasks from strings and objects', () => {
 test('Gateway creates queued task with review workflow metadata', () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1234, queueMaxWaitMs: 5678 } };
+  gateway._persistActiveQueue = () => {};
   gateway.taskHistoryStore = {
     createTask: () => 'task_test_1',
     recordStep: () => {}
@@ -309,6 +385,8 @@ test('Gateway creates queued task with review workflow metadata', () => {
 asyncTest('Gateway auto-continues reviewable workflow followups without human review', async () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1234 } };
+  gateway._persistActiveQueue = () => {};
+  gateway._ensureBackgroundPolling = () => {};
   gateway.taskHistoryStore = {
     createTask: (() => {
       let index = 0;
@@ -486,6 +564,7 @@ asyncTest('Gateway cleanup endpoint repeats passes for queue probes revealed aft
 
 asyncTest('Gateway keeps parallel queued session Solo results isolated when completion is out of order', async () => {
   const gateway = new Gateway();
+  gateway._persistActiveQueue = () => {};
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
   gateway._emitTaskNotification = async () => {};
   gateway.taskHistoryStore = {
@@ -543,6 +622,7 @@ asyncTest('Gateway keeps parallel queued session Solo results isolated when comp
 test('Gateway queued tasks wait indefinitely by default for external model queues', () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1234 } };
+  gateway._persistActiveQueue = () => {};
   gateway.taskHistoryStore = {
     createTask: () => 'task_wait_forever_1',
     recordStep: () => {}
@@ -1908,6 +1988,70 @@ asyncTest('Gateway restart-debug requires explicit confirmation before quitting 
   assert.strictEqual(responseData.plan.command, 'restart_trae_debug');
 });
 
+asyncTest('Gateway restart-debug confirmed branch uses restart dependencies and returns CDP surface', async () => {
+  const gateway = new Gateway();
+  const traeControl = require('./handlers/trae-control');
+  const previousPort = process.env.TRAECN_REMOTE_DEBUGGING_PORT;
+  let responseData = null;
+  let responseStatus = null;
+  let restartOptions = null;
+  let clientClosed = false;
+
+  gateway.client = {
+    close: async () => {
+      clientClosed = true;
+    }
+  };
+  gateway.driver = { stale: true };
+  gateway._json = (req, res, data, status = 200) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+
+  traeControl.setRestartDebugDepsForTest({
+    getQuickstartConfig: () => ({ remoteDebuggingPort: '17777' }),
+    getEnvWithFallback: () => '17777',
+    restartTraeCNWithDebug: async (options) => {
+      restartOptions = options;
+      return { ok: true, pid: 12345 };
+    },
+    discoverTarget: async () => ({ target: { id: 'target-1', type: 'page', url: 'http://127.0.0.1' } }),
+    describeCDPSurface: targets => ({ count: targets.length, primary: targets[0] })
+  });
+
+  try {
+    const req = new Readable({
+      read() {
+        this.push(JSON.stringify({
+          confirmationPhrase: 'restart-trae-cn-with-debug-existing-profile',
+          projectPath: '/tmp/project',
+          quitTimeoutMs: 10,
+          pollMs: 5,
+          cdpWaitMs: 1
+        }));
+        this.push(null);
+      }
+    });
+    req.headers = { 'content-type': 'application/json' };
+
+    await gateway._handleRestartTraeDebug(req, {});
+  } finally {
+    traeControl.setRestartDebugDepsForTest();
+    restoreEnv('TRAECN_REMOTE_DEBUGGING_PORT', previousPort);
+  }
+
+  assert.strictEqual(responseStatus, 200);
+  assert.strictEqual(responseData.ok, true);
+  assert.strictEqual(responseData.requestedPort, '17777');
+  assert.strictEqual(responseData.connected, true);
+  assert.deepStrictEqual(restartOptions, { projectPath: '/tmp/project', quitTimeoutMs: 10, pollMs: 5 });
+  assert.strictEqual(clientClosed, true);
+  assert.strictEqual(gateway.client, null);
+  assert.strictEqual(gateway.driver, null);
+  assert.strictEqual(responseData.surface.count, 1);
+});
+
 asyncTest('Gateway task status falls back to history for cleaned terminal tasks', async () => {
   const gateway = new Gateway();
   gateway.taskQueue.clear();
@@ -2458,6 +2602,7 @@ asyncTest('Gateway sync delegate keeps collecting incomplete review output in ba
 asyncTest('Gateway keeps collecting echoed task text instead of marking it done', async () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
+  gateway._persistActiveQueue = () => {};
   gateway.taskHistoryStore = {
     createTask: () => 'task_echo_guard',
     recordStep: () => {},
@@ -2486,6 +2631,7 @@ asyncTest('Gateway keeps collecting echoed task text instead of marking it done'
 asyncTest('Gateway accepts timed-out text when it contains strong completion evidence', async () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
+  gateway._persistActiveQueue = () => {};
   gateway.taskHistoryStore = {
     createTask: () => 'task_strong_completion',
     recordStep: () => {},
@@ -2514,6 +2660,7 @@ asyncTest('Gateway accepts timed-out text when it contains strong completion evi
 asyncTest('Gateway finalizes restored executing task when persisted result is complete', async () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
+  gateway._persistActiveQueue = () => {};
   gateway.taskHistoryStore = {
     createTask: () => 'task_restored_complete',
     recordStep: () => {},
@@ -2585,23 +2732,27 @@ test('Gateway _normalizeFollowupTasks ignores non-array input', () => {
   assert.deepStrictEqual(gateway._normalizeFollowupTasks(undefined), []);
 });
 
-test('Gateway _handleUpdateSelf returns 200 with success:false', () => {
+asyncTest('Gateway _handleUpdateSelf returns 200 with success:false', async () => {
   const gateway = new Gateway();
   let responseData, responseStatus;
   gateway._json = (req, res, data, status) => {
     responseData = data;
     responseStatus = status;
   };
-  // Simulate _handleUpdateSelf behavior: calls _json with 200 and success:false
-  gateway._json({}, {}, {
-    success: false,
-    version: require('../../package.json').version,
-    force: false,
-    message: 'Automatic self-update is not enabled.',
-    currentVersion: require('../../package.json').version
-  }, 200);
+
+  const req = new Readable({
+    read() {
+      this.push(JSON.stringify({ force: true }));
+      this.push(null);
+    }
+  });
+  req.headers = { 'content-type': 'application/json' };
+
+  await gateway._handleUpdateSelf(req, {});
+
   assert.strictEqual(responseStatus, 200);
   assert.strictEqual(responseData.success, false);
+  assert.strictEqual(responseData.force, true);
   assert.ok(responseData.currentVersion);
   assert.ok(responseData.message);
 });

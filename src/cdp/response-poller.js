@@ -198,7 +198,7 @@ class ResponsePoller {
     const truncationTimeout = 20000;
     let hasCheckedInitialSnapshot = false;
 
-    let streamingBuffer = [];
+    const streamingBuffer = [];
     let streamingGrowthFrames = 0;
     const STREAMING_GROWTH_THRESHOLD = 3;
 
@@ -238,7 +238,9 @@ class ResponsePoller {
       try {
         this.client.off('Log.entryAdded', () => {});
         this.client.off('Runtime.consoleAPICalled', () => {});
-      } catch (_) {}
+      } catch {
+        // Listener cleanup is best-effort across CDP client implementations.
+      }
     };
 
     try {
@@ -371,8 +373,8 @@ class ResponsePoller {
           }
         }
 
-        var queuePosition = null;
-        var queueMatch = currentText && currentText.match(/\u6392\u5728\u7b2c\s*(\d+)\s*\u4f4d/);
+        let queuePosition = null;
+        const queueMatch = currentText && currentText.match(/\u6392\u5728\u7b2c\s*(\d+)\s*\u4f4d/);
         if (queueMatch) queuePosition = parseInt(queueMatch[1], 10);
 
         const isQueued = currentText && (
@@ -385,10 +387,6 @@ class ResponsePoller {
 
         if (isQueued) {
           if (!inQueueSince) inQueueSince = Date.now();
-          if (false && Date.now() - inQueueSince > queueWaitTimeout) {
-            cleanup();
-            return { text: currentText, stable: false, elapsedMs: Date.now() - startTime, queued: true, queuePosition: queuePosition, queueElapsedMs: Date.now() - inQueueSince, timedOut: true };
-          }
           lastText = currentText; await sleep(queuePollInterval); continue;
         }
 

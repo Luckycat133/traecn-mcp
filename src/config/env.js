@@ -56,7 +56,7 @@ function parseEnv(content) {
         }
       }
     } else if (value.startsWith("'")) {
-      let end = value.indexOf("'", 1);
+      const end = value.indexOf("'", 1);
       if (end !== -1) {
         result[key] = value.slice(1, end);
       } else {

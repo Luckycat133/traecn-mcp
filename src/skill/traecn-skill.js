@@ -714,7 +714,7 @@ class TraeCNSkill {
       modelProbeIntervalMs
     } = opts;
 
-    let result = await this.client.delegate(task, {
+    const result = await this.client.delegate(task, {
       projectPath,
       sessionId,
       includeProcessText: includeProcess,

@@ -2,6 +2,22 @@
 
 const { parseBody } = require('../request-gate');
 const { buildConfirmationPlan } = require('../../shared/operation-confirmation');
+const { getEnvWithFallback } = require('../../shared/utils');
+const { discoverTarget, describeCDPSurface } = require('../../cdp/discovery');
+const { getQuickstartConfig, restartTraeCNWithDebug } = require('../../config/quickstart');
+
+const defaultRestartDebugDeps = {
+  getEnvWithFallback,
+  discoverTarget,
+  describeCDPSurface,
+  getQuickstartConfig,
+  restartTraeCNWithDebug
+};
+let restartDebugDeps = defaultRestartDebugDeps;
+
+function setRestartDebugDepsForTest(overrides = null) {
+  restartDebugDeps = overrides ? { ...defaultRestartDebugDeps, ...overrides } : defaultRestartDebugDeps;
+}
 
 /**
  * trae-control handlers.
@@ -104,13 +120,15 @@ async function handleRestartTraeDebug(req, res, ctx) {
   if (ctx.client) {
     try {
       await ctx.client.close();
-    } catch (_) {}
+    } catch (_err) {
+      // Closing an already-dead CDP client is non-fatal before restart.
+    }
     ctx.client = null;
     ctx.driver = null;
   }
 
-  const quickstart = getQuickstartConfig();
-  const requestedPort = getEnvWithFallback(
+  const quickstart = restartDebugDeps.getQuickstartConfig();
+  const requestedPort = restartDebugDeps.getEnvWithFallback(
     'TRAECN_REMOTE_DEBUGGING_PORT',
     'TRAE_REMOTE_DEBUGGING_PORT',
     quickstart.remoteDebuggingPort || '9334'
@@ -119,7 +137,7 @@ async function handleRestartTraeDebug(req, res, ctx) {
 
   let restart;
   try {
-    restart = await restartTraeCNWithDebug({
+    restart = await restartDebugDeps.restartTraeCNWithDebug({
       projectPath: body.projectPath,
       quitTimeoutMs: body.quitTimeoutMs,
       pollMs: body.pollMs
@@ -140,7 +158,7 @@ async function handleRestartTraeDebug(req, res, ctx) {
   let lastError = null;
   while (Date.now() - startedAt < cdpWaitMs) {
     try {
-      surface = await discoverTarget();
+      surface = await restartDebugDeps.discoverTarget();
       connected = true;
       break;
     } catch (err) {
@@ -157,7 +175,7 @@ async function handleRestartTraeDebug(req, res, ctx) {
     restart,
     cdpWaitMs,
     connected,
-    surface: surface ? describeCDPSurface([surface.target || surface]) : null,
+    surface: surface ? restartDebugDeps.describeCDPSurface([surface.target || surface]) : null,
     error: connected ? null : (lastError || 'Timed out waiting for CDP')
   }, connected ? 200 : 504);
 }
@@ -283,4 +301,14 @@ async function handleSwitchModel(req, res, ctx) {
   }, 504);
 }
 
-module.exports = { ROUTES, handleStopGeneration, handleRestartTraeDebug, handleReviewGateStatus, handleReviewGateResolve, handleDetectMode, handleSwitchMode, handleSwitchModel };
+module.exports = {
+  ROUTES,
+  handleStopGeneration,
+  handleRestartTraeDebug,
+  handleReviewGateStatus,
+  handleReviewGateResolve,
+  handleDetectMode,
+  handleSwitchMode,
+  handleSwitchModel,
+  setRestartDebugDepsForTest
+};
