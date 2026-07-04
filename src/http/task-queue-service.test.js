@@ -100,6 +100,47 @@ test('TaskQueueService: restore is a no-op while mock bridge is enabled', () => 
   assert.strictEqual(taskQueue.size, 0);
 });
 
+test('TaskQueueService: restore drops persisted generic queue-probe tasks', () => {
+  const queueFile = path.join(TMP_DIR, 'queue-probe-active-queue.json');
+  fs.writeFileSync(queueFile, JSON.stringify({
+    version: 1,
+    tasks: [
+      {
+        taskId: 'probe_task',
+        status: 'queued',
+        task: 'wait for Trae queue',
+        createdAt: Date.now()
+      },
+      {
+        taskId: 'real_task',
+        status: 'queued',
+        task: 'implement the queue status panel without sending prompts',
+        createdAt: Date.now()
+      }
+    ]
+  }), 'utf8');
+
+  const mirrored = [];
+  const svc = new TaskQueueService({
+    persistencePath: queueFile,
+    taskHistoryStore: {
+      ensureTask: (taskId) => {
+        mirrored.push(taskId);
+      }
+    }
+  });
+  const taskQueue = new Map();
+
+  const restored = svc.restore(taskQueue);
+
+  assert.strictEqual(restored, 1);
+  assert.strictEqual(taskQueue.has('probe_task'), false);
+  assert.strictEqual(taskQueue.has('real_task'), true);
+  assert.deepStrictEqual(mirrored, ['real_task']);
+  const rewritten = JSON.parse(fs.readFileSync(queueFile, 'utf8'));
+  assert.deepStrictEqual(rewritten.tasks.map(task => task.taskId), ['real_task']);
+});
+
 test('TaskQueueService: tryAcquire is atomic per taskId', () => {
   const svc = new TaskQueueService({ persistencePath: PERSIST_PATH });
   assert.strictEqual(svc.tryAcquire('task-x'), true);

@@ -87,7 +87,7 @@ const CONFIG_SCHEMA = {
   traeControl: {
     autoStart: {
       type: 'boolean',
-      default: true,
+      default: false,
       description: 'Whether to auto-start the Trae process'
     },
     recoveryCooldownMs: {
@@ -201,7 +201,7 @@ const DEFAULT_CONFIG = {
     authHeader: 'Authorization'
   },
   traeControl: {
-    autoStart: true,
+    autoStart: false,
     recoveryCooldownMs: 30000,
     recoveryWaitMs: 60000
   },

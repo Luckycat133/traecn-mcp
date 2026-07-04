@@ -6,7 +6,37 @@
  */
 
 const { TraeCNAutomationError } = require('./errors');
-const { safeJsValue, sleep } = require('../shared/utils');
+const { sleep } = require('../shared/utils');
+
+function jsStringLiteral(value) {
+  return JSON.stringify(String(value || ''))
+    .replace(/</g, '\\u003C')
+    .replace(/>/g, '\\u003E')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function runtimeValue(result, fallbackReason = 'no runtime value') {
+  if (result && result.result && Object.prototype.hasOwnProperty.call(result.result, 'value')) {
+    return result.result.value || {};
+  }
+  const exception = result && result.exceptionDetails;
+  if (exception) {
+    return {
+      ok: false,
+      reason: exception.text || exception.exception?.description || fallbackReason
+    };
+  }
+  return { ok: false, reason: fallbackReason };
+}
+
+function composerFailureReason(inputInfo) {
+  if (!inputInfo) return 'unknown';
+  if (inputInfo.reason) return inputInfo.reason;
+  if (inputInfo.normalized) return inputInfo.normalized;
+  if (inputInfo.text) return inputInfo.text;
+  return 'unknown';
+}
 
 class MessageHandler {
   constructor(client, config, domHelper, dialogHandler) {
@@ -66,7 +96,7 @@ class MessageHandler {
       `,
       returnByValue: true
     });
-    const focusInfo = focusResult.result?.value || {};
+    const focusInfo = runtimeValue(focusResult, 'composer focus produced no result');
     if (!focusInfo.ok) {
       throw new Error(`Failed to focus composer: ${focusInfo.reason || 'unknown'}`);
     }
@@ -86,7 +116,7 @@ class MessageHandler {
           var value = el ? (el.innerText || el.textContent || '').trim() : '';
           var normalized = value.replace(/\\s+/g, ' ').trim();
           return {
-            ok: normalized === ${safeJsValue(normalizedExpected)},
+            ok: normalized === ${jsStringLiteral(normalizedExpected)},
             text: value,
             normalized: normalized
           };
@@ -95,7 +125,7 @@ class MessageHandler {
       returnByValue: true
     });
 
-    let inputInfo = inputResult.result?.value || {};
+    let inputInfo = runtimeValue(inputResult, 'composer verification produced no result');
     if (!inputInfo.ok) {
       await this.typeMessage(text);
       inputResult = await this.client.send('Runtime.evaluate', {
@@ -105,7 +135,7 @@ class MessageHandler {
             var value = el ? (el.innerText || el.textContent || '').trim() : '';
             var normalized = value.replace(/\\s+/g, ' ').trim();
             return {
-              ok: normalized === ${safeJsValue(normalizedExpected)},
+              ok: normalized === ${jsStringLiteral(normalizedExpected)},
               text: value,
               normalized: normalized
             };
@@ -113,10 +143,10 @@ class MessageHandler {
         `,
         returnByValue: true
       });
-      inputInfo = inputResult.result?.value || {};
+      inputInfo = runtimeValue(inputResult, 'composer verification produced no result after fallback typing');
     }
     if (!inputInfo.ok) {
-      throw new Error(`Failed to set composer text: ${inputInfo.normalized || inputInfo.text || 'unknown'}`);
+      throw new Error(`Failed to set composer text: ${composerFailureReason(inputInfo)}`);
     }
     await sleep(this.config.postActionDelayMs * 2);
 

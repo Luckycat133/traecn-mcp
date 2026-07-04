@@ -39,7 +39,9 @@ const FINAL_ASSISTANT_RESULT_MARKERS = [
   /Code\s+Review\s*[—-]\s*Findings\s+First/i,
   /(^|\n)\s*Findings\s*\(ordered\s+by\s+severity\)/i,
   /(^|\n)\s*1\.\s+Findings\b/i,
-  /(^|\n)\s*Findings\s*[:：]/i
+  /(^|\n)\s*Findings\s*[:：]/i,
+  /(?:Thought\s*)?Bug\s+found\s*(?:\(|[:：]|\b)/i,
+  /\bLikely\s+bug\s*[:：]/i
 ];
 
 function findLastMarkerIndex(value, pattern) {
@@ -51,6 +53,10 @@ function findLastMarkerIndex(value, pattern) {
     lastIndex = match.index;
     if (match[0] && match[0].startsWith('\n')) {
       lastIndex += 1;
+    }
+    const bugFoundOffset = match[0] ? match[0].search(/Bug\s+found/i) : -1;
+    if (bugFoundOffset > 0) {
+      lastIndex += bugFoundOffset;
     }
     if (match[0] === '') {
       globalPattern.lastIndex += 1;

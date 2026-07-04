@@ -164,11 +164,17 @@ const COMPILED_ROUTES = ROUTES.map(route => ({
  */
 function matchRoute(method, pathname) {
   if (!method || !pathname) return null;
+  let exactPathname = pathname;
+  try {
+    exactPathname = decodeURI(pathname);
+  } catch {
+    exactPathname = pathname;
+  }
 
   // First pass: exact path + exact method match.
   for (const route of COMPILED_ROUTES) {
     if (route.method !== method) continue;
-    if (route.path === pathname) {
+    if (route.path === exactPathname) {
       return { route, params: {} };
     }
   }
@@ -179,9 +185,13 @@ function matchRoute(method, pathname) {
     const m = pathname.match(route.re);
     if (!m) continue;
     const params = {};
-    route.paramNames.forEach((name, idx) => {
-      params[name] = decodeURIComponent(m[idx + 1]);
-    });
+    try {
+      route.paramNames.forEach((name, idx) => {
+        params[name] = decodeURIComponent(m[idx + 1]);
+      });
+    } catch {
+      return null;
+    }
     return { route, params };
   }
 

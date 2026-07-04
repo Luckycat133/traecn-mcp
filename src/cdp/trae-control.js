@@ -20,7 +20,7 @@ class TraeControl {
   constructor({
     configManager = null,
     isMockBridge = () => false,
-    autoStartTrae = true,
+    autoStartTrae = false,
     recoveryCooldownMs = 30000,
     recoveryWaitMs = 60000,
     logger = console,

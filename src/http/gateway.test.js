@@ -303,8 +303,8 @@ test('buildCapabilities returns compact command and token strategy metadata', ()
   });
   assert.strictEqual(capabilities.name, 'traecnclaw');
   assert.strictEqual(capabilities.coverage.queueManagement, true);
-  assert.ok(capabilities.tokenStrategy.prefer.includes('preflight'));
-  assert.ok(capabilities.tokenStrategy.prefer.includes('delegate_async'));
+  assert.ok(capabilities.tokenStrategy.prefer.includes('traecn_preflight'));
+  assert.ok(capabilities.tokenStrategy.prefer.includes('traecn_queue_task'));
   assert.ok(capabilities.commands.some(command => command.command === 'delegate_async'));
   assert.ok(capabilities.mcp.tools.some(tool => tool.name === 'queue_task'));
   assert.ok(capabilities.http.some(operation => operation.path === '/api/capabilities'));
@@ -380,6 +380,15 @@ test('Gateway creates queued task with review workflow metadata', () => {
   assert.strictEqual(task.queueState, 'running');
   assert.strictEqual(task.notifyUrl, 'https://example.test/hook');
   assert.ok(task.maxDeadline >= task.deadline);
+});
+
+test('Gateway rejects generic queue-probe task creation', () => {
+  const gateway = new Gateway();
+  gateway.driver = { config: { queuePerTaskTimeoutMs: 1234 } };
+  assert.throws(
+    () => gateway._createQueuedTask({ task: 'wait for Trae queue' }, { queued: true }),
+    /generic_queue_probe_task_rejected/
+  );
 });
 
 asyncTest('Gateway auto-continues reviewable workflow followups without human review', async () => {
@@ -628,7 +637,7 @@ test('Gateway queued tasks wait indefinitely by default for external model queue
     recordStep: () => {}
   };
   const task = gateway._createQueuedTask({
-    task: 'wait for Trae queue'
+    task: 'implement a long-running queue workflow'
   }, { queued: true, queueMessage: 'model busy' });
 
   assert.strictEqual(task.deadline, null);
@@ -744,6 +753,37 @@ test('Gateway restores queued tasks without adding a local queue deadline', () =
     assert.ok(task);
     assert.strictEqual(task.deadline, null);
     assert.strictEqual(task.maxDeadline, null);
+  } finally {
+    if (fs.existsSync(queueFile)) fs.unlinkSync(queueFile);
+    restoreEnv('TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH', previousPath);
+  }
+});
+
+test('Gateway does not persist generic queue-probe tasks', () => {
+  const queueFile = path.join(os.tmpdir(), `traecnclaw-gateway-probe-persist-test-${Date.now()}.json`);
+  const previousPath = process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH;
+  process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH = queueFile;
+
+  try {
+    const gateway = new Gateway();
+    gateway.taskQueue.clear();
+    gateway.taskQueue.set('probe_task', {
+      taskId: 'probe_task',
+      status: 'queued',
+      task: 'wait for Trae queue',
+      createdAt: Date.now()
+    });
+    gateway.taskQueue.set('real_task', {
+      taskId: 'real_task',
+      status: 'queued',
+      task: 'implement the queue status panel without sending prompts',
+      createdAt: Date.now()
+    });
+
+    gateway._persistActiveQueue();
+
+    const persisted = JSON.parse(fs.readFileSync(queueFile, 'utf8'));
+    assert.deepStrictEqual(persisted.tasks.map(task => task.taskId), ['real_task']);
   } finally {
     if (fs.existsSync(queueFile)) fs.unlinkSync(queueFile);
     restoreEnv('TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH', previousPath);
@@ -1264,6 +1304,64 @@ asyncTest('Gateway finalizes submitted executing task after recovery retries are
 
   assert.strictEqual(task.status, 'error');
   assert.strictEqual(task.error, 'CDP disconnected permanently');
+});
+
+asyncTest('Gateway background polling cancels generic queue probes before sending', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue = new Map();
+  gateway.taskLocks = new Set();
+  let pollOnce = null;
+  let ensuredConnection = false;
+  let sentToTrae = false;
+  const cancelled = [];
+  gateway._setInterval = (fn) => {
+    pollOnce = fn;
+    return { id: 'timer' };
+  };
+  gateway._clearInterval = () => {};
+  gateway._persistActiveQueue = () => {};
+  gateway._ensureConnection = async () => {
+    ensuredConnection = true;
+  };
+  gateway._emitTaskNotification = async () => {};
+  gateway.taskHistoryStore = {
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => {},
+    failTask: () => {},
+    cancelTask: (taskId) => {
+      cancelled.push(taskId);
+    }
+  };
+  gateway.driver = {
+    config: { queuePerTaskTimeoutMs: 1000 },
+    checkQueueStatus: async () => {
+      throw new Error('checkQueueStatus must not be called');
+    },
+    newChat: async () => {
+      sentToTrae = true;
+    },
+    sendMessage: async () => {
+      sentToTrae = true;
+    }
+  };
+  const task = {
+    taskId: 'task_probe_guard',
+    status: 'queued',
+    task: 'wait for Trae queue',
+    createdAt: Date.now(),
+    followupTasks: []
+  };
+  gateway.taskQueue.set(task.taskId, task);
+
+  gateway._ensureBackgroundPolling();
+  await pollOnce();
+
+  assert.strictEqual(task.status, 'cancelled');
+  assert.strictEqual(task.error, 'generic_queue_probe_task_rejected');
+  assert.deepStrictEqual(cancelled, ['task_probe_guard']);
+  assert.strictEqual(ensuredConnection, false);
+  assert.strictEqual(sentToTrae, false);
 });
 
 asyncTest('Gateway keeps submitted task executing when collected result times out', async () => {
@@ -1890,6 +1988,87 @@ asyncTest('Gateway adopts current queued Trae request as submitted background ta
   assert.strictEqual(responseData.queueDetails.queuePosition, 12);
   assert.strictEqual(task.status, 'executing');
   assert.strictEqual(task.submittedToTrae, true);
+});
+
+asyncTest('Gateway adopt-current returns existing submitted Solo task for the same active chat', async () => {
+  const gateway = new Gateway();
+  gateway._ensureConnection = async () => {};
+  let pollingStarted = false;
+  gateway._ensureBackgroundPolling = () => {
+    pollingStarted = true;
+  };
+  gateway.driver = {
+    config: { queuePerTaskTimeoutMs: 1000 },
+    checkQueueStatus: async () => ({
+      queued: true,
+      running: false,
+      canSubmit: true,
+      queuePosition: 7,
+      queueMessage: '排在第 7 位',
+      currentModel: 'GLM-5.2'
+    }),
+    getActiveSoloChat: async () => ({
+      mode: 'solo',
+      active: {
+        index: 0,
+        title: 'Debug HTTP Route Handlers 进行中 13:30',
+        text: 'Debug HTTP Route Handlers 进行中 13:30',
+        status: 'running'
+      }
+    })
+  };
+  gateway.taskHistoryStore = {
+    createTask: () => {
+      throw new Error('duplicate adopt must not create a new task');
+    },
+    recordStep: () => {},
+    ensureTask: () => {}
+  };
+  gateway._persistActiveQueue = () => {};
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.taskQueue.clear();
+  gateway.taskQueue.set('task_existing_adopt', {
+    taskId: 'task_existing_adopt',
+    status: 'executing',
+    task: 'Debug current workspace briefly. Marker TRAECN_DEBUG_SYNC_GLM52.',
+    createdAt: Date.now() - 1000,
+    submittedToTrae: true,
+    submittedAt: Date.now() - 900,
+    reviewRequired: false,
+    followupTasks: [],
+    soloChat: {
+      index: 0,
+      titleIncludes: 'Debug HTTP Route Handlers',
+      textIncludes: 'Debug HTTP Route Handlers',
+      candidates: ['TRAECN_DEBUG_SYNC_GLM52', 'Debug HTTP Route Handlers']
+    }
+  });
+
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+
+  const req = new Readable({
+    read() {
+      this.push(JSON.stringify({ task: 'Adopt existing Trae debug request. Marker TRAECN_DEBUG_SYNC_GLM52.' }));
+      this.push(null);
+    }
+  });
+  req.headers = { 'content-type': 'application/json' };
+
+  await gateway._handleAdoptCurrentTask(req, {});
+
+  assert.strictEqual(responseStatus, 200);
+  assert.strictEqual(responseData.taskId, 'task_existing_adopt');
+  assert.strictEqual(responseData.deduped, true);
+  assert.strictEqual(responseData.queueDetails.queuePosition, 7);
+  assert.strictEqual(gateway.taskQueue.size, 1);
+  assert.strictEqual(gateway.taskQueue.get('task_existing_adopt').queuePosition, 7);
+  assert.strictEqual(pollingStarted, true);
 });
 
 asyncTest('Gateway refuses to adopt when no submitted Trae request is visible', async () => {

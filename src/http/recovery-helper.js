@@ -23,7 +23,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { getEnvWithFallback } = require('../shared/utils');
+const { getEnvWithFallback, isGenericQueueProbeTask } = require('../shared/utils');
 
 class RecoveryHelper {
   constructor({
@@ -83,6 +83,7 @@ class RecoveryHelper {
     // write. The chain still guarantees serial ordering.
     const snapshot = Array.from(taskQueue.entries())
       .filter(([, task]) => !this.isTerminalStatus(task.status))
+      .filter(([, task]) => !isGenericQueueProbeTask(task && task.task))
       .map(([taskId, task]) => ({ taskId, ...task }));
 
     this._persistChain = this._persistChain.then(() => this._writeToDisk(snapshot)).catch(err => {
@@ -91,7 +92,7 @@ class RecoveryHelper {
     return this._persistChain;
   }
 
-  async _writeToDisk(snapshot) {
+  _writeSnapshot(snapshot) {
     const dirPath = path.dirname(this.persistencePath);
     fs.mkdirSync(dirPath, { recursive: true });
     fs.writeFileSync(this.persistencePath, JSON.stringify({
@@ -99,6 +100,10 @@ class RecoveryHelper {
       savedAt: new Date().toISOString(),
       tasks: snapshot
     }, null, 2), 'utf8');
+  }
+
+  async _writeToDisk(snapshot) {
+    this._writeSnapshot(snapshot);
   }
 
   /**
@@ -170,8 +175,14 @@ class RecoveryHelper {
       const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
       const now = Date.now();
       let restored = 0;
+      let skippedQueueProbes = 0;
+      const sanitizedTasks = [];
       for (const item of tasks) {
         if (!item || !item.taskId || this.isTerminalStatus(item.status)) continue;
+        if (isGenericQueueProbeTask(item.task)) {
+          skippedQueueProbes++;
+          continue;
+        }
         const task = { ...item };
         if (task.status === 'executing' && task.submittedToTrae !== true) {
           task.status = 'queued';
@@ -195,7 +206,12 @@ class RecoveryHelper {
         task.result = task.result || null;
         taskQueue.set(task.taskId, task);
         this.syncHistoryMirror(task);
+        sanitizedTasks.push({ taskId: task.taskId, ...task });
         restored++;
+      }
+      if (skippedQueueProbes > 0) {
+        this.logger.warn(`[QueuePersistence] Dropped ${skippedQueueProbes} generic queue-probe task(s) from active queue restore`);
+        this._writeSnapshot(sanitizedTasks);
       }
       return restored;
     } catch (err) {

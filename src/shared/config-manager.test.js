@@ -359,6 +359,8 @@ test('DEFAULT_CONFIG matches schema defaults', () => {
   assert.strictEqual(DEFAULT_CONFIG.logLevel, CONFIG_SCHEMA.logLevel.default);
   assert.strictEqual(DEFAULT_CONFIG.rateLimit.windowMs, CONFIG_SCHEMA.rateLimit.windowMs.default);
   assert.strictEqual(DEFAULT_CONFIG.rateLimit.maxRequests, CONFIG_SCHEMA.rateLimit.maxRequests.default);
+  assert.strictEqual(DEFAULT_CONFIG.traeControl.autoStart, CONFIG_SCHEMA.traeControl.autoStart.default);
+  assert.strictEqual(DEFAULT_CONFIG.traeControl.autoStart, false);
 });
 
 test('LOG_LEVELS contains expected values', () => {
