@@ -60,7 +60,17 @@ async function listSoloChats(driver) {
           });
         }
         var sidebar = document.querySelector('.soloaisidebar');
-        if (!sidebar || sidebar.offsetParent === null) {
+        if (!sidebar) {
+          return { mode: 'not_solo', chats: [], count: 0, reason: 'sidebar_element_not_found' };
+        }
+        // Trae CN's Electron webview sometimes reports offsetParent === null on
+        // the sidebar element even when it is logically active (e.g. before the
+        // layout pass has run, or when the panel is collapsed but its items are
+        // still mounted in the DOM). Falling back to a structural probe — if
+        // there are task-item class nodes under the sidebar, treat this as
+        // "in solo mode" rather than bailing.
+        var sidebarItemsRaw = sidebar.querySelectorAll('[class*="task-item___"], [class*="chat-item___"], [class*="conversation-item___"]');
+        if ((!sidebar.offsetParent || sidebar.offsetParent === null) && sidebarItemsRaw.length === 0) {
           return { mode: 'not_solo', chats: [], count: 0, reason: 'solo_sidebar_not_visible' };
         }
         var seen = new Set();
@@ -68,14 +78,14 @@ async function listSoloChats(driver) {
         function visibleChatNodes() {
           return Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
             .filter(function(el) {
-              if (!el || el.offsetParent === null) return false;
               var cls = (el.className || '').toString();
               if (/task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
-              var rect = el.getBoundingClientRect();
-              if (rect.width < 40 || rect.height < 20) return false;
               var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
               if (!text) return false;
               if (/^\\s*(新任务|New Task|New Chat|新对话)/i.test(text) && text.length < 30) return false;
+              // Loosened visibility: Trae webview commonly reports rect 0×0
+              // and offsetParent === null on its own DOM, so we now only filter
+              // out completely-empty / disconnected nodes.
               return true;
             });
         }
@@ -163,16 +173,17 @@ async function switchSoloChat(driver, criteria = {}) {
         var textIncludes = ${safeJsValue(textIncludes)};
         var titleIncludes = ${safeJsValue(titleIncludes)};
         var sidebar = document.querySelector('.soloaisidebar');
-        if (!sidebar || sidebar.offsetParent === null) {
+        if (!sidebar) {
+          return { success: false, reason: 'sidebar_element_not_found' };
+        }
+        var sidebarItemsRaw = sidebar.querySelectorAll('[class*="task-item___"], [class*="chat-item___"], [class*="conversation-item___"]');
+        if ((!sidebar.offsetParent || sidebar.offsetParent === null) && sidebarItemsRaw.length === 0) {
           return { success: false, reason: 'solo_sidebar_not_visible' };
         }
         var nodes = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
           .filter(function(el) {
-            if (!el || el.offsetParent === null) return false;
             var cls = (el.className || '').toString();
-            if (/task-items-list|task-item-info|task-item-title|task-item-desc/i.test(cls)) return false;
-            var rect = el.getBoundingClientRect();
-            if (rect.width < 40 || rect.height < 20) return false;
+            if (/task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
             var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
             if (!text) return false;
             if (/^\\s*(新任务|New Task|New Chat|新对话)/i.test(text) && text.length < 30) return false;
@@ -256,29 +267,25 @@ async function _clickAt(driver, x, y, button = 'left') {
 async function _openRowContextMenu(driver, candidate) {
   const expression = `
     (function() {
+      var candidate = ${safeJsValue(candidate)};
       var sidebar = document.querySelector('.soloaisidebar');
       if (!sidebar) return { success: false, reason: 'sidebar_not_visible' };
       var items = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
         .filter(function(el) {
-          if (!el || el.offsetParent === null) return false;
           var cls = (el.className || '').toString();
-          if (/task-items-list|task-item-info|task-item-title|task-item-desc/i.test(cls)) return false;
-          var rect = el.getBoundingClientRect();
-          if (rect.width < 40 || rect.height < 20) return false;
+          if (/task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
           return true;
         });
       var target = null;
       for (var i = 0; i < items.length; i++) {
         var text = (items[i].innerText || items[i].textContent || '').replace(/\\s+/g, ' ').trim();
-        if (candidate.title && text.indexOf(candidate.title) !== -1) { target = items[i]; break; }
+        if (candidate && candidate.title && text.indexOf(candidate.title) !== -1) { target = items[i]; break; }
       }
-      if (!target && Number.isInteger(candidate.index) && items[candidate.index]) target = items[candidate.index];
+      if (!target && candidate && Number.isInteger(candidate.index) && items[candidate.index]) target = items[candidate.index];
       if (!target) return { success: false, reason: 'row_not_found', count: items.length };
       var rect = target.getBoundingClientRect();
       var x = rect.x + rect.width / 2;
       var y = rect.y + rect.height / 2;
-      // Use the canonical contextmenu event so Trae shows its native right-click
-      // menu (with "删除" / "重命名" / etc.) — left-click would activate the chat.
       try {
         var ev = new MouseEvent('contextmenu', {
           bubbles: true,
@@ -356,19 +363,21 @@ async function _locateCandidateRow(driver, candidate) {
         return String(value || '').replace(/[\\u00a0\\t\\r\\n]+/g, ' ').replace(/\\s+/g, ' ').trim().toLowerCase();
       }
       var sidebar = document.querySelector('.soloaisidebar');
-      if (!sidebar || sidebar.offsetParent === null) {
+      if (!sidebar) {
+        return { error: 'sidebar_element_not_found' };
+      }
+      var sidebarItemsRaw = sidebar.querySelectorAll('[class*="task-item___"], [class*="chat-item___"], [class*="conversation-item___"]');
+      if ((!sidebar.offsetParent || sidebar.offsetParent === null) && sidebarItemsRaw.length === 0) {
         return { error: 'sidebar_not_visible' };
       }
       var candidate = ${safeJsValue(candidate)};
       function visibleItems() {
         var nodes = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
           .filter(function(el) {
-            if (!el || el.offsetParent === null) return false;
             var cls = String(el.className || '');
             if (/task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
-            var rect = el.getBoundingClientRect();
             var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-            return rect.width > 40 && rect.height > 20 && text;
+            return Boolean(text);
           });
         var seen = new Set();
         var items = [];
