@@ -27,7 +27,7 @@ acceptable when they produce a coherent, verified improvement.
 ## Automation Contract
 
 - Automation name: `TRAECNclaw continuous development loop`
-- Schedule: hourly, starting from 2026-07-04 14:00 Asia/Shanghai
+- Schedule: every 12 hours, anchored at 14:00 and 02:00 Asia/Shanghai
 - Model posture: high-effort recurring development in an isolated worktree
 - Default safety boundary: no real TraeCN task submission, quota spend, push, or
   external UI operation without explicit user approval
@@ -60,12 +60,31 @@ The loop has produced multiple clean worktree commits that are not merged to
   `93ee252 feat(agent): expose unattended status surfaces`
 - 2026-07-05 08:12, `/Users/jack/.codex/worktrees/7bb6/TRAECNclaw`,
   `9f1e579 feat(skill): expose unattended status helper`
+- 2026-07-05 09:17, `/Users/jack/.codex/worktrees/fc25/TRAECNclaw`,
+  `1fc941e docs(loop): record reconciled agent surfaces`
+- 2026-07-05 10:12, `/Users/jack/.codex/worktrees/3f14/TRAECNclaw`,
+  `6592677 feat(mcp): reconcile agent bootstrap surfaces`
+- 2026-07-05 11:23, automation memory recorded reconciled commits
+  `3d972c8`, `fd09fe4`, `1d9cb74`, and `dcd4e93`
+- 2026-07-05 12:10, automation memory recorded
+  `9905645 feat(skill): expose recovery helper parity` and
+  `975a8c2 docs(loop): record recovery helper parity run`
+- 2026-07-05 13:17, automation memory recorded
+  `8125d06 feat(agent): expose unattended status surface` and
+  `0930c89 docs(loop): record unattended status run`
 
-All observed worktrees were clean when inspected. The automation-local memory
-reported broad verification passing for the 05:12 through 08:12 runs, including
-lint, focused tests, `npm test`, `npm run acceptance:audit -- --require-complete`,
-and other relevant gates. None of the observed commits were merged to `main`
-at inspection time.
+The completed worktrees in the initial inspection were clean. The
+automation-local memory reported broad verification passing for the 05:12
+through 08:12 runs, including lint, focused tests, `npm test`,
+`npm run acceptance:audit -- --require-complete`, and other relevant gates.
+None of the observed commits were merged to `main` at inspection time.
+
+Later runs shifted from isolated feature slices into reconciliation work. The
+09:17 through 13:17 records show successful integration of agent bootstrap,
+MCP client config, recovery-helper parity, and unattended-status surfaces with
+broad verification. At 2026-07-05 14:06 Asia/Shanghai, the 14:00 worktree
+`/Users/jack/.codex/worktrees/aaab/TRAECNclaw` was still dirty and appeared to
+be an active run.
 
 ## Current Focus
 
@@ -111,6 +130,20 @@ commits, deduplicating overlapping unattended-status changes, then running broad
 verification before merge.
 
 ## Run Log
+
+### 2026-07-05 - Change loop cadence to twice daily
+
+- Objective: reduce the recurring automation cadence from hourly to half-day.
+- Why it mattered: hourly execution produced useful code, but it also created
+  many sibling worktrees and overlapping integration work that now needs review.
+- Files changed: `docs/CONTINUOUS-DEVELOPMENT-LOOP.md`.
+- Verification: automation config inspected after update; doc-only
+  `git diff --check` passed before commit.
+- Commit: `docs(loop): record half-day cadence`.
+- Remaining risk: the active 14:00 automation worktree may still be running and
+  should not be interrupted.
+- Next: review the 14:00 run once it finishes, then integrate the reconciled
+  worktree commits instead of starting unrelated new surfaces.
 
 ### 2026-07-05 - Import observed automation output state
 
