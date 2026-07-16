@@ -34,7 +34,6 @@
     "start-traecnapi.cmd",
     "start-traecnapi.command",
     "mcp-server.js",
-    ".codex/skills/**",
     "docs/**/*.md",
     "skills/**/*.md",
     "scripts/acceptance-audit.js",

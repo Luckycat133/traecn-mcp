@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const { TraeCNAutomationError } = require('../cdp/errors');
-const { errorToHttpStatus, errorToBody, CODE_TO_STATUS, DEFAULT_STATUS } = require('./error-mapping');
+const { errorToHttpStatus, errorToBody, safeErrorMessage, CODE_TO_STATUS, DEFAULT_STATUS } = require('./error-mapping');
 const { createRunner } = require('../shared/test-runner');
 const runner = createRunner('error-mapping.test.js');
 const { test, asyncTest, pendingAsyncTests, summary } = runner;
@@ -73,9 +73,19 @@ test('errorToBody: HttpError surfaces message and code', () => {
   assert.strictEqual(body.error, 'rate limited');
 });
 
-test('errorToBody: bare Error returns message only', () => {
+test('errorToBody: bare Error returns generic message (no leak)', () => {
   const body = errorToBody(new Error('disk full'));
-  assert.deepStrictEqual(body, { error: 'disk full' });
+  assert.deepStrictEqual(body, { error: 'Internal server error' });
+});
+
+test('safeErrorMessage: bare Error returns generic message', () => {
+  assert.strictEqual(safeErrorMessage(new Error('disk full')), 'Internal server error');
+  assert.strictEqual(safeErrorMessage(null), 'Internal server error');
+});
+
+test('safeErrorMessage: TraeCNAutomationError returns real message', () => {
+  const err = TraeCNAutomationError.selectorNotFound('.foo', ['.foo']);
+  assert.strictEqual(safeErrorMessage(err), err.message);
 });
 
 test('errorToBody: falsy values get a generic body', () => {

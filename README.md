@@ -163,7 +163,7 @@ compatibility audits and every explicit shortcut.
 
 ### Agent Skill Distribution
 
-The portable cross-agent skill lives at `.codex/skills/traecnclaw-mcp`. It
+The portable cross-agent skill lives at `skills/traecnclaw-mcp`. It
 teaches agents how to configure the stdio MCP server, choose the right profile,
 and prefer MCP tools over GUI control.
 
@@ -171,7 +171,7 @@ Install the skill globally for Codex-compatible clients:
 
 ```sh
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
-cp -R .codex/skills/traecnclaw-mcp "${CODEX_HOME:-$HOME/.codex}/skills/"
+cp -R skills/traecnclaw-mcp "${CODEX_HOME:-$HOME/.codex}/skills/"
 ```
 
 Build release artifacts for direct download:
@@ -209,7 +209,7 @@ Complete skill documentation:
 
 ## API
 
-The OpenAPI schema is served at `/openapi.json`. Primary endpoints:
+The OpenAPI schema is served at `/openapi.json` (requires the same auth token as other authenticated endpoints). Primary endpoints:
 
 - `GET /api/capabilities`
 - `GET /api/status`
@@ -317,7 +317,7 @@ Bind the gateway to `127.0.0.1`, set `TRAECN_GATEWAY_TOKEN` before exposing prot
 Before public distribution, make the repository or release artifact public,
 verify the skill with `quick_validate.py`, run the maintained test suite, and
 scan the current tree and git history for secrets. Public catalog submissions
-should point to `.codex/skills/traecnclaw-mcp` for the skill and `mcp-server.js`
+should point to `skills/traecnclaw-mcp` for the skill and `mcp-server.js`
 or `traecnclaw-mcp` for the server entrypoint.
 
 ## Documentation
