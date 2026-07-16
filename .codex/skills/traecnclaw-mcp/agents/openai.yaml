@@ -1,4 +1,0 @@
-interface:
-  display_name: "TRAECNclaw MCP"
-  short_description: "Portable TRAECNclaw MCP guidance"
-  default_prompt: "Use $traecnclaw-mcp to connect any MCP-capable agent to TRAECNclaw safely."

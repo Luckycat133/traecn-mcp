@@ -42,7 +42,7 @@ It includes:
 - model, mode, settings, and dialog controls
 - code review delegation
 - unattended workflow support
-- a portable `.codex/skills/traecnclaw-mcp` skill folder for agent clients
+- a portable `skills/traecnclaw-mcp` skill folder for agent clients
 
 Repo: https://github.com/Luckycat133/TRAECNclaw
 
@@ -64,7 +64,7 @@ It exposes a profile-scoped stdio MCP surface:
 - `full`: every explicit shortcut for compatibility and audits
 
 The repo also includes a portable Agent Skill at
-`.codex/skills/traecnclaw-mcp`, so agents can learn how to configure and use the
+`skills/traecnclaw-mcp`, so agents can learn how to configure and use the
 server without copy-pasting long prompts.
 
 Use cases:
@@ -100,12 +100,12 @@ cleanup、Solo 对话、诊断和长队列 proof 使用。
 - 弹窗确认
 - 代码审查委派
 - 无人值守 workflow
-- 可直接安装的 `.codex/skills/traecnclaw-mcp`
+- 可直接安装的 `skills/traecnclaw-mcp`
 
 Repo: https://github.com/Luckycat133/TRAECNclaw
 
 ## Directory Submission Note
 
 TRAECNclaw MCP is both a local stdio MCP server and a portable Agent Skill.
-Please list the skill path as `.codex/skills/traecnclaw-mcp` and the server
+Please list the skill path as `skills/traecnclaw-mcp` and the server
 entrypoint as `mcp-server.js` or the package bin `traecnclaw-mcp`.
