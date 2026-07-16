@@ -69,6 +69,7 @@ class TaskQueueService {
 
   tryAcquire(taskId) { return this.stateMachine.tryAcquire(taskId); }
   release(taskId) { return this.stateMachine.release(taskId); }
+  clearLocks() { this.stateMachine.taskLocks.clear(); }
 
   // ── queue-snapshot helpers (QueueStateMachine) ───────────────────────
 

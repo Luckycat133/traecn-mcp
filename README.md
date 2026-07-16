@@ -209,7 +209,7 @@ Complete skill documentation:
 
 ## API
 
-The OpenAPI schema is served at `/openapi.json`. Primary endpoints:
+The OpenAPI schema is served at `/openapi.json` (requires the same auth token as other authenticated endpoints). Primary endpoints:
 
 - `GET /api/capabilities`
 - `GET /api/status`

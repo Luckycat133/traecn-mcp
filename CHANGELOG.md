@@ -54,6 +54,10 @@ Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No be
 - Fixed plugin client settings API paths to match gateway routes.
 - Added `/api/delegate-async` compatibility for async delegation clients.
 - Added mock queue status support so mock-mode delegate flows work through the async path.
+- Fixed error leakage: `errorToBody` now returns a generic `'Internal server error'` message for bare `Error` instances instead of forwarding `err.message` (which could contain filesystem paths, CDP selector names, or other internals). Added `safeErrorMessage()` helper and applied it at all stored error sites (`task.error`, `batch.results[].error`, model probe results, settings handler errors). `TraeCNAutomationError` and `HttpError` continue to surface their purpose-built messages.
+- Consolidated the dual per-task lock structures: `Gateway.taskLocks` is now a read-only alias for `taskQueueService.stateMachine.taskLocks`. Mutations go through `taskQueueService.tryAcquire/release/clearLocks`, making the previously dead abstraction real and preventing future callers (e.g. adopt-current-task, batch executor) from missing locks held by the polling loop.
+- Added a startup warning when `TRAECN_GATEWAY_TOKEN` is unset and the gateway is bound to a non-loopback host — authenticated endpoints become open in that configuration.
+- Gated `/openapi.json` behind `requiresAuth: true` to prevent unauthenticated API-surface reconnaissance. The chat UI diagnostics panel continues to work because it already sends the saved token on every request.
 
 ### Security
 

@@ -87,8 +87,29 @@ function errorToBody(err) {
   if (Number.isInteger(err.statusCode) || err.name === 'HttpError') {
     return { error: err.message, code: err.code };
   }
-  // Bare Error: don't leak stack/details; keep message only.
-  return { error: err.message || 'Internal server error' };
+  // Bare Error: never leak message/stack/details to clients — internal
+  // driver failures often contain filesystem paths, selector names, or
+  // CDP internals. The real message is already logged server-side at the
+  // catch-all in gateway.js.
+  return { error: 'Internal server error' };
+}
+
+/**
+ * Return a single safe string message for an error, applying the same
+ * disclosure rules as errorToBody. Use this for fields that store a
+ * plain string (e.g. `task.error`, `batch.results[].error`) instead of
+ * an error body object.
+ * @param {*} err
+ * @returns {string}
+ */
+function safeErrorMessage(err) {
+  if (!err) return 'Internal server error';
+  if (err.name === 'TraeCNAutomationError' ||
+      Number.isInteger(err.statusCode) ||
+      err.name === 'HttpError') {
+    return err.message || 'Internal server error';
+  }
+  return 'Internal server error';
 }
 
 module.exports = {
@@ -96,4 +117,5 @@ module.exports = {
   DEFAULT_STATUS,
   errorToHttpStatus,
   errorToBody,
+  safeErrorMessage,
 };
