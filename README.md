@@ -133,7 +133,28 @@ const review = await reviewCode({
 
 ### MCP Server
 
-Any MCP-capable agent can connect through the bundled stdio server:
+Any MCP-capable agent can connect through the bundled stdio server. The
+recommended entry point is the skill launcher, which auto-locates
+`mcp-server.js` from the repo root:
+
+```json
+{
+  "mcpServers": {
+    "traecn": {
+      "command": "node",
+      "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"],
+      "env": {
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_TOKEN": "",
+        "TRAECN_MCP_TOOL_PROFILE": "public"
+      }
+    }
+  }
+}
+```
+
+Alternatively, point directly at `mcp-server.js`:
 
 ```json
 {
@@ -151,6 +172,9 @@ Any MCP-capable agent can connect through the bundled stdio server:
   }
 }
 ```
+
+A ready-to-copy template with all options documented is at
+`skills/traecnclaw-mcp/assets/mcp-client-config.json`.
 
 The MCP server exposes a profile-scoped tool surface. By default,
 `TRAECN_MCP_TOOL_PROFILE=public` lists the 20 common tools:

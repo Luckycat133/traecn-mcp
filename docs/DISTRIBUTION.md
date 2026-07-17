@@ -60,7 +60,31 @@ npm install
 npm run doctor
 ```
 
-Configure any stdio MCP client with an absolute `mcp-server.js` path:
+**Option A (recommended): use the skill launcher**
+
+The skill bundles a launcher that auto-locates `mcp-server.js` from the repo
+root. Copy the template from
+`skills/traecnclaw-mcp/assets/mcp-client-config.json` and replace `SKILL_DIR`
+with the absolute path to the skill folder:
+
+```json
+{
+  "mcpServers": {
+    "traecn": {
+      "command": "node",
+      "args": ["SKILL_DIR/scripts/start-mcp.js"],
+      "env": {
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_TOKEN": "",
+        "TRAECN_MCP_TOOL_PROFILE": "public"
+      }
+    }
+  }
+}
+```
+
+**Option B (fallback): direct mcp-server.js path**
 
 ```json
 {

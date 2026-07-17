@@ -2,18 +2,28 @@
 
 TRAECNclaw 自带零依赖 stdio MCP 服务器：`mcp-server.js`。MCP 客户端连接 MCP 服务器，MCP 服务器再调用本地 TraeCNclaw HTTP 网关（默认 `http://127.0.0.1:8788`）。TraeCN 桌面的 CDP 端口仍由网关配置管理，通常不需要暴露给 MCP 客户端。
 
+## 推荐入口：skill 启动器
+
+Skill 自带启动器 `skills/traecnclaw-mcp/scripts/start-mcp.js`，会自动定位仓库根目录的 `mcp-server.js`。将下方各配置中的 `args` 替换为启动器路径即可：
+
+```
+"args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"]
+```
+
+完整配置模板（含 Option A 启动器 / Option B 直连两种方式）见 `skills/traecnclaw-mcp/assets/mcp-client-config.json`。也可设置环境变量 `TRAECN_MCP_SERVER_PATH` 手动指定 `mcp-server.js` 的绝对路径。
+
 ## 快速开始
 
 ### 1. Cursor 配置
 
-创建 `~/.cursor/mcp.json` 或项目 `.cursor/mcp.json`：
+创建 `~/.cursor/mcp.json` 或项目 `.cursor/mcp.json`（推荐使用 skill 启动器路径）：
 
 ```json
 {
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
+      "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"],
       "env": {
         "TRAECN_HOST": "127.0.0.1",
         "TRAECN_PORT": "8788",
@@ -33,7 +43,7 @@ TRAECNclaw 自带零依赖 stdio MCP 服务器：`mcp-server.js`。MCP 客户端
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
+      "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"],
       "env": {
         "TRAECN_HOST": "127.0.0.1",
         "TRAECN_PORT": "8788",
@@ -53,7 +63,7 @@ TRAECNclaw 自带零依赖 stdio MCP 服务器：`mcp-server.js`。MCP 客户端
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"]
+      "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"]
     }
   }
 }
@@ -68,7 +78,7 @@ TRAECNclaw 自带零依赖 stdio MCP 服务器：`mcp-server.js`。MCP 客户端
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"]
+      "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"]
     }
   }
 }
