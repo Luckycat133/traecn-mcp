@@ -6,7 +6,6 @@ const {
   parseSelectors,
   parsePositiveInt,
   sleep,
-  escapeJsString,
   safeJsValue,
   isQueueProbeCommandText,
   isGenericQueueProbeTask,
@@ -94,30 +93,6 @@ test('parsePositiveInt falls back for invalid values', () => {
   assert.strictEqual(parsePositiveInt('abc', 10), 10);
   assert.strictEqual(parsePositiveInt('0', 10), 10);
   assert.strictEqual(parsePositiveInt('-5', 10), 10);
-});
-
-test('escapeJsString escapes backslashes', () => {
-  assert.strictEqual(escapeJsString('a\\b'), 'a\\\\b');
-});
-
-test('escapeJsString escapes single quotes', () => {
-  assert.strictEqual(escapeJsString("it's"), "it\\'s");
-});
-
-test('escapeJsString escapes double quotes', () => {
-  assert.strictEqual(escapeJsString('say "hello"'), 'say \\"hello\\"');
-});
-
-test('escapeJsString escapes newlines', () => {
-  assert.strictEqual(escapeJsString('line1\nline2'), 'line1\\nline2');
-});
-
-test('escapeJsString handles empty string', () => {
-  assert.strictEqual(escapeJsString(''), '');
-});
-
-test('escapeJsString handles string with no special chars', () => {
-  assert.strictEqual(escapeJsString('hello world'), 'hello world');
 });
 
 test('safeJsValue serializes objects and arrays as JavaScript literals', () => {

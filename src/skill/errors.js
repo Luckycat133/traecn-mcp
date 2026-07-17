@@ -72,6 +72,19 @@ class TraeCNSkillError extends Error {
   }
 
   /**
+   * 任务参数缺失错误
+   * @param {string} [details] - 附加详情（如缺失字段名）
+   * @returns {TraeCNSkillError}
+   */
+  static taskRequired(details) {
+    return new TraeCNSkillError(
+      'Task input is required. Provide a non-empty task string.',
+      'TASK_REQUIRED',
+      details || {}
+    );
+  }
+
+  /**
    * 队列超时错误
    * @param {string} taskId - 任务 ID
    * @param {number} attempts - 尝试次数

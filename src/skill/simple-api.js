@@ -43,8 +43,7 @@ async function switchSoloChat(criteria = {}) {
   return layered.advanced.switchSoloChat(criteria);
 }
 async function submitSoloChatTask(task, opts = {}) {
-  const result = await layered.advanced.submitSoloChatTask(task, opts);
-  return result && typeof result === 'object' ? result.taskId : result;
+  return layered.advanced.submitSoloChatTask(task, opts);
 }
 async function openProject(p) {
   return layered.advanced.openProject(p);
@@ -65,7 +64,7 @@ async function checkDialog() {
   return layered.dialog.checkDialog();
 }
 async function checkQueue() {
-  return layered.batch.checkQueue();
+  return layered.dialog.checkQueue();
 }
 
 // ── Methods that only exist on TraeCNSkill (not surfaced by index.js) ────

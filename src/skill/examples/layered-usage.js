@@ -102,34 +102,16 @@ async function batchExample() {
   console.log('批量结果:', results);
 }
 
-// ============ AI 错误处理示例 ============
-
-const { AIErrorHandler } = require('../ai-errors');
+// ============ 错误处理示例 ============
 
 async function errorHandlingExample() {
-  console.log('\n=== AI 错误处理示例 ===');
-
-  const errorHandler = new AIErrorHandler();
+  console.log('\n=== 错误处理示例 ===');
 
   try {
-    // 模拟一个错误
     throw new Error('Connection refused');
   } catch (error) {
-    // AI 友好的错误处理
-    const report = errorHandler.handle(error, {
-      task: '测试任务'
-    });
-
-    console.log('错误报告:', JSON.stringify(report, null, 2));
-
-    // AI 可以自动尝试修复
-    if (report.canAutoFix) {
-      console.log('尝试自动修复...');
-      // await error.tryAutoFix();
-    }
-
-    // 或者按照建议执行
-    console.log('建议操作:', report.suggestion);
+    console.error('发生错误:', error.message);
+    console.log('建议: 检查 TraeCN IDE 是否启动，端口是否正确');
   }
 }
 
@@ -141,9 +123,6 @@ async function completeWorkflow() {
   // 只导入需要的层
   const { runTask, switchModel, checkStatus } = require('../index');
   const { dialog } = require('../index');
-  const { AIErrorHandler } = require('../ai-errors');
-
-  const errorHandler = new AIErrorHandler();
 
   try {
     // 1. 检查状态
@@ -168,16 +147,11 @@ async function completeWorkflow() {
     }
 
   } catch (error) {
-    // AI 自助处理错误
-    const report = errorHandler.handle(error);
+    console.error('发生错误:', error.message);
+    console.log('建议: 检查 TraeCN IDE 连接状态');
 
-    console.error('发生错误:', report.error);
-    console.log('建议:', report.suggestion);
-
-    // 根据错误类型自动恢复
-    if (report.code === 'CONNECTION_FAILED') {
+    if (error.message.includes('未连接') || error.message.includes('Connection')) {
       console.log('尝试重新连接...');
-      // 等待后重试
     }
   }
 }

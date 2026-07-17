@@ -47,19 +47,6 @@ function sleep(ms) {
 }
 
 /**
- * 转义 JavaScript 字符串
- * @param {string} str 输入字符串
- * @returns {string}
- */
-function escapeJsString(str) {
-  return str
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "\\'")
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, '\\n');
-}
-
-/**
  * 安全的 JavaScript 值序列化
  * @param {*} value 输入值
  * @returns {string}
@@ -234,7 +221,6 @@ module.exports = {
   parseSelectors,
   parsePositiveInt,
   sleep,
-  escapeJsString,
   safeJsValue,
   secureCompare,
   normalizeQueueProbeText,

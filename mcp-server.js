@@ -469,45 +469,6 @@ const RAW_MCP_TOOLS = Object.freeze([
 
 const DEFAULT_MCP_TOOL_PROFILE = 'public';
 
-const PUBLIC_MCP_TOOL_NAMES = Object.freeze([
-  'traecn_get_capabilities',
-  'traecn_list_commands',
-  'traecn_run_command',
-  'traecn_plan_operation',
-  'traecn_preflight',
-  'traecn_run_task',
-  'traecn_queue_task',
-  'traecn_poll_task',
-  'traecn_wait_task',
-  'traecn_cancel_task',
-  'traecn_review_code',
-  'traecn_switch_model',
-  'traecn_switch_mode',
-  'traecn_create_chat',
-  'traecn_get_settings',
-  'traecn_set_setting',
-  'traecn_respond_dialog',
-  'traecn_get_dialog_status',
-  'traecn_open_project',
-  'traecn_run_unattended_workflow'
-]);
-
-const OPS_MCP_TOOL_NAMES = Object.freeze([
-  ...PUBLIC_MCP_TOOL_NAMES,
-  'traecn_adopt_current_task',
-  'traecn_stop_generation',
-  'traecn_get_review_gate_status',
-  'traecn_resolve_review_gate',
-  'traecn_restart_debug_session',
-  'traecn_list_solo_chats',
-  'traecn_switch_solo_chat',
-  'traecn_cleanup_queue_probe_chats',
-  'traecn_get_cleanup_watch_status',
-  'traecn_start_long_queue_proof',
-  'traecn_get_long_queue_proof_status',
-  'traecn_cancel_long_queue_proof'
-]);
-
 const TOOL_METADATA = Object.freeze({
   traecn_get_capabilities: { layer: 'discovery', profile: 'public', risk: 'read' },
   traecn_list_commands: { layer: 'discovery', profile: 'public', risk: 'read' },
@@ -518,7 +479,7 @@ const TOOL_METADATA = Object.freeze({
   traecn_queue_task: { layer: 'task', profile: 'public', risk: 'delegate' },
   traecn_poll_task: { layer: 'task', profile: 'public', risk: 'read' },
   traecn_wait_task: { layer: 'task', profile: 'public', risk: 'read-or-delegate' },
-  traecn_cancel_task: { layer: 'task', profile: 'public', risk: 'delegate' },
+  traecn_cancel_task: { layer: 'task', profile: 'public', risk: 'delegate', destructive: true },
   traecn_review_code: { layer: 'review', profile: 'public', risk: 'delegate' },
   traecn_switch_model: { layer: 'control', profile: 'public', risk: 'write' },
   traecn_switch_mode: { layer: 'control', profile: 'public', risk: 'write' },
@@ -531,21 +492,21 @@ const TOOL_METADATA = Object.freeze({
   traecn_run_unattended_workflow: { layer: 'workflow', profile: 'public', risk: 'delegate' },
 
   traecn_adopt_current_task: { layer: 'recovery', profile: 'ops', risk: 'delegate' },
-  traecn_stop_generation: { layer: 'recovery', profile: 'ops', risk: 'delegate' },
+  traecn_stop_generation: { layer: 'recovery', profile: 'ops', risk: 'delegate', destructive: true },
   traecn_get_review_gate_status: { layer: 'recovery', profile: 'ops', risk: 'read' },
-  traecn_resolve_review_gate: { layer: 'recovery', profile: 'ops', risk: 'delegate' },
-  traecn_restart_debug_session: { layer: 'recovery', profile: 'ops', risk: 'delegate' },
+  traecn_resolve_review_gate: { layer: 'recovery', profile: 'ops', risk: 'delegate', destructive: true },
+  traecn_restart_debug_session: { layer: 'recovery', profile: 'ops', risk: 'delegate', destructive: true },
   traecn_list_solo_chats: { layer: 'solo', profile: 'ops', risk: 'read' },
   traecn_switch_solo_chat: { layer: 'solo', profile: 'ops', risk: 'write' },
-  traecn_cleanup_queue_probe_chats: { layer: 'cleanup', profile: 'ops', risk: 'delegate' },
+  traecn_cleanup_queue_probe_chats: { layer: 'cleanup', profile: 'ops', risk: 'delegate', destructive: true },
   traecn_get_cleanup_watch_status: { layer: 'cleanup', profile: 'ops', risk: 'read' },
   traecn_start_long_queue_proof: { layer: 'acceptance', profile: 'ops', risk: 'delegate' },
   traecn_get_long_queue_proof_status: { layer: 'acceptance', profile: 'ops', risk: 'read' },
-  traecn_cancel_long_queue_proof: { layer: 'acceptance', profile: 'ops', risk: 'delegate' },
+  traecn_cancel_long_queue_proof: { layer: 'acceptance', profile: 'ops', risk: 'delegate', destructive: true },
 
   traecn_get_status: { layer: 'diagnostics', profile: 'full', risk: 'read', alternative: 'traecn_preflight' },
   traecn_get_queue_status: { layer: 'diagnostics', profile: 'full', risk: 'read', alternative: 'traecn_preflight' },
-  traecn_dismiss_dialog: { layer: 'dialog', profile: 'full', risk: 'delegate', alternative: 'traecn_respond_dialog' },
+  traecn_dismiss_dialog: { layer: 'dialog', profile: 'full', risk: 'delegate', destructive: true, alternative: 'traecn_respond_dialog' },
   traecn_submit_solo_task: { layer: 'solo', profile: 'full', risk: 'delegate', alternative: 'traecn_queue_task' }
 });
 
@@ -558,15 +519,23 @@ const TOOL_ANNOTATIONS = Object.freeze({
   'read-or-delegate': { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
 });
 
-const DESTRUCTIVE_MCP_TOOLS = new Set([
-  'traecn_cancel_task',
-  'traecn_stop_generation',
-  'traecn_resolve_review_gate',
-  'traecn_dismiss_dialog',
-  'traecn_restart_debug_session',
-  'traecn_cleanup_queue_probe_chats',
-  'traecn_cancel_long_queue_proof'
-]);
+const PUBLIC_MCP_TOOL_NAMES = Object.freeze(
+  Object.entries(TOOL_METADATA)
+    .filter(([, meta]) => meta.profile === 'public')
+    .map(([name]) => name)
+);
+
+const OPS_MCP_TOOL_NAMES = Object.freeze(
+  Object.entries(TOOL_METADATA)
+    .filter(([, meta]) => meta.profile === 'public' || meta.profile === 'ops')
+    .map(([name]) => name)
+);
+
+const DESTRUCTIVE_MCP_TOOLS = new Set(
+  Object.entries(TOOL_METADATA)
+    .filter(([, meta]) => meta.destructive === true)
+    .map(([name]) => name)
+);
 
 function decorateTool(tool) {
   const metadata = TOOL_METADATA[tool.name] || { layer: 'misc', profile: 'full', risk: 'dynamic' };

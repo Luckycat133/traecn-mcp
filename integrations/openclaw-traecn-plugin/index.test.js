@@ -3,7 +3,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { toolDefinitions, slashCommands, formatResult, PLUGIN_ID } = require('./index');
+const { toolDefinitions, formatResult, PLUGIN_ID } = require('./index');
 const { listCommands, mapSettingsAction } = require('./lib/command-set');
 const { createRunner } = require('../../src/shared/test-runner');
 
@@ -244,19 +244,6 @@ test('traecn_chat has required prompt parameter', () => {
   assert.ok(chat.parameters.properties.mode.enum.includes('ask'));
   assert.ok(chat.parameters.properties.mode.enum.includes('edit'));
   assert.ok(chat.parameters.properties.mode.enum.includes('agent'));
-});
-
-test('slashCommands is an array', () => {
-  assert.ok(Array.isArray(slashCommands));
-  assert.ok(slashCommands.length >= 1);
-});
-
-test('slashCommands have command, description, and handler', () => {
-  for (const cmd of slashCommands) {
-    assert.ok(cmd.command, 'Command missing command name');
-    assert.ok(cmd.description, 'Command missing description');
-    assert.ok(typeof cmd.handler === 'function', 'Command missing handler');
-  }
 });
 
 test('formatResult handles error', () => {

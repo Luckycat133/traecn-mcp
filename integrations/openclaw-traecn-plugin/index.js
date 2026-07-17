@@ -719,31 +719,6 @@ const toolDefinitions = [
   }
 ];
 
-const slashCommands = [
-  {
-    command: '/TraeCN',
-    description: 'Create a new chat and delegate a task to TraeCN, returning only the final response',
-    handler: async (args, context) => {
-      const task = args.trim();
-      if (!task) return 'Usage: /TraeCN <task>';
-      const client = new TraeCNApiClient(context);
-      const result = await client.delegate(task, { includeProcessText: false });
-      return formatResult(result);
-    }
-  },
-  {
-    command: '/TraeCN process',
-    description: 'Create a new chat and delegate a task to TraeCN, returning the full output including process information',
-    handler: async (args, context) => {
-      const task = args.trim();
-      if (!task) return 'Usage: /TraeCN process <task>';
-      const client = new TraeCNApiClient(context);
-      const result = await client.delegate(task, { includeProcessText: true });
-      return formatResult(result);
-    }
-  }
-];
-
 function formatResult(result) {
   if (result.error) {
     return `[TraeCN Error] ${result.error}`;
@@ -782,7 +757,6 @@ function register(openClaw) {
 module.exports = {
   PLUGIN_ID,
   toolDefinitions,
-  slashCommands,
   formatResult,
   register
 };
