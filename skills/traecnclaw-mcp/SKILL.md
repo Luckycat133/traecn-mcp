@@ -1,6 +1,11 @@
 ---
 name: traecnclaw-mcp
 description: Use when an MCP-capable agent must connect, configure, operate, test, or document TRAECNclaw's stdio MCP server for TraeCN automation, OpenClaw integration, unattended vibe workflows, settings/model/dialog control, code review delegation, or long-queue proof runs. Prefer this skill whenever the agent needs the real MCP tool surface instead of direct browser/GUI control.
+license: MIT
+compatibility: Requires Node.js 22+, a running TraeCN IDE instance with CDP remote debugging on port 9222, and the local TRAECNclaw HTTP gateway on 127.0.0.1:8788. Use `npm run doctor` to verify readiness.
+metadata:
+  author: TRAECNclaw
+  version: "0.3.0"
 ---
 
 # TRAECNclaw MCP

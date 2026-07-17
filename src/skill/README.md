@@ -99,8 +99,6 @@ Model and section names support fuzzy/alias matching via `KNOWN_MODELS` and `SET
 
 Errors are wrapped in `TraeCNSkillError` with stable codes: `TASK_ID_MISSING`, `UNKNOWN_MODEL`, `INVALID_MODE`, `TASK_FAILED`, `QUEUE_TIMEOUT`, `CONNECTION_ERROR`. Inspect `error.code` and `error.details` for recovery.
 
-For an opinionated classifier with recovery suggestions, see [`ai-errors.js`](./ai-errors.js) (`AIFriendlyError` / `AIErrorHandler`).
-
 ## API comparison
 
 | Aspect | Raw gateway API | `TraeCNSkill` class | `simple-api` flat |
