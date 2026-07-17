@@ -31,6 +31,16 @@ Do NOT use this skill for direct browser automation or GUI clicking when an MCP 
 5. Start the gateway separately: `npm run start:gateway` (or `TRAECN_ENABLE_MOCK_BRIDGE=1 npm run start:gateway` for mock mode).
 6. For exact tool names, profiles, and MCP client config JSON, read [references/mcp-surface.md](references/mcp-surface.md).
 
+## Start the MCP server
+
+Use the bundled launcher so the server inherits stdio for JSON-RPC:
+
+```bash
+node scripts/start-mcp.js
+```
+
+The launcher auto-locates `mcp-server.js` from the repo root. Set `TRAECN_MCP_SERVER_PATH` to override. For MCP client config templates (Cursor, Claude Desktop, Cline, Windsurf), copy [assets/mcp-client-config.json](assets/mcp-client-config.json) and replace `SKILL_DIR` with the absolute path to this skill folder.
+
 ## Profile choice
 
 `TRAECN_MCP_TOOL_PROFILE` scopes `tools/list`:

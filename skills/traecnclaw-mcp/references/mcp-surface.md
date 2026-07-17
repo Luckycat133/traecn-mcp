@@ -4,9 +4,11 @@ Reference for selecting exact tools, configuring MCP clients, or auditing docs a
 
 ## Server
 
-- Entrypoint: `mcp-server.js`
+- Entrypoint: `mcp-server.js` (repo root)
+- Skill launcher: `scripts/start-mcp.js` — auto-locates and starts the server, inheriting stdio for JSON-RPC
 - Local gateway default: `http://127.0.0.1:8788`
-- Start: `npm run mcp`
+- Start via skill: `node scripts/start-mcp.js`
+- Start via npm: `npm run mcp`
 - Package bin: `traecnclaw-mcp`
 - Transport: stdio JSON-RPC
 - Live tool list from code:
@@ -17,7 +19,28 @@ node -e "console.log(require('./mcp-server').MCP_TOOLS.map(t => t.name).join('\n
 
 ## Client config
 
-Generic shape for any MCP client with an `mcpServers` config (Cursor, Claude Desktop, Cline/Roo Code, Windsurf):
+Copy [`assets/mcp-client-config.json`](../assets/mcp-client-config.json) into your client's config and replace `SKILL_DIR` with the absolute path to this skill folder. Two entry points are provided:
+
+**Option A (recommended): skill launcher**
+
+```json
+{
+  "mcpServers": {
+    "traecn": {
+      "command": "node",
+      "args": ["SKILL_DIR/scripts/start-mcp.js"],
+      "env": {
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_TOKEN": "",
+        "TRAECN_MCP_TOOL_PROFILE": "public"
+      }
+    }
+  }
+}
+```
+
+**Option B (fallback): direct mcp-server.js path**
 
 ```json
 {
