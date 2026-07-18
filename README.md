@@ -1,5 +1,9 @@
 # TRAECNclaw
 
+> Status: Core Canonical Active
+>
+> **TRAECNclaw is the canonical source repository.** Packages, the Agent Skill, OpenClaw metadata, and GitHub Releases are generated and versioned from this repository.
+
 Local HTTP bridge, OpenClaw tool integration, and AI Skill module for TraeCN desktop automation. TRAECNclaw connects OpenClaw to TraeCN through a local REST gateway, Chrome DevTools Protocol (CDP), and DOM automation so tools can create chats, delegate tasks, switch modes, inspect readiness, and read TraeCN responses.
 
 ## Table of Contents
@@ -328,7 +332,7 @@ npm run test:live
 npm run audit:prod
 ```
 
-`npm test` runs unit and integration tests. `test:system` starts the gateway in mock mode and verifies the HTTP flow. `test:uat` verifies documentation, OpenAPI coverage, and the machine-readable acceptance audit required for release acceptance. `npm run acceptance:audit` prints the current requirement-by-requirement status; add `-- --require-complete` before declaring the full unattended TraeCN goal complete.
+`npm test` runs unit and integration tests. Default CI uses mock and local test surfaces and never spends TraeCN quota. `test:system` starts the gateway in mock mode and verifies the HTTP flow. `test:uat` verifies documentation, OpenAPI coverage, and the machine-readable acceptance audit required for release acceptance. `npm run acceptance:audit` prints the current requirement-by-requirement status; add `-- --require-complete` before declaring the full unattended TraeCN goal complete.
 `test:live` runs safe real Trae CN/CDP smoke checks when a live remote-debugging endpoint is available; otherwise it reports `SKIP` and exits successfully. Use `node scripts/live-uat.js --strict` when a live desktop instance is required, `--require-ready` when the UI must be logged in and automation-ready, and `--cleanup-queue-probes` when accidental `wait for Trae queue` Solo chats should be stopped, deleted, and rechecked to `matched: 0`. `--strict` fails if those queue-probe chats remain. Add `--delegate` only when sending a real test prompt is acceptable. `--delegate` is readiness-gated and fails with diagnostics instead of sending a prompt to an unready UI.
 `npm run proof:long-queue` is the guarded GLM-5.2 proof runner. It defaults to dry-run, verifies preflight readiness, refuses to start when queue-probe Solo chats or local tasks remain, and prints the exact evidence paths. Add `-- --execute --detach --allow-quota-spend` only when a real long-queue TraeCN submission is explicitly approved; execute mode automatically stops/deletes accidental queue-probe Solo chats and requires consecutive clean dry-runs before submitting. Tune that gate with `-- --cleanup-stabilize-checks <n> --cleanup-stabilize-delay-ms <ms> --cleanup-max-attempts <n>`. Re-running with the same marker resumes the existing task from the evidence log instead of submitting again; add `-- --force-new` only when an intentional new submission is acceptable. Use `npm run proof:status`, MCP `traecn_get_long_queue_proof_status`, OpenClaw `traecn_long_queue_proof_status`, CLI `traecnclaw proof status`, or `npm run proof:cancel -- --marker <id>` to inspect or stop detached proof runs without creating another TraeCN conversation.
 
@@ -338,6 +342,12 @@ Bind the gateway to `127.0.0.1`, set `TRAECN_GATEWAY_TOKEN` before exposing prot
 
 ## Distribution
 
+All release surfaces share the version in `package.json`. Run
+`npm run check:versions` before release. Pushing a matching `v*` tag runs
+lint, unit/integration tests, the mock system test, packages the Skill and npm
+tarball, generates `SHA256SUMS`, and creates a GitHub Release. Quota-consuming
+live acceptance is intentionally excluded.
+
 Before public distribution, make the repository or release artifact public,
 verify the skill with `quick_validate.py`, run the maintained test suite, and
 scan the current tree and git history for secrets. Public catalog submissions
@@ -346,6 +356,7 @@ or `traecnclaw-mcp` for the server entrypoint.
 
 ## Documentation
 
+- [Compatibility Matrix](docs/COMPATIBILITY.md)
 - [User Manual](docs/user-manual.md)
 - [Development Guide](docs/development.md)
 - [Deployment Guide](docs/deployment.md)
@@ -358,7 +369,7 @@ or `traecnclaw-mcp` for the server entrypoint.
 
 ## Maintainers
 
-Repository maintainers for `firerlAGI/TRAECNclaw`.
+Repository maintainers for `Luckycat133/TRAECNclaw`.
 
 ## License
 

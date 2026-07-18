@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Node.js 22+, a running TraeCN IDE instance with CDP remote debugging on port 9222, and the local TRAECNclaw HTTP gateway on 127.0.0.1:8788. Use `npm run doctor` to verify readiness.
 metadata:
   author: TRAECNclaw
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 # TRAECNclaw MCP

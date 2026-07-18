@@ -1883,7 +1883,7 @@ asyncTest('Gateway task cancel stops submitted executing task', async () => {
     submittedToTrae: true
   };
   gateway.taskQueue.set(task.taskId, task);
-  gateway.taskLocks.add(task.taskId);
+  gateway.taskQueueService.tryAcquire(task.taskId);
   let stopCalled = false;
   gateway.driver = {
     stopGeneration: async () => {

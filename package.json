@@ -1,12 +1,12 @@
 {
   "name": "traecnclaw",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Local HTTP bridge and OpenClaw tool integration for TraeCN powered by CDP and DOM automation.",
-  "homepage": "https://github.com/firerlAGI/TRAECNclaw",
+  "homepage": "https://github.com/Luckycat133/TRAECNclaw",
   "repository": {
     "type": "git",
-    "url": "https://github.com/firerlAGI/TRAECNclaw.git"
+    "url": "https://github.com/Luckycat133/TRAECNclaw.git"
   },
   "license": "MIT",
   "keywords": [
@@ -106,7 +106,9 @@
     "lint:eslint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "check:versions": "node scripts/check-versions.js",
+    "test:release": "npm run check:versions && npm run lint && npm test && npm run test:system && npm run pack:skill"
   },
   "dependencies": {
     "ws": "^8.21.0"
