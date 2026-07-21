@@ -16,41 +16,14 @@
  */
 
 const { parseBody } = require('../request-gate');
-const { getEnvWithFallback, isGenericQueueProbeTask } = require('../../shared/utils');
+const { isGenericQueueProbeTask } = require('../../shared/utils');
+const { notifyOpenClaw, formatResult } = require('../task-notify');
 
 const ROUTES = [
   { method: 'POST', path: '/api/tasks/delegate', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'POST', path: '/api/delegate', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'POST', path: '/api/delegate-async', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 ];
-
-async function notifyOpenClaw(chatId, message) {
-  try {
-    const openclawUrl = getEnvWithFallback('TRAECN_OPENCLAW_URL', 'TRAE_OPENCLAW_URL', 'http://127.0.0.1:18789/api/message/send');
-    const body = JSON.stringify({ chatId, text: message });
-    const res = await fetch(openclawUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      signal: AbortSignal.timeout(5000)
-    });
-    if (res.ok) await res.text();
-  } catch (e) {
-    console.error('[Delegate] OpenClaw notify failed:', e.message);
-  }
-}
-
-function formatResult(result) {
-  if (!result) return '✅ Trae 完成（无详情）';
-  if (result.needsConfirmation || result.needsApproval) {
-    return `🤖 Trae 需要确认:\n${result.question}\n\n输入你的决定继续。`;
-  }
-  if (result.error) {
-    return `❌ Trae 出错: ${result.error}`;
-  }
-  const msg = result.text || result.message || '';
-  return `✅ Trae 完成: ${msg.substring(0, 200)}`;
-}
 
 async function handleDelegateAsync(req, res, ctx) {
   const body = await parseBody(req);
@@ -307,7 +280,7 @@ async function handleDelegateAsync(req, res, ctx) {
   }
 
   if (chatId) {
-    await notifyOpenClaw(chatId, formatResult(result));
+    await notifyOpenClaw(chatId, formatResult(result), '[Delegate] OpenClaw notify failed:');
   }
 
   const responseData = {
