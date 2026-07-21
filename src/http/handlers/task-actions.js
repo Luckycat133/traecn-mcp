@@ -1,6 +1,7 @@
 'use strict';
 
 const { parseBody } = require('../request-gate');
+const { hasDriverCapability } = require('./helpers');
 
 /**
  * task-actions handlers.
@@ -246,7 +247,7 @@ async function handleAdoptCurrentTask(req, res, ctx) {
   }
 
   let activeSnapshot = null;
-  if (ctx.driver && typeof ctx.driver.getActiveSoloChat === 'function') {
+  if (ctx.driver && hasDriverCapability(ctx, 'getActiveSoloChat')) {
     try {
       activeSnapshot = await ctx.driver.getActiveSoloChat();
     } catch (err) {

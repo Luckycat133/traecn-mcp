@@ -18,6 +18,7 @@
 const { parseBody } = require('../request-gate');
 const { isGenericQueueProbeTask } = require('../../shared/utils');
 const { notifyOpenClaw, formatResult } = require('../task-notify');
+const { rejectBadRequest } = require('./helpers');
 
 const ROUTES = [
   { method: 'POST', path: '/api/tasks/delegate', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
@@ -34,7 +35,7 @@ async function handleDelegateAsync(req, res, ctx) {
     }, 400);
   }
   if (!body.task) {
-    return ctx._json(req, res, { error: 'task is required' }, 400);
+    return rejectBadRequest(req, res, ctx, 'task is required');
   }
   if (typeof body.task !== 'string' || body.task.length > 100000) {
     return ctx._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);

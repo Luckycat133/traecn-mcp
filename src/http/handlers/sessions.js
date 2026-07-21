@@ -2,6 +2,7 @@
 
 const { parseBody } = require('../request-gate');
 const { isGenericQueueProbeTask } = require('../../shared/utils');
+const { rejectBadRequest, hasDriverCapability } = require('./helpers');
 
 /**
  * sessions handlers.
@@ -99,7 +100,7 @@ async function handleDelegate(req, res, ctx, sessionId) {
     }, 400);
   }
   if (!body.task) {
-    return ctx._json(req, res, { error: 'task is required' }, 400);
+    return rejectBadRequest(req, res, ctx, 'task is required');
   }
   if (typeof body.task !== 'string' || body.task.length > 100000) {
     return ctx._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
@@ -112,7 +113,7 @@ async function handleDelegate(req, res, ctx, sessionId) {
     ctx._appendSessionMessage(sessionId, { role: 'user', content: body.task });
   }
 
-  const queueStatus = typeof ctx.driver.checkQueueStatus === 'function'
+  const queueStatus = hasDriverCapability(ctx, 'checkQueueStatus')
     ? await ctx.driver.checkQueueStatus()
     : { queued: false, running: false, canSubmit: true };
   const waitForQueue = body.waitForQueue !== false;

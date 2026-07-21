@@ -1,6 +1,7 @@
 'use strict';
 
 const { parseBody } = require('../request-gate');
+const { rejectBadRequest } = require('./helpers');
 
 /**
  * settings handlers.
@@ -125,10 +126,10 @@ async function handleSettingsRead(req, res, ctx) {
 async function handleSettingsSet(req, res, ctx) {
   const body = await parseBody(req);
   if (!body.label) {
-    return ctx._json(req, res, { error: 'label is required' }, 400);
+    return rejectBadRequest(req, res, ctx, 'label is required');
   }
   if (body.value === undefined || body.value === null) {
-    return ctx._json(req, res, { error: 'value is required' }, 400);
+    return rejectBadRequest(req, res, ctx, 'value is required');
   }
   const confirmationFailure = ctx._confirmationFailure(req, body, 'settings_set', {
     label: body.label,
@@ -150,7 +151,7 @@ async function handleSettingsSet(req, res, ctx) {
 async function handleSettingsSwitchTab(req, res, ctx) {
   const body = await parseBody(req);
   if (!body.section) {
-    return ctx._json(req, res, { error: 'section is required' }, 400);
+    return rejectBadRequest(req, res, ctx, 'section is required');
   }
 
   await ctx._ensureConnection();

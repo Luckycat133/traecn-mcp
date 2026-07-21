@@ -2,6 +2,7 @@
 
 const { parseBody } = require('../request-gate');
 const { isGenericQueueProbeTask } = require('../../shared/utils');
+const { rejectBadRequest } = require('./helpers');
 
 /**
  * batch handlers.
@@ -51,7 +52,7 @@ const ROUTES = [
 async function handleBatchSubmit(req, res, ctx) {
   const body = await parseBody(req);
   if (!body.tasks || !Array.isArray(body.tasks) || body.tasks.length === 0) {
-    return ctx._json(req, res, { error: 'tasks array is required and must not be empty' }, 400);
+    return rejectBadRequest(req, res, ctx, 'tasks array is required and must not be empty');
   }
   if (body.tasks.length > 100) {
     return ctx._json(req, res, { error: 'Maximum 100 tasks per batch' }, 400);

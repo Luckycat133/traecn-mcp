@@ -1,6 +1,7 @@
 'use strict';
 
 const { parseBody } = require('../request-gate');
+const { rejectBadRequest, requireDriverCapability } = require('./helpers');
 
 /**
  * dialog handlers.
@@ -93,10 +94,10 @@ async function handleDialogApprove(req, res, ctx) {
   if (action === 'answer') {
     const answer = body.answer || body.option || body.value;
     if (!answer) {
-      return ctx._json(req, res, { error: 'answer is required for dialog answer action' }, 400);
+      return rejectBadRequest(req, res, ctx, 'answer is required for dialog answer action');
     }
-    if (typeof ctx.driver.answerQuestionDialog !== 'function') {
-      return ctx._json(req, res, { error: 'Driver does not support question dialog answers' }, 501);
+    if (!requireDriverCapability(req, res, ctx, 'answerQuestionDialog', 'Driver does not support question dialog answers')) {
+      return;
     }
     const result = await ctx.driver.answerQuestionDialog(answer);
     const resumedTaskIds = result.success

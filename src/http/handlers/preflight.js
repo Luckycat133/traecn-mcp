@@ -3,6 +3,7 @@
 const { parseBody } = require('../request-gate');
 const { buildConfirmationPlan } = require('../../shared/operation-confirmation');
 const { listCommands } = require('../../../integrations/openclaw-traecn-plugin/lib/command-set');
+const { rejectBadRequest } = require('./helpers');
 
 /**
  * preflight handlers.
@@ -38,7 +39,7 @@ const ROUTES = [
 async function handleConfirmPlan(req, res, ctx) {
   const body = await parseBody(req);
   if (!body.command || typeof body.command !== 'string') {
-    return ctx._json(req, res, { error: 'command is required' }, 400);
+    return rejectBadRequest(req, res, ctx, 'command is required');
   }
   ctx._json(req, res, buildConfirmationPlan(body));
 }

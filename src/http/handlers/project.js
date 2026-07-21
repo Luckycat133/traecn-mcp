@@ -2,6 +2,7 @@
 
 const packageInfo = require('../../../package.json');
 const { parseBody } = require('../request-gate');
+const { rejectBadRequest } = require('./helpers');
 
 /**
  * project handlers.
@@ -37,7 +38,7 @@ const ROUTES = [
 async function handleOpenProject(req, res, ctx) {
   const body = await parseBody(req);
   if (!body.projectPath) {
-    return ctx._json(req, res, { error: 'projectPath is required' }, 400);
+    return rejectBadRequest(req, res, ctx, 'projectPath is required');
   }
 
   const projectPath = body.projectPath;
