@@ -1,6 +1,6 @@
 # TRAECNclaw 重构诊断报告
 
-> 生成日期：2026-07-21
+> 生成日期：2026-07-21　｜　**状态更新：P0 五项已全部完成**（branch `refactor/readability`，提交 `5e2821f`→`a7723cc`，lint + eslint + 全量测试通过）。详见文末「执行记录」。
 > 范围：`src/`、`scripts/`、`integrations/`（约 145 个源文件 / 4.3 万行，不含 `*.test.js`）
 > 原则：**保持所有现有功能不变，不引入新特性**。所有建议均为可读性 / 可维护性改进。
 > 验证基线：`npm test` 全绿（唯一 FAIL 为 test-runner 自验证的预期 `intentional` 项，单独运行通过）。
@@ -134,3 +134,27 @@
 4. **P2 视时间**：注释统一与冗余清理。
 
 > 每个 P0 项均为零/低风险且可被现有测试覆盖；P1 涉及调用约定，建议逐项确认后再动。
+
+---
+
+## 七、执行记录（2026-07-21，P0 已完成）
+
+P0 五项已在 `refactor/readability` 分支完成（基于 main `09f7c4a`，共 9 个提交），全程采用「实现 → 规格符合性评审 → 代码质量评审」三段流程：
+
+| 项 | 提交 | 结果 |
+|---|---|---|
+| P0-1 拆 queue-probe | `5e2821f` `3e5349f` | ✅ 6 函数纯移动（逐字节比对一致），utils re-export 接口不变 |
+| P0-2 抽 task-notify | `ea9e5bb` `3729c5f` | ✅ 4 函数抽出 + 消除 delegate 重复；`logPrefix` 保两侧日志前缀 |
+| P0-3 config 派生 | `0f366cd` | ✅ `DEFAULT_CONFIG` 由 `buildDefaultConfig()` 派生，深度相等验证通过 |
+| P0-4 handlers helpers | `973d011` `a0467d5` | ✅ 28 处收敛为 3 个 helper；按评审改为 options 对象签名 |
+| P0-5 注释+常量 | `0e76926` `a7723cc` | ✅ gateway 文件级 docstring + 3 个命名常量 + 关键"为什么"注释 |
+
+**整体验证**：`npm run lint` ✅、`npm run lint:eslint`（0 problems）✅、`npm test` 全量 41 套件中重构相关全绿 ✅。两个失败项与本次无关（test-runner 自验证 intentional 项；traecn-cli 的 macOS 进程探测环境问题，`scripts/` 本次零改动，基线已存在）。
+
+**评审中发现并已修正的问题**：`handlers/settings.js` 及 config/dialog/preflight 四组 handler 属历史遗留的**未接线死代码**（生产流量走 gateway.js 内联实现，源自历史提交 `0ba8b3b`）。P0-5 误把 `hardLimitMs` 注释加在了不执行的副本上，已挪至 gateway.js 活实现并修正 settings.js 文件头不实声明（`a7723cc`）。
+
+**转入 P1 的新候选**：
+- 四组未接线 handler（settings/config/dialog/preflight）的「接线或删除」审计。
+- 统一 settings handler 与 gateway 的 `e.message` vs `safeErrorMessage(e)` 错误包装差异。
+- `batch-executor.js` 与 `queue-state-machine.js` 的 120 字符阈值可考虑共享常量 `MIN_COMPLETION_EVIDENCE_CHARS`。
+- `task-notify.js` 的 `formatReviewRequiredMessage`/`sendTaskWebhook` 目前无直接单测（gateway.test.js 中相关路径被 stub）。

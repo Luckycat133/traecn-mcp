@@ -62,6 +62,13 @@ Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No be
 - Repointed `package.json` `exports["./errors"]` from the deleted
   `ai-errors.js` to the canonical `errors.js`.
 - Updated lint script to check `errors.js` instead of the deleted `ai-errors.js`.
+- Extracted the queue-probe predicate helpers (6 functions) from `src/shared/utils.js` into a dedicated `src/shared/queue-probe.js` module; `utils.js` re-exports them so all 61 existing `require` sites keep working unchanged.
+- Extracted the four task-completion notification functions (`notifyOpenClaw`, `formatResult`, `formatReviewRequiredMessage`, `sendTaskWebhook`) from the top of `src/http/gateway.js` into a new `src/http/task-notify.js` module, and removed the duplicated `notifyOpenClaw`/`formatResult` definitions in `src/http/handlers/delegate.js` in favor of the shared module (an optional `logPrefix` parameter keeps both sides' error-log prefixes unchanged).
+- Derived `DEFAULT_CONFIG` in `src/shared/config-manager.js` from `CONFIG_SCHEMA` via the module-private `buildDefaultConfig()` instead of maintaining default values in two places by hand; the derived result is deep-equal to the previous handwritten values.
+- Added `src/http/handlers/helpers.js` exporting `rejectBadRequest`, `hasDriverCapability`, and `requireDriverCapability`, consolidating 28 copies of the parameter-validation and driver-capability-guard boilerplate across 10 handlers; error messages are preserved byte-for-byte and the helpers take named options objects to avoid positional-argument drift.
+- Documented `src/http/gateway.js` with a file-level docstring (gateway responsibilities and handlers layering), replaced scattered magic numbers with named constants (`MAX_TASK_TEXT_LENGTH`, `IDEMPOTENCY_KEY_TTL_MS`, `GZIP_MIN_BYTES`), and added "why" comments for the CIDR mask bit arithmetic, the 120-character completion threshold, and the 35000 ms settings-read timeout. No external behavior changes.
+- Corrected misleading file-header comments on the historically unwired dead-code modules (`src/http/handlers/settings.js` and the config/dialog/preflight handler groups) to state that production traffic goes through the inline implementations in `gateway.js`.
+- Updated the `lint` script to `node --check` the new modules (`queue-probe.js`, `task-notify.js`, `handlers/helpers.js`).
 
 ### Fixed
 
