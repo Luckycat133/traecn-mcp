@@ -2407,6 +2407,9 @@ class Gateway {
 
   async _handleSettingsReadAll(req, res) {
     await this._ensureConnection();
+    // Hard timeout ceiling (ms) for reading every settings section in one
+    // go; raced against the driver call so a stuck settings panel can't
+    // hang the request forever.
     const hardLimitMs = 35000;
     let timeoutId;
     const timeoutPromise = new Promise((_, reject) => {

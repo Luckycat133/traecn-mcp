@@ -10,9 +10,10 @@ const { rejectBadRequest } = require('./helpers');
  * exported function with signature `function handleX(req, res, ctx, ...pathParams)`
  * taking the gateway instance as `ctx`. Behavior is preserved 1:1.
  *
- * The Gateway retains thin delegating shims (e.g. `_handleCreateSession`) so
- * existing gateway.test.js cases that call `gateway._handleCreateSession(...)`
- * continue to work unchanged.
+ * NOTE: this group is currently NOT wired into the Gateway — no delegating
+ * shim exists for these settings handlers, so live traffic is served by the
+ * inline `_handleSettings*` methods in gateway.js. This module is kept for a
+ * future migration; see route-table.js for the actual dispatch path.
  */
 
 const ROUTES = [
@@ -76,9 +77,6 @@ const ROUTES = [
 
 async function handleSettingsReadAll(req, res, ctx) {
   await ctx._ensureConnection();
-  // Hard timeout ceiling (milliseconds) for reading every settings section
-  // in one go; raced against the driver call so a stuck settings panel
-  // can't hang the request forever.
   const hardLimitMs = 35000;
   let timeoutId;
   const timeoutPromise = new Promise((_, reject) => {
