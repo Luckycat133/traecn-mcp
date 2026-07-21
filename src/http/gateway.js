@@ -53,14 +53,13 @@ const taskActionsHandlers = require('./handlers/task-actions');
 const batchHandlers = require('./handlers/batch');
 const projectHandlers = require('./handlers/project');
 const driverDispatchHandlers = require('./handlers/driver-dispatch');
+const { notifyOpenClaw, formatResult, formatReviewRequiredMessage, sendTaskWebhook } = require('./task-notify');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
 
 const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
-
-const { notifyOpenClaw, formatResult, formatReviewRequiredMessage, sendTaskWebhook } = require('./task-notify');
 
 class Gateway {
   constructor(options = {}) {
