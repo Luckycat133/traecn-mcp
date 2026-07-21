@@ -180,49 +180,29 @@ const CONFIG_SCHEMA = {
   }
 };
 
-const DEFAULT_CONFIG = {
-  logLevel: 'info',
-  rateLimit: {
-    windowMs: 60000,
-    maxRequests: 60
-  },
-  timeout: {
-    request: 120000,
-    response: 30000
-  },
-  cors: {
-    allowedOrigins: '',
-    enabled: true
-  },
-  server: {
-    host: '127.0.0.1',
-    port: 8788,
-    token: '',
-    authHeader: 'Authorization'
-  },
-  traeControl: {
-    autoStart: false,
-    recoveryCooldownMs: 30000,
-    recoveryWaitMs: 60000
-  },
-  autoRecover: {
-    enabled: false,
-    probeIntervalMs: 30000,
-    maxRecoveries: 5,
-    probeTimeoutMs: 5000
-  },
-  queue: {
-    flickerGraceMs: 45000,
-    persistencePath: ''
-  },
-  features: {
-    debugEndpoints: false,
-    mockBridge: false,
-    enforceOperationConfirmation: false
-  },
-  plugins: {},
-  secrets: {}
-};
+/**
+ * Derive the default config object from CONFIG_SCHEMA. A schema node holding
+ * a `default` key is a leaf and contributes its default value; any other
+ * plain object is a nested parent whose children are assembled recursively.
+ * Object/array defaults are deep-copied so callers never share references
+ * with the schema. Key order follows the schema definition order.
+ */
+function buildDefaultConfig(schema) {
+  const config = {};
+  for (const [key, node] of Object.entries(schema)) {
+    if (Object.prototype.hasOwnProperty.call(node, 'default')) {
+      const value = node.default;
+      config[key] = (value !== null && typeof value === 'object')
+        ? JSON.parse(JSON.stringify(value))
+        : value;
+    } else {
+      config[key] = buildDefaultConfig(node);
+    }
+  }
+  return config;
+}
+
+const DEFAULT_CONFIG = buildDefaultConfig(CONFIG_SCHEMA);
 
 class ConfigValidationError extends Error {
   constructor(message, errors = []) {
