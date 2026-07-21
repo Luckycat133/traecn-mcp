@@ -17,7 +17,7 @@ const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
 const { getEnvWithFallback, parsePositiveInt, sanitizeLog, isGenericQueueProbeTask } = require('../shared/utils');
-const { errorToHttpStatus, errorToBody } = require('./error-mapping');
+const { errorToHttpStatus, errorToBody, safeErrorMessage } = require('./error-mapping');
 const { ConfigManager } = require('../shared/config-manager');
 const { getGlobalStore } = require('../shared/task-history');
 const { buildCapabilities } = require('../shared/capabilities');
@@ -132,6 +132,13 @@ class Gateway {
     this.port = options.port !== undefined ? options.port : config.server.port;
     this.token = config.server.token;
     this.authHeader = config.server.authHeader;
+    if (!this.token && this.host !== '127.0.0.1' && this.host !== 'localhost') {
+      console.warn(
+        `[Gateway] WARNING: TRAECN_GATEWAY_TOKEN is not set and gateway is bound to ` +
+        `'${this.host}' (non-loopback). All authenticated endpoints will be open ` +
+        `to anyone who can reach this host. Set TRAECN_GATEWAY_TOKEN or bind to 127.0.0.1.`
+      );
+    }
     this.allowedOrigins = config.cors.allowedOrigins;
     this.debugEndpoints = config.features.debugEndpoints;
     this.mockBridge = config.features.mockBridge;
@@ -152,7 +159,11 @@ class Gateway {
     this.pollingTimer = null;
     this.isPolling = false;
     this.uiActionChain = Promise.resolve();
-    this.taskLocks = new Set();
+    // taskLocks is owned by taskQueueService.stateMachine (a Map<taskId, boolean>).
+    // Exposed on `this` as a read-only alias for the polling loop's .has()
+    // checks; mutations go through taskQueueService.tryAcquire/release so
+    // the lock contract is explicit and the abstraction is not dead.
+    this.taskLocks = null;
     this.activeTimers = new Set();
     this.autoStartTrae = config.traeControl.autoStart;
     this.traeRecoveryCooldownMs = config.traeControl.recoveryCooldownMs;
@@ -189,6 +200,9 @@ class Gateway {
       isTerminalStatus: (status) => this._isTerminalTaskStatus(status),
     });
     this.taskQueueService.restore(this.taskQueue);
+    // Point the read-only alias at the state machine's lock map. All
+    // mutations go through taskQueueService.tryAcquire/release.
+    this.taskLocks = this.taskQueueService.taskLocks;
 
     this.configManager.on('configChanged', (data) => {
       this._applyConfigChanges(data.changes);
@@ -816,7 +830,7 @@ class Gateway {
         results.push({
           model,
           ok: false,
-          error: err.message,
+          error: safeErrorMessage(err),
           elapsedMs: Date.now() - startedAt
         });
       }
@@ -1161,7 +1175,7 @@ class Gateway {
     } catch (err) {
       this.taskHistoryStore.recordStep(taskId, 'dialog_auto_approval_failed', {
         success: false,
-        error: err.message,
+        error: safeErrorMessage(err),
         details: {
           action,
           dialogType: result.dialogType || null
@@ -1656,7 +1670,10 @@ class Gateway {
     // Single-source-of-truth route lookup. Public endpoints (requiresAuth: false)
     // are dispatched before the auth check to preserve the pre-refactor behavior
     // where public endpoints such as /api/status, /api/capabilities, /,
-    // /openapi.json, /metrics, and /metrics.json bypassed authentication.
+    // /metrics, and /metrics.json bypassed authentication. (Note: /openapi.json
+    // is now requiresAuth: true to prevent unauthenticated API-surface
+    // reconnaissance — the chat UI's diagnostics panel still works because
+    // it already includes the saved token on every request.)
     const match = matchRoute(method, pathname);
     if (!match) {
       this._finishRequestLog(req, res, 404);
@@ -2434,7 +2451,7 @@ class Gateway {
       ]);
       this._json(req, res, { sections: Object.keys(data || {}), data });
     } catch (e) {
-      this._json(req, res, { error: e.message, sections: [], data: {} }, 504);
+      this._json(req, res, { error: safeErrorMessage(e), sections: [], data: {} }, 504);
     } finally {
       if (timeoutId) this._clearTimeout(timeoutId);
     }
@@ -2462,7 +2479,7 @@ class Gateway {
     try {
       data = await this.driver.settings.getContent();
     } catch(e) {
-      return this._json(req, res, { error: e.message }, 500);
+      return this._json(req, res, { error: safeErrorMessage(e) }, 500);
     }
 
     this._json(req, res, { section: section || 'current', ...data });
@@ -2847,9 +2864,9 @@ class Gateway {
       }
     } catch (e) {
       task.status = 'error';
-      task.error = e.message;
+      task.error = safeErrorMessage(e);
       batch.failedCount++;
-      batch.results.push({ taskId, status: 'error', error: e.message });
+      batch.results.push({ taskId, status: 'error', error: safeErrorMessage(e) });
     }
 
     this._checkBatchCompletion(batchId);
@@ -3240,7 +3257,7 @@ class Gateway {
           if (this._isTerminalTaskStatus(task.status) && now - task.createdAt > maxTaskAge) {
             console.log('[Queue] Cleaning up old task', taskId, 'with status', task.status);
             this.taskQueue.delete(taskId);
-            this.taskLocks.delete(taskId);
+            this.taskQueueService.release(taskId);
           }
         }
         
@@ -3255,7 +3272,7 @@ class Gateway {
           }
 
           if (task.status === 'executing' && task.submittedToTrae === true) {
-            this.taskLocks.add(taskId);
+            this.taskQueueService.tryAcquire(taskId);
             try {
               if (await this._finalizePersistedResultIfComplete(taskId, task)) {
                 continue;
@@ -3275,10 +3292,10 @@ class Gateway {
                 continue;
               }
               await this._finalizeBackgroundTask(taskId, task, 'error', {
-                error: e.message
+                error: safeErrorMessage(e)
               });
             } finally {
-              this.taskLocks.delete(taskId);
+              this.taskQueueService.release(taskId);
             }
             continue;
           }
@@ -3321,7 +3338,7 @@ class Gateway {
             }
 
             // Lock this task before execution
-            this.taskLocks.add(taskId);
+            this.taskQueueService.tryAcquire(taskId);
             task.status = 'executing';
             this._syncTaskHistoryMirror(task);
             this._persistActiveQueue();
@@ -3376,11 +3393,11 @@ class Gateway {
                 continue;
               }
               await this._finalizeBackgroundTask(taskId, task, 'error', {
-                error: e.message
+                error: safeErrorMessage(e)
               });
             } finally {
               // Unlock the task after execution completes (success or error)
-              this.taskLocks.delete(taskId);
+              this.taskQueueService.release(taskId);
             }
           } catch (e) {
             console.error('[Queue] polling error:', e.message);
@@ -3418,7 +3435,7 @@ class Gateway {
 
       const taskCount = this.taskQueue.size;
       this.taskQueue.clear();
-      this.taskLocks.clear();
+      this.taskQueueService.clearLocks();
       console.log(`[Gateway] Cleared ${taskCount} tasks from queue`);
 
       const batchCount = this.batchTasks.size;

@@ -31,7 +31,7 @@ Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No be
 
 ### Added
 
-- Added the portable `.codex/skills/traecnclaw-mcp` Agent Skill for MCP-capable
+- Added the portable `skills/traecnclaw-mcp` Agent Skill for MCP-capable
   clients.
 - Added `npm run pack:skill` to generate direct-download skill release
   artifacts and checksums under `dist/`.
@@ -40,6 +40,13 @@ Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No be
 - Added production documentation covering usage, development, deployment, environment configuration, and release acceptance checks.
 - Added mock-mode system testing and documentation/OpenAPI UAT validation scripts.
 - Added explicit OpenAPI coverage for settings read/write and self-update status endpoints.
+- Added `skills/traecnclaw-mcp/scripts/start-mcp.js` launcher so MCP clients
+  can start the server through the skill itself (auto-locates `mcp-server.js`,
+  overridable via `TRAECN_MCP_SERVER_PATH`).
+- Added `skills/traecnclaw-mcp/assets/mcp-client-config.json` template with
+  Option A (skill launcher) and Option B (direct path) configs for all major
+  MCP clients.
+- Added `TASK_REQUIRED` factory method to `TraeCNSkillError` on `errors.js`.
 
 ### Changed
 
@@ -48,12 +55,41 @@ Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No be
 - Improved gateway response headers, CORS handling, status version reporting, numeric environment parsing, and background queue polling lifecycle.
 - Improved the built-in chat UI with safer DOM rendering, clearer error handling, responsive layout, token persistence, and status metadata.
 - Updated OpenClaw plugin metadata to match registered tools.
+- Consolidated `mcp-server.js` tool metadata: `TOOL_METADATA` is now the
+  single source of truth; `PUBLIC_MCP_TOOL_NAMES`, `OPS_MCP_TOOL_NAMES`, and
+  `DESTRUCTIVE_MCP_TOOLS` are derived from it instead of maintained in
+  parallel.
+- Repointed `package.json` `exports["./errors"]` from the deleted
+  `ai-errors.js` to the canonical `errors.js`.
+- Updated lint script to check `errors.js` instead of the deleted `ai-errors.js`.
 
 ### Fixed
 
 - Fixed plugin client settings API paths to match gateway routes.
 - Added `/api/delegate-async` compatibility for async delegation clients.
 - Added mock queue status support so mock-mode delegate flows work through the async path.
+- Fixed error leakage: `errorToBody` now returns a generic `'Internal server error'` message for bare `Error` instances instead of forwarding `err.message` (which could contain filesystem paths, CDP selector names, or other internals). Added `safeErrorMessage()` helper and applied it at all stored error sites (`task.error`, `batch.results[].error`, model probe results, settings handler errors). `TraeCNAutomationError` and `HttpError` continue to surface their purpose-built messages.
+- Consolidated the dual per-task lock structures: `Gateway.taskLocks` is now a read-only alias for `taskQueueService.stateMachine.taskLocks`. Mutations go through `taskQueueService.tryAcquire/release/clearLocks`, making the previously dead abstraction real and preventing future callers (e.g. adopt-current-task, batch executor) from missing locks held by the polling loop.
+- Added a startup warning when `TRAECN_GATEWAY_TOKEN` is unset and the gateway is bound to a non-loopback host — authenticated endpoints become open in that configuration.
+- Fixed `simple-api.js` `checkQueue` routing: was calling `layered.batch.checkQueue()`
+  (nonexistent); now correctly calls `layered.dialog.checkQueue()`.
+- Fixed `submitSoloChatTask` return type inconsistency in `simple-api.js`: the
+  flat alias was stripping the result to a bare `taskId` string while
+  `index.js`'s `advanced.submitSoloChatTask` returned the full object; both
+  now return the full normalized result.
+
+### Removed
+
+- Removed dead code `src/skill/config.js` (74 lines, zero references).
+- Removed dead code `src/skill/ai-errors.js` (375 lines, only referenced by
+  examples; had circular `require('./index')` calls). Export path
+  `./errors` now points to the canonical `errors.js`.
+- Removed `escapeJsString` from `src/shared/utils.js` and its test (unused).
+- Removed deprecated `slashCommands` export from the OpenClaw plugin
+  (`integrations/openclaw-traecn-plugin/index.js`). Slash commands are
+  declared in `openclaw.plugin.json` since OpenClaw 2026.4; the runtime array
+  was dead code. Updated `index.test.js` accordingly.
+- Gated `/openapi.json` behind `requiresAuth: true` to prevent unauthenticated API-surface reconnaissance. The chat UI diagnostics panel continues to work because it already sends the saved token on every request.
 
 ### Security
 

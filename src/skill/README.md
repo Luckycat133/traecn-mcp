@@ -1,297 +1,110 @@
-# TraeCN Skill - 精简高效 API
+# TraeCN Skill — Programmatic JS API
 
-专为 AI 设计的 TraeCN 自动化工具，功能完整，函数名清晰易懂。
+A token-efficient JavaScript wrapper around the TRAECNclaw HTTP gateway, designed for embedding in Node scripts, plugins, and test runners. For the agent-facing Trae skill (MCP server usage, tool profiles, safety rules), see [`skills/traecnclaw-mcp/SKILL.md`](../../skills/traecnclaw-mcp/SKILL.md).
 
-## 快速开始
+Full TypeScript surface lives in [`simple-api.d.ts`](./simple-api.d.ts) and [`traecn-skill.d.ts`](./traecn-skill.d.ts). This README only shows usage patterns and layering.
 
-### Simple API (推荐) - 描述性函数名
+## Quick start
 
 ```javascript
-const { runTask, queueTask, pollTask, checkStatus, switchModel, switchMode } = require('./src/skill/simple-api');
+const { runTask, queueTask, pollTask, switchModel, checkStatus } = require('./src/skill/simple-api');
 
-// 运行任务 (自动处理队列)
-const result = await runTask('分析这个项目的架构');
-console.log(result); // 直接返回响应文本
-
-// 检查状态
-const isConnected = await checkStatus();
-
-// 队列任务 (异步)
-const taskId = await queueTask('耗时的复杂任务');
-const status = await pollTask(taskId); // 检查进度
-
-// 切换模型
-await switchModel('GLM-5.2');
-
-// 切换模式
-await switchMode('ide'); // 'solo' or 'ide'
+if (!await checkStatus()) throw new Error('TraeCN not connected');
+await switchModel('glm');                              // fuzzy match → GLM-5.2
+const result = await runTask('分析这个项目的架构');     // returns response text
 ```
 
-### 完整 Skill API
+## Layered entry points
+
+| Entry | Path | Use when |
+| --- | --- | --- |
+| `./simple-api` | `simple-api.js` | 90% of cases; flat function exports (`runTask`, `queueTask`, …) plus short aliases (`t`, `q`, `p`) |
+| `./skill` (or `./`) | `traecn-skill.js` | Need the `TraeCNSkill` class instance, shared singleton, or `_sessionId`/`_lastTaskId` state |
+| `./advanced` | `index.js` | Namespaced layers: `advanced`, `config`, `dialog`, `batch`, `promptLayers` |
+
+All three share one process-wide singleton via `TraeCNSkill.getSharedInstance()`, so `reset()` in one affects the others.
+
+## Patterns
+
+### Synchronous run (auto-handles queue)
 
 ```javascript
-const { TraeCNSkill } = require('./src/skill/traecn-skill');
-
-const skill = new TraeCNSkill(context);
-const result = await skill.run('任务描述');
+const { runTask } = require('./src/skill/simple-api');
+const text = await runTask('编写一个快速排序函数', { projectPath: '/workspace/my-project' });
 ```
 
-## API 参考
-
-### Simple API (清晰易懂)
-
-| 函数 | 说明 | 返回值 |
-|------|------|--------|
-| `runTask(task, opts)` | 运行任务 | string (响应文本) |
-| `queueTask(task, opts)` | 队列任务 | string (taskId) |
-| `pollTask(taskId?)` | 轮询状态 | object |
-| `waitTask(taskId?, opts)` | 本地静默等待到终态/决策点 | object |
-| `cancelTask(taskId?)` | 取消任务 | object |
-| `checkStatus()` | 检查状态 | boolean |
-| `switchModel(name)` | 切换模型 | object |
-| `switchMode(m)` | 切换模式 | object |
-| `newChat()` | 新对话 | object |
-| `getSettings(sec)` | 读取设置 | object |
-| `setSetting(label, val, sec)` | 设置项 | object |
-| `approveDialog(action, wait)` | 批准对话框 | object |
-| `checkDialog()` | 检查对话框 | object |
-| `checkQueue()` | 检查队列状态 | object |
-| `openProject(path)` | 打开项目 | object |
-| `reset()` | 重置实例 | void |
-
-**向后兼容性**：仍支持单字母函数别名 (`t`, `q`, `p`, `s` 等)。
-
-### `runTask(task, opts)` 选项
+### Async queue + local wait
 
 ```javascript
-{
-  projectPath: '/path/to/project',  // 项目路径
-  includeProcess: false,             // 包含过程信息
-  autoWait: true,                    // 自动等待队列
-  mode: null                         // 切换模式 ('solo'/'ide')
-}
-```
+const { queueTask, waitTask, pollTask } = require('./src/skill/simple-api');
 
-### 完整 Skill API
-
-```javascript
-const skill = new TraeCNSkill(context);
-
-// 任务管理
-await skill.status(allowAutoStart?)
-await skill.run(task, opts)
-await skill.queue(task, opts)
-await skill.poll(taskId?)
-await skill.cancel(taskId?)
-
-// 对话管理
-await skill.newChat()
-await skill.switchMode(mode)
-await skill.switchModel(model)
-await skill.openProject(path)
-
-// 设置管理
-await skill.getSettings(section?)
-await skill.setSetting(label, value, section?)
-
-// 对话框处理
-await skill.approveDialog(action?, wait?)
-await skill.checkDialog()
-await skill.queueStatus()
-
-// 配置
-skill._sessionId           // 当前会话 ID
-skill._lastTaskId          // 最后任务 ID
-```
-
-## 设计原则
-
-### 清晰易懂
-- 描述性函数名 (`runTask`, `queueTask`, `pollTask` 等)
-- 简化响应格式 (直接返回字符串)
-- 自动数据规范化
-- 智能默认值
-
-### 简化使用
-- 自动处理队列 (autoWait)
-- 智能模型匹配
-- 设置别名支持
-- 自动状态保存
-
-### 错误处理
-- 统一错误格式
-- 清晰的错误信息
-- 降级处理策略
-
-## 可用模型
-
-```javascript
-['Doubao-Seed-2.0-Code', 'Doubao-Seed-1.8', 'GLM-5.2', 'GLM-5.1',
- 'DeepSeek-V3.1-Terminus', 'MiniMax-M2.7', 'MiniMax-M2.5',
- 'Kimi-K2.5', 'Qwen3.6-Plus', 'Qwen3.5-Plus']
-```
-
-模糊匹配支持：`await switchModel('glm')` → 匹配 GLM-5.2
-
-## 设置别名
-
-```javascript
-'general'    → '通用'
-'account'    → '账号'
-'agents'     → '智能体'
-'mcp'        → 'MCP'
-'flow'       → '对话流'
-'cue'        → 'CUE'
-'model'      → '模型'
-'context'    → '上下文'
-'rules'      → '规则和技能'
-'beta'       → 'Beta'
-'about'      → '关于 TRAE'
-```
-
-## 响应格式 (完整 Skill)
-
-### 运行任务结果
-```javascript
-{
-  ok: true,
-  text: "AI 响应内容",
-  status: "stable",     // stable | unstable
-  elapsed: 1234,        // 毫秒
-  process: null         // includeProcess: true 时
-}
-```
-
-### 队列结果
-```javascript
-{
-  ok: true,
-  queued: true,
-  taskId: "task_abc123",
-  status: "queued",
-  queue: {...}
-}
-```
-
-### 轮询结果
-```javascript
-{
-  ok: true,
-  status: "done",  // done | queued | executing | error
-  text: "...",     // status=done 时
-  elapsed: 5000
-}
-```
-
-## 使用示例
-
-### 基本使用
-
-```javascript
-const { runTask, switchModel } = require('./src/skill/simple-api');
-
-// 1. 切换到想要的模型
-await switchModel('deepseek');
-
-// 2. 执行任务 (自动处理队列)
-const result = await runTask('编写一个快速排序函数');
-console.log(result);
-```
-
-### 队列模式
-
-```javascript
-const { queueTask, pollTask, waitTask } = require('./src/skill/simple-api');
-
-// 1. 提交队列任务
 const taskId = await queueTask('耗时的代码审查任务');
-
-// 2. 稍后轮询或让本地进程静默等待
-const status = await pollTask(taskId);
-const done = await waitTask(taskId, { pollMs: 30000, timeoutMs: 0 });
-if (status.status === 'done') {
-  console.log(status.text);
-}
+const result = await waitTask(taskId, { pollMs: 30000, timeoutMs: 0 });  // blocks until terminal/review point
+// or non-blocking:
+const status = await pollTask(taskId);  // { ok, status: 'done'|'queued'|'executing'|'error', text?, elapsed? }
 ```
 
-### 项目工作流
+### Settings, dialogs, mode
 
 ```javascript
-const { runTask, openProject, switchModel, switchMode } = require('./src/skill/simple-api');
+const { getSettings, setSetting, approveDialog, checkDialog, switchMode } = require('./src/skill/simple-api');
 
-// 打开项目
-await openProject('/workspace/my-project');
+const m = await getSettings('model');              // section alias supported: general|model|agents|mcp|flow|cue|context|rules|beta|about
+await setSetting('温度', '0.7', 'model');
 
-// 切换到 IDE 模式
-await switchMode('ide');
+const dlg = await checkDialog();
+if (dlg.hasDialog) await approveDialog('trust');
 
-// 运行任务
-const result = await runTask('分析项目结构并提出优化建议', {
-  projectPath: '/workspace/my-project'
+await switchMode('ide');                          // 'solo' | 'ide'
+```
+
+### Code review delegation
+
+```javascript
+const { reviewCode } = require('./src/skill/simple-api');
+
+const findings = await reviewCode({
+  instruction: '审查 auth 模块的安全性',
+  files: ['src/shared/mcp-auth.js'],
+  focus: ['safety', 'tests']
+});
+// opts.queue=true returns a taskId instead of waiting
+```
+
+### Unattended vibe workflow
+
+```javascript
+const { vibeWorkflow } = require('./src/skill/simple-api');
+
+const taskId = await vibeWorkflow({
+  task: '修复登录页样式',
+  steps: ['补充快照测试', '更新 CHANGELOG'],
+  reviewRequired: true
 });
 ```
 
-### 设置管理
+## Option surface
 
-```javascript
-const { getSettings, setSetting } = require('./src/skill/simple-api');
+`runTask(task, opts)` / `queueTask(task, opts)` accept (see `RunTaskOptions` in `traecn-skill.d.ts` for the full list):
 
-// 读取模型设置
-const modelSettings = await getSettings('model');
+- `projectPath`, `mode` (`'solo'`/`'ide'`), `autoWait` (default `true`)
+- `includeProcess`, `reviewRequired`, `autoContinue`, `followupTasks`, `completionChecks`
+- `autoApproveDialog`, `notifyUrl`, `fallbackModels`, `autoModelFallback`, `modelProbeIntervalMs`
+- `waitForQueue`, `background`, `forceBackground`, `maxQueueWaitMs` (queue only)
+- Solo targeting: `soloChat`, `soloChatIndex`, `soloChatTitleIncludes`, `soloChatTextIncludes`, `newChat`
 
-// 更新设置
-await setSetting('Agent 名', '代码助手', 'agents');
-```
+Model and section names support fuzzy/alias matching via `KNOWN_MODELS` and `SETTINGS_SECTIONS` (re-exported from `traecn-skill.js`).
 
-### 对话框处理
+## Error handling
 
-```javascript
-const { approveDialog, checkDialog } = require('./src/skill/simple-api');
+Errors are wrapped in `TraeCNSkillError` with stable codes: `TASK_ID_MISSING`, `UNKNOWN_MODEL`, `INVALID_MODE`, `TASK_FAILED`, `QUEUE_TIMEOUT`, `CONNECTION_ERROR`. Inspect `error.code` and `error.details` for recovery.
 
-// 检查是否有对话框
-const hasDialog = await checkDialog();
-if (hasDialog.hasDialog) {
-  await approveDialog('trust'); // 自动信任
-}
+## API comparison
 
-// 或等待并自动批准
-await approveDialog('auto', true);
-```
-
-## 导出
-
-### 完整导出
-```javascript
-const {
-  runTask, queueTask, pollTask, cancelTask,
-  checkStatus, switchModel, switchMode,
-  newChat, getSettings, setSetting,
-  approveDialog, checkDialog, checkQueue, openProject,
-  reset, getSkill, TraeCNSkill,
-  // 单字母别名 (向后兼容)
-  t, q, p, s, model, mode, settings, set,
-  approve, dialog, queueCheck, open, cancel
-} = require('./src/skill/simple-api');
-```
-
-### Skill 模块
-```javascript
-const { TraeCNSkill, KNOWN_MODELS, SETTINGS_SECTIONS } = require('./src/skill/traecn-skill');
-```
-
-## 对比
-
-| 特性 | 原始 API | Skill API | Simple API |
-|------|----------|-----------|------------|
-| 函数名 | `delegate` | `run` | `runTask` |
-| 参数数 | 6+ | 2 | 1-2 |
-| 响应格式 | 复杂对象 | 标准化对象 | 纯文本 |
-| 队列处理 | 手动 | 自动 | 自动 |
-| 可理解性 | 低 | 中 | 高 |
-
-选择建议：
-- **Simple API**: 90% 的场景，最易用
-- **Skill API**: 需要更多控制时
-- **原始 API**: 向后兼容
-
----
+| Aspect | Raw gateway API | `TraeCNSkill` class | `simple-api` flat |
+| --- | --- | --- | --- |
+| Function name | `delegate` | `run` | `runTask` |
+| Args | 6+ | 2 | 1–2 |
+| Response | Raw object | Normalized object | Plain text / taskId |
+| Queue handling | Manual | Auto | Auto |
+| Use when | Backwards compat | Need instance state | Most call sites |

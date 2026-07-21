@@ -1303,7 +1303,10 @@ asyncTest('Gateway finalizes submitted executing task after recovery retries are
   await pollOnce();
 
   assert.strictEqual(task.status, 'error');
-  assert.strictEqual(task.error, 'CDP disconnected permanently');
+  // bare Error messages are sanitized to 'Internal server error' to avoid
+  // leaking internal paths/selectors via /api/task/:taskId. Real driver
+  // failures throw TraeCNAutomationError, which still carries the message.
+  assert.strictEqual(task.error, 'Internal server error');
 });
 
 asyncTest('Gateway background polling cancels generic queue probes before sending', async () => {
@@ -1880,7 +1883,7 @@ asyncTest('Gateway task cancel stops submitted executing task', async () => {
     submittedToTrae: true
   };
   gateway.taskQueue.set(task.taskId, task);
-  gateway.taskLocks.add(task.taskId);
+  gateway.taskQueueService.tryAcquire(task.taskId);
   let stopCalled = false;
   gateway.driver = {
     stopGeneration: async () => {

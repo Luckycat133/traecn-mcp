@@ -254,7 +254,7 @@ async function test(name, fn) {
     });
     const result = await handlers.handle({
       method: 'tools/call',
-      params: { name: 'traecn_get_status', arguments: {} }
+      params: { name: 'traecn_get_capabilities', arguments: {} }
     });
     assert.strictEqual(result.isError, true);
     const payload = JSON.parse(result.content[0].text);
@@ -287,13 +287,11 @@ async function test(name, fn) {
     });
     const result = await handlers.handle({
       method: 'tools/call',
-      params: { name: 'traecn_get_status', arguments: {} }
+      params: { name: 'traecn_get_capabilities', arguments: {} }
     });
-    // traecn_get_status still attempts to reach the gateway; the relevant
-    // assertion is that it did NOT short-circuit with an auth error.
-    const text = result.content[0].text;
-    assert.ok(!text.includes('MCP_AUTH_REQUIRED'));
-    assert.ok(!text.includes('MCP_AUTH_DENIED'));
+    assert.notStrictEqual(result.isError, true);
+    const payload = JSON.parse(result.content[0].text);
+    assert.strictEqual(payload.name, 'traecnclaw');
   });
 
   await test('MCP tools/call honors traecn_run_command permission from arguments', async () => {
@@ -304,12 +302,15 @@ async function test(name, fn) {
       keyId
     });
 
-    // read+write is enough for the read-prefixed 'status' command.
-    const ok = await handlers.handle({
-      method: 'tools/call',
-      params: { name: 'traecn_run_command', arguments: { command: 'status' } }
+    // Authorize the read-prefixed command without contacting a live gateway.
+    const decision = mcpAuth.authorizeTool({
+      apiKeyManager: manager,
+      keyId,
+      toolName: 'traecn_run_command',
+      args: { command: 'status' }
     });
-    assert.ok(!ok.isError || !ok.content[0].text.includes('MCP_AUTH_DENIED'));
+    assert.strictEqual(decision.ok, true);
+    assert.strictEqual(decision.required, 'read');
 
     // read+write is not enough for a delegate command.
     const denied = await handlers.handle({

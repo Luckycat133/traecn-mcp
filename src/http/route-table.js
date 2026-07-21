@@ -11,7 +11,8 @@
  *   - handler:           function name on Gateway (used to look up the
  *                        callable at dispatch time)
  *   - requiresAuth:      false for public endpoints (e.g. /api/status,
- *                        /metrics, /openapi.json), true otherwise
+ *                        /metrics), true otherwise. Note: /openapi.json is
+ *                        auth-gated to prevent API-surface reconnaissance.
  *   - requiresRateLimit: true for endpoints that count against the IP /
  *                        API-key rate-limit bucket. Some endpoints
  *                        (e.g. /metrics) are rate-limited per IP but
@@ -34,7 +35,7 @@ const ROUTES = [
   { method: 'GET', path: '/api/capabilities', handler: '_handleCapabilities', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/readiness', handler: '_handleReadiness', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/', handler: '_handleRoot', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
-  { method: 'GET', path: '/openapi.json', handler: '_handleOpenApiSpec', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
+  { method: 'GET', path: '/openapi.json', handler: '_handleOpenApiSpec', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/metrics', handler: '_handleMetrics', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/metrics.json', handler: '_handleMetricsJson', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
 

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/mcp-servers.json",
+  "$comment": "Template for MCP-capable clients (Cursor, Claude Desktop, Cline, Windsurf, Codex). Copy this block into your client's mcpServers config and replace SKILL_DIR with the absolute path to the traecnclaw-mcp skill folder. Two entry points are provided: the skill launcher (recommended) and the direct mcp-server.js path (fallback).",
+  "mcpServers": {
+    "traecn": {
+      "_comment": "Option A (recommended): use the skill launcher script.",
+      "command": "node",
+      "args": ["SKILL_DIR/scripts/start-mcp.js"],
+      "env": {
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_TOKEN": "",
+        "TRAECN_MCP_TOOL_PROFILE": "public",
+        "_optional_TRAECN_MCP_SERVER_PATH": "Set this if mcp-server.js lives outside the skill folder."
+      }
+    },
+    "traecn-direct": {
+      "_comment": "Option B (fallback): point directly at mcp-server.js when the skill launcher cannot auto-locate it.",
+      "command": "node",
+      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
+      "env": {
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_TOKEN": "",
+        "TRAECN_MCP_TOOL_PROFILE": "public"
+      }
+    }
+  },
+  "profiles": {
+    "public": "20 tools — default for published agent integrations",
+    "ops": "32 tools — adds recovery, cleanup, Solo control, long-queue proof",
+    "full": "36 tools — audits, compatibility checks, every shortcut"
+  },
+  "envvars": {
+    "TRAECN_HOST": "Gateway host (default 127.0.0.1)",
+    "TRAECN_PORT": "Gateway port (default 8788)",
+    "TRAECN_GATEWAY_TOKEN": "Gateway auth token; leave empty if auth is disabled",
+    "TRAECN_MCP_TOOL_PROFILE": "Tool profile: public | ops | full (default public)",
+    "TRAECN_MCP_SERVER_PATH": "Absolute path to mcp-server.js; overrides auto-detection"
+  }
+}

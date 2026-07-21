@@ -8,7 +8,7 @@ const { spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const skillName = 'traecnclaw-mcp';
-const skillRoot = path.join(repoRoot, '.codex', 'skills');
+const skillRoot = path.join(repoRoot, 'skills');
 const skillDir = path.join(skillRoot, skillName);
 const distDir = path.join(repoRoot, 'dist');
 

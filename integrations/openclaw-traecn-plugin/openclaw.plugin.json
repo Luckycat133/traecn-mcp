@@ -1,7 +1,7 @@
 {
   "id": "traecnclaw",
   "name": "TraeCNclaw",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Delegate IDE tasks from OpenClaw to a local TraeCNclaw instance that drives the TraeCN desktop app.",
   "baseUrl": "http://127.0.0.1:8788",
   "configSchema": {
@@ -77,7 +77,9 @@
       "description": "Execute a preset TraeCN command through the local TraeCNclaw gateway, including confirmed restart_trae_debug recovery.",
       "parameters": {
         "type": "object",
-        "required": ["command"],
+        "required": [
+          "command"
+        ],
         "properties": {
           "command": {
             "type": "string",
@@ -147,7 +149,9 @@
       "description": "Run an unattended TraeCN vibe coding workflow with background queue tracking and auto-continued follow-up steps.",
       "parameters": {
         "type": "object",
-        "required": ["task"],
+        "required": [
+          "task"
+        ],
         "properties": {
           "task": {
             "type": "string",
@@ -157,8 +161,12 @@
             "type": "array",
             "items": {
               "oneOf": [
-                { "type": "string" },
-                { "type": "object" }
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                }
               ]
             },
             "description": "Follow-up workflow steps to auto-continue after the initial task"
@@ -167,8 +175,12 @@
             "type": "array",
             "items": {
               "oneOf": [
-                { "type": "string" },
-                { "type": "object" }
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                }
               ]
             },
             "description": "Alias for steps; included for delegate_async workflow compatibility"
@@ -178,19 +190,33 @@
             "properties": {
               "requiredFiles": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
               "requiredText": {
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": ["filePath", "includes"],
+                  "required": [
+                    "filePath",
+                    "includes"
+                  ],
                   "properties": {
-                    "filePath": { "type": "string" },
+                    "filePath": {
+                      "type": "string"
+                    },
                     "includes": {
                       "oneOf": [
-                        { "type": "string" },
-                        { "type": "array", "items": { "type": "string" } }
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
                       ]
                     }
                   }
@@ -213,9 +239,15 @@
           "soloChat": {
             "type": "object",
             "properties": {
-              "index": { "type": "number" },
-              "titleIncludes": { "type": "string" },
-              "textIncludes": { "type": "string" }
+              "index": {
+                "type": "number"
+              },
+              "titleIncludes": {
+                "type": "string"
+              },
+              "textIncludes": {
+                "type": "string"
+              }
             },
             "description": "Target a real Solo conversation for ownership and queued result collection"
           },
@@ -247,7 +279,9 @@
           },
           "fallbackModels": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Ordered fallback models to probe while the selected model is queued"
           },
           "autoModelFallback": {
@@ -284,7 +318,9 @@
       "description": "Create a dry side-effect, risk, and preflight plan before executing a TraeCN command.",
       "parameters": {
         "type": "object",
-        "required": ["command"],
+        "required": [
+          "command"
+        ],
         "properties": {
           "command": {
             "type": "string",
@@ -334,7 +370,9 @@
       "description": "Delegate an IDE task to TraeCN desktop app and return the AI response.",
       "parameters": {
         "type": "object",
-        "required": ["task"],
+        "required": [
+          "task"
+        ],
         "properties": {
           "task": {
             "type": "string",
@@ -355,9 +393,15 @@
           "soloChat": {
             "type": "object",
             "properties": {
-              "index": { "type": "number" },
-              "titleIncludes": { "type": "string" },
-              "textIncludes": { "type": "string" }
+              "index": {
+                "type": "number"
+              },
+              "titleIncludes": {
+                "type": "string"
+              },
+              "textIncludes": {
+                "type": "string"
+              }
             },
             "description": "Target a real Solo conversation for ownership and queued result collection"
           },
@@ -421,8 +465,12 @@
             "type": "array",
             "items": {
               "oneOf": [
-                { "type": "string" },
-                { "type": "object" }
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                }
               ]
             },
             "description": "Follow-up tasks for unattended workflow continuation"
@@ -432,19 +480,33 @@
             "properties": {
               "requiredFiles": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
               "requiredText": {
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": ["filePath", "includes"],
+                  "required": [
+                    "filePath",
+                    "includes"
+                  ],
                   "properties": {
-                    "filePath": { "type": "string" },
+                    "filePath": {
+                      "type": "string"
+                    },
                     "includes": {
                       "oneOf": [
-                        { "type": "string" },
-                        { "type": "array", "items": { "type": "string" } }
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
                       ]
                     }
                   }
@@ -458,7 +520,9 @@
           },
           "fallbackModels": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Ordered model candidates to probe while queued"
           },
           "autoModelFallback": {
@@ -486,11 +550,24 @@
       "description": "Perform supported actions on the TraeCN settings panel through implemented gateway routes.",
       "parameters": {
         "type": "object",
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
         "properties": {
           "action": {
             "type": "string",
-            "enum": ["navigate", "read", "readAll", "type", "clickTab", "toggle", "dropdown", "set", "readTables", "back"],
+            "enum": [
+              "navigate",
+              "read",
+              "readAll",
+              "type",
+              "clickTab",
+              "toggle",
+              "dropdown",
+              "set",
+              "readTables",
+              "back"
+            ],
             "description": "Action to perform on settings"
           },
           "params": {
@@ -540,7 +617,10 @@
       "description": "Change a setting in the TraeCN settings panel. Specify the label text and new value.",
       "parameters": {
         "type": "object",
-        "required": ["label", "value"],
+        "required": [
+          "label",
+          "value"
+        ],
         "properties": {
           "label": {
             "type": "string",
@@ -562,11 +642,16 @@
       "description": "Switch TraeCN between SOLO and IDE modes.",
       "parameters": {
         "type": "object",
-        "required": ["mode"],
+        "required": [
+          "mode"
+        ],
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["solo", "ide"],
+            "enum": [
+              "solo",
+              "ide"
+            ],
             "description": "The mode to switch to"
           },
           "allowAutoStart": {
@@ -582,7 +667,9 @@
       "description": "Switch the AI model used by TraeCN.",
       "parameters": {
         "type": "object",
-        "required": ["model"],
+        "required": [
+          "model"
+        ],
         "properties": {
           "model": {
             "type": "string",
@@ -757,7 +844,9 @@
       "description": "Open a project in TraeCN.",
       "parameters": {
         "type": "object",
-        "required": ["projectPath"],
+        "required": [
+          "projectPath"
+        ],
         "properties": {
           "projectPath": {
             "type": "string",
@@ -771,7 +860,9 @@
       "description": "Trigger a task via the trae-cn chat CLI without waiting for an AI response.",
       "parameters": {
         "type": "object",
-        "required": ["prompt"],
+        "required": [
+          "prompt"
+        ],
         "properties": {
           "prompt": {
             "type": "string",
@@ -779,7 +870,11 @@
           },
           "mode": {
             "type": "string",
-            "enum": ["ask", "edit", "agent"],
+            "enum": [
+              "ask",
+              "edit",
+              "agent"
+            ],
             "description": "CLI mode"
           },
           "addFile": {
@@ -823,7 +918,16 @@
         "properties": {
           "action": {
             "type": "string",
-            "enum": ["auto", "trust", "allow", "confirm", "approve", "deny", "cancel", "dismiss"],
+            "enum": [
+              "auto",
+              "trust",
+              "allow",
+              "confirm",
+              "approve",
+              "deny",
+              "cancel",
+              "dismiss"
+            ],
             "description": "\"auto\" (default) auto-detects best action. trust/allow/confirm for positive actions, deny/cancel/dismiss to reject.",
             "default": "auto"
           },

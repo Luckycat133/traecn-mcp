@@ -36,7 +36,7 @@ From a source checkout:
 
 ```sh
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
-cp -R .codex/skills/traecnclaw-mcp "${CODEX_HOME:-$HOME/.codex}/skills/"
+cp -R skills/traecnclaw-mcp "${CODEX_HOME:-$HOME/.codex}/skills/"
 ```
 
 From the generated archive:
@@ -60,7 +60,31 @@ npm install
 npm run doctor
 ```
 
-Configure any stdio MCP client with an absolute `mcp-server.js` path:
+**Option A (recommended): use the skill launcher**
+
+The skill bundles a launcher that auto-locates `mcp-server.js` from the repo
+root. Copy the template from
+`skills/traecnclaw-mcp/assets/mcp-client-config.json` and replace `SKILL_DIR`
+with the absolute path to the skill folder:
+
+```json
+{
+  "mcpServers": {
+    "traecn": {
+      "command": "node",
+      "args": ["SKILL_DIR/scripts/start-mcp.js"],
+      "env": {
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_TOKEN": "",
+        "TRAECN_MCP_TOOL_PROFILE": "public"
+      }
+    }
+  }
+}
+```
+
+**Option B (fallback): direct mcp-server.js path**
 
 ```json
 {
@@ -89,7 +113,7 @@ Recommended first submissions:
 - SkillsLLM: submit as an open-source AI skill and MCP server helper.
 - mcpservers.org: submit as a local stdio MCP server for development automation.
 - Codex Skills Registry: submit a PR or issue pointing to
-  `.codex/skills/traecnclaw-mcp`.
+  `skills/traecnclaw-mcp`.
 - Composio awesome-codex-skills: submit the skill path and installation notes.
 - Awesome Skills: rely on the public GitHub repository and `SKILL.md` crawl.
 
@@ -100,7 +124,7 @@ Suggested listing fields:
 - Category: `Development` or `MCP Servers`
 - Tags: `mcp`, `agent-skills`, `codex`, `openclaw`, `traecn`, `automation`
 - Primary link: `https://github.com/Luckycat133/TRAECNclaw`
-- Skill path: `.codex/skills/traecnclaw-mcp`
+- Skill path: `skills/traecnclaw-mcp`
 
 ## Public Release Gate
 
@@ -108,7 +132,7 @@ Before making the repository public or attaching release artifacts:
 
 1. Confirm `git status --short` contains only intended changes.
 2. Run `npm run lint`, `npm test`, and `npm run acceptance:audit -- --require-complete`.
-3. Run `python3 /Users/jack/.codex/skills/.system/skill-creator/scripts/quick_validate.py .codex/skills/traecnclaw-mcp` when validating on this Mac.
+3. Run `python3 /Users/jack/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/traecnclaw-mcp` when validating on this Mac.
 4. Run `npm run pack:skill` and keep the generated checksums.
 5. Scan current files and git history for `.env`, tokens, cookies, auth headers,
    raw TraeCN profiles, and local-only paths.

@@ -237,7 +237,7 @@ async function handleDelegateAsync(req, res, ctx) {
       task.submittedToTrae = true;
       task.submittedAt = Date.now();
       task.error = null;
-      ctx.taskLocks.add(task.taskId);
+      ctx.taskQueueService.tryAcquire(task.taskId);
       await ctx._captureTaskSoloChat(task);
       ctx._syncTaskHistoryMirror(task);
       ctx._persistActiveQueue();
@@ -259,7 +259,7 @@ async function handleDelegateAsync(req, res, ctx) {
           });
         })
         .finally(() => {
-          ctx.taskLocks.delete(task.taskId);
+          ctx.taskQueueService.release(task.taskId);
         });
 
       return ctx._json(req, res, {
