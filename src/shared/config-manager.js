@@ -384,9 +384,41 @@ class ConfigManager extends EventEmitter {
     }
   }
 
+  /**
+   * Validate a config object against CONFIG_SCHEMA rules. Collects every
+   * violation (no early exit) and appends them to a shared `errors` array,
+   * then throws a single ConfigValidationError if any were found.
+   *
+   * The order of checks is significant: each section helper below runs in
+   * the same sequence the original inline code used, so error messages are
+   * produced in exactly the same order.
+   */
   validate(config) {
     const errors = [];
 
+    this._validateLogLevel(config, errors);
+    this._validateRateLimit(config, errors);
+    this._validateTimeout(config, errors);
+    this._validateCors(config, errors);
+    this._validatePlugins(config, errors);
+    this._validateSecrets(config, errors);
+    this._validateServer(config, errors);
+    this._validateTraeControl(config, errors);
+    this._validateAutoRecover(config, errors);
+    this._validateQueue(config, errors);
+    this._validateFeatures(config, errors);
+
+    const dependencyErrors = this._checkDependencies(config);
+    errors.push(...dependencyErrors);
+
+    if (errors.length > 0) {
+      throw new ConfigValidationError('Configuration validation failed', errors);
+    }
+
+    return true;
+  }
+
+  _validateLogLevel(config, errors) {
     if (config.logLevel !== undefined) {
       if (typeof config.logLevel !== 'string' || !LOG_LEVELS.includes(config.logLevel)) {
         errors.push({
@@ -396,7 +428,9 @@ class ConfigManager extends EventEmitter {
         });
       }
     }
+  }
 
+  _validateRateLimit(config, errors) {
     if (config.rateLimit !== undefined && typeof config.rateLimit === 'object') {
       if (config.rateLimit.windowMs !== undefined) {
         if (typeof config.rateLimit.windowMs !== 'number') {
@@ -417,7 +451,9 @@ class ConfigManager extends EventEmitter {
         }
       }
     }
+  }
 
+  _validateTimeout(config, errors) {
     if (config.timeout !== undefined && typeof config.timeout === 'object') {
       if (config.timeout.request !== undefined) {
         if (typeof config.timeout.request !== 'number') {
@@ -438,13 +474,17 @@ class ConfigManager extends EventEmitter {
         }
       }
     }
+  }
 
+  _validateCors(config, errors) {
     if (config.cors !== undefined && typeof config.cors === 'object') {
       if (config.cors.enabled !== undefined && typeof config.cors.enabled !== 'boolean') {
         errors.push({ path: 'cors.enabled', message: 'Value must be a boolean', current: typeof config.cors.enabled });
       }
     }
+  }
 
+  _validatePlugins(config, errors) {
     if (config.plugins !== undefined && typeof config.plugins === 'object') {
       for (const [pluginKey, pluginValue] of Object.entries(config.plugins)) {
         if (typeof pluginValue !== 'boolean') {
@@ -456,7 +496,9 @@ class ConfigManager extends EventEmitter {
         }
       }
     }
+  }
 
+  _validateSecrets(config, errors) {
     if (config.secrets !== undefined) {
       if (config.secrets === null || typeof config.secrets !== 'object' || Array.isArray(config.secrets)) {
         errors.push({
@@ -482,8 +524,9 @@ class ConfigManager extends EventEmitter {
         }
       }
     }
+  }
 
-    // Server config validation
+  _validateServer(config, errors) {
     if (config.server !== undefined && typeof config.server === 'object') {
       if (config.server.port !== undefined) {
         if (typeof config.server.port !== 'number') {
@@ -495,8 +538,9 @@ class ConfigManager extends EventEmitter {
         }
       }
     }
+  }
 
-    // TraeControl config validation
+  _validateTraeControl(config, errors) {
     if (config.traeControl !== undefined && typeof config.traeControl === 'object') {
       if (config.traeControl.autoStart !== undefined && typeof config.traeControl.autoStart !== 'boolean') {
         errors.push({ path: 'traeControl.autoStart', message: 'Value must be a boolean', current: typeof config.traeControl.autoStart });
@@ -516,8 +560,9 @@ class ConfigManager extends EventEmitter {
         }
       }
     }
+  }
 
-    // AutoRecover config validation
+  _validateAutoRecover(config, errors) {
     if (config.autoRecover !== undefined && typeof config.autoRecover === 'object') {
       if (config.autoRecover.enabled !== undefined && typeof config.autoRecover.enabled !== 'boolean') {
         errors.push({ path: 'autoRecover.enabled', message: 'Value must be a boolean' });
@@ -538,8 +583,9 @@ class ConfigManager extends EventEmitter {
         }
       }
     }
+  }
 
-    // Queue config validation
+  _validateQueue(config, errors) {
     if (config.queue !== undefined && typeof config.queue === 'object') {
       if (config.queue.flickerGraceMs !== undefined) {
         if (typeof config.queue.flickerGraceMs !== 'number' || config.queue.flickerGraceMs < 10000 || config.queue.flickerGraceMs > 300000) {
@@ -547,8 +593,9 @@ class ConfigManager extends EventEmitter {
         }
       }
     }
+  }
 
-    // Features config validation
+  _validateFeatures(config, errors) {
     if (config.features !== undefined && typeof config.features === 'object') {
       for (const [featKey, featValue] of Object.entries(config.features)) {
         if (typeof featValue !== 'boolean') {
@@ -556,15 +603,6 @@ class ConfigManager extends EventEmitter {
         }
       }
     }
-
-    const dependencyErrors = this._checkDependencies(config);
-    errors.push(...dependencyErrors);
-
-    if (errors.length > 0) {
-      throw new ConfigValidationError('Configuration validation failed', errors);
-    }
-
-    return true;
   }
 
   _checkDependencies(config) {

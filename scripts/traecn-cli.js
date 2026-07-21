@@ -1077,18 +1077,9 @@ async function cmdCleanupQueue(args) {
     ? 'json'
     : 'text';
   const lockFile = readStringOption(args, '--lock-file', null);
+
   if (args.includes('--status')) {
-    const status = describeCleanupWatchStatus({ lockFile });
-    if (outputFormat === 'json') {
-      console.log(JSON.stringify(status, null, 2));
-    } else {
-      console.log(`\n${color('bold', '═══ Cleanup Watcher Status ═══')}\n`);
-      console.log(`  ${color('cyan', 'Running:')} ${status.running ? color('green', 'yes') : color('yellow', 'no')}`);
-      console.log(`  ${color('cyan', 'PID:')}     ${status.pid || 'none'}`);
-      console.log(`  ${color('cyan', 'Lock:')}    ${status.lockFile}`);
-      if (status.stale) console.log(`  ${color('cyan', 'Stale:')}   yes`);
-      console.log(`\n${color('dim', status.message)}\n`);
-    }
+    cleanupQueueStatus({ outputFormat, lockFile });
     return;
   }
 
@@ -1107,11 +1098,11 @@ async function cmdCleanupQueue(args) {
 
   try {
     if (detach) {
-      if (!execute || watchMs <= 0) {
-        console.error(color('red', 'Error: cleanup-queue --detach requires --execute and --watch-ms'));
-        process.exit(1);
-      }
-      const detached = buildDetachedCleanupCommand({
+      cleanupQueueDetach({
+        outputFormat,
+        lockFile,
+        execute,
+        dryRun,
         maxPasses,
         watchMs,
         stableMs,
@@ -1120,204 +1111,37 @@ async function cmdCleanupQueue(args) {
         logFile,
         finalFile,
         stderrFile,
-        lockFile,
         replace
       });
-      const cleanupLockFile = path.resolve(lockFile || defaultCleanupWatchLockFile());
-      const existingLock = readCleanupWatchLock(cleanupLockFile);
-      if (existingLock && !existingLock.error && isPidRunning(existingLock.pid) && replace !== true) {
-        const payload = {
-          detached: false,
-          alreadyRunning: true,
-          lockFile: cleanupLockFile,
-          existing: existingLock,
-          message: 'Cleanup watcher is already running; use --replace to terminate the existing watcher and start a new one.'
-        };
-        if (outputFormat === 'json') {
-          console.log(JSON.stringify(payload, null, 2));
-        } else {
-          console.log(color('yellow', `Cleanup watcher already running: pid ${existingLock.pid}`));
-          console.log(color('dim', `Lock: ${payload.lockFile}`));
-        }
-        return;
-      }
-      if (existingLock && !existingLock.error && isPidRunning(existingLock.pid) && replace === true) {
-        const terminated = terminateCleanupWatcher(existingLock.pid, { timeoutMs: 5000 });
-        if (!terminated.terminated) {
-          const payload = {
-            detached: false,
-            alreadyRunning: true,
-            lockFile: cleanupLockFile,
-            existing: existingLock,
-            terminate: terminated,
-            error: 'unable_to_replace_running_cleanup_watcher'
-          };
-          if (outputFormat === 'json') {
-            console.log(JSON.stringify(payload, null, 2));
-          } else {
-            console.error(color('red', `Unable to replace cleanup watcher pid ${existingLock.pid}`));
-          }
-          process.exit(1);
-        }
-      }
-      if (replace === true) {
-        for (const processInfo of listCleanupWatcherProcesses()) {
-          if (existingLock && processInfo.pid === existingLock.pid) continue;
-          const terminated = terminateCleanupWatcher(processInfo.pid, { timeoutMs: 5000 });
-          if (!terminated.terminated) {
-            const payload = {
-              detached: false,
-              alreadyRunning: true,
-              lockFile: cleanupLockFile,
-              orphan: processInfo,
-              terminate: terminated,
-              error: 'unable_to_replace_orphan_cleanup_watcher'
-            };
-            if (outputFormat === 'json') {
-              console.log(JSON.stringify(payload, null, 2));
-            } else {
-              console.error(color('red', `Unable to replace orphan cleanup watcher pid ${processInfo.pid}`));
-            }
-            process.exit(1);
-          }
-        }
-      }
-      if (existingLock && (replace === true || existingLock.error || !isPidRunning(existingLock.pid))) {
-        try {
-          fs.unlinkSync(cleanupLockFile);
-        } catch {
-          // Best-effort stale lock cleanup.
-        }
-      }
-      for (const filePath of [detached.logFile, detached.finalFile, detached.stderrFile]) {
-        if (filePath) fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      }
-      const started = spawnSync('screen', detached.screenArgs, { encoding: 'utf8' });
-      if (started.error || started.status !== 0) {
-        console.error(color('red', `Detach failed: ${started.error ? started.error.message : started.stderr || 'screen exited with status ' + started.status}`));
-        process.exit(1);
-      }
-      const payload = {
-        detached: true,
-        sessionName: detached.sessionName,
-        logFile: detached.logFile,
-        finalFile: detached.finalFile,
-        stderrFile: detached.stderrFile,
-        lockFile: path.resolve(lockFile || defaultCleanupWatchLockFile()),
-        watchMs,
-        stableMs,
-        intervalMs
-      };
-      if (outputFormat === 'json') {
-        console.log(JSON.stringify(payload, null, 2));
-      } else {
-        console.log(color('green', `Detached cleanup watcher started: ${detached.sessionName}`));
-        if (detached.logFile) console.log(color('dim', `Evidence log: ${detached.logFile}`));
-        console.log(color('dim', `Final JSON: ${detached.finalFile}`));
-        console.log(color('dim', `Errors: ${detached.stderrFile}`));
-      }
       return;
     }
 
-    const cleanupOnce = () => apiRequest('POST', '/api/solo/chats/cleanup-foreign-queue', {
-      execute,
-      dryRun,
-      ...(execute && Number.isFinite(maxPasses) && maxPasses > 0 ? { maxPasses } : {})
-    });
     let result;
     if (execute && watchMs > 0) {
-      const lock = acquireCleanupWatchLock({
+      result = await cleanupQueueWatch({
+        outputFormat,
         lockFile,
-        replace,
+        execute,
+        dryRun,
+        maxPasses,
         watchMs,
         stableMs,
         intervalMs,
         logFile,
-        finalFile
+        finalFile,
+        replace
       });
-      if (!lock.ok) {
-        result = {
-          status: 200,
-          data: {
-            mode: 'watch_already_running',
-            alreadyRunning: lock.alreadyRunning === true,
-            lockFile: lock.lockFile,
-            existing: lock.existing || null,
-            error: lock.error || null
-          }
-        };
-        if (outputFormat === 'json') {
-          console.log(JSON.stringify(result.data, null, 2));
-        } else {
-          console.log(color('yellow', `Cleanup watcher already running: pid ${lock.existing?.pid || 'unknown'}`));
-          console.log(color('dim', `Lock: ${lock.lockFile}`));
-        }
-        return;
-      }
-      const startedAt = Date.now();
-      let cleanSince = null;
-      const iterations = [];
-      const releaseAndExit = () => {
-        lock.release();
-        process.exit(0);
-      };
-      process.once('SIGINT', releaseAndExit);
-      process.once('SIGTERM', releaseAndExit);
-      try {
-        while (Date.now() - startedAt <= watchMs) {
-          const attempt = await runCleanupWatchAttempt(cleanupOnce, { lockFile: lock.lockFile, intervalMs });
-          result = attempt.result;
-          iterations.push(attempt.iteration);
-          appendJsonLine(logFile, iterations[iterations.length - 1]);
-          if (attempt.transient) {
-            cleanSince = null;
-          } else if (!attempt.clean) {
-            cleanSince = null;
-          } else {
-            cleanSince = cleanSince || Date.now();
-            if (Date.now() - cleanSince >= stableMs) break;
-          }
-          await delay(attempt.iteration.nextDelayMs);
-        }
-      } finally {
-        process.removeListener('SIGINT', releaseAndExit);
-        process.removeListener('SIGTERM', releaseAndExit);
-        lock.release();
-      }
-      let verify;
-      try {
-        verify = await apiRequest('POST', '/api/solo/chats/cleanup-foreign-queue', { dryRun: true });
-      } catch (err) {
-        verify = {
-          status: 0,
-          data: {
-            error: err.message || 'cleanup_verify_failed'
-          }
-        };
-      }
-      result = {
-        status: verify.status,
-        data: {
-          mode: 'watch',
-          lockFile: lock.lockFile,
-          matched: verify.data?.matched || 0,
-          remainingMatched: verify.data?.matched || 0,
-          total: verify.data?.total || null,
-          deleted: iterations.reduce((sum, item) => sum + item.deleted, 0),
-          stopped: iterations.reduce((sum, item) => sum + item.stopped, 0),
-          support: verify.data?.support || result?.data?.support || 'unknown',
-          watchMs,
-          stableMs,
-          intervalMs,
-          elapsedMs: Date.now() - startedAt,
-          iterations,
-          transientErrors: iterations.filter(item => item.transient === true).length,
-          finalDryRun: verify.data
-        }
-      };
+      if (result === undefined) return;
     } else {
-      result = await cleanupOnce();
+      result = await cleanupQueueDryRun({
+        outputFormat,
+        lockFile,
+        execute,
+        dryRun,
+        maxPasses
+      });
     }
+
     if (![200, 501].includes(result.status)) {
       console.error(color('red', `Error: ${result.data.error || 'Unable to cleanup Solo queue probes'}`));
       if (outputFormat === 'json') console.log(JSON.stringify(result.data, null, 2));
@@ -1342,6 +1166,273 @@ async function cmdCleanupQueue(args) {
     console.error(color('red', `Request failed: ${err.message}`));
     process.exit(1);
   }
+}
+
+function cleanupQueueStatus({ outputFormat, lockFile }) {
+  const status = describeCleanupWatchStatus({ lockFile });
+  if (outputFormat === 'json') {
+    console.log(JSON.stringify(status, null, 2));
+  } else {
+    console.log(`\n${color('bold', '═══ Cleanup Watcher Status ═══')}\n`);
+    console.log(`  ${color('cyan', 'Running:')} ${status.running ? color('green', 'yes') : color('yellow', 'no')}`);
+    console.log(`  ${color('cyan', 'PID:')}     ${status.pid || 'none'}`);
+    console.log(`  ${color('cyan', 'Lock:')}    ${status.lockFile}`);
+    if (status.stale) console.log(`  ${color('cyan', 'Stale:')}   yes`);
+    console.log(`\n${color('dim', status.message)}\n`);
+  }
+}
+
+function cleanupQueueDetach({
+  outputFormat,
+  lockFile,
+  execute,
+  dryRun,
+  maxPasses,
+  watchMs,
+  stableMs,
+  intervalMs,
+  sessionName,
+  logFile,
+  finalFile,
+  stderrFile,
+  replace
+}) {
+  if (!execute || watchMs <= 0) {
+    console.error(color('red', 'Error: cleanup-queue --detach requires --execute and --watch-ms'));
+    process.exit(1);
+  }
+  const detached = buildDetachedCleanupCommand({
+    maxPasses,
+    watchMs,
+    stableMs,
+    intervalMs,
+    sessionName,
+    logFile,
+    finalFile,
+    stderrFile,
+    lockFile,
+    replace
+  });
+  const cleanupLockFile = path.resolve(lockFile || defaultCleanupWatchLockFile());
+  const existingLock = readCleanupWatchLock(cleanupLockFile);
+  if (existingLock && !existingLock.error && isPidRunning(existingLock.pid) && replace !== true) {
+    const payload = {
+      detached: false,
+      alreadyRunning: true,
+      lockFile: cleanupLockFile,
+      existing: existingLock,
+      message: 'Cleanup watcher is already running; use --replace to terminate the existing watcher and start a new one.'
+    };
+    if (outputFormat === 'json') {
+      console.log(JSON.stringify(payload, null, 2));
+    } else {
+      console.log(color('yellow', `Cleanup watcher already running: pid ${existingLock.pid}`));
+      console.log(color('dim', `Lock: ${payload.lockFile}`));
+    }
+    return;
+  }
+  if (existingLock && !existingLock.error && isPidRunning(existingLock.pid) && replace === true) {
+    const terminated = terminateCleanupWatcher(existingLock.pid, { timeoutMs: 5000 });
+    if (!terminated.terminated) {
+      const payload = {
+        detached: false,
+        alreadyRunning: true,
+        lockFile: cleanupLockFile,
+        existing: existingLock,
+        terminate: terminated,
+        error: 'unable_to_replace_running_cleanup_watcher'
+      };
+      if (outputFormat === 'json') {
+        console.log(JSON.stringify(payload, null, 2));
+      } else {
+        console.error(color('red', `Unable to replace cleanup watcher pid ${existingLock.pid}`));
+      }
+      process.exit(1);
+    }
+  }
+  if (replace === true) {
+    for (const processInfo of listCleanupWatcherProcesses()) {
+      if (existingLock && processInfo.pid === existingLock.pid) continue;
+      const terminated = terminateCleanupWatcher(processInfo.pid, { timeoutMs: 5000 });
+      if (!terminated.terminated) {
+        const payload = {
+          detached: false,
+          alreadyRunning: true,
+          lockFile: cleanupLockFile,
+          orphan: processInfo,
+          terminate: terminated,
+          error: 'unable_to_replace_orphan_cleanup_watcher'
+        };
+        if (outputFormat === 'json') {
+          console.log(JSON.stringify(payload, null, 2));
+        } else {
+          console.error(color('red', `Unable to replace orphan cleanup watcher pid ${processInfo.pid}`));
+        }
+        process.exit(1);
+      }
+    }
+  }
+  if (existingLock && (replace === true || existingLock.error || !isPidRunning(existingLock.pid))) {
+    try {
+      fs.unlinkSync(cleanupLockFile);
+    } catch {
+      // Best-effort stale lock cleanup.
+    }
+  }
+  for (const filePath of [detached.logFile, detached.finalFile, detached.stderrFile]) {
+    if (filePath) fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  }
+  const started = spawnSync('screen', detached.screenArgs, { encoding: 'utf8' });
+  if (started.error || started.status !== 0) {
+    console.error(color('red', `Detach failed: ${started.error ? started.error.message : started.stderr || 'screen exited with status ' + started.status}`));
+    process.exit(1);
+  }
+  const payload = {
+    detached: true,
+    sessionName: detached.sessionName,
+    logFile: detached.logFile,
+    finalFile: detached.finalFile,
+    stderrFile: detached.stderrFile,
+    lockFile: path.resolve(lockFile || defaultCleanupWatchLockFile()),
+    watchMs,
+    stableMs,
+    intervalMs
+  };
+  if (outputFormat === 'json') {
+    console.log(JSON.stringify(payload, null, 2));
+  } else {
+    console.log(color('green', `Detached cleanup watcher started: ${detached.sessionName}`));
+    if (detached.logFile) console.log(color('dim', `Evidence log: ${detached.logFile}`));
+    console.log(color('dim', `Final JSON: ${detached.finalFile}`));
+    console.log(color('dim', `Errors: ${detached.stderrFile}`));
+  }
+}
+
+async function cleanupQueueWatch({
+  outputFormat,
+  lockFile,
+  execute,
+  dryRun,
+  maxPasses,
+  watchMs,
+  stableMs,
+  intervalMs,
+  logFile,
+  finalFile,
+  replace
+}) {
+  const cleanupOnce = () => apiRequest('POST', '/api/solo/chats/cleanup-foreign-queue', {
+    execute,
+    dryRun,
+    ...(execute && Number.isFinite(maxPasses) && maxPasses > 0 ? { maxPasses } : {})
+  });
+  let result;
+  const lock = acquireCleanupWatchLock({
+    lockFile,
+    replace,
+    watchMs,
+    stableMs,
+    intervalMs,
+    logFile,
+    finalFile
+  });
+  if (!lock.ok) {
+    result = {
+      status: 200,
+      data: {
+        mode: 'watch_already_running',
+        alreadyRunning: lock.alreadyRunning === true,
+        lockFile: lock.lockFile,
+        existing: lock.existing || null,
+        error: lock.error || null
+      }
+    };
+    if (outputFormat === 'json') {
+      console.log(JSON.stringify(result.data, null, 2));
+    } else {
+      console.log(color('yellow', `Cleanup watcher already running: pid ${lock.existing?.pid || 'unknown'}`));
+      console.log(color('dim', `Lock: ${lock.lockFile}`));
+    }
+    return;
+  }
+  const startedAt = Date.now();
+  let cleanSince = null;
+  const iterations = [];
+  const releaseAndExit = () => {
+    lock.release();
+    process.exit(0);
+  };
+  process.once('SIGINT', releaseAndExit);
+  process.once('SIGTERM', releaseAndExit);
+  try {
+    while (Date.now() - startedAt <= watchMs) {
+      const attempt = await runCleanupWatchAttempt(cleanupOnce, { lockFile: lock.lockFile, intervalMs });
+      result = attempt.result;
+      iterations.push(attempt.iteration);
+      appendJsonLine(logFile, iterations[iterations.length - 1]);
+      if (attempt.transient) {
+        cleanSince = null;
+      } else if (!attempt.clean) {
+        cleanSince = null;
+      } else {
+        cleanSince = cleanSince || Date.now();
+        if (Date.now() - cleanSince >= stableMs) break;
+      }
+      await delay(attempt.iteration.nextDelayMs);
+    }
+  } finally {
+    process.removeListener('SIGINT', releaseAndExit);
+    process.removeListener('SIGTERM', releaseAndExit);
+    lock.release();
+  }
+  let verify;
+  try {
+    verify = await apiRequest('POST', '/api/solo/chats/cleanup-foreign-queue', { dryRun: true });
+  } catch (err) {
+    verify = {
+      status: 0,
+      data: {
+        error: err.message || 'cleanup_verify_failed'
+      }
+    };
+  }
+  result = {
+    status: verify.status,
+    data: {
+      mode: 'watch',
+      lockFile: lock.lockFile,
+      matched: verify.data?.matched || 0,
+      remainingMatched: verify.data?.matched || 0,
+      total: verify.data?.total || null,
+      deleted: iterations.reduce((sum, item) => sum + item.deleted, 0),
+      stopped: iterations.reduce((sum, item) => sum + item.stopped, 0),
+      support: verify.data?.support || result?.data?.support || 'unknown',
+      watchMs,
+      stableMs,
+      intervalMs,
+      elapsedMs: Date.now() - startedAt,
+      iterations,
+      transientErrors: iterations.filter(item => item.transient === true).length,
+      finalDryRun: verify.data
+    }
+  };
+  return result;
+}
+
+async function cleanupQueueDryRun({
+  outputFormat,
+  lockFile,
+  execute,
+  dryRun,
+  maxPasses
+}) {
+  const cleanupOnce = () => apiRequest('POST', '/api/solo/chats/cleanup-foreign-queue', {
+    execute,
+    dryRun,
+    ...(execute && Number.isFinite(maxPasses) && maxPasses > 0 ? { maxPasses } : {})
+  });
+  const result = await cleanupOnce();
+  return result;
 }
 
 async function cmdStatus() {

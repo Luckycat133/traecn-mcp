@@ -3223,159 +3223,20 @@ class Gateway {
       this.isPolling = true;
 
       try {
-        // 定期清理机制：只清理超过一定时间的终态任务。
-        // Paused or running workflow state must remain recoverable for long queues.
-        const now = Date.now();
-        const maxTaskAge = 3600000; // 1小时
-        for (const [taskId, task] of this.taskQueue) {
-          if (this._isTerminalTaskStatus(task.status) && now - task.createdAt > maxTaskAge) {
-            console.log('[Queue] Cleaning up old task', taskId, 'with status', task.status);
-            this.taskQueue.delete(taskId);
-            this.taskQueueService.release(taskId);
-          }
-        }
-        
+        this._pollCleanupStaleState();
+
         for (const [taskId, task] of this.taskQueue) {
           if (this.taskLocks.has(taskId)) continue;
 
-          if (isGenericQueueProbeTask(task && task.task)) {
-            await this._finalizeBackgroundTask(taskId, task, 'cancelled', {
-              error: 'generic_queue_probe_task_rejected'
-            });
-            continue;
-          }
+          if (await this._pollRejectQueueProbe(taskId, task)) continue;
 
           if (task.status === 'executing' && task.submittedToTrae === true) {
-            this.taskQueueService.tryAcquire(taskId);
-            try {
-              if (await this._finalizePersistedResultIfComplete(taskId, task)) {
-                continue;
-              }
-              await this._collectSubmittedBackgroundTask(taskId, task);
-            } catch (e) {
-              console.error('[Queue] Submitted task', taskId, 'recovery error:', e.message);
-              if (/review gate/i.test(e.message || '')) {
-                const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
-                if (recoveredResult) {
-                  task.result = recoveredResult;
-                  await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
-                  continue;
-                }
-              }
-              if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
-                continue;
-              }
-              await this._finalizeBackgroundTask(taskId, task, 'error', {
-                error: safeErrorMessage(e)
-              });
-            } finally {
-              this.taskQueueService.release(taskId);
-            }
+            await this._pollRecoverPreviousTask(taskId, task);
             continue;
           }
 
-          // Skip if task is not queued
-          if (task.status !== 'queued') continue;
+          await this._pollDispatchWatcher(taskId, task);
 
-          try {
-            await this._ensureConnection();
-            let queueStatus = await this.driver.checkQueueStatus();
-            this._updateQueuedTaskSnapshot(task, queueStatus);
-
-            if ((queueStatus.queued || queueStatus.running) && Array.isArray(task.fallbackModels) && task.fallbackModels.length > 0) {
-              const probe = await this._probeFallbackModels(task);
-              if (probe.queueStatus) {
-                queueStatus = probe.queueStatus;
-                this._updateQueuedTaskSnapshot(task, queueStatus);
-              }
-            }
-
-            if (task.deadline && Date.now() > task.deadline) {
-              const extended = this._maybeExtendQueuedTaskDeadline(task, queueStatus);
-              if (!extended) {
-                console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
-                await this._finalizeBackgroundTask(taskId, task, 'queue_timeout', {
-                  error: 'Task exceeded queue wait timeout'
-                });
-                continue;
-              }
-            }
-
-            // Still queued or actively running — skip this task for now
-            if (queueStatus.running || (queueStatus.queued && queueStatus.canSubmit !== true)) {
-              if (this.wsHandler) {
-                this.wsHandler.notifyTaskStatusChange(taskId, task);
-              }
-              this._syncTaskHistoryMirror(task);
-              this._persistActiveQueue();
-              continue;
-            }
-
-            // Lock this task before execution
-            this.taskQueueService.tryAcquire(taskId);
-            task.status = 'executing';
-            this._syncTaskHistoryMirror(task);
-            this._persistActiveQueue();
-
-            if (this.wsHandler) {
-              this.wsHandler.notifyTaskStatusChange(taskId, task);
-            }
-
-            try {
-              await this._withUiActionLock(async () => {
-                // Create a fresh chat before sending (background poller bypasses
-                // delegate() which would also call newChat)
-                if (task.soloChat) {
-                  await this._switchToTaskSoloChat(task, 'send_task');
-                } else {
-                  await this.driver.newChat();
-                }
-                await this.driver.sendMessage(this._taskWithProjectContext(task.task, task.projectPath));
-                task.submittedToTrae = true;
-                task.submittedAt = Date.now();
-                if (!task.soloChat) {
-                  await this._captureTaskSoloChat(task);
-                }
-                this._syncTaskHistoryMirror(task);
-                this._persistActiveQueue();
-                const result = await this.driver.collectResponse();
-                if (this._isTerminalTaskStatus(task.status)) {
-                  this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
-                    success: true,
-                    details: {
-                      status: task.status,
-                      reason: 'task already reached a terminal state before collectResponse returned'
-                    }
-                  });
-                  this._syncTaskHistoryMirror(task);
-                  this._persistActiveQueue();
-                  return;
-                }
-                await this._finalizeCollectedBackgroundResult(taskId, task, result);
-              });
-            } catch (e) {
-              console.error('[Queue] Task', taskId, 'execution error:', e.message);
-              if (/review gate/i.test(e.message || '')) {
-                const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
-                if (recoveredResult) {
-                  task.result = recoveredResult;
-                  await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
-                  continue;
-                }
-              }
-              if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
-                continue;
-              }
-              await this._finalizeBackgroundTask(taskId, task, 'error', {
-                error: safeErrorMessage(e)
-              });
-            } finally {
-              // Unlock the task after execution completes (success or error)
-              this.taskQueueService.release(taskId);
-            }
-          } catch (e) {
-            console.error('[Queue] polling error:', e.message);
-          }
         }
       } finally {
         // Release the polling lock
@@ -3386,6 +3247,165 @@ class Gateway {
       this.pollingTimer.unref();
     }
     console.log('[Gateway] Background polling started (interval=' + pollInterval + 'ms)');
+  }
+
+  // ── Poll sub-steps (extracted verbatim from _ensureBackgroundPolling) ─────
+
+  _pollCleanupStaleState() {
+    // 定期清理机制：只清理超过一定时间的终态任务。
+    // Paused or running workflow state must remain recoverable for long queues.
+    const now = Date.now();
+    const maxTaskAge = 3600000; // 1小时
+    for (const [taskId, task] of this.taskQueue) {
+      if (this._isTerminalTaskStatus(task.status) && now - task.createdAt > maxTaskAge) {
+        console.log('[Queue] Cleaning up old task', taskId, 'with status', task.status);
+        this.taskQueue.delete(taskId);
+        this.taskQueueService.release(taskId);
+      }
+    }
+  }
+
+  async _pollRejectQueueProbe(taskId, task) {
+    if (isGenericQueueProbeTask(task && task.task)) {
+      await this._finalizeBackgroundTask(taskId, task, 'cancelled', {
+        error: 'generic_queue_probe_task_rejected'
+      });
+      return true;
+    }
+    return false;
+  }
+
+  async _pollRecoverPreviousTask(taskId, task) {
+    this.taskQueueService.tryAcquire(taskId);
+    try {
+      if (await this._finalizePersistedResultIfComplete(taskId, task)) {
+        return;
+      }
+      await this._collectSubmittedBackgroundTask(taskId, task);
+    } catch (e) {
+      console.error('[Queue] Submitted task', taskId, 'recovery error:', e.message);
+      if (/review gate/i.test(e.message || '')) {
+        const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
+        if (recoveredResult) {
+          task.result = recoveredResult;
+          await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
+          return;
+        }
+      }
+      if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
+        return;
+      }
+      await this._finalizeBackgroundTask(taskId, task, 'error', {
+        error: safeErrorMessage(e)
+      });
+    } finally {
+      this.taskQueueService.release(taskId);
+    }
+  }
+
+  async _pollDispatchWatcher(taskId, task) {
+    // Skip if task is not queued
+    if (task.status !== 'queued') return;
+
+    try {
+      await this._ensureConnection();
+      let queueStatus = await this.driver.checkQueueStatus();
+      this._updateQueuedTaskSnapshot(task, queueStatus);
+
+      if ((queueStatus.queued || queueStatus.running) && Array.isArray(task.fallbackModels) && task.fallbackModels.length > 0) {
+        const probe = await this._probeFallbackModels(task);
+        if (probe.queueStatus) {
+          queueStatus = probe.queueStatus;
+          this._updateQueuedTaskSnapshot(task, queueStatus);
+        }
+      }
+
+      if (task.deadline && Date.now() > task.deadline) {
+        const extended = this._maybeExtendQueuedTaskDeadline(task, queueStatus);
+        if (!extended) {
+          console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
+          await this._finalizeBackgroundTask(taskId, task, 'queue_timeout', {
+            error: 'Task exceeded queue wait timeout'
+          });
+          return;
+        }
+      }
+
+      // Still queued or actively running — skip this task for now
+      if (queueStatus.running || (queueStatus.queued && queueStatus.canSubmit !== true)) {
+        if (this.wsHandler) {
+          this.wsHandler.notifyTaskStatusChange(taskId, task);
+        }
+        this._syncTaskHistoryMirror(task);
+        this._persistActiveQueue();
+        return;
+      }
+
+      // Lock this task before execution
+      this.taskQueueService.tryAcquire(taskId);
+      task.status = 'executing';
+      this._syncTaskHistoryMirror(task);
+      this._persistActiveQueue();
+
+      if (this.wsHandler) {
+        this.wsHandler.notifyTaskStatusChange(taskId, task);
+      }
+
+      try {
+        await this._withUiActionLock(async () => {
+          // Create a fresh chat before sending (background poller bypasses
+          // delegate() which would also call newChat)
+          if (task.soloChat) {
+            await this._switchToTaskSoloChat(task, 'send_task');
+          } else {
+            await this.driver.newChat();
+          }
+          await this.driver.sendMessage(this._taskWithProjectContext(task.task, task.projectPath));
+          task.submittedToTrae = true;
+          task.submittedAt = Date.now();
+          if (!task.soloChat) {
+            await this._captureTaskSoloChat(task);
+          }
+          this._syncTaskHistoryMirror(task);
+          this._persistActiveQueue();
+          const result = await this.driver.collectResponse();
+          if (this._isTerminalTaskStatus(task.status)) {
+            this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
+              success: true,
+              details: {
+                status: task.status,
+                reason: 'task already reached a terminal state before collectResponse returned'
+              }
+            });
+            this._syncTaskHistoryMirror(task);
+            this._persistActiveQueue();
+            return;
+          }
+          await this._finalizeCollectedBackgroundResult(taskId, task, result);
+        });
+      } catch (e) {
+        console.error('[Queue] Task', taskId, 'execution error:', e.message);
+        if (/review gate/i.test(e.message || '')) {
+          const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
+          if (recoveredResult) {
+            task.result = recoveredResult;
+            await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
+            return;
+          }
+        }
+        if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
+          return;
+        }
+        await this._finalizeBackgroundTask(taskId, task, 'error', {
+          error: safeErrorMessage(e)
+        });
+      } finally {
+        // Unlock the task after execution completes (success or error)
+        this.taskQueueService.release(taskId);
+      }
+    } catch (e) {
+      console.error('[Queue] polling error:', e.message);
+    }
   }
 
   _stopBackgroundPolling() {

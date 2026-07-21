@@ -41,8 +41,30 @@ class ResponsePoller {
 
     const taskSourceResult = await this.taskStateManager.queryTaskSource(skipText);
 
+    const probeScript = this._buildResponseProbeScript({
+      isIdeMode,
+      safeIdeResponseSelectors,
+      safeResponseSelectors,
+      safeActivitySelectors
+    });
+
     const result = await this.client.send('Runtime.evaluate', {
-      expression: `
+      expression: probeScript,
+      returnByValue: true
+    });
+
+    const state = result.result?.value || { taskComplete: false, taskText: '', taskInProgress: false, responseText: '' };
+
+    return this._classifyResponseState(state, taskSourceResult);
+  }
+
+  /**
+   * Builds the JS expression injected into the page DOM to probe for a response.
+   * The produced string is executed verbatim in a browser context, so its
+   * content must remain character-identical to the original inline template.
+   */
+  _buildResponseProbeScript({ isIdeMode, safeIdeResponseSelectors, safeResponseSelectors, safeActivitySelectors }) {
+    return `
         (function() {
           var result = { taskComplete: false, taskText: '', taskInProgress: false, responseText: '' };
 
@@ -124,12 +146,15 @@ class ResponsePoller {
 
           return result;
         })()
-      `,
-      returnByValue: true
-    });
+      `;
+  }
 
-    const state = result.result?.value || { taskComplete: false, taskText: '', taskInProgress: false, responseText: '' };
-
+  /**
+   * Merges the task-source result into the probed state and applies the
+   * fallback text-extraction branches that classify the response state.
+   * Returns the (possibly mutated) state object.
+   */
+  async _classifyResponseState(state, taskSourceResult) {
     if (taskSourceResult && taskSourceResult.text) {
       state.taskText = taskSourceResult.text;
       state.taskInProgress = taskSourceResult.inProgress;
