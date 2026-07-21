@@ -96,7 +96,7 @@ async function handleDialogApprove(req, res, ctx) {
     if (!answer) {
       return rejectBadRequest(req, res, ctx, 'answer is required for dialog answer action');
     }
-    if (!requireDriverCapability(req, res, ctx, 'answerQuestionDialog', 'Driver does not support question dialog answers')) {
+    if (!requireDriverCapability(req, res, ctx, 'answerQuestionDialog', { message: 'Driver does not support question dialog answers' })) {
       return;
     }
     const result = await ctx.driver.answerQuestionDialog(answer);
