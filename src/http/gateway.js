@@ -1,5 +1,23 @@
 'use strict';
 
+/**
+ * Gateway — the local HTTP gateway for TRAECNclaw.
+ *
+ * Responsibilities:
+ *   - REST route dispatch (via ./route-table) for the public API surface.
+ *   - CDP/DOM driver orchestration: target discovery, connection lifecycle,
+ *     and UI automation against the Trae CN desktop app.
+ *   - Task queue orchestration: queueing, polling, batch execution, and
+ *     completion-check retries (with QueueStateMachine / BatchExecutor).
+ *   - Cross-cutting HTTP concerns: authentication, rate limiting,
+ *     idempotency keys, CORS, and request context.
+ *   - Webhook / OpenClaw notifications for task lifecycle events.
+ *
+ * Most endpoint handlers have been extracted to ./handlers/*.js; this
+ * class keeps the orchestration glue and the cross-cutting concerns that
+ * the handlers consume through the `ctx` object.
+ */
+
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -60,6 +78,15 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
 
 const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
+
+// Max task text/content length accepted by the queue endpoints (characters).
+// Used both to filter oversized batch items on intake and to truncate
+// completion-check feedback before resubmitting a task.
+const MAX_TASK_TEXT_LENGTH = 100000;
+
+// 5-minute idempotency window: cached responses for a given Idempotency-Key
+// header are kept this long before the key may be reused.
+const IDEMPOTENCY_KEY_TTL_MS = 300000;
 
 class Gateway {
   constructor(options = {}) {
@@ -411,7 +438,7 @@ class Gateway {
         if (this._hasCompletionChecks(completionChecks)) normalized.completionChecks = completionChecks;
         return normalized;
       })
-      .filter(item => item && item.task && item.task.length <= 100000)
+      .filter(item => item && item.task && item.task.length <= MAX_TASK_TEXT_LENGTH)
       .filter(item => !isGenericQueueProbeTask(item.task));
   }
 
@@ -1422,7 +1449,7 @@ class Gateway {
   _storeIdempotency(key, response) {
     if (key) {
       this.idempotencyKeys.set(key, response);
-      this._setTimeout(() => this.idempotencyKeys.delete(key), 300000);
+      this._setTimeout(() => this.idempotencyKeys.delete(key), IDEMPOTENCY_KEY_TTL_MS);
     }
   }
 
@@ -2888,7 +2915,7 @@ class Gateway {
       'Fix these missing deliverables before reporting completion.'
     ].join('\n');
     const base = String(taskText || '').replace(/\n\nCompletion checks failed after the previous attempt\.[\s\S]*$/m, '');
-    return (base + feedback).slice(0, 100000);
+    return (base + feedback).slice(0, MAX_TASK_TEXT_LENGTH);
   }
 
   async _retryBackgroundTaskAfterCompletionCheckFailure(taskId, task, result, validation, options = {}) {

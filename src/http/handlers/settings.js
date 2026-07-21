@@ -76,6 +76,9 @@ const ROUTES = [
 
 async function handleSettingsReadAll(req, res, ctx) {
   await ctx._ensureConnection();
+  // Hard timeout ceiling (milliseconds) for reading every settings section
+  // in one go; raced against the driver call so a stuck settings panel
+  // can't hang the request forever.
   const hardLimitMs = 35000;
   let timeoutId;
   const timeoutPromise = new Promise((_, reject) => {

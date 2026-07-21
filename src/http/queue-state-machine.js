@@ -210,6 +210,10 @@ class QueueStateMachine {
     if (!value) return true;
     const hasStructuredReportMarker = /^(?:TRAECNclaw\s+)?Code\s+Review\s*[—-]\s*Findings\s+First\b/i.test(value)
       || (/\b1\.\s*Findings\s*\(ordered by severity\)/i.test(value) && /\b(?:final verdict|review complete)\b/i.test(value));
+    // 120 = minimum text length (chars) for a marker to count as a real
+    // structured completion; shorter text is treated as incomplete /
+    // placeholder. Same threshold semantics as BatchExecutor's
+    // _hasStrongCompletionEvidence.
     if (hasStructuredReportMarker && value.length >= 120) return false;
     const hasCompletionMarker = /任务完成|所有测试通过|测试已通过|已完成。以下是|已完成，以下是|completed successfully|all tests pass(?:ed)?|delivery summary|final report/i.test(value);
     if (hasCompletionMarker && value.length >= 120) return false;

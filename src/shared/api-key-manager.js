@@ -53,6 +53,9 @@ class ApiKeyManager {
     if (!ipBuffer || !Number.isInteger(bits) || bits < 0 || bits > 32) return null;
 
     const mask = Buffer.alloc(4);
+    // Build the IPv4 subnet mask byte by byte from the remaining prefix
+    // bits: a full byte (>= 8 bits) is 0xFF; a partial byte fills its top
+    // bits with 1s via (0xFF << (8 - bits)) & 0xFF; exhausted bits give 0.
     for (let i = 0; i < 4; i++) {
       mask[i] = bits >= 8 ? 0xFF : (bits > 0 ? (0xFF << (8 - bits)) & 0xFF : 0);
       bits = Math.max(0, bits - 8);
