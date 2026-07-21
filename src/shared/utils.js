@@ -2,6 +2,8 @@
 
 const crypto = require('crypto');
 
+// Queue-probe logic lives in ./queue-probe; re-exported below so the public
+// surface of this module stays unchanged for existing callers.
 const {
   normalizeQueueProbeText,
   isQueueProbeCommandText,
