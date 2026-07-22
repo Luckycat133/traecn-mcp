@@ -77,11 +77,11 @@ class TraeCNSkill {
    * 为即将执行的操作生成确认/预检计划，不操作 TraeCN。
    * @param {string} command - 命令名
    * @param {object} [params={}] - 命令参数
-   * @param {object} [opts={}] - 选项
+   * @param {object} [options={}] - 选项
    * @returns {Promise<object>} 确认计划
    */
-  async planOperation(command, params = {}, opts = {}) {
-    const result = await this.client.createConfirmationPlan(command, params, opts);
+  async planOperation(command, params = {}, options = {}) {
+    const result = await this.client.createConfirmationPlan(command, params, options);
     return result.data || result;
   }
 
@@ -98,14 +98,14 @@ class TraeCNSkill {
   /**
    * 运行任务
    * @param {string} task - 任务描述
-   * @param {object} [opts={}] - 运行选项
-   * @param {string} [opts.projectPath] - 项目路径
-   * @param {boolean} [opts.includeProcess] - 是否包含过程信息
-   * @param {boolean} [opts.autoWait=true] - 是否自动等待队列
-   * @param {string} [opts.mode] - 模式 ('solo' 或 'ide')
+   * @param {object} [options={}] - 运行选项
+   * @param {string} [options.projectPath] - 项目路径
+   * @param {boolean} [options.includeProcess] - 是否包含过程信息
+   * @param {boolean} [options.autoWait=true] - 是否自动等待队列
+   * @param {string} [options.mode] - 模式 ('solo' 或 'ide')
    * @returns {Promise<object>} 运行结果
    */
-  async run(task, opts = {}) {
+  async run(task, options = {}) {
     const {
       projectPath,
       includeProcess,
@@ -120,8 +120,8 @@ class TraeCNSkill {
       fallbackModels,
       autoModelFallback,
       modelProbeIntervalMs
-    } = opts;
-    // autoApproveDialog is consumed downstream via opts in delegate(); keeping
+    } = options;
+    // autoApproveDialog is consumed downstream via options in delegate(); keeping
     // the explicit destructure here makes the supported option surface
     // self-documenting. No-op reference so eslint no-unused-vars is satisfied.
     void autoApproveDialog;
@@ -185,11 +185,11 @@ class TraeCNSkill {
   /**
    * 队列任务（异步执行）
    * @param {string} task - 任务描述
-   * @param {object} [opts={}] - 运行选项
-   * @param {string} [opts.projectPath] - 项目路径
+   * @param {object} [options={}] - 运行选项
+   * @param {string} [options.projectPath] - 项目路径
    * @returns {Promise<object>} 队列结果
    */
-  async queue(task, opts = {}) {
+  async queue(task, options = {}) {
     const {
       projectPath,
       sessionId,
@@ -215,7 +215,7 @@ class TraeCNSkill {
       soloChatTitleIncludes,
       soloChatTextIncludes,
       newChat
-    } = opts;
+    } = options;
     
     try {
       const result = await this.client.delegateAsync(task, {
@@ -274,17 +274,17 @@ class TraeCNSkill {
   /**
    * 在本地等待任务直到终态或需要代码决策的停点。
    * @param {string|null} [taskId=null] - 任务 ID（可选，默认为最后执行的任务）
-   * @param {object} [opts={}] - 等待选项
+   * @param {object} [options={}] - 等待选项
    * @returns {Promise<object>} 等待结果
    */
-  async wait(taskId = null, opts = {}) {
+  async wait(taskId = null, options = {}) {
     const id = taskId || this._lastTaskId;
     if (!id) {
       throw TraeCNSkillError.taskIdMissing();
     }
 
     try {
-      const result = await this.client.waitForTask(id, opts);
+      const result = await this.client.waitForTask(id, options);
       return {
         ok: !['error', 'queue_timeout', 'review_rejected', 'not_found'].includes(String(result.status || '').toLowerCase()),
         ...result
@@ -332,9 +332,9 @@ class TraeCNSkill {
     return await this.client.switchSoloChat(criteria);
   }
 
-  async submitSoloChatTask(task, opts = {}) {
+  async submitSoloChatTask(task, options = {}) {
     try {
-      const result = await this.client.submitSoloChatTask(task, opts);
+      const result = await this.client.submitSoloChatTask(task, options);
       this._lastTaskId = result.taskId || result.data?.taskId;
       return this._normalizeQueueResult(result);
     } catch (cause) {
@@ -434,15 +434,15 @@ class TraeCNSkill {
   /**
    * 代码审查辅助：将代码、diff 或审查说明包装成稳定审查提示并委派给 TraeCN。
    * @param {string|object} input - 审查说明，或 { instruction, files, focus, code, diff }
-   * @param {object} [opts={}] - run/queue 选项；opts.queue=true 时异步排队
+   * @param {object} [options={}] - run/queue 选项；options.queue=true 时异步排队
    * @returns {Promise<object>} 审查结果
    */
-  async reviewCode(input, opts = {}) {
-    const task = buildCodeReviewTask(input, opts);
-    if (opts.queue === true) {
-      return this.queue(task, opts);
+  async reviewCode(input, options = {}) {
+    const task = buildCodeReviewTask(input, options);
+    if (options.queue === true) {
+      return this.queue(task, options);
     }
-    return this.run(task, opts);
+    return this.run(task, options);
   }
 
   /**
@@ -485,13 +485,13 @@ class TraeCNSkill {
    * @returns {object} 标准化的状态
    */
   _normalizeStatus(data) {
-    const d = data.data || data;
+    const payload = data.data || data;
     return {
       ok: true,
-      status: d.status,
-      connected: d.status === 'connected',
-      version: d.version || null,
-      mock: d.mockBridge || false
+      status: payload.status,
+      connected: payload.status === 'connected',
+      version: payload.version || null,
+      mock: payload.mockBridge || false
     };
   }
 
@@ -502,23 +502,23 @@ class TraeCNSkill {
    * @returns {object} 标准化的结果
    */
   _normalizeResult(data) {
-    const d = data.data || data;
+    const payload = data.data || data;
     
-    if (d.status === 'queued') {
+    if (payload.status === 'queued') {
       return {
         ok: true,
         queued: true,
-        taskId: d.taskId,
+        taskId: payload.taskId,
         status: 'queued'
       };
     }
 
     return {
       ok: true,
-      text: d.text || '',
-      status: d.stable ? 'stable' : 'unstable',
-      elapsed: d.elapsedMs || 0,
-      process: d.processText || null
+      text: payload.text || '',
+      status: payload.stable ? 'stable' : 'unstable',
+      elapsed: payload.elapsedMs || 0,
+      process: payload.processText || null
     };
   }
 
@@ -529,13 +529,13 @@ class TraeCNSkill {
    * @returns {object} 标准化的队列结果
    */
   _normalizeQueueResult(data) {
-    const d = data.data || data;
+    const payload = data.data || data;
     return {
       ok: true,
       queued: true,
-      taskId: d.taskId,
-      status: d.status,
-      queue: d.queueDetails || null
+      taskId: payload.taskId,
+      status: payload.status,
+      queue: payload.queueDetails || null
     };
   }
 
@@ -546,22 +546,22 @@ class TraeCNSkill {
    * @returns {object} 标准化的轮询结果
    */
   _normalizePollResult(data) {
-    const d = data.data || data;
-    const status = d.status || 'queued';
+    const payload = data.data || data;
+    const status = payload.status || 'queued';
     
     const result = { ok: true, status };
 
-    if (status === 'done' && d.result) {
-      result.text = d.result.text;
-      result.elapsed = d.result.elapsedMs;
+    if (status === 'done' && payload.result) {
+      result.text = payload.result.text;
+      result.elapsed = payload.result.elapsedMs;
     }
 
-    if (d.elapsed) {
-      result.elapsed = d.elapsed;
+    if (payload.elapsed) {
+      result.elapsed = payload.elapsed;
     }
 
-    if (d.error) {
-      result.error = d.error;
+    if (payload.error) {
+      result.error = payload.error;
       result.ok = false;
     }
 
@@ -575,7 +575,7 @@ class TraeCNSkill {
    * @returns {object} 标准化的取消结果
    */
   _normalizeCancelResult(data) {
-    const d = data.data || data;
+    const payload = data.data || data;
     return { ok: true, cancelled: true };
   }
 
@@ -586,8 +586,8 @@ class TraeCNSkill {
    * @returns {object} 标准化的设置结果
    */
   _normalizeSettings(data) {
-    const d = data.data || data;
-    return { ok: true, section: d.section || null, content: d };
+    const payload = data.data || data;
+    return { ok: true, section: payload.section || null, content: payload };
   }
 
   /**
@@ -597,8 +597,8 @@ class TraeCNSkill {
    * @returns {object} 标准化的设置项结果
    */
   _normalizeSetResult(data) {
-    const d = data.data || data;
-    return { ok: true, label: d.label, value: d.value };
+    const payload = data.data || data;
+    return { ok: true, label: payload.label, value: payload.value };
   }
 
   /**
@@ -608,12 +608,12 @@ class TraeCNSkill {
    * @returns {object} 标准化的批准结果
    */
   _normalizeApproveResult(data) {
-    const d = data.data || data;
+    const payload = data.data || data;
     return {
       ok: true,
-      success: d.success,
-      action: d.action,
-      clicked: d.buttonClicked || null
+      success: payload.success,
+      action: payload.action,
+      clicked: payload.buttonClicked || null
     };
   }
 
@@ -624,13 +624,13 @@ class TraeCNSkill {
    * @returns {object} 标准化的对话框状态
    */
   _normalizeDialogStatus(data) {
-    const d = data.data || data;
+    const payload = data.data || data;
     return {
       ok: true,
-      hasDialog: d.hasDialog || false,
-      type: d.dialogType || null,
-      question: d.question || null,
-      buttons: d.buttons || []
+      hasDialog: payload.hasDialog || false,
+      type: payload.dialogType || null,
+      question: payload.question || null,
+      buttons: payload.buttons || []
     };
   }
 
@@ -641,12 +641,12 @@ class TraeCNSkill {
    * @returns {object} 标准化的队列状态
    */
   _normalizeQueueStatus(data) {
-    const d = data.data || data;
+    const payload = data.data || data;
     return {
       ok: true,
-      queued: d.queued || false,
-      position: d.position || null,
-      message: d.message || null
+      queued: payload.queued || false,
+      position: payload.position || null,
+      message: payload.message || null
     };
   }
 

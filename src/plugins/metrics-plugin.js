@@ -134,9 +134,9 @@ function getGlobalMetrics() {
   return globalMetrics;
 }
 
-function createMetricsPlugin(config = {}) {
-  const collectDefaultMetrics = config.collectDefaultMetrics !== false;
-  const metricsPrefix = config.metricsPrefix || 'traecn';
+function createMetricsPlugin(options = {}) {
+  const collectDefaultMetrics = options.collectDefaultMetrics !== false;
+  const metricsPrefix = options.metricsPrefix || 'traecn';
 
   const metrics = getGlobalMetrics();
 

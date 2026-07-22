@@ -42,10 +42,10 @@ function formatTaskContext(ctx) {
   return sanitized;
 }
 
-function createLoggingPlugin(config = {}) {
-  const includeRequestBody = config.includeRequestBody !== false;
-  const includeResponseBody = config.includeResponseBody !== false;
-  const logHeaders = config.logHeaders !== false;
+function createLoggingPlugin(options = {}) {
+  const includeRequestBody = options.includeRequestBody !== false;
+  const includeResponseBody = options.includeResponseBody !== false;
+  const logHeaders = options.logHeaders !== false;
 
   return {
     name: 'logging-plugin',

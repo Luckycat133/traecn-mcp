@@ -42,8 +42,8 @@ async function listSoloChats() {
 async function switchSoloChat(criteria = {}) {
   return layered.advanced.switchSoloChat(criteria);
 }
-async function submitSoloChatTask(task, opts = {}) {
-  return layered.advanced.submitSoloChatTask(task, opts);
+async function submitSoloChatTask(task, options = {}) {
+  return layered.advanced.submitSoloChatTask(task, options);
 }
 async function openProject(p) {
   return layered.advanced.openProject(p);
@@ -72,11 +72,11 @@ async function checkQueue() {
 async function getCapabilities() {
   return _skill().getCapabilities();
 }
-async function planOperation(command, params = {}, opts = {}) {
-  return _skill().planOperation(command, params, opts);
+async function planOperation(command, params = {}, options = {}) {
+  return _skill().planOperation(command, params, options);
 }
-async function vibeWorkflow(input = {}, opts = {}) {
-  const result = await _skill().vibeWorkflow({ ...input, ...opts });
+async function vibeWorkflow(input = {}, options = {}) {
+  const result = await _skill().vibeWorkflow({ ...input, ...options });
   return result.taskId;
 }
 
