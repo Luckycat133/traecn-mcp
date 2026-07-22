@@ -3,6 +3,8 @@
 const { parseBody } = require('../request-gate');
 const { hasDriverCapability } = require('./helpers');
 
+const MAX_TASK_TEXT_LENGTH = 100000;
+
 /**
  * task-actions handlers.
  *
@@ -213,7 +215,6 @@ async function handleTaskCancel(req, res, ctx, taskId) {
       stopResult = { success: false, error: err.message };
     }
   }
-  // Remove task from locks if it's there
   ctx.taskLocks.delete(taskId);
   task.status = 'cancelled';
   task.error = null;

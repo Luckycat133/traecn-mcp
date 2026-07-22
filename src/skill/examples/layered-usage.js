@@ -163,12 +163,7 @@ async function main() {
 
   try {
     await basicExample();
-    // await advancedExample();
-    // await configExample();
-    // await dialogExample();
-    // await batchExample();
     await errorHandlingExample();
-    // await completeWorkflow();
   } catch (error) {
     console.error('示例执行失败:', error.message);
   }

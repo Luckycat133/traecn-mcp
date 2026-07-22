@@ -4,6 +4,9 @@ const { parseBody } = require('../request-gate');
 const { isGenericQueueProbeTask } = require('../../shared/utils');
 const { rejectBadRequest } = require('./helpers');
 
+const MAX_BATCH_TASKS = 100;
+const MAX_TASK_TEXT_LENGTH = 100000;
+
 /**
  * batch handlers.
  *
@@ -54,7 +57,7 @@ async function handleBatchSubmit(req, res, ctx) {
   if (!body.tasks || !Array.isArray(body.tasks) || body.tasks.length === 0) {
     return rejectBadRequest(req, res, ctx, 'tasks array is required and must not be empty');
   }
-  if (body.tasks.length > 100) {
+  if (body.tasks.length > MAX_BATCH_TASKS) {
     return ctx._json(req, res, { error: 'Maximum 100 tasks per batch' }, 400);
   }
   for (let idx = 0; idx < body.tasks.length; idx++) {
@@ -62,7 +65,7 @@ async function handleBatchSubmit(req, res, ctx) {
     if (!item.task || typeof item.task !== 'string') {
       return ctx._json(req, res, { error: 'Each task must have a task string' }, 400);
     }
-    if (item.task.length > 100000) {
+    if (item.task.length > MAX_TASK_TEXT_LENGTH) {
       return ctx._json(req, res, { error: 'Each task must be at most 100000 characters' }, 400);
     }
     if (isGenericQueueProbeTask(item.task)) {

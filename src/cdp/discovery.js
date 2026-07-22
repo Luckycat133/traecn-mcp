@@ -7,6 +7,8 @@ const { getEnvWithFallback, safeClose } = require('../shared/utils');
 
 const DEFAULT_DISCOVERY_PORTS = ['9222', '9223', '9224', '9225', '9226', '9230', '9333', '9334'];
 
+const CDP_REQUEST_TIMEOUT_MS = 5000;
+
 function classifyTargetSurface(target = {}) {
   const title = String(target.title || '').toLowerCase();
   const url = String(target.url || '').toLowerCase();
@@ -85,7 +87,7 @@ async function fetchCDPTargets(host, port) {
       });
     });
     req.on('error', reject);
-    req.setTimeout(5000, () => {
+    req.setTimeout(CDP_REQUEST_TIMEOUT_MS, () => {
       req.destroy(new Error('CDP /json/list request timed out'));
     });
   });
@@ -111,7 +113,7 @@ async function fetchCDPVersion(host, port) {
       });
     });
     req.on('error', reject);
-    req.setTimeout(5000, () => {
+    req.setTimeout(CDP_REQUEST_TIMEOUT_MS, () => {
       req.destroy(new Error('CDP /json/version request timed out'));
     });
   });
@@ -213,7 +215,6 @@ function scoreTarget(target, titleKeywords) {
 }
 
 async function validateTargetHasContent(client, readiness) {
-  // Check if response region has actual text content
   if (!readiness.responseRegion) return false;
   try {
     const sel = readiness.responseRegion.matchedSelector.replace(/'/g, "\\'");
