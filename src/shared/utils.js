@@ -12,10 +12,10 @@ const {
 } = require('./queue-probe');
 
 /**
- * 从环境变量获取值，支持降级查找
- * @param {string} traecnKey TraeCN 环境变量名
- * @param {string} traeKey 降级环境变量名
- * @param {*} defaultValue 默认值
+ * Get a value from environment variables, with fallback lookup.
+ * @param {string} traecnKey TraeCN environment variable name.
+ * @param {string} traeKey Fallback environment variable name.
+ * @param {*} defaultValue Default value.
  * @returns {*}
  */
 function getEnvWithFallback(traecnKey, traeKey, defaultValue) {
@@ -23,9 +23,9 @@ function getEnvWithFallback(traecnKey, traeKey, defaultValue) {
 }
 
 /**
- * 解析 CSS 选择器列表
- * @param {string} envValue 逗号分隔的选择器字符串
- * @param {string[]} defaults 默认值
+ * Parse a CSS selector list.
+ * @param {string} envValue Comma-separated selector string.
+ * @param {string[]} defaults Default values.
  * @returns {string[]}
  */
 function parseSelectors(envValue, defaults) {
@@ -36,9 +36,9 @@ function parseSelectors(envValue, defaults) {
 }
 
 /**
- * 解析正整数
- * @param {string} value 输入字符串
- * @param {number} defaultValue 默认值
+ * Parse a positive integer.
+ * @param {string} value Input string.
+ * @param {number} defaultValue Default value.
  * @returns {number}
  */
 function parsePositiveInt(value, defaultValue) {
@@ -47,8 +47,8 @@ function parsePositiveInt(value, defaultValue) {
 }
 
 /**
- * 延迟函数
- * @param {number} ms 毫秒数
+ * Delay helper.
+ * @param {number} ms Milliseconds.
  * @returns {Promise<void>}
  */
 function sleep(ms) {
@@ -56,8 +56,8 @@ function sleep(ms) {
 }
 
 /**
- * 安全的 JavaScript 值序列化
- * @param {*} value 输入值
+ * Safe JavaScript value serialization.
+ * @param {*} value Input value.
  * @returns {string}
  */
 function safeJsValue(value) {

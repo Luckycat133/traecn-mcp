@@ -3252,10 +3252,10 @@ class Gateway {
   // ── Poll sub-steps (extracted verbatim from _ensureBackgroundPolling) ─────
 
   _pollCleanupStaleState() {
-    // 定期清理机制：只清理超过一定时间的终态任务。
+    // Periodic cleanup: only remove terminal tasks older than a certain age.
     // Paused or running workflow state must remain recoverable for long queues.
     const now = Date.now();
-    const maxTaskAge = 3600000; // 1小时
+    const maxTaskAge = 3600000; // 1 hour
     for (const [taskId, task] of this.taskQueue) {
       if (this._isTerminalTaskStatus(task.status) && now - task.createdAt > maxTaskAge) {
         console.log('[Queue] Cleaning up old task', taskId, 'with status', task.status);

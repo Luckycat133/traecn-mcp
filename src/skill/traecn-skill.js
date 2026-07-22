@@ -5,7 +5,7 @@ const { TraeCNSkillError } = require('./errors');
 const { buildCodeReviewTask } = require('./review');
 const { KNOWN_MODELS } = require('../shared/models');
 
-/** 设置区域的别名映射 */
+/** Alias mapping for settings sections */
 const SETTINGS_SECTIONS = {
   general: '通用',
   account: '账号',
@@ -24,36 +24,36 @@ const SETTINGS_SECTIONS = {
   about: '关于 TRAE'
 };
 
-/** 有效模式列表 */
+/** List of valid modes */
 // (Currently informational only — mode validation lives inside TraeCNSkill's
 // switchMode/constructor. Kept here as documentation; remove if it stays
 // unused in the next refactor pass.)
 const VALID_MODES = ['solo', 'ide'];
 
 /**
- * TraeCN Skill 主类
- * 提供 TraeCN 自动化功能的简化、统一接口
+ * Main TraeCN Skill class.
+ * Provides a simplified, unified interface to TraeCN automation features.
  */
 class TraeCNSkill {
   /**
-   * 创建 TraeCNSkill 实例
-   * @param {object} [context={}] - 上下文配置对象
+   * Create a TraeCNSkill instance.
+   * @param {object} [context={}] - Context configuration object.
    */
   constructor(context = {}) {
-    /** @type {object} 上下文配置 */
+    /** @type {object} Context configuration */
     this.context = context;
-    /** @type {TraeCNApiClient} TraeCN API 客户端 */
+    /** @type {TraeCNApiClient} TraeCN API client */
     this.client = new TraeCNApiClient(context);
-    /** @type {string|null} 当前会话 ID */
+    /** @type {string|null} Current session ID */
     this._sessionId = null;
-    /** @type {string|null} 最后执行的任务 ID */
+    /** @type {string|null} Last executed task ID */
     this._lastTaskId = null;
   }
 
   /**
-   * 获取 TraeCN 连接状态
-   * @param {boolean} [allowAutoStart=false] - 是否允许自动启动
-   * @returns {Promise<object>} 状态结果
+   * Get TraeCN connection status
+   * @param {boolean} [allowAutoStart=false] - Whether to allow auto-start
+   * @returns {Promise<object>} Status result
    */
   async status(allowAutoStart = false) {
     try {
@@ -65,8 +65,8 @@ class TraeCNSkill {
   }
 
   /**
-   * 获取面向 agent 的紧凑能力目录。
-   * @returns {Promise<object>} capabilities 结果
+   * Get the compact capability catalog for the agent.
+   * @returns {Promise<object>} Capabilities result
    */
   async getCapabilities() {
     const result = await this.client.getCapabilities();
@@ -74,11 +74,11 @@ class TraeCNSkill {
   }
 
   /**
-   * 为即将执行的操作生成确认/预检计划，不操作 TraeCN。
-   * @param {string} command - 命令名
-   * @param {object} [params={}] - 命令参数
-   * @param {object} [options={}] - 选项
-   * @returns {Promise<object>} 确认计划
+   * Generate a confirmation/preflight plan for an upcoming operation without touching TraeCN.
+   * @param {string} command - Command name.
+   * @param {object} [params={}] - Command parameters.
+   * @param {object} [options={}] - Options.
+   * @returns {Promise<object>} Confirmation plan
    */
   async planOperation(command, params = {}, options = {}) {
     const result = await this.client.createConfirmationPlan(command, params, options);
@@ -86,9 +86,9 @@ class TraeCNSkill {
   }
 
   /**
-   * 一次性获取低 token 预检摘要：连接、就绪、队列、弹窗和可选操作确认计划。
-   * @param {object} [options={}] - 可选 { command, params, forceConfirm }
-   * @returns {Promise<object>} 预检摘要
+   * Fetch a low-token preflight summary in one shot: connection, readiness, queue, popups, and an optional operation confirmation plan.
+   * @param {object} [options={}] - Optional { command, params, forceConfirm }.
+   * @returns {Promise<object>} Preflight summary
    */
   async preflight(options = {}) {
     const result = await this.client.preflight(options);
@@ -96,14 +96,14 @@ class TraeCNSkill {
   }
 
   /**
-   * 运行任务
-   * @param {string} task - 任务描述
-   * @param {object} [options={}] - 运行选项
-   * @param {string} [options.projectPath] - 项目路径
-   * @param {boolean} [options.includeProcess] - 是否包含过程信息
-   * @param {boolean} [options.autoWait=true] - 是否自动等待队列
-   * @param {string} [options.mode] - 模式 ('solo' 或 'ide')
-   * @returns {Promise<object>} 运行结果
+   * Run a task
+   * @param {string} task - Task description
+   * @param {object} [options={}] - Run options
+   * @param {string} [options.projectPath] - Project path
+   * @param {boolean} [options.includeProcess] - Whether to include process info
+   * @param {boolean} [options.autoWait=true] - Whether to auto-wait for the queue
+   * @param {string} [options.mode] - Mode ('solo' or 'ide')
+   * @returns {Promise<object>} Run result
    */
   async run(task, options = {}) {
     const {
@@ -135,7 +135,7 @@ class TraeCNSkill {
         const session = await this.client.createSession({ projectPath });
         this._sessionId = session.data?.sessionId || session.sessionId;
       } catch {
-        // 静默失败，继续执行
+        // Silently fail and continue.
       }
     }
 
@@ -183,11 +183,11 @@ class TraeCNSkill {
   }
 
   /**
-   * 队列任务（异步执行）
-   * @param {string} task - 任务描述
-   * @param {object} [options={}] - 运行选项
-   * @param {string} [options.projectPath] - 项目路径
-   * @returns {Promise<object>} 队列结果
+   * Queue a task (asynchronous execution)
+   * @param {string} task - Task description
+   * @param {object} [options={}] - Run options
+   * @param {string} [options.projectPath] - Project path
+   * @returns {Promise<object>} Queue result
    */
   async queue(task, options = {}) {
     const {
@@ -252,10 +252,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 轮询任务状态
-   * @param {string|null} [taskId=null] - 任务 ID（可选，默认为最后执行的任务）
-   * @returns {Promise<object>} 轮询结果
-   * @throws {TraeCNSkillError} 如果没有可用的任务 ID
+   * Poll task status
+   * @param {string|null} [taskId=null] - Task ID (optional, defaults to the last executed task)
+   * @returns {Promise<object>} Poll result
+   * @throws {TraeCNSkillError} If no task ID is available
    */
   async poll(taskId = null) {
     const id = taskId || this._lastTaskId;
@@ -272,10 +272,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 在本地等待任务直到终态或需要代码决策的停点。
-   * @param {string|null} [taskId=null] - 任务 ID（可选，默认为最后执行的任务）
-   * @param {object} [options={}] - 等待选项
-   * @returns {Promise<object>} 等待结果
+   * Wait locally for a task until it reaches a terminal state or a stop point requiring a code decision.
+   * @param {string|null} [taskId=null] - Task ID (optional, defaults to the last executed task)
+   * @param {object} [options={}] - Wait options
+   * @returns {Promise<object>} Wait result
    */
   async wait(taskId = null, options = {}) {
     const id = taskId || this._lastTaskId;
@@ -295,10 +295,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 取消任务
-   * @param {string|null} [taskId=null] - 任务 ID（可选，默认为最后执行的任务）
-   * @returns {Promise<object>} 取消结果
-   * @throws {TraeCNSkillError} 如果没有可用的任务 ID
+   * Cancel a task
+   * @param {string|null} [taskId=null] - Task ID (optional, defaults to the last executed task)
+   * @returns {Promise<object>} Cancel result
+   * @throws {TraeCNSkillError} If no task ID is available
    */
   async cancel(taskId = null) {
     const id = taskId || this._lastTaskId;
@@ -315,8 +315,8 @@ class TraeCNSkill {
   }
 
   /**
-   * 创建新对话
-   * @returns {Promise<object>} 新对话结果
+   * Create a new chat
+   * @returns {Promise<object>} New chat result
    */
   async newChat() {
     const result = await this.client.newChat();
@@ -343,9 +343,9 @@ class TraeCNSkill {
   }
 
   /**
-   * 切换模式
-   * @param {string} mode - 模式名称 ('solo' 或 'ide')
-   * @returns {Promise<object>} 切换结果
+   * Switch mode
+   * @param {string} mode - Mode name ('solo' or 'ide')
+   * @returns {Promise<object>} Switch result
    */
   async switchMode(mode) {
     const validMode = mode.toLowerCase() === 'ide' ? 'ide' : 'solo';
@@ -353,10 +353,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 切换模型
-   * @param {string} model - 模型名称（支持模糊匹配）
-   * @returns {Promise<object>} 切换结果
-   * @throws {TraeCNSkillError} 如果模型未知
+   * Switch model
+   * @param {string} model - Model name (supports fuzzy matching)
+   * @returns {Promise<object>} Switch result
+   * @throws {TraeCNSkillError} If the model is unknown
    */
   async switchModel(model, options = {}) {
     const normalized = this._normalizeModel(model);
@@ -367,9 +367,9 @@ class TraeCNSkill {
   }
 
   /**
-   * 获取设置
-   * @param {string|null} [section=null] - 设置区域（可选）
-   * @returns {Promise<object>} 设置结果
+   * Get settings
+   * @param {string|null} [section=null] - Settings section (optional)
+   * @returns {Promise<object>} Settings result
    */
   async getSettings(section = null) {
     const normalized = this._normalizeSection(section);
@@ -378,11 +378,11 @@ class TraeCNSkill {
   }
 
   /**
-   * 设置项
-   * @param {string} label - 设置标签
-   * @param {any} value - 设置值
-   * @param {string|null} [section=null] - 设置区域（可选）
-   * @returns {Promise<object>} 设置结果
+   * Set a setting
+   * @param {string} label - Setting label
+   * @param {any} value - Setting value
+   * @param {string|null} [section=null] - Settings section (optional)
+   * @returns {Promise<object>} Settings result
    */
   async setSetting(label, value, section = null) {
     const normalized = this._normalizeSection(section);
@@ -391,10 +391,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 批准对话框
-   * @param {string} [action='auto'] - 批准动作
-   * @param {boolean} [wait=false] - 是否等待
-   * @returns {Promise<object>} 批准结果
+   * Approve dialog
+   * @param {string} [action='auto'] - Approval action
+   * @param {boolean} [wait=false] - Whether to wait
+   * @returns {Promise<object>} Approval result
    */
   async approveDialog(action = 'auto', wait = false) {
     if (wait) {
@@ -405,8 +405,8 @@ class TraeCNSkill {
   }
 
   /**
-   * 检查对话框状态
-   * @returns {Promise<object>} 对话框状态
+   * Check dialog status
+   * @returns {Promise<object>} Dialog status
    */
   async checkDialog() {
     const result = await this.client.dialogStatus();
@@ -414,8 +414,8 @@ class TraeCNSkill {
   }
 
   /**
-   * 检查队列状态
-   * @returns {Promise<object>} 队列状态
+   * Check queue status
+   * @returns {Promise<object>} Queue status
    */
   async queueStatus() {
     const result = await this.client.checkQueueStatus();
@@ -423,19 +423,19 @@ class TraeCNSkill {
   }
 
   /**
-   * 打开项目
-   * @param {string} projectPath - 项目路径
-   * @returns {Promise<object>} 打开结果
+   * Open project
+   * @param {string} projectPath - Project path
+   * @returns {Promise<object>} Open result
    */
   async openProject(projectPath) {
     return await this.client.openProject(projectPath);
   }
 
   /**
-   * 代码审查辅助：将代码、diff 或审查说明包装成稳定审查提示并委派给 TraeCN。
-   * @param {string|object} input - 审查说明，或 { instruction, files, focus, code, diff }
-   * @param {object} [options={}] - run/queue 选项；options.queue=true 时异步排队
-   * @returns {Promise<object>} 审查结果
+   * Code-review helper: wrap code, a diff, or review notes into a stable review prompt and delegate to TraeCN.
+   * @param {string|object} input - Review notes, or { instruction, files, focus, code, diff }
+   * @param {object} [options={}] - run/queue options; queued asynchronously when options.queue=true
+   * @returns {Promise<object>} Review result
    */
   async reviewCode(input, options = {}) {
     const task = buildCodeReviewTask(input, options);
@@ -446,9 +446,9 @@ class TraeCNSkill {
   }
 
   /**
-   * 启动无人值守 vibe coding 工作流：初始任务完成后自动继续 follow-up。
+   * Start an unattended vibe-coding workflow: automatically continue with follow-ups after the initial task completes.
    * @param {object} input - { task, steps?, projectPath?, reviewRequired? }
-   * @returns {Promise<object>} 队列结果
+   * @returns {Promise<object>} Queue result
    */
   async vibeWorkflow(input = {}) {
     if (!input || typeof input.task !== 'string' || !input.task.trim()) {
@@ -479,10 +479,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化状态数据
+   * Normalize status data
    * @private
-   * @param {any} data - 原始数据
-   * @returns {object} 标准化的状态
+   * @param {any} data - Raw data
+   * @returns {object} Normalized status
    */
   _normalizeStatus(data) {
     const payload = data.data || data;
@@ -496,10 +496,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化运行结果
+   * Normalize run result
    * @private
-   * @param {any} data - 原始数据
-   * @returns {object} 标准化的结果
+   * @param {any} data - Raw data
+   * @returns {object} Normalized result
    */
   _normalizeResult(data) {
     const payload = data.data || data;
@@ -523,10 +523,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化队列结果
+   * Normalize queue result
    * @private
-   * @param {any} data - 原始数据
-   * @returns {object} 标准化的队列结果
+   * @param {any} data - Raw data
+   * @returns {object} Normalized queue result
    */
   _normalizeQueueResult(data) {
     const payload = data.data || data;
@@ -540,10 +540,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化轮询结果
+   * Normalize poll result
    * @private
-   * @param {any} data - 原始数据
-   * @returns {object} 标准化的轮询结果
+   * @param {any} data - Raw data
+   * @returns {object} Normalized poll result
    */
   _normalizePollResult(data) {
     const payload = data.data || data;
@@ -569,10 +569,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化取消结果
+   * Normalize cancel result
    * @private
-   * @param {any} data - 原始数据
-   * @returns {object} 标准化的取消结果
+   * @param {any} data - Raw data
+   * @returns {object} Normalized cancel result
    */
   _normalizeCancelResult(data) {
     const payload = data.data || data;
@@ -580,10 +580,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化设置结果
+   * Normalize settings result
    * @private
-   * @param {any} data - 原始数据
-   * @returns {object} 标准化的设置结果
+   * @param {any} data - Raw data
+   * @returns {object} Normalized settings result
    */
   _normalizeSettings(data) {
     const payload = data.data || data;
@@ -591,10 +591,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化设置项结果
+   * Normalize setting result
    * @private
-   * @param {any} data - 原始数据
-   * @returns {object} 标准化的设置项结果
+   * @param {any} data - Raw data
+   * @returns {object} Normalized setting result
    */
   _normalizeSetResult(data) {
     const payload = data.data || data;
@@ -602,10 +602,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化批准结果
+   * Normalize approval result
    * @private
-   * @param {any} data - 原始数据
-   * @returns {object} 标准化的批准结果
+   * @param {any} data - Raw data
+   * @returns {object} Normalized approval result
    */
   _normalizeApproveResult(data) {
     const payload = data.data || data;
@@ -618,10 +618,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化对话框状态
+   * Normalize dialog status
    * @private
-   * @param {any} data - 原始数据
-   * @returns {object} 标准化的对话框状态
+   * @param {any} data - Raw data
+   * @returns {object} Normalized dialog status
    */
   _normalizeDialogStatus(data) {
     const payload = data.data || data;
@@ -635,10 +635,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化队列状态
+   * Normalize queue status
    * @private
-   * @param {any} data - 原始数据
-   * @returns {object} 标准化的队列状态
+   * @param {any} data - Raw data
+   * @returns {object} Normalized queue status
    */
   _normalizeQueueStatus(data) {
     const payload = data.data || data;
@@ -651,10 +651,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化模型名称（支持模糊匹配）
+   * Normalize a model name (supports fuzzy matching)
    * @private
-   * @param {string} model - 模型名称
-   * @returns {string|null} 标准化的模型名称或 null
+   * @param {string} model - Model name
+   * @returns {string|null} Normalized model name or null
    */
   _normalizeModel(model) {
     if (!model) return null;
@@ -672,10 +672,10 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化设置区域
+   * Normalize settings section
    * @private
-   * @param {string|null} section - 区域名称
-   * @returns {string|null} 标准化的区域名称
+   * @param {string|null} section - Section name
+   * @returns {string|null} Normalized section name
    */
   _normalizeSection(section) {
     if (!section) return null;
@@ -683,9 +683,9 @@ class TraeCNSkill {
   }
 
   /**
-   * 延时等待
+   * Delay/wait
    * @private
-   * @param {number} ms - 毫秒数
+   * @param {number} ms - Milliseconds
    * @returns {Promise<void>}
    */
   _sleep(ms) {
@@ -693,11 +693,11 @@ class TraeCNSkill {
   }
 
   /**
-   * 委托任务并轮询完成
+   * Delegate a task and poll until completion
    * @private
-   * @param {string} task - 任务描述
-   * @param {object} opts - 选项
-   * @returns {Promise<any>} 任务结果
+   * @param {string} task - Task description
+   * @param {object} opts - Options
+   * @returns {Promise<any>} Task result
    */
   async _delegateWithPoll(task, opts) {
     const {

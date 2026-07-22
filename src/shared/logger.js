@@ -36,7 +36,7 @@ function sanitizeLog(obj, seen) {
 }
 
 /**
- * 格式化文本日志
+ * Format a text log.
  */
 function formatText(logEntry) {
   const { timestamp, level, message, requestId, sessionId, duration, metadata } = logEntry;
@@ -51,14 +51,14 @@ function formatText(logEntry) {
 }
 
 /**
- * 格式化 JSON 日志
+ * Format a JSON log.
  */
 function formatJson(logEntry) {
   return JSON.stringify(logEntry);
 }
 
 /**
- * 旋转文件写入器
+ * Rotating file writer.
  */
 class RotatingFileWriter {
   constructor(options = {}) {
@@ -95,7 +95,7 @@ class RotatingFileWriter {
     const dateStr = this._getDateStr();
     if (dateStr === this.currentDate && this.currentFile) return;
     if (this.currentFile) {
-      try { this.currentFile.end(); } catch { /* 忽略 */ }
+      try { this.currentFile.end(); } catch { /* ignore */ }
     }
     this.currentDate = dateStr;
     this.currentFile = null;
@@ -127,14 +127,14 @@ class RotatingFileWriter {
 
   close() {
     if (this.currentFile) {
-      try { this.currentFile.end(); } catch { /* 忽略 */ }
+      try { this.currentFile.end(); } catch { /* ignore */ }
       this.currentFile = null;
     }
   }
 }
 
 /**
- * 日志记录器
+ * Logger.
  */
 class Logger {
   constructor(options = {}) {

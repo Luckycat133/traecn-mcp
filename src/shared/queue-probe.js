@@ -1,12 +1,14 @@
 'use strict';
 
 /**
- * 队列探针（queue probe）文本判定逻辑。
+ * Queue probe text classification logic.
  *
- * 识别"等排队 / 查队列状态"这类探针任务的文本特征，用于在网关层
- * 拦截或识别非真实业务任务。本模块与 src/shared/utils.js 中的通用
- * 工具（sleep / sanitizeLog / getEnvWithFallback 等）职责独立，
- * 被 utils.js re-export 以保持对外接口不变。
+ * Identifies the textual features of probe tasks such as "wait for queue /
+ * check queue status", used at the gateway layer to intercept or recognize
+ * non-real business tasks. This module's responsibilities are independent of
+ * the generic helpers in src/shared/utils.js (sleep / sanitizeLog /
+ * getEnvWithFallback, etc.); it is re-exported by utils.js to keep the public
+ * interface unchanged.
  */
 
 function normalizeQueueProbeText(value) {
