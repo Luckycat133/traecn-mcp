@@ -12,6 +12,7 @@ const {
   DEFAULT_TASK_POLL_MS,
   isTerminalTaskStatus
 } = require('../integrations/openclaw-traecn-plugin/lib/traecnapi-client');
+const { DEFAULT_HOST, DEFAULT_PORT, resolveGatewayToken } = require('./lib/cli-config');
 
 const COLORS = {
   reset: '\x1b[0m',
@@ -28,8 +29,6 @@ const COLORS = {
 };
 
 const CONFIG_FILE = process.env.TRAECN_CONFIG_FILE || path.join(os.homedir(), '.traecnrc');
-const DEFAULT_HOST = '127.0.0.1';
-const DEFAULT_PORT = 8788;
 
 let config = null;
 
@@ -61,7 +60,7 @@ function loadConfig() {
   const defaults = {
     host: DEFAULT_HOST,
     port: DEFAULT_PORT,
-    token: process.env.TRAECN_GATEWAY_TOKEN || ''
+    token: resolveGatewayToken()
   };
 
   try {

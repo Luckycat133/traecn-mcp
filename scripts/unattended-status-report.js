@@ -13,9 +13,9 @@ const {
   describeCleanupWatchStatus,
   defaultCleanupWatchLockFile
 } = require('./traecn-cli');
+const { readArg, resolveGatewayHostPort } = require('./lib/cli-config');
 
-const DEFAULT_HOST = process.env.TRAECN_GATEWAY_HOST || process.env.TRAECN_HOST || '127.0.0.1';
-const DEFAULT_PORT = Number(process.env.TRAECN_GATEWAY_PORT || process.env.TRAECN_PORT || 8788);
+const { host: DEFAULT_HOST, port: DEFAULT_PORT } = resolveGatewayHostPort({ useCliArgs: false, useLegacyEnv: true });
 const DEFAULT_GATEWAY_TIMEOUT_MS = 4000;
 const STATUS_MARKER = 'TRAECN_GLM52_MEANINGFUL_STATUS_REPORT_1782000683181';
 const REPORT_STATUS = 'meaningful_status_report_done';
@@ -23,12 +23,6 @@ const CLEAN_LONG_QUEUE_RESULT_TOKEN = 'clean_long_queue_result';
 
 function hasFlag(name) {
   return process.argv.includes(name);
-}
-
-function readArg(name, fallback = null) {
-  const index = process.argv.indexOf(name);
-  if (index === -1) return fallback;
-  return process.argv[index + 1] || fallback;
 }
 
 function readNumberArg(name, fallback) {
