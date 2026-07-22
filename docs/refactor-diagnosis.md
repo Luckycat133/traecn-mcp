@@ -158,10 +158,10 @@ P0 五项已在 `refactor/readability` 分支完成（基于 main `09f7c4a`，�
 
 **整体验证**：`npm run lint` ✅、`npm run lint:eslint`（0 problems）✅、`npm test` 全量 41 套件中重构相关全绿 ✅。两个失败项与本次无关（test-runner 自验证 intentional 项；traecn-cli 的 macOS 进程探测环境问题，`scripts/` 本次零改动，基线已存在）。
 
-**评审中发现并已修正的问题**：`handlers/settings.js` 及 config/dialog/preflight 四组 handler 属历史遗留的**未接线死代码**（生产流量走 gateway.js 内联实现，源自历史提交 `0ba8b3b`）。P0-5 误把 `hardLimitMs` 注释加在了不执行的副本上，已挪至 gateway.js 活实现并修正 settings.js 文件头不实声明（`a7723cc`）。
+**评审中发现并已修正的问题**：`handlers/settings.js` 及 config/dialog/preflight 四组 handler 属历史遗留的**未接线死代码**（生产流量走 gateway.js 内联实现，源自历史提交 `0ba8b3b`）。P0-5 误把 `hardLimitMs` 注释加在了不执行的副本上，已挪至 gateway.js 活实现并修正 settings.js 文件头不实声明（`a7723cc`）。这 4 组模块已于 2026-07-22 删除（零行为变更，依据 `docs/handler-dead-code-audit.md` 的审计结论）。
 
 **转入 P1 的新候选**：
-- 四组未接线 handler（settings/config/dialog/preflight）的「接线或删除」审计。
+- ✅ 四组未接线 handler（settings/config/dialog/preflight）的「接线或删除」审计 —— 已完成，结论为**删除**（见 `docs/handler-dead-code-audit.md`）。
 - 统一 settings handler 与 gateway 的 `e.message` vs `safeErrorMessage(e)` 错误包装差异。
 - `batch-executor.js` 与 `queue-state-machine.js` 的 120 字符阈值可考虑共享常量 `MIN_COMPLETION_EVIDENCE_CHARS`。
 - `task-notify.js` 的 `formatReviewRequiredMessage`/`sendTaskWebhook` 目前无直接单测（gateway.test.js 中相关路径被 stub）。
