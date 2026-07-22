@@ -1,6 +1,6 @@
 # TRAECNclaw 重构诊断报告
 
-> 生成日期：2026-07-21　｜　**状态更新：P0 五项已全部完成**（branch `refactor/readability`，提交 `5e2821f`→`a7723cc`，lint + eslint + 全量测试通过）。详见文末「执行记录」。
+> 生成日期：2026-07-21　｜　**状态更新：P0 / P1 / P2 全部完成**（branch `refactor/readability`，最终提交 `c3025e1`；P0/P1-1/P1-2 已通过 lint + eslint + 全量测试，P1-3/P1-4/P2-1/P2-2/P2-3 已通过 `node --check` + 相关单测，零行为变化）。详见文末「执行记录」。
 > 范围：`src/`、`scripts/`、`integrations/`（约 145 个源文件 / 4.3 万行，不含 `*.test.js`）
 > 原则：**保持所有现有功能不变，不引入新特性**。所有建议均为可读性 / 可维护性改进。
 > 验证基线：`npm test` 全绿（唯一 FAIL 为 test-runner 自验证的预期 `intentional` 项，单独运行通过）。
@@ -137,7 +137,7 @@
 
 ---
 
-## 七、执行记录（2026-07-21，P0 已完成）
+## 七、执行记录（2026-07-21 ~ 2026-07-22，P0/P1/P2 全部完成）
 
 P0 五项已在 `refactor/readability` 分支完成（基于 main `09f7c4a`，共 9 个提交），全程采用「实现 → 规格符合性评审 → 代码质量评审」三段流程：
 
@@ -148,6 +148,13 @@ P0 五项已在 `refactor/readability` 分支完成（基于 main `09f7c4a`，�
 | P0-3 config 派生 | `0f366cd` | ✅ `DEFAULT_CONFIG` 由 `buildDefaultConfig()` 派生，深度相等验证通过 |
 | P0-4 handlers helpers | `973d011` `a0467d5` | ✅ 28 处收敛为 3 个 helper；按评审改为 options 对象签名 |
 | P0-5 注释+常量 | `0e76926` `a7723cc` | ✅ gateway 文件级 docstring + 3 个命名常量 + 关键"为什么"注释 |
+| P1-1 修 capabilities 反向依赖 | `6871f40` | ✅ 依赖倒置：由 http/skill 层注入 openapi/prompt-layers/traecn-skill；保留懒加载默认，零行为变化 |
+| P1-2 拆分超长混杂函数 | `811ec6d`(auto-sync) | ✅ gateway._ensureBackgroundPolling、delegate.handleDelegateAsync、traecn-cli.cmdCleanupQueue、config-manager.validate、response-poller._pollResponseState、response-collection.collectResponse 各拆为单一职责助手 |
+| P1-3 统一入口参数命名 | `9a4b644` | ✅ skill 层 opts→options、plugins config→options、traecn-skill `d`→`payload`；保留 simple-api `t/q/p/w/s` 公开导出 |
+| P1-4 scripts 连接配置去重 | `7abf90f` | ✅ 新增 scripts/lib/cli-config.js，消除 5 处 readArg 重复与 host/port/token 三件套 |
+| P2-1 注释语言统一英文 | `32a514a` | ✅ 翻译 skill/shared/gateway 中文注释为英文；保留注释内中文示例与字符串/正则中的中文 |
+| P2-2 清理冗余/死代码注释 | `c3025e1` | ✅ 删除 task-actions/settings-driver/discovery/panel-capture 复述注释与 layered-usage 死代码块 |
+| P2-3 魔法数字提常量 | `c3025e1` | ✅ task-actions MAX_TASK_TEXT_LENGTH、discovery CDP_REQUEST_TIMEOUT_MS、batch MAX_BATCH_TASKS/MAX_TASK_TEXT_LENGTH |
 
 **整体验证**：`npm run lint` ✅、`npm run lint:eslint`（0 problems）✅、`npm test` 全量 41 套件中重构相关全绿 ✅。两个失败项与本次无关（test-runner 自验证 intentional 项；traecn-cli 的 macOS 进程探测环境问题，`scripts/` 本次零改动，基线已存在）。
 
