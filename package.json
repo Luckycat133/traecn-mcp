@@ -112,7 +112,7 @@
     "test:release": "npm run check:versions && npm run lint && npm test && npm run test:system && npm run pack:skill"
   },
   "dependencies": {
-    "ws": "^8.21.0"
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
