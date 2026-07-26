@@ -1,6 +1,9 @@
 'use strict';
 
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { TraeCNAutomationError } = require('./errors');
 const { CDPClient } = require('./client');
 const { getEnvWithFallback, safeClose } = require('../shared/utils');
@@ -120,7 +123,34 @@ async function fetchCDPVersion(host, port) {
 function isTraeCNVersion(version) {
   const browser = String(version?.Browser || '').toLowerCase();
   const userAgent = String(version?.['User-Agent'] || '').toLowerCase();
-  return browser.includes('trae') || userAgent.includes('traecn') || userAgent.includes('trae cn');
+  return (
+    browser.includes('trae') ||
+    userAgent.includes('traecn') ||
+    userAgent.includes('trae cn') ||
+    // Trae CN's agent runtime ("Antigravity") exposes its own Chromium
+    // DevTools port on a dynamic port; treat it as a valid TraeCN surface.
+    userAgent.includes('antigravity')
+  );
+}
+
+/**
+ * Trae CN's "Antigravity" agent runtime opens a Chromium DevTools (CDP)
+ * endpoint on a per-session port, persisted in
+ * ~/Library/Application Support/Antigravity/DevToolsActivePort (first line
+ * is the port). This is the working CDP surface on builds that no longer
+ * forward --remote-debugging-port to the IDE process.
+ * @returns {string} port string, or '' if not available
+ */
+function getAntigravityDevToolsPort() {
+  try {
+    const file = path.join(os.homedir(), 'Library', 'Application Support', 'Antigravity', 'DevToolsActivePort');
+    const raw = fs.readFileSync(file, 'utf8').split('\n')[0].trim();
+    const port = Number(raw);
+    if (Number.isInteger(port) && port > 0 && port < 65536) return String(port);
+  } catch {
+    // File absent on builds without the Antigravity runtime — not fatal.
+  }
+  return '';
 }
 
 function uniquePorts(...groups) {
@@ -143,7 +173,15 @@ async function resolveCDPEndpoint(options = {}) {
     .map(p => p.trim())
     .filter(Boolean);
 
-  const ports = uniquePorts([configuredPort], [quickstartPort], extraPorts, DEFAULT_DISCOVERY_PORTS);
+  const antigravityPort = getAntigravityDevToolsPort();
+
+  const ports = uniquePorts(
+    [configuredPort],
+    [quickstartPort],
+    extraPorts,
+    [antigravityPort],
+    DEFAULT_DISCOVERY_PORTS
+  );
   let lastError = null;
   let configuredPortError = null;
   let firstReachable = null;
