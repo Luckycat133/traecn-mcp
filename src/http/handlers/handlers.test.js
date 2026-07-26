@@ -132,6 +132,7 @@ asyncTest('handleDelegateAsync with chatId sends OpenClaw notification', async (
   const timeoutIds = new Set();
   const ctx = {
     ...fakeCtx(),
+    mockBridge: true,
     _normalizeFallbackModels: () => [],
     _modelProbeIntervalMs: () => 60000,
     _ensureConnection: async () => {},

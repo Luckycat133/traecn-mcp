@@ -34,16 +34,13 @@ async function main() {
   }
 
   try {
-    const result = startTraeCN({
+    const result = await startTraeCN({
       binPath,
       projectPath,
       newInstance: forceNew,
       useIsolatedProfile: useExistingProfile ? false : (useIsolatedProfile ? true : undefined)
     });
     console.log(`[TRAECNclaw] TraeCN started (PID: ${result.pid})`);
-    if (forceNew) {
-      console.log('[TRAECNclaw] Started a new TraeCN instance for remote debugging.');
-    }
     if (useExistingProfile) {
       console.log('[TRAECNclaw] Reused the existing Trae CN profile (no isolated user-data-dir).');
     }
@@ -52,6 +49,23 @@ async function main() {
     }
     if (projectPath) {
       console.log(`[TRAECNclaw] Project: ${projectPath}`);
+    }
+
+    if (result.cdpReady) {
+      console.log(`[TRAECNclaw] CDP remote debugging is available on port ${result.remotePort}.`);
+      if (forceNew) {
+        console.log('[TRAECNclaw] Started a new TraeCN instance for remote debugging.');
+      }
+    } else {
+      console.error(`[TRAECNclaw] TraeCN launched, but CDP remote debugging did NOT come up on port ${result.remotePort}.`);
+      if (result.launchError) {
+        console.error('[TRAECNclaw] Trae CN launch output (root cause):');
+        console.error(result.launchError);
+      }
+      console.error('[TRAECNclaw] The running Trae CN build is not forwarding --remote-debugging-port.');
+      console.error(`[TRAECNclaw] The skill requires a TraeCN instance with CDP on ${result.remotePort} before it can expose traecn_* tools.`);
+      console.error('[TRAECNclaw] Verify Trae CN is the expected build and that no other process holds the port.');
+      process.exit(1);
     }
   } catch (err) {
     console.error(`[TRAECNclaw] Failed to start TraeCN: ${err.message}`);

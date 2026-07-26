@@ -34,7 +34,7 @@ async function main() {
     }
 
     try {
-      const result = startTraeCN({ binPath });
+      const result = await startTraeCN({ binPath });
       console.log(`[TRAECNclaw] TraeCN started (PID: ${result.pid})`);
       console.log('[TRAECNclaw] Waiting for TraeCN to initialize...');
       await new Promise(resolve => setTimeout(resolve, 5000));

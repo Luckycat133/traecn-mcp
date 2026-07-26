@@ -503,7 +503,21 @@ class TraeCNSkill {
    */
   _normalizeResult(data) {
     const d = data.data || data;
-    
+
+    // Honest failure propagation: if the gateway (or any upstream) reported
+    // an explicit failure, surface it instead of rewriting it into a false
+    // success. This is what prevents `traecn_run_task` from returning
+    // ok:true when the TraeCN CDP endpoint is actually unreachable.
+    if (d.ok === false || d.error) {
+      return {
+        ok: false,
+        error: d.error || 'TASK_FAILED',
+        code: d.code || null,
+        message: d.message || null,
+        status: d.status || 'failed'
+      };
+    }
+
     if (d.status === 'queued') {
       return {
         ok: true,
@@ -530,6 +544,15 @@ class TraeCNSkill {
    */
   _normalizeQueueResult(data) {
     const d = data.data || data;
+    if (d.ok === false || d.error) {
+      return {
+        ok: false,
+        error: d.error || 'TASK_FAILED',
+        code: d.code || null,
+        message: d.message || null,
+        status: d.status || 'failed'
+      };
+    }
     return {
       ok: true,
       queued: true,

@@ -2296,6 +2296,7 @@ asyncTest('Gateway recovers review-gate persistence into awaiting_review result'
 
 asyncTest('Gateway sync delegate_async recovers review gate into awaiting_review task', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   gateway.driver = {
     config: { queuePerTaskTimeoutMs: 1234 },
     checkQueueStatus: async () => ({ queued: false, running: false, canSubmit: false }),
@@ -2541,6 +2542,7 @@ asyncTest('Gateway probes fallback models and selects first ready candidate', as
 
 asyncTest('Gateway delegate-async queues with fallback model probe evidence when all candidates are queued', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   gateway.driver = {
     config: { queuePerTaskTimeoutMs: 1000 },
     checkQueueStatus: async () => ({
@@ -2589,6 +2591,7 @@ asyncTest('Gateway delegate-async queues with fallback model probe evidence when
 
 asyncTest('Gateway delegate-async executes immediately when fallback probe finds ready model', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   const statusByModel = {
     'GLM-5.1': { queued: true, running: false, canSubmit: false, currentModel: 'GLM-5.1' },
     'Kimi-K2.6': { queued: false, running: false, canSubmit: true, currentModel: 'Kimi-K2.6' }
@@ -2681,6 +2684,7 @@ asyncTest('Gateway sync delegate returns background task immediately when model 
 
 asyncTest('Gateway sync delegate timeout converts submitted request to tracked background task', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   let resolveDelegate;
   let delegatedPrompt = '';
   const delegatePromise = new Promise((resolve) => {
@@ -2742,6 +2746,7 @@ asyncTest('Gateway sync delegate timeout converts submitted request to tracked b
 
 asyncTest('Gateway sync delegate keeps collecting incomplete review output in background', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   gateway.driver = {
     config: { queuePerTaskTimeoutMs: 1000 },
     checkQueueStatus: async () => ({ queued: false, running: false, canSubmit: true, currentModel: 'DeepSeek-V4-Pro' }),
@@ -3135,6 +3140,7 @@ asyncTest('Gateway dialog status exposes Trae question options and answer action
 
 asyncTest('Gateway delegate-async keeps advisory queue in local background queue when waitForQueue=true', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   gateway.driver = {
     checkQueueStatus: async () => ({
       queued: true,
@@ -3175,6 +3181,42 @@ asyncTest('Gateway delegate-async keeps advisory queue in local background queue
   assert.strictEqual(responseData.status, 'queued');
   assert.strictEqual(responseData.taskId, 'task_bg_1');
   assert.strictEqual(responseData.queueDetails.currentModel, 'DeepSeek-V4-Pro');
+});
+
+asyncTest('Gateway delegate returns 503 CDP_NOT_CONNECTED when CDP endpoint unreachable (honest failure)', async () => {
+  const gateway = new Gateway();
+  gateway.mockBridge = false;
+  gateway._ensureConnection = async () => {};
+  gateway._json = (req, res, data, status = 200) => {
+    gateway.__respData = data;
+    gateway.__respStatus = status;
+    return data;
+  };
+
+  const discovery = require('../cdp/discovery');
+  const origResolve = discovery.resolveCDPEndpoint;
+  discovery.resolveCDPEndpoint = async () => {
+    throw new Error('simulated CDP unreachable');
+  };
+
+  const req = new Readable({
+    read() {
+      this.push(JSON.stringify({ task: 'drive TraeCN for real', mode: 'ide', autoWait: false }));
+      this.push(null);
+    }
+  });
+  req.headers = { 'content-type': 'application/json' };
+
+  try {
+    await gateway._handleDelegateAsync(req, {});
+  } finally {
+    discovery.resolveCDPEndpoint = origResolve;
+  }
+
+  assert.strictEqual(gateway.__respStatus, 503, 'unreachable CDP must fail with 503, not a false ok');
+  assert.strictEqual(gateway.__respData.error, 'CONNECTION_FAILED');
+  assert.strictEqual(gateway.__respData.code, 'CDP_NOT_CONNECTED');
+  assert.ok(/CDP is not reachable/i.test(gateway.__respData.message), 'message must explain CDP unreachable');
 });
 
 asyncTest('Gateway continues reviewed task into queued followup task', async () => {
