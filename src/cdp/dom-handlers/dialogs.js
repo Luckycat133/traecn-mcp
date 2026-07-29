@@ -227,13 +227,21 @@ async function checkForApprovalDialog(driver) {
     }
     return { needsApproval: false };
   } catch (e) {
-    return { needsApproval: false, error: e.message };
+    const errorCode = e.code || 0;
+    const isConnectionError = errorCode === -32603 || errorCode === -32000 || /disconnect|connection|websocket/i.test(e.message);
+    if (isConnectionError) {
+      throw e;
+    }
+    return { needsApproval: false, error: e.message, transient: true };
   }
 }
 
 async function approveDialog(driver, action) {
   try {
     const dialog = await driver.checkForApprovalDialog();
+    if (dialog.transient) {
+      return { success: false, action, error: dialog.error, transient: true };
+    }
     if (!dialog.needsApproval) {
       return { success: false, action, error: 'No dialog found to approve' };
     }
@@ -444,10 +452,10 @@ async function checkReadiness(driver) {
   }
 
   // Include mode info
-  let modeInfo = null;
+  let modeInfo;
   try {
     modeInfo = await driver.detectMode();
-  } catch(e) {
+  } catch {
     modeInfo = { mode: 'unknown', confidence: 0, indicators: [] };
   }
 

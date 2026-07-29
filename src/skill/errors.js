@@ -1,6 +1,17 @@
 'use strict';
 
 /**
+ * 从 cause 中提取可读消息，兼容 Error 实例与字符串。
+ * @param {Error|string|any} cause - 错误原因
+ * @returns {string} 可读消息
+ * @private
+ */
+function _causeMessage(cause) {
+  if (cause instanceof Error) return cause.message;
+  return String(cause);
+}
+
+/**
  * TraeCN Skill 错误基类
  * 提供统一的错误处理机制
  */
@@ -59,13 +70,13 @@ class TraeCNSkillError extends Error {
 
   /**
    * 任务执行错误
-   * @param {string} cause - 错误原因
+   * @param {Error|string|any} cause - 错误原因（Error 实例或字符串）
    * @param {object} [details] - 附加详情
    * @returns {TraeCNSkillError}
    */
   static taskFailed(cause, details) {
     return new TraeCNSkillError(
-      `Task failed: ${cause}`,
+      `Task failed: ${_causeMessage(cause)}`,
       'TASK_FAILED',
       { cause, ...details }
     );
@@ -100,14 +111,14 @@ class TraeCNSkillError extends Error {
 
   /**
    * 连接错误
-   * @param {string} cause - 错误原因
+   * @param {Error|string|any} cause - 错误原因
    * @returns {TraeCNSkillError}
    */
   static connectionError(cause) {
     return new TraeCNSkillError(
-      `Connection error: ${cause}`,
+      `Connection error: ${_causeMessage(cause)}`,
       'CONNECTION_ERROR',
-      { cause: String(cause) }
+      { cause: _causeMessage(cause) }
     );
   }
 }

@@ -234,7 +234,7 @@ class RecoveryHelper {
    * Returns the underlying timer so callers can stop it themselves if
    * they want to bypass `stop()`.
    */
-  startBackgroundPolling({ runProbe, intervalMs = 15000, setIntervalImpl, clearIntervalImpl } = {}) {
+  startBackgroundPolling({ runProbe, intervalMs = 15000, setIntervalImpl, _clearIntervalImpl } = {}) {
     if (!runProbe) throw new Error('RecoveryHelper.startBackgroundPolling requires a runProbe() callback');
     this._pollingTimer = setIntervalImpl(runProbe, intervalMs);
     if (this._pollingTimer && typeof this._pollingTimer.unref === 'function') {
@@ -250,6 +250,7 @@ class RecoveryHelper {
   stopBackgroundPolling({ clearIntervalImpl } = {}) {
     if (!this._pollingTimer) return;
     if (clearIntervalImpl) clearIntervalImpl(this._pollingTimer);
+    else clearInterval(this._pollingTimer);
     this._pollingTimer = null;
   }
 

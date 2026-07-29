@@ -1,8 +1,5 @@
 'use strict';
 
-const http = require('http');
-const { TraeCNAutomationError } = require('./errors');
-const { CDPClient } = require('./client');
 const { SettingsDriver } = require('./settings-driver');
 const { CommandPaletteDriver } = require('./command-palette-driver');
 const { EditorDriver } = require('./editor-driver');
@@ -431,11 +428,13 @@ const DEFAULT_ACTIVITY_SELECTORS = require('./driver-config').DEFAULT_ACTIVITY_S
 const DEFAULT_NEW_CHAT_SELECTORS = require('./driver-config').DEFAULT_NEW_CHAT_SELECTORS;
 const DEFAULT_MODE_TAB_SELECTORS = require('./driver-config').DEFAULT_MODE_TAB_SELECTORS;
 const sanitizeActivityText = require('./driver-config').sanitizeActivityText;
+const isTruncationSignal = require('./driver-config').isTruncationSignal;
 
 module.exports = {
   DomDriver,
   getConfig,
   sanitizeActivityText,
+  isTruncationSignal,
   DEFAULT_COMPOSER_SELECTORS,
   DEFAULT_SEND_BUTTON_SELECTORS,
   DEFAULT_RESPONSE_SELECTORS,

@@ -1,6 +1,6 @@
 'use strict';
 
-const { sleep, safeJsValue } = require('../shared/utils');
+const { sleep } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
 const dom = require('./browser-dom');
 
@@ -156,11 +156,10 @@ class CommandPaletteDriver {
    * @param {number} [opts.timeoutMs=5000] Time to wait for palette to open.
    * @returns {Promise<{ok: boolean, commandId: string, paletteOpened: boolean}>}
    */
-  async run(commandId, opts = {}) {
+  async run(commandId, _opts = {}) {
     if (typeof commandId !== 'string' || !commandId) {
       throw new TraeCNAutomationError('commandId is required', 'INVALID_COMMAND_ID', {});
     }
-    const timeoutMs = opts.timeoutMs || 5000;
 
     const opened = await this.open();
     if (!opened) {
@@ -237,7 +236,6 @@ class CommandPaletteDriver {
    */
   async _setInputValue(hasInput, text) {
     // Use Runtime.evaluate to find and set the palette input directly.
-    const safeText = safeJsValue(text);
     await dom.evaluate(
       this.client,
       `(text) => {

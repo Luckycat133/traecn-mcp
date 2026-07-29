@@ -78,7 +78,7 @@ async function handleOpenProject(req, res, ctx) {
             url: page.url
           };
         }
-      } catch (e) {
+      } catch {
         // CDP probe failed — TraeCN may be running but unreachable. Fall through
         // to the not-running path so the caller can still try to start a fresh
         // instance.
@@ -138,7 +138,7 @@ async function handleOpenProject(req, res, ctx) {
         const targets = await fetchCDPTargets(cdpHost, cdpPort);
         pageTarget = targets.find(t => t.type === 'page');
         if (pageTarget && pageTarget.webSocketDebuggerUrl) break;
-      } catch (e) {
+      } catch {
         // CDP not ready yet — retry
       }
       await new Promise(r => ctx._setTimeout(r, pollIntervalMs));

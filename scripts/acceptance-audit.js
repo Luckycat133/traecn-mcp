@@ -7,8 +7,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const { generateOpenAPISpec } = require('../src/http/openapi');
-const { buildCapabilities } = require('../src/shared/capabilities');
-const { listCommands } = require('../integrations/openclaw-traecn-plugin/lib/command-set');
+const { buildCapabilities } = require('../src/capabilities');
+const { listCommands } = require('../src/client/command-set');
 const { MCP_TOOLS } = require('../mcp-server');
 const openClawManifest = require('../integrations/openclaw-traecn-plugin/openclaw.plugin.json');
 const packageJson = require('../package.json');
@@ -360,7 +360,7 @@ async function main() {
   const mcpTestSource = readFile('mcp-server.test.js');
   const skillSource = readFile('src/skill/traecn-skill.js');
   const skillTestSource = readFile('src/skill/skill.test.js');
-  const commandSetSource = readFile('integrations/openclaw-traecn-plugin/lib/command-set.js');
+  const commandSetSource = readFile('src/client/command-set.js');
 
   add(results, 'agent_surfaces', (
     capabilities.commands.some(command => command.command === 'delegate_async')
@@ -446,7 +446,7 @@ async function main() {
       && liveUatSource.includes('confirmation-gate')
       && gatewayTestSource.includes('buildConfirmationPlan marks settings writes as high-risk confirmation operations')
       && gatewayTestSource.includes('Gateway switch-model can return immediately with queue details when waitForQueue is false')
-      && hasAll(readFile('integrations/openclaw-traecn-plugin/lib/traecnapi-client.test.js'), ['settingsRead sends GET with section param', 'settingsWrite can send confirmation metadata', 'settingsAction maps navigate to implemented settings switch-tab endpoint', 'switchModel sends POST to /api/switch-model'])
+      && hasAll(readFile('src/client/traecnapi-client.test.js'), ['settingsRead sends GET with section param', 'settingsWrite can send confirmation metadata', 'settingsAction maps navigate to implemented settings switch-tab endpoint', 'switchModel sends POST to /api/switch-model'])
   ) ? 'passed' : 'missing', 'Settings, model/mode switching, and confirmation gates are exposed across HTTP, MCP, CLI/OpenClaw, and live read-only UAT.', {
     settingsPaths: ['/api/settings/read', '/api/settings/read-all', '/api/settings/set', '/api/settings/switch-tab', '/api/settings/back-to-chat']
       .filter(apiPath => Boolean(spec.paths[apiPath])),

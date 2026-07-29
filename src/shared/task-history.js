@@ -148,6 +148,7 @@ class TaskHistoryStore {
     this.tasks.set(taskId, record);
     this._dirty = true;
     this._enforceSizeLimit();
+    this._persist();
     return taskId;
   }
 

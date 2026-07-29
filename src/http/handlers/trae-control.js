@@ -121,7 +121,7 @@ async function handleRestartTraeDebug(req, res, ctx) {
   if (ctx.client) {
     try {
       await ctx.client.close();
-    } catch (_err) {
+    } catch {
       // Closing an already-dead CDP client is non-fatal before restart.
     }
     ctx.client = null;

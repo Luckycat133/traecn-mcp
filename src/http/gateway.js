@@ -1,36 +1,14 @@
 'use strict';
 
-/**
- * Gateway — the local HTTP gateway for TRAECNclaw.
- *
- * Responsibilities:
- *   - REST route dispatch (via ./route-table) for the public API surface.
- *   - CDP/DOM driver orchestration: target discovery, connection lifecycle,
- *     and UI automation against the Trae CN desktop app.
- *   - Task queue orchestration: queueing, polling, batch execution, and
- *     completion-check retries (with QueueStateMachine / BatchExecutor).
- *   - Cross-cutting HTTP concerns: authentication, rate limiting,
- *     idempotency keys, CORS, and request context.
- *   - Webhook / OpenClaw notifications for task lifecycle events.
- *
- * Most endpoint handlers have been extracted to ./handlers/*.js; this
- * class keeps the orchestration glue and the cross-cutting concerns that
- * the handlers consume through the `ctx` object.
- */
-
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
-const zlib = require('zlib');
 const path = require('path');
-const crypto = require('crypto');
 const { URL } = require('url');
 const packageInfo = require('../../package.json');
 const { discoverTarget, connectToTarget, resolveCDPEndpoint, fetchCDPTargets, describeCDPSurface } = require('../cdp/discovery');
 const { DomDriver, getConfig } = require('../cdp/dom-driver');
-const { SETTINGS_SECTIONS } = require('../cdp/settings-driver');
 const { MockDriver } = require('../cdp/mock-driver');
-const { DriverRouter, DRIVER_SPEC } = require('./driver-router');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
@@ -38,13 +16,13 @@ const { getEnvWithFallback, parsePositiveInt, sanitizeLog, isGenericQueueProbeTa
 const { errorToHttpStatus, errorToBody, safeErrorMessage } = require('./error-mapping');
 const { ConfigManager } = require('../shared/config-manager');
 const { getGlobalStore } = require('../shared/task-history');
-const { buildCapabilities } = require('../shared/capabilities');
+const { buildCapabilities } = require('../capabilities');
 const { buildConfirmationPlan } = require('../shared/operation-confirmation');
 const requestContext = require('../shared/request-context');
 const { globalMetrics } = require('../shared/metrics');
-const { listCommands } = require('../../integrations/openclaw-traecn-plugin/lib/command-set');
+const { listCommands } = require('../client/command-set');
 const { WebSocketHandler } = require('./websocket-handler');
-const { findTraeCNBinary, isTraeCNRunning, restartTraeCNWithDebug, startTraeCN, getQuickstartConfig } = require('../config/quickstart');
+const { isTraeCNRunning } = require('../config/quickstart');
 const { CDPHealthWatcher } = require('../cdp/health-watcher');
 const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
 
@@ -52,10 +30,10 @@ const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
 // after the helpers moved to ./request-gate. The real implementation lives
 // in request-gate.js; this is a one-line shim kept for readability.
 const { redactUrl: _redactUrl } = require('./request-gate');
-const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, RateLimiter, HttpError } = require('./request-gate');
+const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, RateLimiter } = require('./request-gate');
 const { TaskQueueService } = require('./task-queue-service');
 const { TraeControl } = require('../cdp/trae-control');
-const { ROUTES, matchRoute, resolveHandler } = require('./route-table');
+const { matchRoute, resolveHandler } = require('./route-table');
 const statusHandlers = require('./handlers/status');
 const tasksHandlers = require('./handlers/tasks');
 const delegateHandlers = require('./handlers/delegate');
@@ -67,7 +45,6 @@ const taskActionsHandlers = require('./handlers/task-actions');
 const batchHandlers = require('./handlers/batch');
 const projectHandlers = require('./handlers/project');
 const driverDispatchHandlers = require('./handlers/driver-dispatch');
-const { notifyOpenClaw, formatResult, formatReviewRequiredMessage, sendTaskWebhook } = require('./task-notify');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -75,14 +52,34 @@ const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
 
 const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
 
-// Max task text/content length accepted by the queue endpoints (characters).
-// Used both to filter oversized batch items on intake and to truncate
-// completion-check feedback before resubmitting a task.
-const MAX_TASK_TEXT_LENGTH = 100000;
+const { notifyOpenClaw, formatResult } = require('./notifications');
 
-// 5-minute idempotency window: cached responses for a given Idempotency-Key
-// header are kept this long before the key may be reused.
-const IDEMPOTENCY_KEY_TTL_MS = 300000;
+function formatReviewRequiredMessage(taskId, result, remainingFollowups = 0) {
+  const preview = String(result?.text || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+  const suffix = remainingFollowups > 0 ? `\n后续待续任务: ${remainingFollowups}` : '';
+  return `📝 Trae 已完成并等待审查:\nTask ID: ${taskId}\n预览: ${preview || '（无文本预览）'}${suffix}\n\n审查通过后再继续后续排队任务。`;
+}
+
+async function sendTaskWebhook(url, payload) {
+  if (!url) return;
+  const body = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    ...payload
+  });
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'TraeCNclaw-TaskWebhook/1.0'
+    },
+    body,
+    signal: AbortSignal.timeout(5000)
+  });
+  if (!response.ok) {
+    throw TraeCNAutomationError.webhookFailed(url, response.status, response.statusText);
+  }
+  await response.text().catch(() => {});
+}
 
 class Gateway {
   constructor(options = {}) {
@@ -434,7 +431,7 @@ class Gateway {
         if (this._hasCompletionChecks(completionChecks)) normalized.completionChecks = completionChecks;
         return normalized;
       })
-      .filter(item => item && item.task && item.task.length <= MAX_TASK_TEXT_LENGTH)
+      .filter(item => item && item.task && item.task.length <= 100000)
       .filter(item => !isGenericQueueProbeTask(item.task));
   }
 
@@ -1123,7 +1120,7 @@ class Gateway {
     if (!action || !this.driver) return false;
 
     let approvalResult;
-    let selectedAction = action;
+    let selectedAction;
     try {
       const isQuestion = result.dialogType === 'review_scope_question'
         || /review scope|what would you like me to review/i.test(result.question || '');
@@ -1445,7 +1442,7 @@ class Gateway {
   _storeIdempotency(key, response) {
     if (key) {
       this.idempotencyKeys.set(key, response);
-      this._setTimeout(() => this.idempotencyKeys.delete(key), IDEMPOTENCY_KEY_TTL_MS);
+      this._setTimeout(() => this.idempotencyKeys.delete(key), 300000);
     }
   }
 
@@ -1516,7 +1513,7 @@ class Gateway {
         return;
       }
 
-      let setupResult = null;
+      let setupResult;
       try {
         setupResult = await this.driver.completeSetupIfPresent();
       } catch (e) {
@@ -2403,9 +2400,6 @@ class Gateway {
 
   async _handleSettingsReadAll(req, res) {
     await this._ensureConnection();
-    // Hard timeout ceiling (ms) for reading every settings section in one
-    // go; raced against the driver call so a stuck settings panel can't
-    // hang the request forever.
     const hardLimitMs = 35000;
     let timeoutId;
     const timeoutPromise = new Promise((_, reject) => {
@@ -2438,12 +2432,12 @@ class Gateway {
       beta: 'Beta', about: '关于 TRAE'
     };
     const section = raw ? (SECTION_ALIASES[raw] || (() => {
-      try { return decodeURIComponent(raw); } catch(e) { return raw; }
+      try { return decodeURIComponent(raw); } catch { return raw; }
     })()) : null;
 
     await this._ensureConnection();
 
-    const switchResult = await this.driver.settings.switchTab(section);
+    await this.driver.settings.switchTab(section);
 
     let data;
     try {
@@ -2914,7 +2908,7 @@ class Gateway {
       'Fix these missing deliverables before reporting completion.'
     ].join('\n');
     const base = String(taskText || '').replace(/\n\nCompletion checks failed after the previous attempt\.[\s\S]*$/m, '');
-    return (base + feedback).slice(0, MAX_TASK_TEXT_LENGTH);
+    return (base + feedback).slice(0, 100000);
   }
 
   async _retryBackgroundTaskAfterCompletionCheckFailure(taskId, task, result, validation, options = {}) {
@@ -3219,20 +3213,176 @@ class Gateway {
       this.isPolling = true;
 
       try {
-        this._pollCleanupStaleState();
+        // 定期清理机制：只清理超过一定时间的终态任务。
+        // Paused or running workflow state must remain recoverable for long queues.
+        const now = Date.now();
+        const maxTaskAge = 3600000; // 1小时
+        for (const [taskId, task] of this.taskQueue) {
+          if (this._isTerminalTaskStatus(task.status) && now - task.createdAt > maxTaskAge) {
+            console.log('[Queue] Cleaning up old task', taskId, 'with status', task.status);
+            this.taskQueue.delete(taskId);
+            this.taskQueueService.release(taskId);
+          }
+        }
+
+        // Hoist queue status check above the per-task loop — queue status is
+        // a property of the Trae IDE, not per-task, so one CDP round-trip per
+        // polling cycle suffices regardless of how many tasks are queued.
+        let cachedQueueStatus = null;
+        const hasQueuedTasks = Array.from(this.taskQueue.values()).some(
+          t => t.status === 'queued' && !isGenericQueueProbeTask(t && t.task)
+        );
+        if (hasQueuedTasks) {
+          try {
+            await this._ensureConnection();
+            cachedQueueStatus = await this.driver.checkQueueStatus();
+          } catch (e) {
+            console.error('[Queue] checkQueueStatus failed:', e.message);
+          }
+        }
 
         for (const [taskId, task] of this.taskQueue) {
           if (this.taskLocks.has(taskId)) continue;
 
-          if (await this._pollRejectQueueProbe(taskId, task)) continue;
-
-          if (task.status === 'executing' && task.submittedToTrae === true) {
-            await this._pollRecoverPreviousTask(taskId, task);
+          if (isGenericQueueProbeTask(task && task.task)) {
+            await this._finalizeBackgroundTask(taskId, task, 'cancelled', {
+              error: 'generic_queue_probe_task_rejected'
+            });
             continue;
           }
 
-          await this._pollDispatchWatcher(taskId, task);
+          if (task.status === 'executing' && task.submittedToTrae === true) {
+            this.taskQueueService.tryAcquire(taskId);
+            try {
+              if (await this._finalizePersistedResultIfComplete(taskId, task)) {
+                continue;
+              }
+              await this._collectSubmittedBackgroundTask(taskId, task);
+            } catch (e) {
+              console.error('[Queue] Submitted task', taskId, 'recovery error:', e.message);
+              if (/review gate/i.test(e.message || '')) {
+                const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
+                if (recoveredResult) {
+                  task.result = recoveredResult;
+                  await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
+                  continue;
+                }
+              }
+              if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
+                continue;
+              }
+              await this._finalizeBackgroundTask(taskId, task, 'error', {
+                error: safeErrorMessage(e)
+              });
+            } finally {
+              this.taskQueueService.release(taskId);
+            }
+            continue;
+          }
 
+          // Skip if task is not queued
+          if (task.status !== 'queued') continue;
+
+          try {
+            if (!cachedQueueStatus) continue;
+            let queueStatus = cachedQueueStatus;
+            this._updateQueuedTaskSnapshot(task, queueStatus);
+
+            if ((queueStatus.queued || queueStatus.running) && Array.isArray(task.fallbackModels) && task.fallbackModels.length > 0) {
+              const probe = await this._probeFallbackModels(task);
+              if (probe.queueStatus) {
+                queueStatus = probe.queueStatus;
+                cachedQueueStatus = queueStatus;
+                this._updateQueuedTaskSnapshot(task, queueStatus);
+              }
+            }
+
+            if (task.deadline && Date.now() > task.deadline) {
+              const extended = this._maybeExtendQueuedTaskDeadline(task, queueStatus);
+              if (!extended) {
+                console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
+                await this._finalizeBackgroundTask(taskId, task, 'queue_timeout', {
+                  error: 'Task exceeded queue wait timeout'
+                });
+                continue;
+              }
+            }
+
+            // Still queued or actively running — skip this task for now
+            if (queueStatus.running || (queueStatus.queued && queueStatus.canSubmit !== true)) {
+              if (this.wsHandler) {
+                this.wsHandler.notifyTaskStatusChange(taskId, task);
+              }
+              this._syncTaskHistoryMirror(task);
+              this._persistActiveQueue();
+              continue;
+            }
+
+            // Lock this task before execution
+            this.taskQueueService.tryAcquire(taskId);
+            task.status = 'executing';
+            this._syncTaskHistoryMirror(task);
+            this._persistActiveQueue();
+
+            if (this.wsHandler) {
+              this.wsHandler.notifyTaskStatusChange(taskId, task);
+            }
+
+            try {
+              await this._withUiActionLock(async () => {
+                // Create a fresh chat before sending (background poller bypasses
+                // delegate() which would also call newChat)
+                if (task.soloChat) {
+                  await this._switchToTaskSoloChat(task, 'send_task');
+                } else {
+                  await this.driver.newChat();
+                }
+                await this.driver.sendMessage(this._taskWithProjectContext(task.task, task.projectPath));
+                task.submittedToTrae = true;
+                task.submittedAt = Date.now();
+                if (!task.soloChat) {
+                  await this._captureTaskSoloChat(task);
+                }
+                this._syncTaskHistoryMirror(task);
+                this._persistActiveQueue();
+                const result = await this.driver.collectResponse();
+                if (this._isTerminalTaskStatus(task.status)) {
+                  this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
+                    success: true,
+                    details: {
+                      status: task.status,
+                      reason: 'task already reached a terminal state before collectResponse returned'
+                    }
+                  });
+                  this._syncTaskHistoryMirror(task);
+                  this._persistActiveQueue();
+                  return;
+                }
+                await this._finalizeCollectedBackgroundResult(taskId, task, result);
+              });
+            } catch (e) {
+              console.error('[Queue] Task', taskId, 'execution error:', e.message);
+              if (/review gate/i.test(e.message || '')) {
+                const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
+                if (recoveredResult) {
+                  task.result = recoveredResult;
+                  await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
+                  continue;
+                }
+              }
+              if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
+                continue;
+              }
+              await this._finalizeBackgroundTask(taskId, task, 'error', {
+                error: safeErrorMessage(e)
+              });
+            } finally {
+              // Unlock the task after execution completes (success or error)
+              this.taskQueueService.release(taskId);
+            }
+          } catch (e) {
+            console.error('[Queue] polling error:', e.message);
+          }
         }
       } finally {
         // Release the polling lock
@@ -3243,165 +3393,6 @@ class Gateway {
       this.pollingTimer.unref();
     }
     console.log('[Gateway] Background polling started (interval=' + pollInterval + 'ms)');
-  }
-
-  // ── Poll sub-steps (extracted verbatim from _ensureBackgroundPolling) ─────
-
-  _pollCleanupStaleState() {
-    // Periodic cleanup: only remove terminal tasks older than a certain age.
-    // Paused or running workflow state must remain recoverable for long queues.
-    const now = Date.now();
-    const maxTaskAge = 3600000; // 1 hour
-    for (const [taskId, task] of this.taskQueue) {
-      if (this._isTerminalTaskStatus(task.status) && now - task.createdAt > maxTaskAge) {
-        console.log('[Queue] Cleaning up old task', taskId, 'with status', task.status);
-        this.taskQueue.delete(taskId);
-        this.taskQueueService.release(taskId);
-      }
-    }
-  }
-
-  async _pollRejectQueueProbe(taskId, task) {
-    if (isGenericQueueProbeTask(task && task.task)) {
-      await this._finalizeBackgroundTask(taskId, task, 'cancelled', {
-        error: 'generic_queue_probe_task_rejected'
-      });
-      return true;
-    }
-    return false;
-  }
-
-  async _pollRecoverPreviousTask(taskId, task) {
-    this.taskQueueService.tryAcquire(taskId);
-    try {
-      if (await this._finalizePersistedResultIfComplete(taskId, task)) {
-        return;
-      }
-      await this._collectSubmittedBackgroundTask(taskId, task);
-    } catch (e) {
-      console.error('[Queue] Submitted task', taskId, 'recovery error:', e.message);
-      if (/review gate/i.test(e.message || '')) {
-        const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
-        if (recoveredResult) {
-          task.result = recoveredResult;
-          await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
-          return;
-        }
-      }
-      if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
-        return;
-      }
-      await this._finalizeBackgroundTask(taskId, task, 'error', {
-        error: safeErrorMessage(e)
-      });
-    } finally {
-      this.taskQueueService.release(taskId);
-    }
-  }
-
-  async _pollDispatchWatcher(taskId, task) {
-    // Skip if task is not queued
-    if (task.status !== 'queued') return;
-
-    try {
-      await this._ensureConnection();
-      let queueStatus = await this.driver.checkQueueStatus();
-      this._updateQueuedTaskSnapshot(task, queueStatus);
-
-      if ((queueStatus.queued || queueStatus.running) && Array.isArray(task.fallbackModels) && task.fallbackModels.length > 0) {
-        const probe = await this._probeFallbackModels(task);
-        if (probe.queueStatus) {
-          queueStatus = probe.queueStatus;
-          this._updateQueuedTaskSnapshot(task, queueStatus);
-        }
-      }
-
-      if (task.deadline && Date.now() > task.deadline) {
-        const extended = this._maybeExtendQueuedTaskDeadline(task, queueStatus);
-        if (!extended) {
-          console.log('[Queue] Task', taskId, 'queue timeout after', Date.now() - task.createdAt, 'ms');
-          await this._finalizeBackgroundTask(taskId, task, 'queue_timeout', {
-            error: 'Task exceeded queue wait timeout'
-          });
-          return;
-        }
-      }
-
-      // Still queued or actively running — skip this task for now
-      if (queueStatus.running || (queueStatus.queued && queueStatus.canSubmit !== true)) {
-        if (this.wsHandler) {
-          this.wsHandler.notifyTaskStatusChange(taskId, task);
-        }
-        this._syncTaskHistoryMirror(task);
-        this._persistActiveQueue();
-        return;
-      }
-
-      // Lock this task before execution
-      this.taskQueueService.tryAcquire(taskId);
-      task.status = 'executing';
-      this._syncTaskHistoryMirror(task);
-      this._persistActiveQueue();
-
-      if (this.wsHandler) {
-        this.wsHandler.notifyTaskStatusChange(taskId, task);
-      }
-
-      try {
-        await this._withUiActionLock(async () => {
-          // Create a fresh chat before sending (background poller bypasses
-          // delegate() which would also call newChat)
-          if (task.soloChat) {
-            await this._switchToTaskSoloChat(task, 'send_task');
-          } else {
-            await this.driver.newChat();
-          }
-          await this.driver.sendMessage(this._taskWithProjectContext(task.task, task.projectPath));
-          task.submittedToTrae = true;
-          task.submittedAt = Date.now();
-          if (!task.soloChat) {
-            await this._captureTaskSoloChat(task);
-          }
-          this._syncTaskHistoryMirror(task);
-          this._persistActiveQueue();
-          const result = await this.driver.collectResponse();
-          if (this._isTerminalTaskStatus(task.status)) {
-            this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
-              success: true,
-              details: {
-                status: task.status,
-                reason: 'task already reached a terminal state before collectResponse returned'
-              }
-            });
-            this._syncTaskHistoryMirror(task);
-            this._persistActiveQueue();
-            return;
-          }
-          await this._finalizeCollectedBackgroundResult(taskId, task, result);
-        });
-      } catch (e) {
-        console.error('[Queue] Task', taskId, 'execution error:', e.message);
-        if (/review gate/i.test(e.message || '')) {
-          const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
-          if (recoveredResult) {
-            task.result = recoveredResult;
-            await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
-            return;
-          }
-        }
-        if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
-          return;
-        }
-        await this._finalizeBackgroundTask(taskId, task, 'error', {
-          error: safeErrorMessage(e)
-        });
-      } finally {
-        // Unlock the task after execution completes (success or error)
-        this.taskQueueService.release(taskId);
-      }
-    } catch (e) {
-      console.error('[Queue] polling error:', e.message);
-    }
   }
 
   _stopBackgroundPolling() {

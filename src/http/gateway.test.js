@@ -18,7 +18,7 @@ try {
 } catch {}
 
 const { Gateway, RateLimiter, sanitizeLog } = require('./gateway');
-const { buildCapabilities } = require('../shared/capabilities');
+const { buildCapabilities } = require('../capabilities');
 const { buildConfirmationPlan } = require('../shared/operation-confirmation');
 const requestContext = require('../shared/request-context');
 

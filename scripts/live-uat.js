@@ -9,7 +9,7 @@ const { resolveCDPEndpoint } = require('../src/cdp/discovery');
 const { startGateway } = require('../src/http/gateway');
 const { MCP_TOOLS } = require('../mcp-server');
 const { toolDefinitions: openClawTools } = require('../integrations/openclaw-traecn-plugin');
-const { listCommands } = require('../integrations/openclaw-traecn-plugin/lib/command-set');
+const { listCommands } = require('../src/client/command-set');
 const { readArg, resolveGatewayToken } = require('./lib/cli-config');
 
 loadEnv(path.resolve(__dirname, '..', '.env'));

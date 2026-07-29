@@ -2,6 +2,9 @@
 
 All notable changes to this project are documented in this file.
 
+The format is based on [Keep a Changelog v1.1.0](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+
 ## [v0.4.0] - 2026-06-12
 
 Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No behavior break; all 538+ pre-existing tests still pass alongside 100+ new driver test cases.

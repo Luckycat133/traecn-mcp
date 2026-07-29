@@ -93,49 +93,36 @@ const taskIds = await batch.queueTasks(tasks);
 
 ## 🛠️ AI 友好的错误处理
 
-### 自动分类和解决方案
+### 错误类与稳定代码
+
+`TraeCNSkillError`（见 `src/skill/errors.js`）是唯一的错误类，构造时携带稳定
+`code` 与 `details`。所有基础/进阶/配置/对话框层都透传 `TraeCNSkillError`，
+仅把底层普通 `Error` 包装为 `TASK_FAILED`，避免丢失原始错误码：
 
 ```javascript
-const { AIErrorHandler } = require('traecnclaw/errors');
-
-const errorHandler = new AIErrorHandler();
+const { TraeCNSkillError } = require('traecnclaw/errors');
 
 try {
   await runTask('任务');
 } catch (error) {
-  const report = errorHandler.handle(error);
-  
-  console.log(report);
-  // {
-  //   error: "无法连接到 TraeCN",
-  //   code: "CONNECTION_FAILED",
-  //   canAutoFix: true,
-  //   solutions: [
-  //     "1. 检查 TraeCN IDE 是否已启动",
-  //     "2. 检查端口 9222 是否被占用",
-  //     ...
-  //   ],
-  //   suggestion: "1. 检查 TraeCN IDE 是否已启动"
-  // }
-  
-  // AI 可以自动尝试修复
-  if (report.canAutoFix) {
-    await error.tryAutoFix();
+  if (error instanceof TraeCNSkillError) {
+    console.log(error.code);      // 'TASK_FAILED' / 'CONNECTION_ERROR' / ...
+    console.log(error.details);   // 结构化上下文
   }
 }
 ```
 
-### 预定义错误类型
+### 预定义错误代码
 
-| 错误代码 | 说明 | 自动修复 | 解决方案 |
-|---------|------|---------|---------|
-| `CONNECTION_FAILED` | 连接失败 | ✅ | 检查IDE、端口、重启 |
-| `TASK_ID_MISSING` | 缺少任务ID | ❌ | 先调用 runTask/queueTask |
-| `MODEL_SWITCH_FAILED` | 模型切换失败 | ❌ | 使用模糊匹配、检查可用模型 |
-| `QUEUE_TIMEOUT` | 队列超时 | ✅ | 继续轮询 |
-| `SETTING_FAILED` | 设置失败 | ❌ | 检查设置名称和区域 |
-| `PROJECT_OPEN_FAILED` | 项目打开失败 | ❌ | 检查路径、权限 |
-| `RATE_LIMIT_EXCEEDED` | 速率限制 | ✅ | 等待后重试 |
+| 错误代码 | 说明 | 解决方案 |
+|---------|------|---------|
+| `TASK_ID_MISSING` | 缺少任务ID | 先调用 runTask/queueTask，或显式传入 taskId |
+| `TASK_REQUIRED` | 任务入参为空 | 传入非空 task 字符串 |
+| `UNKNOWN_MODEL` | 模型未知 | 检查 `error.details.availableModels` |
+| `INVALID_MODE` | 模式无效 | 使用 `'solo'` 或 `'ide'` |
+| `TASK_FAILED` | 任务执行失败 | 看 `error.message` 与 `error.details` |
+| `QUEUE_TIMEOUT` | 队列超时 | 增大 `pollMaxAttempts`/`pollIntervalMs`，或手动轮询 |
+| `CONNECTION_ERROR` | 网关/TraeCN 不可达 | `npm run doctor`，检查 CDP 与端口 |
 
 ## 📦 导入方式
 
@@ -151,9 +138,7 @@ const { runTask, switchModel, checkStatus } = require('traecnclaw');
 const { runTask, switchModel } = require('traecnclaw');
 
 // 需要时再导入其他层
-const { advanced } = require('traecnclaw');
-const { config } = require('traecnclaw');
-const { dialog } = require('traecnclaw');
+const { advanced, config, dialog } = require('traecnclaw');
 ```
 
 ### 方式3: 完整导入
@@ -214,47 +199,42 @@ async function longTaskWorkflow() {
 ```
 
 ### 示例3: 完整工作流（分层导入）
+
 ```javascript
 // 基础层
 const { runTask, switchModel, checkStatus } = require('traecnclaw');
 
 // 需要时再导入
-const { advanced, dialog, AIErrorHandler } = require('traecnclaw');
+const { advanced, dialog, TraeCNSkillError } = require('traecnclaw');
 
 async function completeWorkflow() {
-  const errorHandler = new AIErrorHandler();
-  
   try {
     // 1. 检查状态
     if (!await checkStatus()) {
       throw new Error('未连接');
     }
-    
+
     // 2. 配置
     await switchModel('glm');
     await advanced.switchMode('ide');
-    
+
     // 3. 执行任务
     const result = await runTask('分析项目');
-    
+
     // 4. 处理对话框
     const dlg = await dialog.checkDialog();
     if (dlg.hasDialog) {
       await dialog.approveDialog('auto');
     }
-    
+
     return result;
-    
+
   } catch (error) {
-    // AI 自助处理错误
-    const report = errorHandler.handle(error);
-    console.error('错误:', report.error);
-    console.log('建议:', report.suggestion);
-    
-    // 尝试自动修复
-    if (report.canAutoFix) {
-      console.log('尝试自动修复...');
-      // await error.tryAutoFix();
+    if (error instanceof TraeCNSkillError) {
+      console.error('错误代码:', error.code);
+      console.error('错误详情:', error.details);
+    } else {
+      console.error('未知错误:', error.message);
     }
   }
 }
@@ -273,15 +253,15 @@ const { advanced, config, dialog, batch } = require('traecnclaw'); // 如果不�
 
 ### 2. 错误处理
 ```javascript
-// ✅ 好：使用 AIErrorHandler
-const { AIErrorHandler } = require('traecnclaw/errors');
-const handler = new AIErrorHandler();
+// ✅ 好：捕获 TraeCNSkillError 拿到稳定 code
+const { TraeCNSkillError } = require('traecnclaw/errors');
 
 try {
   await runTask('任务');
 } catch (error) {
-  const report = handler.handle(error);
-  // AI 可以根据 report 自助解决
+  if (error instanceof TraeCNSkillError) {
+    // 根据 error.code 自助决策
+  }
 }
 ```
 

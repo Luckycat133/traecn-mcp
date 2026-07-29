@@ -30,7 +30,7 @@ async function _captureSidebarText(driver) {
       returnByValue: true
     });
     return result.result?.value || '';
-  } catch(e) {
+  } catch {
     return '';
   }
 }
@@ -58,7 +58,7 @@ async function _captureIdePanelText(driver) {
       returnByValue: true
     });
     return result.result?.value || '';
-  } catch(e) {
+  } catch {
     return '';
   }
 }
@@ -103,7 +103,7 @@ async function _captureVisibleText(driver) {
       returnByValue: true
     });
     return result.result?.value || '';
-  } catch(e) {
+  } catch {
     return '';
   }
 }
@@ -122,7 +122,7 @@ async function _captureBodyText(driver) {
       returnByValue: true
     });
     return result.result?.value || '';
-  } catch(e) {
+  } catch {
     return '';
   }
 }
@@ -152,7 +152,7 @@ async function _scanContentArea(driver) {
           }
         }
         contentAreas.sort(function(a, b) {
-          if (a.width * a.height !== b.width * b.height) return (b.width * a.height) - (a.width * a.height);
+          if (a.width * a.height !== b.width * b.height) return (b.width * b.height) - (a.width * a.height);
           return a.y - b.y;
         });
         if (contentAreas.length > 0) {
@@ -164,7 +164,7 @@ async function _scanContentArea(driver) {
       returnByValue: true
     });
     return result.result?.value || { text: '', areaFound: false };
-  } catch(e) {
+  } catch {
     return { text: '', areaFound: false };
   }
 }
@@ -221,8 +221,12 @@ async function _queryTaskSidebar(driver, skipText) {
         if (text === ${safeSkipText}) return null;
 
         // Skip if text hasn't actually changed from whats in the skipText
-        // (handles case where skipText contains the old task text as substring)
         if (${safeSkipText} && ${safeSkipText}.indexOf(text) >= 0 && text.length <= ${safeSkipText}.length) return null;
+
+        // Normalize both texts for fuzzy comparison (strip timestamps, extra spaces)
+        var normText = text.replace(/[\\d]{1,2}:[\\d]{2}/g, '').replace(/\\s+/g, ' ').trim();
+        var normSkip = ${safeSkipText} ? ${safeSkipText}.replace(/[\\d]{1,2}:[\\d]{2}/g, '').replace(/\\s+/g, ' ').trim() : '';
+        if (normText === normSkip) return null;
 
         return {
           text: text,
@@ -440,6 +444,7 @@ async function findTaskResponse(driver) {
   // SOLO fallback: sidebar full-text scan for task blocks
   const modeInfo = await driver.detectMode();
   if (modeInfo.mode === 'solo') {
+    const safeSkipText = safeJsValue(skipText);
     const result = await driver.client.send('Runtime.evaluate', {
       expression: `
         (() => {
@@ -450,7 +455,7 @@ async function findTaskResponse(driver) {
           let taskMatch = fullText.match(/任务\\d+[^]*?(?=实时|$)/);
           if (taskMatch) {
             let taskText = taskMatch[0].trim();
-            if (taskText.length > 5 && !taskText.includes('开始你的第一个任务') && taskText !== skipText) {
+            if (taskText.length > 5 && !taskText.includes('开始你的第一个任务') && taskText !== ${safeSkipText}) {
               return {
                 text: taskText,
                 inProgress: fullText.includes('进行中') || fullText.includes('思考中') || !!sidebar.querySelector('.icd-loading, .agent-loading-dot, [class*="loading"]'),
@@ -460,7 +465,7 @@ async function findTaskResponse(driver) {
             }
           }
 
-          if (fullText === skipText) return null;
+          if (fullText === ${safeSkipText}) return null;
           if (fullText.includes('任务') && fullText.length > 20) {
             let isProcessing = fullText.includes('进行中') || fullText.includes('生成中') || fullText.includes('思考中') || !!sidebar.querySelector('.icd-loading, .agent-loading-dot, [class*="loading"]');
             return {

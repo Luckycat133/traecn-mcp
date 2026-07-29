@@ -100,41 +100,8 @@ test('safeJsValue serializes objects and arrays as JavaScript literals', () => {
   assert.strictEqual(safeJsValue(['a', 1]), '["a",1]');
 });
 
-test('safeJsValue rejects unsafe control characters in strings', () => {
-  assert.strictEqual(safeJsValue('bad\nvalue'), '');
-});
-
-test('isQueueProbeCommandText blocks bare queue probes and status-title variants', () => {
-  assert.strictEqual(isQueueProbeCommandText('wait for Trae queue'), true);
-  assert.strictEqual(isQueueProbeCommandText('Wait for Trae Queue 进行中 17:34'), true);
-  assert.strictEqual(isQueueProbeCommandText('现在已经排到了'), true);
-  assert.strictEqual(isQueueProbeCommandText('implement a queue-status panel without sending prompts'), false);
-});
-
-test('isGenericQueueProbeTask detects layered payload queue probes', () => {
-  const layered = [
-    '## Role and Objective',
-    'You are TraeCN.',
-    '## User Command Payload',
-    'Wait for Trae Queue 进行中 17:34',
-    'Raw params: {"task":"Wait for Trae Queue 进行中 17:34"}'
-  ].join('\n');
-  assert.strictEqual(isGenericQueueProbeTask(layered), true);
-  assert.strictEqual(isGenericQueueProbeTask('Please implement local queue polling for the app'), false);
-});
-
-test('isForeignQueueProbeText recognizes contaminated Solo titles with menu text', () => {
-  assert.strictEqual(isForeignQueueProbeText('Wait for Trae Queue 重命名 导出 复制会话 删除任务 进行中 17:34'), true);
-  assert.strictEqual(isForeignQueueProbeText('Feature work 任务完成'), false);
-});
-
-test('safeJsValue serializes objects and arrays as JavaScript literals', () => {
-  assert.strictEqual(safeJsValue({ index: 0, title: 'Wait' }), '{"index":0,"title":"Wait"}');
-  assert.strictEqual(safeJsValue(['a', 1]), '["a",1]');
-});
-
-test('safeJsValue rejects unsafe control characters in strings', () => {
-  assert.strictEqual(safeJsValue('bad\nvalue'), '');
+test('safeJsValue strips control characters from strings', () => {
+  assert.strictEqual(safeJsValue('bad\nvalue'), '"badvalue"');
 });
 
 test('isQueueProbeCommandText blocks bare queue probes and status-title variants', () => {

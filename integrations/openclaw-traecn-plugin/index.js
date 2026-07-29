@@ -1,7 +1,7 @@
 'use strict';
 
-const { TraeCNApiClient } = require('./lib/traecnapi-client');
-const { COMMAND_DEFINITIONS, executeCommand, listCommands, mapSettingsAction } = require('./lib/command-set');
+const { TraeCNApiClient } = require('../../src/client/traecnapi-client');
+const { COMMAND_DEFINITIONS, executeCommand, listCommands, mapSettingsAction } = require('../../src/client/command-set');
 
 const PLUGIN_ID = 'traecnclaw';
 
@@ -628,7 +628,7 @@ const toolDefinitions = [
         newWindow: { type: 'boolean', description: 'Open new window', default: false }
       }
     },
-    handler: async (params, context) => {
+    handler: async (params, _context) => {
       const { spawn } = require('child_process');
       if (params.addFile && /[<>|&;$\r\n\t\0]/.test(params.addFile)) {
         return { launched: false, error: 'addFile contains invalid characters' };

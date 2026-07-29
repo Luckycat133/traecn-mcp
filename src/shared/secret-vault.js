@@ -140,7 +140,7 @@ function decryptString(stored, options = {}) {
   try {
     payload = JSON.parse(Buffer.from(wrapped, 'base64').toString('utf8'));
   } catch (err) {
-    throw new Error(`Secret vault: malformed encrypted payload (${err.message})`);
+    throw new Error(`Secret vault: malformed encrypted payload (${err.message})`, { cause: err });
   }
   if (!payload || payload.v !== PAYLOAD_VERSION) {
     throw new Error(`Secret vault: unsupported payload version (${payload && payload.v})`);

@@ -106,8 +106,8 @@ for (const apiPath of [
 
 assert.ok(!spec.paths['/api/settings/action'], '/api/settings/action is documented but not implemented');
 assert.strictEqual(spec.info.version, packageJson.version);
-const { buildCapabilities } = require('../src/shared/capabilities');
-const { listCommands } = require('../integrations/openclaw-traecn-plugin/lib/command-set');
+const { buildCapabilities } = require('../src/capabilities');
+const { listCommands } = require('../src/client/command-set');
 const capabilities = buildCapabilities({ commands: listCommands() });
 assert.strictEqual(capabilities.contractVersion, 1);
 assert.ok(capabilities.commands.some(command => command.command === 'capabilities'), 'capabilities command is missing');
@@ -197,7 +197,7 @@ for (const requiredFile of [
   'src/shared/operation-confirmation.js',
   'src/skill/review.js',
   'src/skill/simple-api.d.ts',
-  'integrations/openclaw-traecn-plugin/lib/command-set.js'
+  'src/client/command-set.js'
 ]) {
   assert.ok(packedFiles.includes(requiredFile), `${requiredFile} is missing from npm package`);
 }

@@ -146,7 +146,7 @@ class BatchExecutor {
   // We expose a no-op factory hook here so callers can stub it cleanly
   // in tests without hitting Gateway internals.
 
-  createQueuedTask(body, queueStatus) {
+  createQueuedTask(_body, _queueStatus) {
     throw new Error('createQueuedTask must be supplied via the owning gateway; this is a marker for A2 only');
   }
 }

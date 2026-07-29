@@ -1,22 +1,17 @@
 'use strict';
 
-const packageInfo = require('../../package.json');
+const packageInfo = require('../package.json');
 
-// shared/ is the lowest layer of the codebase. To keep the dependency direction
-// strictly one-way (http/ and skill/ may depend on shared/, never the reverse),
-// the modules that source capability data are NOT required here at module load.
-// Instead they are injected by callers through `deps`. Every external caller that
-// cannot or does not inject (scripts, the integration plugin, gateway.test.js) gets
-// the exact same modules via lazy requires, so the produced capability document is
-// byte-for-byte identical to the previous static-require implementation.
+// Keep capability data sources injectable so callers can avoid eager dependency
+// cycles and tests can provide focused implementations.
 function loadOpenApiSpec() {
-  return require('../http/openapi').generateOpenAPISpec;
+  return require('./http/openapi').generateOpenAPISpec;
 }
 function loadPromptLayers() {
-  return require('../skill/prompt-layers');
+  return require('./skill/prompt-layers');
 }
 function loadTraecnSkill() {
-  return require('../skill/traecn-skill');
+  return require('./skill/traecn-skill');
 }
 
 const API_FAMILIES = Object.freeze({

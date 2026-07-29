@@ -22,6 +22,8 @@
 
 const dom = require('../browser-dom');
 
+const { sleep, safeJsValue } = require('../../shared/utils');
+
 async function detectMode(driver) {
   const now = Date.now();
   if (driver._cachedMode && now - driver._cachedModeTs < driver._modeCacheTtl) {
@@ -149,7 +151,7 @@ async function _findVisibleElementRuntime(driver, selectors, options = {}) {
       returnByValue: true
     });
     return result.result?.value || null;
-  } catch (_) {
+  } catch {
     return null;
   }
 }
@@ -229,24 +231,19 @@ async function switchMode(driver, mode) {
     });
 
     if (otherTab) {
+      const safeModeLower = safeJsValue(modeLower);
       await driver.client.send('Runtime.evaluate', {
         expression: `
           (function() {
-            var el = document.querySelector('[node-id="${otherTab.nodeId}"]');
-            if (!el) {
-              // Fallback: find by text content
-              var items = document.querySelectorAll('.icube-mode-tab-item, [class*="icube-mode-tab-item"], [class*="mode-tab"]');
-              for (var i = 0; i < items.length; i++) {
-                var t = items[i].textContent.trim().toLowerCase();
-                if (t.indexOf('${modeLower}') > -1) {
-                  items[i].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                  return 'clicked by text match';
-                }
+            var items = document.querySelectorAll('.icube-mode-tab-item, [class*="icube-mode-tab-item"], [class*="mode-tab"]');
+            for (var i = 0; i < items.length; i++) {
+              var t = items[i].textContent.trim().toLowerCase();
+              if (t.indexOf(${safeModeLower}) > -1) {
+                items[i].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                return 'clicked by text match';
               }
-              return 'target tab not found';
             }
-            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-            return 'clicked by node-id';
+            return 'target tab not found';
           })()
         `,
         returnByValue: true
@@ -296,11 +293,7 @@ async function switchMode(driver, mode) {
     return { success: true, previousMode: currentModeInfo.mode, currentMode: modeLower };
   }
 
-  return { success: true, previousMode: currentModeInfo.mode, currentMode: modeLower, verifyLimited: true };
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return { success: false, previousMode: currentModeInfo.mode, currentMode: currentModeInfo.mode, error: 'mode switch verification timed out' };
 }
 
 module.exports = {

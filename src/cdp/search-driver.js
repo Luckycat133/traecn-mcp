@@ -111,7 +111,7 @@ class SearchDriver {
         }`,
         [maxResults]
       );
-    } catch (err) {
+    } catch {
       return { ok: false, count: 0, items: [] };
     }
   }

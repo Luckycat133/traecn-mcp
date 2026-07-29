@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { toolDefinitions, formatResult, PLUGIN_ID } = require('./index');
-const { listCommands, mapSettingsAction } = require('./lib/command-set');
+const { listCommands, mapSettingsAction } = require('../../src/client/command-set');
 const { createRunner } = require('../../src/shared/test-runner');
 
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'openclaw.plugin.json'), 'utf8'));

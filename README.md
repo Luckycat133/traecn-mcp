@@ -215,11 +215,11 @@ available, and `dist/traecnclaw-mcp-release.json` with checksums. See
 
 ### Layered Architecture
 
-TraeCNSkill uses a 5-layer architecture for selective loading and minimal context:
+TraeCNSkill uses a layered architecture for selective loading and minimal context:
 
-- **Basic Layer** (90% scenarios): 5 core functions
+- **Basic Layer** (90% scenarios): core functions including `runTask`, `switchModel`, `checkStatus`, `queueTask`, `pollTask`, `waitTask`, `reviewCode`, `preflight`
 - **Review Layer**: structured code review prompts through `reviewCode`
-- **Advanced Layer**: Project management, mode switching
+- **Advanced Layer**: Project management, mode switching, Solo chat control
 - **Config Layer**: Settings management
 - **Dialog Layer**: Dialog handling
 - **Batch Layer**: Batch operations
@@ -365,6 +365,12 @@ or `traecnclaw-mcp` for the server entrypoint.
 - [Layered Architecture Guide](docs/LAYERED-ARCHITECTURE.md)
 - [AI Usage Guide](docs/AI-USAGE-GUIDE.md)
 - [MCP Server Guide](docs/MCP-SERVER-GUIDE.md)
+- [OpenClaw MCP Setup Guide](docs/OPENCLAW-MCP-SETUP.md)
+- [OpenClaw Command Set](docs/openclaw-command-set.md)
+- [Structured Prompt Mechanism](docs/structured-prompt-mechanism.md)
+- [Continuous Development Loop](docs/CONTINUOUS-DEVELOPMENT-LOOP.md)
+- [First Login Runbook](docs/FIRST-LOGIN-RUNBOOK.md)
+- [Real DOM Findings](docs/REAL-DOM-FINDINGS.md)
 - [Quick Reference](docs/QUICK-REFERENCE.md)
 
 ## Maintainers

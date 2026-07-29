@@ -11,3 +11,10 @@ dist/
 # Local test-only skill install dirs (not the distributable skill under skills/)
 .codex/skills/
 .agents/skills/
+# Generated test coverage data
+.coverage/
+coverage/
+# Generated inspection artifacts
+inspect-report.json
+# IDE-local working state
+.trae/

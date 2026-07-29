@@ -1,8 +1,7 @@
 'use strict';
 
 const { parseBody } = require('../request-gate');
-const { isGenericQueueProbeTask } = require('../../shared/utils');
-const { rejectBadRequest, hasDriverCapability, requireDriverCapability } = require('./helpers');
+const { isGenericQueueProbeTask, sleep } = require('../../shared/utils');
 
 /**
  * solo-chat handlers.
@@ -82,7 +81,7 @@ async function handleNewChat(req, res, ctx) {
 }
 async function handleListSoloChats(req, res, ctx) {
   await ctx._ensureConnection();
-  const result = hasDriverCapability(ctx, 'listSoloChats')
+  const result = typeof ctx.driver.listSoloChats === 'function'
     ? await ctx.driver.listSoloChats()
     : { mode: 'unsupported', chats: [], count: 0, reason: 'driver_does_not_support_solo_chats' };
   ctx._json(req, res, result);
@@ -90,7 +89,7 @@ async function handleListSoloChats(req, res, ctx) {
 async function handleSwitchSoloChat(req, res, ctx) {
   const body = await parseBody(req);
   await ctx._ensureConnection();
-  const result = hasDriverCapability(ctx, 'switchSoloChat')
+  const result = typeof ctx.driver.switchSoloChat === 'function'
     ? await ctx.driver.switchSoloChat({
       index: Number.isInteger(body.index) ? body.index : null,
       textIncludes: body.textIncludes,
@@ -108,7 +107,7 @@ async function handleSubmitSoloChatTask(req, res, ctx) {
     }, 400);
   }
   if (!body.task) {
-    return rejectBadRequest(req, res, ctx, 'task is required');
+    return ctx._json(req, res, { error: 'task is required' }, 400);
   }
   if (typeof body.task !== 'string' || body.task.length > 100000) {
     return ctx._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
@@ -116,11 +115,11 @@ async function handleSubmitSoloChatTask(req, res, ctx) {
 
   return await ctx._withUiActionLock(async () => {
     await ctx._ensureConnection();
-    if (hasDriverCapability(ctx, 'switchMode')) {
+    if (typeof ctx.driver.switchMode === 'function') {
       await ctx.driver.switchMode('solo');
     }
-    if (!requireDriverCapability(req, res, ctx, 'sendMessage', { message: 'driver does not support message submission' })) {
-      return;
+    if (typeof ctx.driver.sendMessage !== 'function') {
+      return ctx._json(req, res, { error: 'driver does not support message submission' }, 501);
     }
 
     const requestedSoloChat = ctx._normalizeSoloChatTarget(body.soloChat || body.soloChatTarget || {
@@ -130,22 +129,22 @@ async function handleSubmitSoloChatTask(req, res, ctx) {
     });
 
     if (requestedSoloChat) {
-      if (!requireDriverCapability(req, res, ctx, 'switchSoloChat', { extraFields: { success: false, reason: 'driver_does_not_support_solo_chats' } })) {
-        return;
+      if (typeof ctx.driver.switchSoloChat !== 'function') {
+        return ctx._json(req, res, { success: false, reason: 'driver_does_not_support_solo_chats' }, 501);
       }
       const switchResult = await ctx.driver.switchSoloChat(ctx._soloChatSwitchCriteria(requestedSoloChat));
       if (switchResult.success === false) {
         return ctx._json(req, res, switchResult, 404);
       }
     } else if (body.newChat !== false) {
-      if (!requireDriverCapability(req, res, ctx, 'newChat', { message: 'driver does not support new chat creation' })) {
-        return;
+      if (typeof ctx.driver.newChat !== 'function') {
+        return ctx._json(req, res, { error: 'driver does not support new chat creation' }, 501);
       }
       await ctx.driver.newChat();
     }
 
     await ctx.driver.sendMessage(ctx._taskWithProjectContext(body.task, body.projectPath));
-    const queueStatus = hasDriverCapability(ctx, 'checkQueueStatus')
+    const queueStatus = typeof ctx.driver.checkQueueStatus === 'function'
       ? await ctx.driver.checkQueueStatus()
       : { queued: true, running: false, canSubmit: false };
     const task = ctx._createQueuedTask({
@@ -188,7 +187,7 @@ async function handleDeleteSoloChats(req, res, ctx) {
   let candidates = candidatesIn;
   if (candidates.length === 0) {
     await ctx._ensureConnection();
-    const listed = hasDriverCapability(ctx, 'listSoloChats')
+    const listed = typeof ctx.driver.listSoloChats === 'function'
       ? await ctx.driver.listSoloChats()
       : { mode: 'unsupported', chats: [], count: 0 };
     if (!Array.isArray(listed.chats)) {
@@ -231,8 +230,10 @@ async function handleDeleteSoloChats(req, res, ctx) {
   }
 
   await ctx._ensureConnection();
-  if (!requireDriverCapability(req, res, ctx, 'deleteSoloChats', { message: 'driver_does_not_support_delete_solo_chats' })) {
-    return;
+  if (typeof ctx.driver.deleteSoloChats !== 'function') {
+    return ctx._json(req, res, {
+      error: 'driver_does_not_support_delete_solo_chats'
+    }, 501);
   }
   const result = await ctx.driver.deleteSoloChats({ candidates });
   return ctx._json(req, res, {
@@ -297,12 +298,8 @@ function clampInt(value, fallback, min, max) {
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function listCleanupCandidates(ctx) {
-  let listResult = null;
+  let listResult;
   try {
     listResult = await ctx.driver.listSoloChats();
   } catch (err) {
@@ -345,14 +342,14 @@ async function handleCleanupForeignQueue(req, res, ctx) {
     }, 503);
   }
 
-  if (!requireDriverCapability(req, res, ctx, 'listSoloChats', { message: 'driver does not support listSoloChats' })) {
-    return;
+  if (typeof ctx.driver.listSoloChats !== 'function') {
+    return ctx._json(req, res, { error: 'driver does not support listSoloChats' }, 501);
   }
 
   const executeDelete = body.execute === true && body.dryRun !== true;
   const maxPasses = executeDelete ? clampInt(body.maxPasses, 1, 1, 20) : 1;
   const settleMs = clampInt(body.settleMs, 250, 0, 5000);
-  const support = hasDriverCapability(ctx, 'deleteSoloChats') ? 'delete_supported' : 'delete_unsupported';
+  const support = typeof ctx.driver.deleteSoloChats === 'function' ? 'delete_supported' : 'delete_unsupported';
   const first = await listCleanupCandidates(ctx);
   if (first.error) {
     return ctx._json(req, res, first.error.body, first.error.status);
@@ -372,15 +369,13 @@ async function handleCleanupForeignQueue(req, res, ctx) {
     }, 200);
   }
 
-  if (!requireDriverCapability(req, res, ctx, 'deleteSoloChats', {
-    message: 'driver does not support deleteSoloChats',
-    extraFields: {
+  if (typeof ctx.driver.deleteSoloChats !== 'function') {
+    return ctx._json(req, res, {
+      error: 'driver does not support deleteSoloChats',
       code: 'DRIVER_METHOD_MISSING',
       candidates: first.match.candidates,
       message: 'Matched candidates are listed above; delete is not supported by current driver.'
-    }
-  })) {
-    return;
+    }, 501);
   }
 
   const passes = [];
