@@ -13,7 +13,7 @@
  */
 
 const { TraeCNAutomationError } = require('../errors');
-const { safeJsValue } = require('../../shared/utils');
+const { sleep, safeJsValue } = require('../../shared/utils');
 
 async function listSoloChats(driver) {
   const result = await driver.client.send('Runtime.evaluate', {
@@ -316,7 +316,7 @@ async function _openRowContextMenu(driver, candidate) {
       await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: openRes.x, y: openRes.y });
       await driver.client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: openRes.x, y: openRes.y, button: 'right', clickCount: 1 });
       await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: openRes.x, y: openRes.y, button: 'right', clickCount: 1 });
-    } catch (e) {}
+    } catch { /* best-effort right-click; fall back to UI click */ }
   }
   return openRes;
 }
@@ -671,10 +671,6 @@ async function deleteSoloChats(driver, options = {}) {
   }
 
   return { deleted, attempts };
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 module.exports = { listSoloChats, getActiveSoloChat, switchSoloChat, deleteSoloChats };

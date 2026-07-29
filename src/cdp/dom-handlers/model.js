@@ -16,15 +16,7 @@
  */
 
 const { sleep, safeJsValue } = require('../../shared/utils');
-
-const KNOWN_MODELS = [
-  'Doubao-Seed-2.0-Code', 'Doubao-Seed-1.8', 'Doubao-Seed-Code',
-  'MiniMax-M2.7', 'MiniMax-M2.5',
-  'GLM-5.2', 'GLM-5.1', 'GLM-5V-Turbo', 'GLM-5',
-  'DeepSeek-V4-Pro', 'DeepSeek-V4-Flash',
-  'Kimi-K2.6', 'Kimi-K2.5',
-  'Qwen3.6-Plus', 'Qwen3.5-Plus'
-];
+const { KNOWN_MODELS } = require('../../shared/models');
 
 async function checkQueueStatus(driver, timeoutMs = 5000) {
   let timeoutId;
@@ -38,7 +30,10 @@ async function checkQueueStatus(driver, timeoutMs = 5000) {
     ]);
     return result;
   } catch (e) {
-    return { queued: false };
+    if (e.message === 'checkQueueStatus timeout') {
+      return { queued: false, timedOut: true };
+    }
+    return { queued: false, error: e.message };
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }

@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { getEnvWithFallback } = require('../shared/utils');
+const { getEnvWithFallback, sleep } = require('../shared/utils');
 
 function findTraeCNBinary() {
   const envBin = getEnvWithFallback('TRAECN_BIN', 'TRAE_BIN', '');
@@ -71,10 +71,6 @@ function execFilePromise(command, args = [], options = {}) {
       resolve({ stdout, stderr });
     });
   });
-}
-
-async function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function waitForTraeCNExit(timeoutMs = 15000, pollMs = 500) {

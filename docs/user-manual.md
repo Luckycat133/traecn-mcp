@@ -19,19 +19,26 @@ The chat UI creates a session and sends each task through `/api/sessions/{sessio
 
 ## OpenClaw Plugin
 
-The OpenClaw plugin lives in `integrations/openclaw-traecn-plugin`. It registers:
+The OpenClaw plugin lives in `integrations/openclaw-traecn-plugin`. It registers
+27 wrapper tools (full list in `openclaw.plugin.json`), including the most-used:
 
-- `traecn_status`
-- `traecn_new_chat`
-- `traecn_delegate`
-- `traecn_switch_mode`
-- `traecn_switch_model`
-- `traecn_queue_status`
-- `traecn_open_project`
-- `traecn_chat`
-- `traecn_update_self`
+- `traecn_capabilities`, `traecn_command_set`, `traecn_preflight`,
+  `traecn_command`, `traecn_plan_operation`
+- `traecn_status`, `traecn_new_chat`, `traecn_delegate`, `traecn_task_status`,
+  `traecn_cancel_task`, `traecn_vibe_workflow`
+- `traecn_switch_mode`, `traecn_switch_model`, `traecn_queue_status`,
+  `traecn_open_project`
+- `traecn_settings_action`, `traecn_settings_read`, `traecn_settings_set`
+- `traecn_dialog_status`, `traecn_approve`
+- `traecn_cleanup_queue`, `traecn_cleanup_watch_status`
+- `traecn_long_queue_proof_start`, `traecn_long_queue_proof_status`,
+  `traecn_long_queue_proof_cancel`
+- `traecn_chat`, `traecn_update_self`
 
-Use `traecn_delegate` when you need a returned TraeCN response. Use `traecn_chat` only for fire-and-forget CLI tasks.
+Use `traecn_delegate` when you need a returned TraeCN response. Use `traecn_chat`
+only for fire-and-forget CLI tasks. Use `traecn_command` with the
+`traecn_command_set` catalog when you want stable command IDs instead of
+per-tool wrappers.
 
 ## Troubleshooting
 

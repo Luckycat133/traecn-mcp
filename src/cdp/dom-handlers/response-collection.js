@@ -117,7 +117,6 @@ function cleanAssistantResultText(text) {
  */
 async function _pollResponseState(driver) {
   const skipText = driver._lastTaskText;
-  const safeSkipText = safeJsValue(skipText);
   const safeResponseSelectors = driver.config.responseSelectors.map(s => safeJsValue(s));
   const safeActivitySelectors = driver.config.activitySelectors.map(s => safeJsValue(s));
   const safeIdeResponseSelectors = driver.config.ideResponseSelectors.map(s => safeJsValue(s));
@@ -283,7 +282,6 @@ async function collectResponse(driver) {
   const requiredStable = 2;
   const pollInterval = driver.config.pollIntervalMs || 350;
   const queuePollInterval = driver.config.queuePollIntervalMs || 15000;
-  const queueWaitTimeout = driver.config.queueWaitTimeoutMs || 60000;
   let stableCount = 0;
   let warmingUp = true;
   let lastText = '';
@@ -297,42 +295,46 @@ async function collectResponse(driver) {
   let streamingGrowthFrames = 0;
   const STREAMING_GROWTH_THRESHOLD = 3;
 
-  try {
-    await driver.client.send('Log.enable', {});
-    const logHandler = (params) => {
-      if (params.entry && params.entry.type === 'log' && params.entry.text) {
-        const text = params.entry.text.trim();
-        if (text.length > 0 && text.length < 10000) {
-          streamingBuffer.push(text);
-        }
+  const logHandler = (params) => {
+    if (params.entry && params.entry.type === 'log' && params.entry.text) {
+      const text = params.entry.text.trim();
+      if (text.length > 0 && text.length < 10000) {
+        streamingBuffer.push(text);
       }
-    };
-    driver.client.on('Log.entryAdded', logHandler);
+    }
+  };
 
-    const consoleHandler = (params) => {
-      if (params.type === 'log' || params.type === 'debug') {
-        const args = params.args || [];
-        for (const arg of args) {
-          if (arg.value && typeof arg.value === 'string') {
-            const text = arg.value.trim();
-            if (text.length > 0 && text.length < 10000) {
-              streamingBuffer.push(text);
-            }
+  const consoleHandler = (params) => {
+    if (params.type === 'log' || params.type === 'debug') {
+      const args = params.args || [];
+      for (const arg of args) {
+        if (arg.value && typeof arg.value === 'string') {
+          const text = arg.value.trim();
+          if (text.length > 0 && text.length < 10000) {
+            streamingBuffer.push(text);
           }
         }
       }
-    };
-    driver.client.on('Runtime.consoleAPICalled', consoleHandler);
+    }
+  };
 
+  let listenersRegistered = false;
+  try {
+    await driver.client.send('Log.enable', {});
+    driver.client.on('Log.entryAdded', logHandler);
+    driver.client.on('Runtime.consoleAPICalled', consoleHandler);
+    listenersRegistered = true;
     await sleep(50);
-  } catch (err) {
+  } catch {
     // Log enable failed
   }
 
   const cleanup = () => {
+    if (!listenersRegistered) return;
     try {
-      driver.client.off('Log.entryAdded', () => {});
-      driver.client.off('Runtime.consoleAPICalled', () => {});
+      driver.client.off('Log.entryAdded', logHandler);
+      driver.client.off('Runtime.consoleAPICalled', consoleHandler);
+      listenersRegistered = false;
     } catch {
       // Listener cleanup is best-effort across CDP client implementations.
     }
@@ -365,6 +367,9 @@ async function collectResponse(driver) {
       if (driver._lastApprovalCheckAt === undefined || (Date.now() - driver._lastApprovalCheckAt) >= approvalCheckInterval) {
         const approvalDialog = await driver.checkForApprovalDialog();
         driver._lastApprovalCheckAt = Date.now();
+        if (approvalDialog.transient) {
+          continue;
+        }
         if (approvalDialog.needsApproval) {
           // Auto-approve command execution dialogs (e.g., "批准执行命令")
           // Questions (dialog without command keywords) still get forwarded to the caller.

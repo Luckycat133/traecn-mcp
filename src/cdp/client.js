@@ -47,15 +47,14 @@ class BaseCDPClient {
     const message = JSON.stringify({ id, method, params });
 
     return new Promise((resolve, reject) => {
-      this._pending.set(id, { resolve, reject });
-      sendFn(message);
-
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this._pending.has(id)) {
           this._pending.delete(id);
-          reject(TraeCNAutomationError.cdpTimeout(method, this._defaultTimeout));
+          reject(TraeCNAutomationError.cdpTimeout(method, timeout));
         }
       }, timeout);
+      this._pending.set(id, { resolve, reject, timer });
+      sendFn(message);
     });
   }
 
@@ -66,7 +65,8 @@ class BaseCDPClient {
   _handleResponse(msg) {
     if (msg.id === undefined || !this._pending.has(msg.id)) return false;
 
-    const { resolve, reject } = this._pending.get(msg.id);
+    const { resolve, reject, timer } = this._pending.get(msg.id);
+    clearTimeout(timer);
     this._pending.delete(msg.id);
 
     try {
@@ -99,7 +99,8 @@ class BaseCDPClient {
    * 清除所有等待的请求
    */
   _clearPending(reason = 'WebSocket closed') {
-    for (const [, { reject }] of this._pending) {
+    for (const [, { reject, timer }] of this._pending) {
+      clearTimeout(timer);
       reject(TraeCNAutomationError.cdpDisconnected(reason));
     }
     this._pending.clear();
@@ -264,6 +265,9 @@ class CDPSession extends BaseCDPClient {
   }
 
   send(method, params = {}) {
+    if (!this._parent || !this._parent.isConnected) {
+      return Promise.reject(TraeCNAutomationError.cdpNotConnected());
+    }
     return this._sendCommand(
       (msg) => {
         const fullMsg = JSON.parse(msg);

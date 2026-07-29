@@ -23,10 +23,7 @@
  *                        pattern (e.g. ['taskId'] for /api/tasks/:taskId)
  *
  * The dispatch path in Gateway.handleRequestImpl calls `matchRoute(method,
- * pathname)` first; on a miss it returns 404. The current implementation
- * still falls through to the inline `if` chain for backward compatibility
- * — the route table is registered alongside so we can validate that the
- * set of routes documented here matches the set actually wired.
+ * pathname)` first; on a miss it returns 404.
  */
 
 const ROUTES = [
@@ -165,7 +162,7 @@ const COMPILED_ROUTES = ROUTES.map(route => ({
  */
 function matchRoute(method, pathname) {
   if (!method || !pathname) return null;
-  let exactPathname = pathname;
+  let exactPathname;
   try {
     exactPathname = decodeURI(pathname);
   } catch {

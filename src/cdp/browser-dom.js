@@ -81,7 +81,7 @@ async function getInnerText(client, nodeId) {
       returnByValue: true
     });
     return result.value || '';
-  } catch(e) {
+  } catch {
     _globalCache.invalidate();
     return '';
   }
@@ -330,7 +330,7 @@ async function evaluateJSON(client, fnDecl, args = []) {
   if (typeof raw !== 'string') return raw;
   try { return JSON.parse(raw); }
   catch (e) {
-    throw new Error(`[browser-dom.evaluateJSON] failed to parse: ${e.message}`);
+    throw new Error(`[browser-dom.evaluateJSON] failed to parse: ${e.message}`, { cause: e });
   }
 }
 

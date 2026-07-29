@@ -1,6 +1,0 @@
-- [ ] `fibonacci(n)` 函数已添加到 `hello.py`
-- [ ] `fibonacci(0)` 返回 `0`
-- [ ] `fibonacci(1)` 返回 `1`
-- [ ] `fibonacci(10)` 返回 `55`
-- [ ] `__main__` 块中包含对 `fibonacci` 的调用并打印结果
-- [ ] 运行 `python hello.py` 无报错且输出符合预期

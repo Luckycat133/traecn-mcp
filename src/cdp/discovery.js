@@ -79,7 +79,7 @@ function fetchCDPTargetsWS(host, port, wsPath) {
     let ws;
     try { ws = new WebSocket(wsUrl); } catch (e) { return reject(e); }
     const to = setTimeout(() => {
-      try { ws.close(); } catch (e) {}
+      try { ws.close(); } catch { /* best-effort close */ }
       reject(new Error('CDP WS /list timed out'));
     }, 5000);
     ws.on('open', () => {
@@ -87,10 +87,10 @@ function fetchCDPTargetsWS(host, port, wsPath) {
     });
     ws.on('message', (data) => {
       let msg;
-      try { msg = JSON.parse(data.toString()); } catch (e) { return; }
+      try { msg = JSON.parse(data.toString()); } catch { return; }
       if (msg.id === 1) {
         clearTimeout(to);
-        try { ws.close(); } catch (e) {}
+        try { ws.close(); } catch { /* best-effort close */ }
         if (msg.error) return reject(new Error('CDP WS error: ' + (msg.error.message || JSON.stringify(msg.error))));
         resolve((msg.result && msg.result.targetInfos) || []);
       }
@@ -105,7 +105,7 @@ async function fetchCDPTargets(host, port, wsPath) {
   } catch (httpErr) {
     if (wsPath) {
       try { return await fetchCDPTargetsWS(host, port, wsPath); }
-      catch (wsErr) { /* fall through */ }
+      catch { /* fall through */ }
     }
     throw httpErr;
   }
@@ -149,7 +149,7 @@ function fetchCDPVersionWS(host, port, wsPath) {
     let ws;
     try { ws = new WebSocket(wsUrl); } catch (e) { return reject(e); }
     const to = setTimeout(() => {
-      try { ws.close(); } catch (e) {}
+      try { ws.close(); } catch { /* best-effort close */ }
       reject(new Error('CDP WS /version timed out'));
     }, 5000);
     ws.on('open', () => {
@@ -157,10 +157,10 @@ function fetchCDPVersionWS(host, port, wsPath) {
     });
     ws.on('message', (data) => {
       let msg;
-      try { msg = JSON.parse(data.toString()); } catch (e) { return; }
+      try { msg = JSON.parse(data.toString()); } catch { return; }
       if (msg.id === 1) {
         clearTimeout(to);
-        try { ws.close(); } catch (e) {}
+        try { ws.close(); } catch { /* best-effort close */ }
         if (msg.error) return reject(new Error('CDP WS error: ' + (msg.error.message || JSON.stringify(msg.error))));
         resolve(msg.result || {});
       }
@@ -175,7 +175,7 @@ async function fetchCDPVersion(host, port, wsPath) {
   } catch (httpErr) {
     if (wsPath) {
       try { return await fetchCDPVersionWS(host, port, wsPath); }
-      catch (wsErr) { /* fall through to original error */ }
+      catch { /* fall through to original error */ }
     }
     throw httpErr;
   }
@@ -255,11 +255,6 @@ function getDevToolsPorts() {
     if (info && !out.some(o => o.port === info.port)) out.push(info);
   }
   return out;
-}
-
-function getAntigravityDevToolsPort() {
-  const info = readDevToolsActivePort('Antigravity');
-  return info ? info.port : '';
 }
 
 function uniquePorts(...groups) {
@@ -363,21 +358,6 @@ function scoreTarget(target, titleKeywords) {
   }
 
   return score;
-}
-
-async function validateTargetHasContent(client, readiness) {
-  // Check if response region has actual text content
-  if (!readiness.responseRegion) return false;
-  try {
-    const sel = readiness.responseRegion.matchedSelector.replace(/'/g, "\\'");
-    const r = await client.send('Runtime.evaluate', {
-      expression: `document.querySelector('${sel}')?.textContent?.trim() || ''`,
-      returnByValue: true
-    });
-    return !!(r.result?.value && r.result.value.length > 0);
-  } catch {
-    return false;
-  }
 }
 
 async function discoverTarget(options = {}) {
@@ -522,7 +502,17 @@ async function discoverTarget(options = {}) {
     return target;
   }
 
-  return bestCandidate;
+  if (bestCandidate) {
+    throw TraeCNAutomationError.connectionFailed(
+      effectiveHost, effectivePort,
+      `No valid Trae CN workbench target found (${candidates.length} candidates probed but none had composer)`
+    );
+  }
+
+  throw TraeCNAutomationError.connectionFailed(
+    effectiveHost, effectivePort,
+    `No Trae CN targets found on CDP endpoint`
+  );
 }
 
 async function connectToTarget(targetInfo) {
@@ -532,9 +522,14 @@ async function connectToTarget(targetInfo) {
   }
 
   const client = new CDPClient(wsUrl);
-  await client.connect();
-  await client.send('DOM.enable');
-  await client.send('Runtime.enable');
+  try {
+    await client.connect();
+    await client.send('DOM.enable');
+    await client.send('Runtime.enable');
+  } catch (err) {
+    await client.close();
+    throw err;
+  }
 
   return client;
 }

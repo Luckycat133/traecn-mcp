@@ -5,7 +5,6 @@ const { sleep, safeJsValue } = require('../shared/utils');
 const {
   clickByTextRadix,
   clickByTextEx,
-  clickByPredicate,
   evaluate,
   evaluateJSON
 } = require('./browser-dom');
@@ -126,7 +125,7 @@ async function _listSettingsSidebarSections(client) {
 async function _waitForContent(client, maxWait = 8000) {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
-    let items = [];
+    let items;
     try {
       items = await evaluateJSON(
         client,
@@ -172,7 +171,7 @@ async function _waitForContent(client, maxWait = 8000) {
  * `evaluateJSON` handles the JSON-stringify/parse transport round-trip.
  */
 async function _readSettingsContent(client, waitMs = 8000) {
-  let parsed = { count: 0, items: [], type: 'none' };
+  let parsed;
   try {
     parsed = await evaluateJSON(
       client,
@@ -614,7 +613,7 @@ class SettingsDriver {
     try {
       const discoveredSections = await _listSettingsSidebarSections(this.client);
       sections = discoveredSections.length > 0 ? discoveredSections : SETTINGS_SECTIONS;
-    } catch (e) {
+    } catch {
       sections = SETTINGS_SECTIONS;
     }
 

@@ -52,7 +52,7 @@ async function handleDriverAction(req, res, ctx, driverName) {
       req.on('end', () => {
         if (!buf) return resolve({});
         try { resolve(JSON.parse(buf)); }
-        catch (e) { reject(new Error('Invalid JSON body')); }
+        catch { reject(new Error('Invalid JSON body')); }
       });
       req.on('error', reject);
     });

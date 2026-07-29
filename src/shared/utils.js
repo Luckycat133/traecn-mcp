@@ -54,23 +54,23 @@ function sleep(ms) {
 function safeJsValue(value) {
   try {
     if (typeof value === 'undefined') return 'undefined';
-    if (typeof value === 'string' && hasUnsafeJsValueChars(value)) return '';
+    if (typeof value === 'string') {
+      value = stripControlChars(value);
+    }
     const encoded = JSON.stringify(value);
     if (typeof encoded === 'undefined') return 'undefined';
     return encoded;
   } catch {
-    return '';
+    return '""';
   }
 }
 
-function hasUnsafeJsValueChars(value) {
-  for (let index = 0; index < value.length; index++) {
-    const code = value.charCodeAt(index);
-    if (value[index] === '<' || value[index] === '>' || code <= 31) {
-      return true;
-    }
+function stripControlChars(value) {
+  let result = '';
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 31) result += value[i];
   }
-  return false;
+  return result;
 }
 
 function normalizeQueueProbeText(value) {

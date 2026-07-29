@@ -1,6 +1,6 @@
 'use strict';
 
-const { sleep, safeJsValue } = require('../shared/utils');
+const { sleep } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
 const { evaluate, evaluateJSON } = require('./browser-dom');
 
@@ -69,7 +69,7 @@ class GitDriver {
   /**
    * Open SCM, type commit message, click commit.
    */
-  async commitWithMessage(message, opts = {}) {
+  async commitWithMessage(message, _opts = {}) {
     if (typeof message !== 'string' || !message) {
       throw new TraeCNAutomationError('commit message is required', 'INVALID_INPUT', {});
     }

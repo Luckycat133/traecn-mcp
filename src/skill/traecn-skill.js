@@ -1,9 +1,23 @@
 'use strict';
 
-const { TraeCNApiClient } = require('../../integrations/openclaw-traecn-plugin/lib/traecnapi-client');
+const { TraeCNApiClient } = require('../client/traecnapi-client');
 const { TraeCNSkillError } = require('./errors');
 const { buildCodeReviewTask } = require('./review');
 const { KNOWN_MODELS } = require('../shared/models');
+
+/** _delegateWithPoll 的默认轮询参数 */
+const DEFAULT_POLL_MAX_ATTEMPTS = 40;
+const DEFAULT_POLL_INTERVAL_MS = 5000;
+
+/**
+ * 解包网关响应，统一 `data.data || data` 取值模式。
+ * @param {any} data - 原始响应
+ * @returns {any} 解包后的负载
+ * @private
+ */
+function _unwrap(data) {
+  return (data && typeof data === 'object' && 'data' in data) ? data.data : data;
+}
 
 /** 设置区域的别名映射 */
 const SETTINGS_SECTIONS = {
@@ -23,12 +37,6 @@ const SETTINGS_SECTIONS = {
   beta: 'Beta',
   about: '关于 TRAE'
 };
-
-/** 有效模式列表 */
-// (Currently informational only — mode validation lives inside TraeCNSkill's
-// switchMode/constructor. Kept here as documentation; remove if it stays
-// unused in the next refactor pass.)
-const VALID_MODES = ['solo', 'ide'];
 
 /**
  * TraeCN Skill 主类
@@ -100,7 +108,6 @@ class TraeCNSkill {
    * @param {string} task - 任务描述
    * @param {object} [opts={}] - 运行选项
    * @param {string} [opts.projectPath] - 项目路径
-   * @param {boolean} [opts.includeProcess] - 是否包含过程信息
    * @param {boolean} [opts.autoWait=true] - 是否自动等待队列
    * @param {string} [opts.mode] - 模式 ('solo' 或 'ide')
    * @returns {Promise<object>} 运行结果
@@ -108,23 +115,11 @@ class TraeCNSkill {
   async run(task, opts = {}) {
     const {
       projectPath,
-      includeProcess,
       autoWait = true,
       mode = null,
-      reviewRequired,
-      autoContinue,
-      followupTasks,
-      completionChecks,
-      autoApproveDialog,
-      notifyUrl,
-      fallbackModels,
-      autoModelFallback,
-      modelProbeIntervalMs
+      pollMaxAttempts,
+      pollIntervalMs
     } = opts;
-    // autoApproveDialog is consumed downstream via opts in delegate(); keeping
-    // the explicit destructure here makes the supported option surface
-    // self-documenting. No-op reference so eslint no-unused-vars is satisfied.
-    void autoApproveDialog;
 
     if (mode) {
       await this.switchMode(mode).catch(() => {});
@@ -139,37 +134,15 @@ class TraeCNSkill {
       }
     }
 
+    // 集中收集 delegate 选项，避免 run/queue 两处分别罗列导致漂移
+    const delegateOpts = this._buildDelegateOptions(opts, { sessionId: this._sessionId });
+
     try {
       let result;
-      
       if (autoWait) {
-        result = await this._delegateWithPoll(task, { 
-          projectPath, 
-          sessionId: this._sessionId, 
-          includeProcess,
-          reviewRequired,
-          autoContinue,
-          followupTasks,
-          completionChecks,
-          notifyUrl,
-          fallbackModels,
-          autoModelFallback,
-          modelProbeIntervalMs
-        });
+        result = await this._delegateWithPoll(task, delegateOpts, { pollMaxAttempts, pollIntervalMs });
       } else {
-        result = await this.client.delegate(task, {
-          projectPath,
-          sessionId: this._sessionId,
-          includeProcessText: includeProcess,
-          reviewRequired,
-          autoContinue,
-          followupTasks,
-          completionChecks,
-          notifyUrl,
-          fallbackModels,
-          autoModelFallback,
-          modelProbeIntervalMs
-        });
+        result = await this.client.delegate(task, delegateOpts);
       }
 
       if (result.taskId) {
@@ -178,6 +151,7 @@ class TraeCNSkill {
 
       return this._normalizeResult(result);
     } catch (cause) {
+      if (cause instanceof TraeCNSkillError || (cause && cause.name === 'TraeCNSkillError')) throw cause;
       throw TraeCNSkillError.taskFailed(cause, { task });
     }
   }
@@ -190,63 +164,20 @@ class TraeCNSkill {
    * @returns {Promise<object>} 队列结果
    */
   async queue(task, opts = {}) {
-    const {
-      projectPath,
-      sessionId,
-      chatId,
-      includeProcessText,
-      includeProcess,
-      waitForQueue = true,
-      background,
-      forceBackground,
-      reviewRequired,
-      autoContinue,
-      followupTasks,
-      completionChecks,
-      autoApproveDialog,
-      notifyUrl,
-      fallbackModels,
-      autoModelFallback,
-      modelProbeIntervalMs,
-      maxQueueWaitMs,
-      queueMaxWaitMs,
-      soloChat,
-      soloChatIndex,
-      soloChatTitleIncludes,
-      soloChatTextIncludes,
-      newChat
-    } = opts;
-    
+    const { sessionId, includeProcessText, includeProcess } = opts;
+
     try {
-      const result = await this.client.delegateAsync(task, {
-        projectPath,
+      const delegateOpts = this._buildQueueOptions(opts, {
         sessionId: sessionId || this._sessionId,
-        chatId,
-        includeProcessText: includeProcessText === true || includeProcess === true,
-        waitForQueue,
-        background,
-        forceBackground,
-        reviewRequired,
-        autoContinue,
-        followupTasks,
-        completionChecks,
-        autoApproveDialog,
-        notifyUrl,
-        fallbackModels,
-        autoModelFallback,
-        modelProbeIntervalMs,
-        maxQueueWaitMs,
-        queueMaxWaitMs,
-        soloChat,
-        soloChatIndex,
-        soloChatTitleIncludes,
-        soloChatTextIncludes,
-        newChat
+        includeProcessText: includeProcessText === true || includeProcess === true
       });
+
+      const result = await this.client.delegateAsync(task, delegateOpts);
 
       this._lastTaskId = result.taskId || result.data?.taskId;
       return this._normalizeQueueResult(result);
     } catch (cause) {
+      if (cause instanceof TraeCNSkillError || (cause && cause.name === 'TraeCNSkillError')) throw cause;
       throw TraeCNSkillError.taskFailed(cause, { task });
     }
   }
@@ -267,6 +198,7 @@ class TraeCNSkill {
       const result = await this.client.getTaskStatus(id);
       return this._normalizePollResult(result);
     } catch (cause) {
+      if (cause instanceof TraeCNSkillError || (cause && cause.name === 'TraeCNSkillError')) throw cause;
       throw TraeCNSkillError.taskFailed(cause, { taskId: id });
     }
   }
@@ -290,6 +222,7 @@ class TraeCNSkill {
         ...result
       };
     } catch (cause) {
+      if (cause instanceof TraeCNSkillError || (cause && cause.name === 'TraeCNSkillError')) throw cause;
       throw TraeCNSkillError.taskFailed(cause, { taskId: id });
     }
   }
@@ -310,6 +243,7 @@ class TraeCNSkill {
       const result = await this.client.cancelTask(id);
       return this._normalizeCancelResult(result);
     } catch (cause) {
+      if (cause instanceof TraeCNSkillError || (cause && cause.name === 'TraeCNSkillError')) throw cause;
       throw TraeCNSkillError.taskFailed(cause, { taskId: id, action: 'cancel' });
     }
   }
@@ -338,18 +272,26 @@ class TraeCNSkill {
       this._lastTaskId = result.taskId || result.data?.taskId;
       return this._normalizeQueueResult(result);
     } catch (cause) {
+      if (cause instanceof TraeCNSkillError || (cause && cause.name === 'TraeCNSkillError')) throw cause;
       throw TraeCNSkillError.taskFailed(cause, { task });
     }
   }
 
   /**
    * 切换模式
-   * @param {string} mode - 模式名称 ('solo' 或 'ide')
+   * @param {string} mode - 模式名称 ('solo' 或 'ide')，忽略大小写
    * @returns {Promise<object>} 切换结果
+   * @throws {TraeCNSkillError} 如果模式不是 'solo' 或 'ide'
    */
   async switchMode(mode) {
-    const validMode = mode.toLowerCase() === 'ide' ? 'ide' : 'solo';
-    return await this.client.switchMode(validMode);
+    if (typeof mode !== 'string') {
+      throw TraeCNSkillError.invalidMode(String(mode), ['solo', 'ide']);
+    }
+    const normalized = mode.toLowerCase();
+    if (normalized !== 'solo' && normalized !== 'ide') {
+      throw TraeCNSkillError.invalidMode(mode, ['solo', 'ide']);
+    }
+    return await this.client.switchMode(normalized);
   }
 
   /**
@@ -485,7 +427,7 @@ class TraeCNSkill {
    * @returns {object} 标准化的状态
    */
   _normalizeStatus(data) {
-    const d = data.data || data;
+    const d = _unwrap(data);
     return {
       ok: true,
       status: d.status,
@@ -502,7 +444,7 @@ class TraeCNSkill {
    * @returns {object} 标准化的结果
    */
   _normalizeResult(data) {
-    const d = data.data || data;
+    const d = _unwrap(data);
 
     // Honest failure propagation: if the gateway (or any upstream) reported
     // an explicit failure, surface it instead of rewriting it into a false
@@ -543,7 +485,7 @@ class TraeCNSkill {
    * @returns {object} 标准化的队列结果
    */
   _normalizeQueueResult(data) {
-    const d = data.data || data;
+    const d = _unwrap(data);
     if (d.ok === false || d.error) {
       return {
         ok: false,
@@ -569,7 +511,7 @@ class TraeCNSkill {
    * @returns {object} 标准化的轮询结果
    */
   _normalizePollResult(data) {
-    const d = data.data || data;
+    const d = _unwrap(data);
     const status = d.status || 'queued';
     
     const result = { ok: true, status };
@@ -597,8 +539,7 @@ class TraeCNSkill {
    * @param {any} data - 原始数据
    * @returns {object} 标准化的取消结果
    */
-  _normalizeCancelResult(data) {
-    const d = data.data || data;
+  _normalizeCancelResult(_data) {
     return { ok: true, cancelled: true };
   }
 
@@ -609,7 +550,7 @@ class TraeCNSkill {
    * @returns {object} 标准化的设置结果
    */
   _normalizeSettings(data) {
-    const d = data.data || data;
+    const d = _unwrap(data);
     return { ok: true, section: d.section || null, content: d };
   }
 
@@ -620,7 +561,7 @@ class TraeCNSkill {
    * @returns {object} 标准化的设置项结果
    */
   _normalizeSetResult(data) {
-    const d = data.data || data;
+    const d = _unwrap(data);
     return { ok: true, label: d.label, value: d.value };
   }
 
@@ -631,7 +572,7 @@ class TraeCNSkill {
    * @returns {object} 标准化的批准结果
    */
   _normalizeApproveResult(data) {
-    const d = data.data || data;
+    const d = _unwrap(data);
     return {
       ok: true,
       success: d.success,
@@ -647,7 +588,7 @@ class TraeCNSkill {
    * @returns {object} 标准化的对话框状态
    */
   _normalizeDialogStatus(data) {
-    const d = data.data || data;
+    const d = _unwrap(data);
     return {
       ok: true,
       hasDialog: d.hasDialog || false,
@@ -664,7 +605,7 @@ class TraeCNSkill {
    * @returns {object} 标准化的队列状态
    */
   _normalizeQueueStatus(data) {
-    const d = data.data || data;
+    const d = _unwrap(data);
     return {
       ok: true,
       queued: d.queued || false,
@@ -674,23 +615,32 @@ class TraeCNSkill {
   }
 
   /**
-   * 标准化模型名称（支持模糊匹配）
+   * 标准化模型名称（支持模糊匹配）。
+   * 匹配优先级：精确（忽略大小写）> 前缀 > 子串；同层取首个匹配。
+   * 优先精确匹配可避免短输入被歧义子串结果抢先返回。
    * @private
    * @param {string} model - 模型名称
    * @returns {string|null} 标准化的模型名称或 null
    */
   _normalizeModel(model) {
-    if (!model) return null;
+    if (!model || typeof model !== 'string') return null;
     const m = model.toLowerCase();
-    
+
+    // 1. 精确匹配（忽略大小写）
     for (const known of KNOWN_MODELS) {
-      if (known.toLowerCase().includes(m) || m.includes(known.toLowerCase())) {
-        return known;
-      }
+      if (known.toLowerCase() === m) return known;
     }
-    
-    if (KNOWN_MODELS.includes(model)) return model;
-    
+
+    // 2. 前缀匹配（请求是已知模型名的前缀）
+    for (const known of KNOWN_MODELS) {
+      if (known.toLowerCase().startsWith(m)) return known;
+    }
+
+    // 3. 子串匹配（请求是已知模型名的子串）
+    for (const known of KNOWN_MODELS) {
+      if (known.toLowerCase().includes(m)) return known;
+    }
+
     return null;
   }
 
@@ -719,52 +669,32 @@ class TraeCNSkill {
    * 委托任务并轮询完成
    * @private
    * @param {string} task - 任务描述
-   * @param {object} opts - 选项
+   * @param {object} delegateOpts - 透传给 client.delegate 的选项
+   * @param {object} [pollOpts] - 轮询控制参数
+   * @param {number} [pollOpts.pollMaxAttempts] - 最大轮询次数
+   * @param {number} [pollOpts.pollIntervalMs] - 轮询间隔毫秒
    * @returns {Promise<any>} 任务结果
    */
-  async _delegateWithPoll(task, opts) {
-    const {
-      projectPath,
-      sessionId,
-      includeProcess,
-      reviewRequired,
-      autoContinue,
-      followupTasks,
-      completionChecks,
-      notifyUrl,
-      fallbackModels,
-      autoModelFallback,
-      modelProbeIntervalMs
-    } = opts;
+  async _delegateWithPoll(task, delegateOpts, pollOpts = {}) {
+    const result = await this.client.delegate(task, delegateOpts);
 
-    const result = await this.client.delegate(task, {
-      projectPath,
-      sessionId,
-      includeProcessText: includeProcess,
-      reviewRequired,
-      autoContinue,
-      followupTasks,
-      completionChecks,
-      notifyUrl,
-      fallbackModels,
-      autoModelFallback,
-      modelProbeIntervalMs
-    });
+    const d = _unwrap(result);
 
-    const d = result.data || result;
-    
     if (d.status === 'queued') {
       const taskId = d.taskId;
-      const maxAttempts = 40;
-      const interval = 5000;
+      // 记住 taskId，使后续 poll()/cancel()/wait() 无需显式传参即可复用
+      if (taskId) this._lastTaskId = taskId;
+      const maxAttempts = pollOpts.pollMaxAttempts || DEFAULT_POLL_MAX_ATTEMPTS;
+      const interval = pollOpts.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS;
 
       for (let i = 0; i < maxAttempts; i++) {
         await this._sleep(interval);
         const poll = await this.client.getTaskStatus(taskId);
-        const status = poll.data?.status || poll.status;
+        const pd = _unwrap(poll);
+        const status = pd.status;
 
         if (status === 'done') {
-          return poll.data?.result || poll.result || poll;
+          return pd.result || pd;
         }
 
         if (status === 'error' || status === 'queue_timeout' || status === 'cancelled') {
@@ -776,6 +706,64 @@ class TraeCNSkill {
     }
 
     return result;
+  }
+
+  /**
+   * 从用户选项构建同步 delegate 调用的选项对象。
+   * 集中映射避免 run/queue 两处分别罗列导致漂移。
+   * @private
+   * @param {object} opts - 用户运行选项
+   * @param {object} [overrides] - 额外覆盖字段
+   * @returns {object} delegate 选项
+   */
+  _buildDelegateOptions(opts, overrides = {}) {
+    return {
+      projectPath: opts.projectPath,
+      includeProcessText: opts.includeProcess,
+      reviewRequired: opts.reviewRequired,
+      autoContinue: opts.autoContinue,
+      followupTasks: opts.followupTasks,
+      completionChecks: opts.completionChecks,
+      notifyUrl: opts.notifyUrl,
+      fallbackModels: opts.fallbackModels,
+      autoModelFallback: opts.autoModelFallback,
+      modelProbeIntervalMs: opts.modelProbeIntervalMs,
+      ...overrides
+    };
+  }
+
+  /**
+   * 从用户选项构建异步 delegateAsync 调用的选项对象。
+   * @private
+   * @param {object} opts - 用户队列选项
+   * @param {object} [overrides] - 额外覆盖字段
+   * @returns {object} delegateAsync 选项
+   */
+  _buildQueueOptions(opts, overrides = {}) {
+    return {
+      projectPath: opts.projectPath,
+      chatId: opts.chatId,
+      waitForQueue: opts.waitForQueue !== false,
+      background: opts.background,
+      forceBackground: opts.forceBackground,
+      reviewRequired: opts.reviewRequired,
+      autoContinue: opts.autoContinue,
+      followupTasks: opts.followupTasks,
+      completionChecks: opts.completionChecks,
+      autoApproveDialog: opts.autoApproveDialog,
+      notifyUrl: opts.notifyUrl,
+      fallbackModels: opts.fallbackModels,
+      autoModelFallback: opts.autoModelFallback,
+      modelProbeIntervalMs: opts.modelProbeIntervalMs,
+      maxQueueWaitMs: opts.maxQueueWaitMs,
+      queueMaxWaitMs: opts.queueMaxWaitMs,
+      soloChat: opts.soloChat,
+      soloChatIndex: opts.soloChatIndex,
+      soloChatTitleIncludes: opts.soloChatTitleIncludes,
+      soloChatTextIncludes: opts.soloChatTextIncludes,
+      newChat: opts.newChat,
+      ...overrides
+    };
   }
 
   // ── Shared singleton management ─────────────────────────────────────

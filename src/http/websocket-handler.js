@@ -470,11 +470,11 @@ class WebSocketHandler {
     switch (task.status) {
       case 'done':
         message.result = {
-          text: task.result.text,
-          stable: task.result.stable,
-          elapsedMs: task.result.elapsedMs,
-          timedOut: task.result.timedOut || false,
-          needsApproval: task.result.needsApproval || false
+          text: task.result?.text || '',
+          stable: task.result?.stable || false,
+          elapsedMs: task.result?.elapsedMs || null,
+          timedOut: task.result?.timedOut || false,
+          needsApproval: task.result?.needsApproval || false
         };
         break;
       case 'error':

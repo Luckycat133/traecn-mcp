@@ -3,16 +3,12 @@
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
-const zlib = require('zlib');
 const path = require('path');
-const crypto = require('crypto');
 const { URL } = require('url');
 const packageInfo = require('../../package.json');
 const { discoverTarget, connectToTarget, resolveCDPEndpoint, fetchCDPTargets, describeCDPSurface } = require('../cdp/discovery');
 const { DomDriver, getConfig } = require('../cdp/dom-driver');
-const { SETTINGS_SECTIONS } = require('../cdp/settings-driver');
 const { MockDriver } = require('../cdp/mock-driver');
-const { DriverRouter, DRIVER_SPEC } = require('./driver-router');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
@@ -20,13 +16,13 @@ const { getEnvWithFallback, parsePositiveInt, sanitizeLog, isGenericQueueProbeTa
 const { errorToHttpStatus, errorToBody, safeErrorMessage } = require('./error-mapping');
 const { ConfigManager } = require('../shared/config-manager');
 const { getGlobalStore } = require('../shared/task-history');
-const { buildCapabilities } = require('../shared/capabilities');
+const { buildCapabilities } = require('../capabilities');
 const { buildConfirmationPlan } = require('../shared/operation-confirmation');
 const requestContext = require('../shared/request-context');
 const { globalMetrics } = require('../shared/metrics');
-const { listCommands } = require('../../integrations/openclaw-traecn-plugin/lib/command-set');
+const { listCommands } = require('../client/command-set');
 const { WebSocketHandler } = require('./websocket-handler');
-const { findTraeCNBinary, isTraeCNRunning, restartTraeCNWithDebug, startTraeCN, getQuickstartConfig } = require('../config/quickstart');
+const { isTraeCNRunning } = require('../config/quickstart');
 const { CDPHealthWatcher } = require('../cdp/health-watcher');
 const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
 
@@ -34,18 +30,14 @@ const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
 // after the helpers moved to ./request-gate. The real implementation lives
 // in request-gate.js; this is a one-line shim kept for readability.
 const { redactUrl: _redactUrl } = require('./request-gate');
-const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, RateLimiter, HttpError } = require('./request-gate');
+const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, RateLimiter } = require('./request-gate');
 const { TaskQueueService } = require('./task-queue-service');
 const { TraeControl } = require('../cdp/trae-control');
-const { ROUTES, matchRoute, resolveHandler } = require('./route-table');
+const { matchRoute, resolveHandler } = require('./route-table');
 const statusHandlers = require('./handlers/status');
 const tasksHandlers = require('./handlers/tasks');
 const delegateHandlers = require('./handlers/delegate');
 const sessionsHandlers = require('./handlers/sessions');
-const configHandlers = require('./handlers/config');
-const dialogHandlers = require('./handlers/dialog');
-const settingsHandlers = require('./handlers/settings');
-const preflightHandlers = require('./handlers/preflight');
 const soloChatHandlers = require('./handlers/solo-chat');
 const traeControlHandlers = require('./handlers/trae-control');
 const queueHandlers = require('./handlers/queue');
@@ -60,35 +52,7 @@ const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
 
 const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
 
-// Notify OpenClaw (Telegram gateway) when async task completes
-async function notifyOpenClaw(chatId, message) {
-  try {
-    const openclawUrl = getEnvWithFallback('TRAECN_OPENCLAW_URL', 'TRAE_OPENCLAW_URL', 'http://127.0.0.1:18789/api/message/send');
-    const body = JSON.stringify({ chatId, text: message });
-    const res = await fetch(openclawUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      signal: AbortSignal.timeout(5000)
-    });
-    // Consume response body to free the connection
-    if (res.ok) await res.text();
-  } catch (e) {
-    console.error('[Queue] notify failed:', e.message);
-  }
-}
-
-function formatResult(result) {
-  if (!result) return '✅ Trae 完成（无详情）';
-  if (result.needsConfirmation || result.needsApproval) {
-    return `🤖 Trae 需要确认:\n${result.question}\n\n输入你的决定继续。`;
-  }
-  if (result.error) {
-    return `❌ Trae 出错: ${result.error}`;
-  }
-  const msg = result.text || result.message || '';
-  return `✅ Trae 完成: ${msg.substring(0, 200)}`;
-}
+const { notifyOpenClaw, formatResult } = require('./notifications');
 
 function formatReviewRequiredMessage(taskId, result, remainingFollowups = 0) {
   const preview = String(result?.text || '').trim().replace(/\s+/g, ' ').slice(0, 200);
@@ -1156,7 +1120,7 @@ class Gateway {
     if (!action || !this.driver) return false;
 
     let approvalResult;
-    let selectedAction = action;
+    let selectedAction;
     try {
       const isQuestion = result.dialogType === 'review_scope_question'
         || /review scope|what would you like me to review/i.test(result.question || '');
@@ -1549,7 +1513,7 @@ class Gateway {
         return;
       }
 
-      let setupResult = null;
+      let setupResult;
       try {
         setupResult = await this.driver.completeSetupIfPresent();
       } catch (e) {
@@ -2468,12 +2432,12 @@ class Gateway {
       beta: 'Beta', about: '关于 TRAE'
     };
     const section = raw ? (SECTION_ALIASES[raw] || (() => {
-      try { return decodeURIComponent(raw); } catch(e) { return raw; }
+      try { return decodeURIComponent(raw); } catch { return raw; }
     })()) : null;
 
     await this._ensureConnection();
 
-    const switchResult = await this.driver.settings.switchTab(section);
+    await this.driver.settings.switchTab(section);
 
     let data;
     try {
@@ -3260,7 +3224,23 @@ class Gateway {
             this.taskQueueService.release(taskId);
           }
         }
-        
+
+        // Hoist queue status check above the per-task loop — queue status is
+        // a property of the Trae IDE, not per-task, so one CDP round-trip per
+        // polling cycle suffices regardless of how many tasks are queued.
+        let cachedQueueStatus = null;
+        const hasQueuedTasks = Array.from(this.taskQueue.values()).some(
+          t => t.status === 'queued' && !isGenericQueueProbeTask(t && t.task)
+        );
+        if (hasQueuedTasks) {
+          try {
+            await this._ensureConnection();
+            cachedQueueStatus = await this.driver.checkQueueStatus();
+          } catch (e) {
+            console.error('[Queue] checkQueueStatus failed:', e.message);
+          }
+        }
+
         for (const [taskId, task] of this.taskQueue) {
           if (this.taskLocks.has(taskId)) continue;
 
@@ -3304,14 +3284,15 @@ class Gateway {
           if (task.status !== 'queued') continue;
 
           try {
-            await this._ensureConnection();
-            let queueStatus = await this.driver.checkQueueStatus();
+            if (!cachedQueueStatus) continue;
+            let queueStatus = cachedQueueStatus;
             this._updateQueuedTaskSnapshot(task, queueStatus);
 
             if ((queueStatus.queued || queueStatus.running) && Array.isArray(task.fallbackModels) && task.fallbackModels.length > 0) {
               const probe = await this._probeFallbackModels(task);
               if (probe.queueStatus) {
                 queueStatus = probe.queueStatus;
+                cachedQueueStatus = queueStatus;
                 this._updateQueuedTaskSnapshot(task, queueStatus);
               }
             }

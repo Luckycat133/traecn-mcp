@@ -315,6 +315,7 @@ class ConfigManager extends EventEmitter {
       }
       if (!found) continue;
       const value = transform ? transform(rawValue) : rawValue;
+      if (typeof value === 'number' && Number.isNaN(value)) continue;
       this._setNestedValue(configPath, value);
     }
   }
@@ -812,7 +813,7 @@ class ConfigManager extends EventEmitter {
     }
 
     if (config.rateLimit) {
-      gateway.rateLimiter = new (require('./gateway').RateLimiter)(
+      gateway.rateLimiter = new (require('../http/request-gate').RateLimiter)(
         config.rateLimit.windowMs,
         config.rateLimit.maxRequests
       );
@@ -825,10 +826,6 @@ class ConfigManager extends EventEmitter {
     if (config.cors) {
       gateway.allowedOrigins = config.cors.allowedOrigins;
       gateway.corsEnabled = config.cors.enabled;
-    }
-
-    if (config.plugins) {
-      gateway.pluginSettings = { ...config.plugins };
     }
   }
 

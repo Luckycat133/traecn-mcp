@@ -19,10 +19,8 @@ const { TraeCNSkill } = require('./traecn-skill');
 const { buildCodeReviewTask } = require('./review');
 const promptLayers = require('./prompt-layers');
 
-let _instance = null;
 function _skill() {
-  if (!_instance) _instance = new TraeCNSkill();
-  return _instance;
+  return TraeCNSkill.getSharedInstance();
 }
 
 // ── Errors-out wrappers around `advanced.*` (index.js namespacing) ─────

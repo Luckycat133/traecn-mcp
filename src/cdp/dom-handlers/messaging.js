@@ -32,6 +32,16 @@ function jsStringLiteral(value) {
     .replace(/\u2029/g, '\\u2029');
 }
 
+function buildComposerSelectorList(driver) {
+  const selectors = driver.config.composerSelectors || ['.chat-input-v2-input-box-editable'];
+  return JSON.stringify(selectors);
+}
+
+function buildSendButtonSelectorList(driver) {
+  const selectors = driver.config.sendButtonSelectors || ['button.chat-input-v2-send-button'];
+  return JSON.stringify(selectors);
+}
+
 function runtimeValue(result, fallbackReason = 'no runtime value') {
   if (result && result.result && Object.prototype.hasOwnProperty.call(result.result, 'value')) {
     return result.result.value || {};
@@ -84,10 +94,16 @@ async function sendMessage(driver, text) {
 
   const normalizedExpected = String(text || '').replace(/\s+/g, ' ').trim();
   driver._pendingUserTask = normalizedExpected;
+  const composerSels = buildComposerSelectorList(driver);
   const focusResult = await driver.client.send('Runtime.evaluate', {
     expression: `
       (function() {
-        var el = document.querySelector('.chat-input-v2-input-box-editable');
+        var sels = ${composerSels};
+        var el = null;
+        for (var i = 0; i < sels.length; i++) {
+          el = document.querySelector(sels[i]);
+          if (el) break;
+        }
         if (!el) return { ok: false, reason: 'no composer' };
         el.focus();
         return { ok: true };
@@ -111,7 +127,12 @@ async function sendMessage(driver, text) {
   let inputResult = await driver.client.send('Runtime.evaluate', {
     expression: `
       (function() {
-        var el = document.querySelector('.chat-input-v2-input-box-editable');
+        var sels = ${composerSels};
+        var el = null;
+        for (var si = 0; si < sels.length; si++) {
+          el = document.querySelector(sels[si]);
+          if (el) break;
+        }
         var value = el ? (el.innerText || el.textContent || '').trim() : '';
         var normalized = value.replace(/\\s+/g, ' ').trim();
         return {
@@ -130,7 +151,12 @@ async function sendMessage(driver, text) {
     inputResult = await driver.client.send('Runtime.evaluate', {
       expression: `
         (function() {
-          var el = document.querySelector('.chat-input-v2-input-box-editable');
+          var sels = ${composerSels};
+          var el = null;
+          for (var si = 0; si < sels.length; si++) {
+            el = document.querySelector(sels[si]);
+            if (el) break;
+          }
           var value = el ? (el.innerText || el.textContent || '').trim() : '';
           var normalized = value.replace(/\\s+/g, ' ').trim();
           return {
@@ -152,10 +178,16 @@ async function sendMessage(driver, text) {
   if (driver.config.sendTrigger === 'button') {
     const sendBtn = await driver.findSendButton();
     if (sendBtn && sendBtn.nodeId) {
-      await driver.client.send('Runtime.evaluate', {
+      const btnSels = buildSendButtonSelectorList(driver);
+      const clickResult = await driver.client.send('Runtime.evaluate', {
         expression: `
           (function() {
-            var btn = document.querySelector('button.chat-input-v2-send-button');
+            var sels = ${btnSels};
+            var btn = null;
+            for (var i = 0; i < sels.length; i++) {
+              btn = document.querySelector(sels[i]);
+              if (btn) break;
+            }
             if (!btn) return 'no button';
             if (btn.classList.contains('disabled')) return 'button disabled: ' + btn.className;
             var rect = btn.getBoundingClientRect();
@@ -169,6 +201,10 @@ async function sendMessage(driver, text) {
         `,
         returnByValue: true
       });
+      if (clickResult.result?.value === 'no button') {
+        await driver.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 2 });
+        await driver.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
+      }
     } else {
       await driver.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 2 });
       await driver.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
@@ -209,20 +245,21 @@ async function stopGeneration(driver) {
 
 async function switchAgent(driver, agentName) {
   const targetName = agentName.replace(/^@/, '').trim();
+  const safeTargetName = JSON.stringify(targetName);
 
   // Open the agent selector popup
   await driver.client.send('Runtime.evaluate', {
     expression: `
       (function() {
         var trigger = document.querySelector('.chat-input-selected-agent-title-inner');
-        if (!trigger) return 'no trigger';
+        if (!trigger) return { success: false, error: 'no trigger' };
         var rect = trigger.getBoundingClientRect();
         trigger.dispatchEvent(new PointerEvent('pointerdown', {
           bubbles: true, cancelable: true, composed: true,
           clientX: rect.x + rect.width/2, clientY: rect.y + rect.height/2
         }));
         trigger.click();
-        return 'opened agent popup';
+        return { success: true, action: 'opened agent popup' };
       })()
     `,
     returnByValue: true
@@ -233,24 +270,24 @@ async function switchAgent(driver, agentName) {
   const found = await driver.client.send('Runtime.evaluate', {
     expression: `
       (function() {
-        var target = '${targetName}';
+        var target = ${safeTargetName};
         var items = document.querySelectorAll('.agent-popup-item');
         for (var i = 0; i < items.length; i++) {
           var text = items[i].textContent.trim();
-          // Match agent name (may have suffix like "SOLO Only")
           if (text.includes(target) || text.includes(target.replace(/ /g, ''))) {
             items[i].dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true}));
             items[i].click();
-            return 'switched to: ' + text.substring(0, 30);
+            return { success: true, agentName: text.substring(0, 30) };
           }
         }
-        return 'agent not found: ' + target + ' (items: ' + items.length + ')';
+        return { success: false, error: 'agent not found', target: target, itemCount: items.length };
       })()
     `,
     returnByValue: true
   });
   await sleep(1500);
-  return found.result?.value || 'unknown';
+  const result = found.result?.value || { success: false, error: 'unknown' };
+  return result;
 }
 
 /**

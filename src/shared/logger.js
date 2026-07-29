@@ -2,10 +2,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getEnvWithFallback } = require('./utils');
+const { getEnvWithFallback, SENSITIVE_LOG_KEYS } = require('./utils');
 
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
-const SENSITIVE_KEYS = ['token', 'password', 'secret', 'credential', 'authorization'];
 
 /**
  * Recursively strip sensitive values (tokens, passwords, etc.) from an object
@@ -24,7 +23,7 @@ function sanitizeLog(obj, seen) {
   seen.add(obj);
   const sanitized = Array.isArray(obj) ? [] : {};
   for (const [key, value] of Object.entries(obj)) {
-    if (SENSITIVE_KEYS.some(k => key.toLowerCase().includes(k))) {
+    if (SENSITIVE_LOG_KEYS.some(k => key.toLowerCase().includes(k))) {
       sanitized[key] = '[REDACTED]';
     } else if (typeof value === 'object' && value !== null) {
       sanitized[key] = sanitizeLog(value, seen);

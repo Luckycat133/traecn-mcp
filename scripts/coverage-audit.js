@@ -8,8 +8,8 @@ const { execFileSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 const packageJson = require('../package.json');
 const { generateOpenAPISpec } = require('../src/http/openapi');
-const { buildCapabilities } = require('../src/shared/capabilities');
-const { listCommands } = require('../integrations/openclaw-traecn-plugin/lib/command-set');
+const { buildCapabilities } = require('../src/capabilities');
+const { listCommands } = require('../src/client/command-set');
 const { MCP_TOOLS } = require('../mcp-server');
 const openClawManifest = require('../integrations/openclaw-traecn-plugin/openclaw.plugin.json');
 
@@ -176,11 +176,11 @@ assertArrayIncludesAll(files, [
   'scripts/coverage-audit.js',
   'scripts/live-uat.js',
   'scripts/traecn-cli.js',
-  'src/shared/capabilities.js',
+  'src/capabilities.js',
   'src/shared/operation-confirmation.js',
   'src/skill/review.js',
   'src/skill/simple-api.d.ts',
-  'integrations/openclaw-traecn-plugin/lib/command-set.js'
+  'src/client/command-set.js'
 ], 'npm package');
 
 console.log('[coverage-audit] PASS', JSON.stringify({

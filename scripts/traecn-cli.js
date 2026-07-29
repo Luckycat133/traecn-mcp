@@ -1,17 +1,15 @@
 #!/usr/bin/env node
 'use strict';
 
-const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
 const os = require('os');
 const { spawnSync } = require('child_process');
 const {
   TraeCNApiClient,
   DEFAULT_TASK_POLL_MS,
   isTerminalTaskStatus
-} = require('../integrations/openclaw-traecn-plugin/lib/traecnapi-client');
+} = require('../src/client/traecnapi-client');
 
 const COLORS = {
   reset: '\x1b[0m',
@@ -702,7 +700,6 @@ async function runCleanupWatchAttempt(cleanupOnce, options = {}) {
 }
 
 async function cmdDelegate(args) {
-  const cfg = loadConfig();
   let task = '';
   let waitForResult = true;
   let outputFormat = 'text';
@@ -1380,7 +1377,7 @@ async function cmdModels() {
         ? settings.data.options
         : [settings.data.options];
 
-      models.forEach((model, index) => {
+      models.forEach((model, _index) => {
         const isActive = readiness.data.currentModel === model ||
                         (typeof model === 'object' && readiness.data.currentModel === model.id);
         const marker = isActive ? color('green', ' ● ') : '   ';
@@ -1599,7 +1596,7 @@ async function cmdBatch(args) {
       console.log(`  ${color('cyan', 'Running:')}    ${batch.executingCount || 0}`);
 
       console.log(`\n${color('bold', 'Tasks:')}`);
-      batch.tasks.forEach((task, i) => {
+      batch.tasks.forEach((task, _i) => {
         const statusIcon = task.status === 'done' ? color('green', '✓') : task.status === 'error' ? color('red', '✗') : task.status === 'executing' ? color('yellow', '▶') : color('dim', '○');
         const priorityLabel = task.priority ? color('dim', `[P${task.priority}]`) : '';
         console.log(`  ${statusIcon} ${priorityLabel} ${task.taskId}`);

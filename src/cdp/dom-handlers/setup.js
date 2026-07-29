@@ -22,20 +22,18 @@ const { sleep, safeJsValue } = require('../../shared/utils');
 async function _ensureClickHelper(driver) {
   await driver.client.send('Runtime.evaluate', {
     expression: `(function() {
-      if (window.__enhancedClick) return;
+      if (window.__traeEnhancedClick_v1) return;
       var normalize = function(text) {
         return String(text || '').trim();
       };
-      window.__enhancedClick = function(targetText, normalizeText) {
+      window.__traeEnhancedClick_v1 = function(targetText, normalizeText) {
+        var normalizeFn = normalizeText
+          ? function(text) { return String(text || '').replace(/\\s+/g, ' ').trim(); }
+          : normalize;
         var candidates = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
-        if (normalizeText) {
-          normalize = function(text) {
-            return String(text || '').replace(/\\s+/g, ' ').trim();
-          };
-        }
         for (var i = 0; i < candidates.length; i++) {
           var el = candidates[i];
-          var text = normalize(el.innerText || el.textContent || '');
+          var text = normalizeFn(el.innerText || el.textContent || '');
           if (text !== targetText) continue;
           var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
           var clickable = el.tagName === 'BUTTON' ||
@@ -148,7 +146,7 @@ async function completeSetupIfPresent(driver, options = {}) {
     }
 
     const clickResult = await driver.client.send('Runtime.evaluate', {
-      expression: `window.__enhancedClick(${safeJsValue(actionable.text)})`,
+      expression: `window.__traeEnhancedClick_v1(${safeJsValue(actionable.text)})`,
       returnByValue: true
     });
 
@@ -301,7 +299,7 @@ async function dismissWorkspaceGuideIfPresent(driver, options = {}) {
     }
 
     const clickResult = await driver.client.send('Runtime.evaluate', {
-      expression: `window.__enhancedClick(${safeJsValue(target.text)}, true)`,
+      expression: `window.__traeEnhancedClick_v1(${safeJsValue(target.text)}, true)`,
       returnByValue: true
     });
 

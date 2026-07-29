@@ -16,7 +16,7 @@
  */
 
 const { parseBody } = require('../request-gate');
-const { getEnvWithFallback, isGenericQueueProbeTask } = require('../../shared/utils');
+const { isGenericQueueProbeTask } = require('../../shared/utils');
 const discovery = require('../../cdp/discovery');
 
 const ROUTES = [
@@ -25,33 +25,7 @@ const ROUTES = [
   { method: 'POST', path: '/api/delegate-async', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 ];
 
-async function notifyOpenClaw(chatId, message) {
-  try {
-    const openclawUrl = getEnvWithFallback('TRAECN_OPENCLAW_URL', 'TRAE_OPENCLAW_URL', 'http://127.0.0.1:18789/api/message/send');
-    const body = JSON.stringify({ chatId, text: message });
-    const res = await fetch(openclawUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      signal: AbortSignal.timeout(5000)
-    });
-    if (res.ok) await res.text();
-  } catch (e) {
-    console.error('[Delegate] OpenClaw notify failed:', e.message);
-  }
-}
-
-function formatResult(result) {
-  if (!result) return '✅ Trae 完成（无详情）';
-  if (result.needsConfirmation || result.needsApproval) {
-    return `🤖 Trae 需要确认:\n${result.question}\n\n输入你的决定继续。`;
-  }
-  if (result.error) {
-    return `❌ Trae 出错: ${result.error}`;
-  }
-  const msg = result.text || result.message || '';
-  return `✅ Trae 完成: ${msg.substring(0, 200)}`;
-}
+const { notifyOpenClaw, formatResult } = require('../notifications');
 
 async function handleDelegateAsync(req, res, ctx) {
   const body = await parseBody(req);
@@ -95,7 +69,7 @@ async function handleDelegateAsync(req, res, ctx) {
 
   // Get queue status with enhanced detection
   let queueStatus = await ctx.driver.checkQueueStatus();
-  let modelProbe = null;
+  let modelProbe;
   let queueVisible = queueStatus.queued === true;
   let queueBlocked = queueStatus.running || (queueVisible && queueStatus.canSubmit !== true);
   let shouldBackgroundWait = queueStatus.running || (waitForQueue && queueVisible);

@@ -19,6 +19,30 @@ function reset() {
   TraeCNSkill.resetSharedInstance();
 }
 
+// ============ 错误映射辅助 ============
+//
+// 统一 try/catch 模板：保留 TraeCNSkillError（携带稳定错误码），
+// 仅把底层抛出的普通 Error 包装成 TASK_FAILED，避免丢失原始错误码。
+// 这解决了此前各方法错误处理不一致的问题（如 cancelTask 会把
+// TASK_ID_MISSING 重新包装成 TASK_FAILED）。
+
+/**
+ * 包装一个异步 skill 调用，统一错误映射。
+ * @param {string} message - 失败时的上下文消息前缀
+ * @param {object} details - 附加到错误的详情
+ * @param {() => Promise} fn - 实际 skill 调用
+ * @returns {Promise<any>} 调用结果
+ * @private
+ */
+async function withSkillError(message, details, fn) {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof TraeCNSkillError || (error && error.name === 'TraeCNSkillError')) throw error;
+    throw TraeCNSkillError.taskFailed(`${message}: ${error.message}`, details);
+  }
+}
+
 // ============ 基础层 (Basic Layer) ============
 // 覆盖90%使用场景，5个核心函数
 
@@ -31,7 +55,7 @@ async function runTask(task, opts = {}) {
     }
     return result.text;
   } catch (error) {
-    if (error instanceof TraeCNSkillError) throw error;
+    if (error instanceof TraeCNSkillError || (error && error.name === 'TraeCNSkillError')) throw error;
     throw TraeCNSkillError.taskFailed(error.message, { task });
   }
 }
@@ -41,9 +65,7 @@ async function switchModel(name) {
   try {
     return await skill.switchModel(name);
   } catch (error) {
-    if (error.code === 'UNKNOWN_MODEL') {
-      throw error; // 保留原始错误，包含可用模型列表
-    }
+    if (error instanceof TraeCNSkillError || (error && error.name === 'TraeCNSkillError')) throw error;
     throw TraeCNSkillError.taskFailed(`切换模型失败: ${error.message}`, { model: name });
   }
 }
@@ -53,62 +75,37 @@ async function checkStatus() {
   try {
     const status = await skill.status();
     return status.connected;
-  } catch (error) {
+  } catch {
     return false; // 连接失败返回false，不抛错
   }
 }
 
 async function queueTask(task, opts = {}) {
   const skill = getSkill();
-  try {
-    const result = await skill.queue(task, opts);
-    return result.taskId;
-  } catch (error) {
-    throw TraeCNSkillError.taskFailed(`队列任务失败: ${error.message}`, { task });
-  }
+  return withSkillError('队列任务失败', { task }, () => skill.queue(task, opts).then(r => r.taskId));
 }
 
 async function pollTask(taskId = null) {
   const skill = getSkill();
-  try {
-    return await skill.poll(taskId);
-  } catch (error) {
-    if (error.code === 'TASK_ID_MISSING') {
-      throw error; // 保留原始错误
-    }
-    throw TraeCNSkillError.taskFailed(`轮询失败: ${error.message}`, { taskId });
-  }
+  return withSkillError('轮询失败', { taskId }, () => skill.poll(taskId));
 }
 
 async function waitTask(taskId = null, opts = {}) {
   const skill = getSkill();
-  try {
-    return await skill.wait(taskId, opts);
-  } catch (error) {
-    if (error.code === 'TASK_ID_MISSING') {
-      throw error; // 保留原始错误
-    }
-    throw TraeCNSkillError.taskFailed(`等待任务失败: ${error.message}`, { taskId });
-  }
+  return withSkillError('等待任务失败', { taskId }, () => skill.wait(taskId, opts));
 }
 
 async function reviewCode(input, opts = {}) {
   const skill = getSkill();
-  try {
+  return withSkillError('代码审查失败', { input }, async () => {
     const result = await skill.reviewCode(input, opts);
     return opts.queue === true ? result.taskId : result.text;
-  } catch (error) {
-    throw TraeCNSkillError.taskFailed(`代码审查失败: ${error.message}`, { input });
-  }
+  });
 }
 
 async function preflight(options = {}) {
   const skill = getSkill();
-  try {
-    return await skill.preflight(options);
-  } catch (error) {
-    throw TraeCNSkillError.taskFailed(`预检失败: ${error.message}`, options);
-  }
+  return withSkillError('预检失败', options, () => skill.preflight(options));
 }
 
 // ============ 进阶层 (Advanced Layer) ============
@@ -117,68 +114,42 @@ async function preflight(options = {}) {
 const advanced = {
   async cancelTask(taskId = null) {
     const skill = getSkill();
-    try {
-      return await skill.cancel(taskId);
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(`取消任务失败: ${error.message}`, { taskId });
-    }
+    return withSkillError('取消任务失败', { taskId }, () => skill.cancel(taskId));
   },
 
   async switchMode(mode) {
     const skill = getSkill();
-    try {
-      return await skill.switchMode(mode);
-    } catch (error) {
-      throw TraeCNSkillError.invalidMode(mode, ['solo', 'ide']);
-    }
+    // switchMode 现在在类内部校验并抛 INVALID_MODE，这里保留该错误透传
+    return withSkillError('切换模式失败', { mode }, () => skill.switchMode(mode));
   },
 
   async newChat() {
     const skill = getSkill();
-    try {
-      return await skill.newChat();
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(`新建对话失败: ${error.message}`);
-    }
+    return withSkillError('新建对话失败', {}, () => skill.newChat());
   },
 
   async listSoloChats() {
     const skill = getSkill();
-    try {
-      return await skill.listSoloChats();
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(`列出 Solo 对话失败: ${error.message}`);
-    }
+    return withSkillError('列出 Solo 对话失败', {}, () => skill.listSoloChats());
   },
 
   async switchSoloChat(criteria = {}) {
     const skill = getSkill();
-    try {
-      return await skill.switchSoloChat(criteria);
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(`切换 Solo 对话失败: ${error.message}`, criteria);
-    }
+    return withSkillError('切换 Solo 对话失败', criteria, () => skill.switchSoloChat(criteria));
   },
 
   async submitSoloChatTask(task, opts = {}) {
     const skill = getSkill();
-    try {
-      return await skill.submitSoloChatTask(task, opts);
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(`提交 Solo 对话任务失败: ${error.message}`, { task });
-    }
+    return withSkillError('提交 Solo 对话任务失败', { task }, () => skill.submitSoloChatTask(task, opts));
   },
 
   async openProject(projectPath) {
     const skill = getSkill();
-    try {
-      return await skill.openProject(projectPath);
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(
-        `打开项目失败: ${error.message}. 请检查路径是否存在: ${projectPath}`,
-        { projectPath }
-      );
-    }
+    return withSkillError(
+      `打开项目失败. 请检查路径是否存在: ${projectPath}`,
+      { projectPath },
+      () => skill.openProject(projectPath)
+    );
   }
 };
 
@@ -188,26 +159,20 @@ const advanced = {
 const config = {
   async getSettings(section = null) {
     const skill = getSkill();
-    try {
-      return await skill.getSettings(section);
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(
-        `获取设置失败: ${error.message}. 可用区域: general, model, agents, mcp, flow`,
-        { section }
-      );
-    }
+    return withSkillError(
+      '获取设置失败. 可用区域: general, model, agents, mcp, flow',
+      { section },
+      () => skill.getSettings(section)
+    );
   },
 
   async setSetting(label, value, section = null) {
     const skill = getSkill();
-    try {
-      return await skill.setSetting(label, value, section);
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(
-        `设置失败: ${error.message}. 请检查设置项名称和区域`,
-        { label, value, section }
-      );
-    }
+    return withSkillError(
+      '设置失败. 请检查设置项名称和区域',
+      { label, value, section },
+      () => skill.setSetting(label, value, section)
+    );
   }
 };
 
@@ -217,32 +182,21 @@ const config = {
 const dialog = {
   async checkDialog() {
     const skill = getSkill();
-    try {
-      return await skill.checkDialog();
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(`检查对话框失败: ${error.message}`);
-    }
+    return withSkillError('检查对话框失败', {}, () => skill.checkDialog());
   },
 
   async approveDialog(action = 'auto', wait = false) {
     const skill = getSkill();
-    try {
-      return await skill.approveDialog(action, wait);
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(
-        `批准对话框失败: ${error.message}. 可用操作: trust, deny, auto`,
-        { action }
-      );
-    }
+    return withSkillError(
+      '批准对话框失败. 可用操作: trust, deny, auto',
+      { action },
+      () => skill.approveDialog(action, wait)
+    );
   },
 
   async checkQueue() {
     const skill = getSkill();
-    try {
-      return await skill.queueStatus();
-    } catch (error) {
-      throw TraeCNSkillError.taskFailed(`检查队列失败: ${error.message}`);
-    }
+    return withSkillError('检查队列失败', {}, () => skill.queueStatus());
   }
 };
 

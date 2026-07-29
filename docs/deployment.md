@@ -122,6 +122,10 @@ Stop the gateway, restore the previous repository revision, run `npm ci --omit=d
 
 TRAECNclaw can be deployed to cloud platforms like **Render** or **Railway**. Since the core function relies on CDP (Chrome DevTools Protocol) to control a local Trae instance, cloud deployment requires additional network configuration to bridge the CDP connection.
 
+> **Note**: The repository does not ship a `render.yaml` or `railway.json`
+> blueprint. The instructions below describe the manual setup; create the
+> blueprint file in your fork if you want one-click deploys.
+
 ### Architecture Overview
 
 ```
@@ -150,29 +154,25 @@ TRAECNclaw can be deployed to cloud platforms like **Render** or **Railway**. Si
 ### Render Deployment
 
 1. Fork or push this repository to GitHub.
-2. In Render Dashboard, click **New +** → **Blueprint**.
+2. In Render Dashboard, click **New +** → **Web Service**.
 3. Connect your GitHub repository.
-4. Render will auto-detect `render.yaml` and configure the service.
+4. Set the build command to `npm ci --omit=dev` and the start command to `npm start`.
 5. Set the following environment variables in Render Dashboard:
    - `TRAECN_CDP_HOST`: Your tunnel URL (e.g., `https://abc123.loca.lt`)
    - `TRAECN_REMOTE_DEBUGGING_PORT`: `80` or `443` (depending on tunnel)
    - `TRAECN_GATEWAY_TOKEN`: A secure random token (auto-generated if not set)
 6. Deploy and verify with `GET https://<your-service>.onrender.com/api/status`.
 
-**Configuration**: See [`render.yaml`](../render.yaml)
-
 ### Railway Deployment
 
 1. Fork or push this repository to GitHub.
 2. In Railway Dashboard, click **New Project** → **Deploy from GitHub repo**.
-3. Select your repository. Railway auto-detects `railway.json`.
+3. Select your repository.
 4. Set environment variables in Railway Dashboard → Variables:
    - `TRAECN_CDP_HOST`: Your tunnel URL
    - `TRAECN_REMOTE_DEBUGGING_PORT`: Tunnel port
    - `TRAECN_GATEWAY_TOKEN`: Secure random token
 5. Deploy and verify health checks pass.
-
-**Configuration**: See [`railway.json`](../railway.json)
 
 ### Cloud Environment Variables
 

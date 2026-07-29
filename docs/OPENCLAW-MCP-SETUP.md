@@ -12,7 +12,7 @@
 | MCP transport | stdio JSON-RPC（`mcp-server.js`） |
 | HTTP gateway | `http://127.0.0.1:8788` |
 | HTTP 端点（v0.4.0 新增） | 9 个 driver endpoint（`POST /api/<driver>`） |
-| MCP tool 总数 | 21 个（含 9 个 v0.4.0 driver 工具） |
+| MCP tool 总数 | `public` 20 / `ops` 32 / `full` 36（由 `TRAECN_MCP_TOOL_PROFILE` 控制） |
 | 配套要求 | Node 22+ · TraeCN 1.107+ · OpenClaw |
 
 ---
@@ -71,7 +71,7 @@ npm run inspect:verify                                    # 验证 DOM 选择器
 ### 2.1 clone + install
 
 ```sh
-git clone https://github.com/firerlAGI/TRAECNclaw.git
+git clone https://github.com/Luckycat133/TRAECNclaw.git
 cd TRAECNclaw && npm install
 cp .env.example .env
 ```
@@ -309,7 +309,7 @@ TRAECN_QUICKSTART_PROFILE_MODE=existing npm run quickstart
 # 4. 注册到 OpenClaw（编辑 openclaw.json → mcp.servers.traecn）
 
 # 5. 端到端 smoke
-#   traecn_capabilities      ← 21 个 tool
+#   traecn_capabilities      ← 20 个 public tool（默认 profile）
 #   traecn_preflight         ← status + readiness + queue + dialog
 #   traecn_editor action=saveAll
 ```
@@ -327,7 +327,7 @@ TRAECN_QUICKSTART_PROFILE_MODE=existing npm run quickstart
 
 ## 5. 能力目录 `GET /api/capabilities`
 
-**所有 agent 第一调用**，返回低 token 能力目录：21 个 MCP tool 摘要、28+ stable command、9 个 driver + 100+ action、已知 model 列表、10 个 settings 栏目、API family 分类、推荐调用顺序。
+**所有 agent 第一调用**，返回低 token 能力目录：当前 profile 可见的 MCP tool 摘要、28+ stable command、9 个 driver + 100+ action、已知 model 列表、10 个 settings 栏目、API family 分类、推荐调用顺序。
 
 ### 5.1 HTTP
 
@@ -886,7 +886,7 @@ curl -s -X POST http://127.0.0.1:8788/api/<driver> \
 
 ```sh
 # 1. clone + install
-git clone https://github.com/firerlAGI/TRAECNclaw.git && cd TRAECNclaw && npm install
+git clone https://github.com/Luckycat133/TRAECNclaw.git && cd TRAECNclaw && npm install
 cp .env.example .env   # macOS 可省 TRAECN_BIN，TRAECN_QUICKSTART_PROFILE_MODE=existing
 
 # 2. 人工登录一次（仅首次）
@@ -927,4 +927,4 @@ open /tmp/traecn-first.png    # 看到 TraeCN IDE 画面 = 端到端通了
 
 ---
 
-**TRAECNclaw v0.4.0 · 9 drivers / 100+ actions / 21 MCP tools / 9 HTTP driver endpoints**
+**TRAECNclaw v0.4.0 · 9 drivers / 100+ actions / 20 public MCP tools (32 ops / 36 full) / 9 HTTP driver endpoints**

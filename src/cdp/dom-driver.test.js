@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { DomDriver, getConfig, sanitizeActivityText, DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS, DEFAULT_RESPONSE_SELECTORS } = require('./dom-driver');
+const { DomDriver, getConfig, sanitizeActivityText, isTruncationSignal, DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS, DEFAULT_RESPONSE_SELECTORS } = require('./dom-driver');
 const { cleanAssistantResultText } = require('./dom-handlers/response-collection');
 const { createRunner } = require('../shared/test-runner');
 
@@ -11,21 +11,24 @@ const { test, asyncTest, pendingAsyncTests, summary } = r;
 console.log('\n[dom-driver.test.js] Running tests...\n');
 
 test('getConfig returns default composer selectors', () => {
+  delete process.env.TRAECN_COMPOSER_SELECTORS;
+  delete process.env.TRAE_COMPOSER_SELECTORS;
   const config = getConfig();
-  assert.ok(Array.isArray(config.composerSelectors));
-  assert.ok(config.composerSelectors.length > 0);
+  assert.deepStrictEqual(config.composerSelectors, DEFAULT_COMPOSER_SELECTORS);
 });
 
 test('getConfig returns default send button selectors', () => {
+  delete process.env.TRAECN_SEND_BUTTON_SELECTORS;
+  delete process.env.TRAE_SEND_BUTTON_SELECTORS;
   const config = getConfig();
-  assert.ok(Array.isArray(config.sendButtonSelectors));
-  assert.ok(config.sendButtonSelectors.length > 0);
+  assert.deepStrictEqual(config.sendButtonSelectors, DEFAULT_SEND_BUTTON_SELECTORS);
 });
 
 test('getConfig returns default response selectors', () => {
+  delete process.env.TRAECN_RESPONSE_SELECTORS;
+  delete process.env.TRAE_RESPONSE_SELECTORS;
   const config = getConfig();
-  assert.ok(Array.isArray(config.responseSelectors));
-  assert.ok(config.responseSelectors.length > 0);
+  assert.deepStrictEqual(config.responseSelectors, DEFAULT_RESPONSE_SELECTORS);
 });
 
 test('getConfig returns numeric poll interval', () => {
@@ -43,22 +46,35 @@ test('getConfig returns numeric timeout', () => {
 test('getConfig leaves queueMaxWaitMs unset by default', () => {
   delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
   delete process.env.TRAE_QUEUE_MAX_WAIT_MS;
-  const config = getConfig();
-  assert.strictEqual(config.queueMaxWaitMs, null);
+  try {
+    const config = getConfig();
+    assert.strictEqual(config.queueMaxWaitMs, null);
+  } finally {
+    delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
+    delete process.env.TRAE_QUEUE_MAX_WAIT_MS;
+  }
 });
 
 test('getConfig parses explicit queueMaxWaitMs', () => {
   process.env.TRAECN_QUEUE_MAX_WAIT_MS = '12345';
-  const config = getConfig();
-  assert.strictEqual(config.queueMaxWaitMs, 12345);
-  delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
+  try {
+    const config = getConfig();
+    assert.strictEqual(config.queueMaxWaitMs, 12345);
+  } finally {
+    delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
+  }
 });
 
 test('getConfig sendTrigger defaults to button', () => {
   delete process.env.TRAECN_SEND_TRIGGER;
   delete process.env.TRAE_SEND_TRIGGER;
-  const config = getConfig();
-  assert.strictEqual(config.sendTrigger, 'button');
+  try {
+    const config = getConfig();
+    assert.strictEqual(config.sendTrigger, 'button');
+  } finally {
+    delete process.env.TRAECN_SEND_TRIGGER;
+    delete process.env.TRAE_SEND_TRIGGER;
+  }
 });
 
 asyncTest('sendMessage verifies debug prompts containing angle brackets and arrows', async () => {
@@ -126,10 +142,12 @@ test('checkQueueStatus ignores historical queue text without visible queue notic
   };
   const driver = new DomDriver(fakeClient, getConfig());
   const result = await driver.checkQueueStatus();
+  // Behavioral assertion: historical queue text must not be treated as active queue.
   assert.strictEqual(result.queued, false);
-  assert.ok(expression.includes('polling error'));
-  assert.ok(expression.includes('monaco-editor'));
+  // Regression guards: the probe expression must inspect the queue surface DOM
+  // (not just body text) and filter transient model/service status strings.
   assert.ok(expression.includes('queueSurface'));
+  assert.ok(expression.includes('monaco-editor'));
   assert.ok(expression.includes('model|request|server|service'));
 });
 
@@ -139,10 +157,22 @@ test('sanitizeActivityText removes Chinese thinking indicators', () => {
   assert.ok(result.includes('some text'));
 });
 
+test('sanitizeActivityText removes 思考中 indicator', () => {
+  const result = sanitizeActivityText('思考中… progress');
+  assert.ok(!result.includes('思考中'));
+  assert.ok(result.includes('progress'));
+});
+
 test('sanitizeActivityText removes English thinking indicators', () => {
   const result = sanitizeActivityText('Generating… some text');
   assert.ok(!result.includes('Generating'));
   assert.ok(result.includes('some text'));
+});
+
+test('sanitizeActivityText removes Thinking indicator', () => {
+  const result = sanitizeActivityText('Thinking… reasoning');
+  assert.ok(!result.includes('Thinking'));
+  assert.ok(result.includes('reasoning'));
 });
 
 test('sanitizeActivityText handles empty input', () => {
@@ -154,6 +184,48 @@ test('sanitizeActivityText handles empty input', () => {
 test('sanitizeActivityText collapses whitespace', () => {
   const result = sanitizeActivityText('hello   world');
   assert.strictEqual(result, 'hello world');
+});
+
+test('isTruncationSignal returns false for empty or null input', () => {
+  assert.strictEqual(isTruncationSignal(''), false);
+  assert.strictEqual(isTruncationSignal(null), false);
+  assert.strictEqual(isTruncationSignal(undefined), false);
+});
+
+test('isTruncationSignal returns false for non-truncation text', () => {
+  assert.strictEqual(isTruncationSignal('任务完成'), false);
+  assert.strictEqual(isTruncationSignal('normal response text'), false);
+});
+
+test('isTruncationSignal detects Builder manual termination', () => {
+  assert.strictEqual(isTruncationSignal('Builder手动终止输出'), true);
+  assert.strictEqual(isTruncationSignal('用户 Builder手动终止输出 已停止'), true);
+});
+
+test('isTruncationSignal detects manual termination', () => {
+  assert.strictEqual(isTruncationSignal('手动终止输出'), true);
+});
+
+test('isTruncationSignal detects output terminated', () => {
+  assert.strictEqual(isTruncationSignal('输出已终止'), true);
+});
+
+test('isTruncationSignal detects generation stopped', () => {
+  assert.strictEqual(isTruncationSignal('生成已停止'), true);
+});
+
+test('isTruncationSignal detects waiting ellipsis variants', () => {
+  assert.strictEqual(isTruncationSignal('等待中...'), true);
+  assert.strictEqual(isTruncationSignal('等待中…'), true);
+});
+
+test('isTruncationSignal detects queue reminder', () => {
+  assert.strictEqual(isTruncationSignal('排队提醒'), true);
+});
+
+test('isTruncationSignal detects analyzing problem variants', () => {
+  assert.strictEqual(isTruncationSignal('正在分析问题...'), true);
+  assert.strictEqual(isTruncationSignal('正在分析问题…'), true);
 });
 
 test('cleanAssistantResultText extracts Trae final bug report from process transcript', () => {
@@ -198,27 +270,27 @@ test('approveDialog approve labels include Monaco trust button text', () => {
 
 test('restricted mode summary treats trusted workspace page as not restricted', () => {
   const driver = new DomDriver(null, getConfig());
-  const summary = driver._summarizeRestrictedModeState({
+  const modeSummary = driver._summarizeRestrictedModeState({
     bodyText: '工作区信任\n你信任此文件夹\n配置设置',
     buttonTexts: ['不信任', '配置设置'],
     hasOverlay: true
   });
-  assert.strictEqual(summary.restricted, false);
-  assert.strictEqual(summary.trusted, true);
-  assert.strictEqual(summary.panelOpen, true);
+  assert.strictEqual(modeSummary.restricted, false);
+  assert.strictEqual(modeSummary.trusted, true);
+  assert.strictEqual(modeSummary.panelOpen, true);
 });
 
 test('restricted mode summary detects actionable trust panel', () => {
   const driver = new DomDriver(null, getConfig());
-  const summary = driver._summarizeRestrictedModeState({
+  const modeSummary = driver._summarizeRestrictedModeState({
     bodyText: '工作区信任\n此文件夹中的功能受限，请信任此文件夹',
     buttonTexts: ['信任', '配置设置'],
     hasOverlay: true
   });
-  assert.strictEqual(summary.restricted, true);
-  assert.strictEqual(summary.trusted, false);
-  assert.strictEqual(summary.panelOpen, true);
-  assert.strictEqual(summary.trustButtonFound, true);
+  assert.strictEqual(modeSummary.restricted, true);
+  assert.strictEqual(modeSummary.trusted, false);
+  assert.strictEqual(modeSummary.panelOpen, true);
+  assert.strictEqual(modeSummary.trustButtonFound, true);
 });
 
 test('completeSetupIfPresent advances multi-step setup wizard and exits when workspace is ready', async () => {
@@ -270,15 +342,15 @@ test('completeSetupIfPresent advances multi-step setup wizard and exits when wor
           }
         };
       }
-      if (expression.includes('window.__enhancedClick("开始")')) {
+      if (expression.includes('window.__traeEnhancedClick_v1("开始")')) {
         clickCount += 1;
         return { result: { value: { clicked: true, text: '开始' } } };
       }
-      if (expression.includes('window.__enhancedClick("继续")')) {
+      if (expression.includes('window.__traeEnhancedClick_v1("继续")')) {
         clickCount += 1;
         return { result: { value: { clicked: true, text: '继续' } } };
       }
-      if (expression.includes('if (window.__enhancedClick) return')) {
+      if (expression.includes('if (window.__traeEnhancedClick_v1) return')) {
         return { result: { value: undefined } };
       }
       throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
@@ -310,7 +382,7 @@ test('completeSetupIfPresent returns no_actionable_setup_button when setup page 
           }
         };
       }
-      if (expression.includes('if (window.__enhancedClick) return')) {
+      if (expression.includes('if (window.__traeEnhancedClick_v1) return')) {
         return { result: { value: undefined } };
       }
       throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
@@ -357,11 +429,11 @@ test('completeSetupIfPresent can click setup skip links rendered as pointer divs
           }
         };
       }
-      if (expression.includes('window.__enhancedClick("跳过")')) {
+      if (expression.includes('window.__traeEnhancedClick_v1("跳过")')) {
         clicked = true;
         return { result: { value: { clicked: true, text: '跳过' } } };
       }
-      if (expression.includes('if (window.__enhancedClick) return')) {
+      if (expression.includes('if (window.__traeEnhancedClick_v1) return')) {
         return { result: { value: undefined } };
       }
       throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
@@ -379,11 +451,11 @@ test('dismissWorkspaceGuideIfPresent clears visible workspace onboarding overlay
     async send(method, payload) {
       if (method !== 'Runtime.evaluate') throw new Error(`unexpected method: ${method}`);
       const expression = payload.expression || '';
-      if (expression.includes('window.__enhancedClick("继续"')) {
+      if (expression.includes('window.__traeEnhancedClick_v1("继续"')) {
         clicked = true;
         return { result: { value: { clicked: true, text: '继续' } } };
       }
-      if (expression.includes('if (window.__enhancedClick) return')) {
+      if (expression.includes('if (window.__traeEnhancedClick_v1) return')) {
         return { result: { value: undefined } };
       }
       throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
@@ -1027,7 +1099,10 @@ test('switchSoloChat requires a selection criterion', async () => {
   await assert.rejects(() => driver.switchSoloChat({}), /requires index, textIncludes, or titleIncludes/);
 });
 
-test('deleteSoloChats deletes matched Solo queue probe and verifies by title', async () => {
+// Shared fake client factory for the deleteSoloChats happy path.
+// Returns { driver, mouseEvents, runtimeExpressions } so each focused
+// test can assert on one aspect without duplicating the ~80-line setup.
+function createDeleteHappyPathDriver() {
   const mouseEvents = [];
   const runtimeExpressions = [];
   const driver = new DomDriver({
@@ -1111,29 +1186,45 @@ test('deleteSoloChats deletes matched Solo queue probe and verifies by title', a
       throw new Error(`unexpected expression: ${expression.slice(0, 120)}`);
     }
   }, { ...getConfig(), postActionDelayMs: 0 });
+  return { driver, mouseEvents, runtimeExpressions };
+}
 
-  const result = await driver.deleteSoloChats({
-    candidates: [
-      {
-        index: 0,
-        title: 'Wait for Trae Queue 进行中 14:07',
-        text: 'Wait for Trae Queue 进行中 14:07'
-      }
-    ]
-  });
+const DELETE_CANDIDATE = {
+  index: 0,
+  title: 'Wait for Trae Queue 进行中 14:07',
+  text: 'Wait for Trae Queue 进行中 14:07'
+};
 
+test('deleteSoloChats reports successful deletion with correct delete and confirm points', async () => {
+  const { driver } = createDeleteHappyPathDriver();
+  const result = await driver.deleteSoloChats({ candidates: [DELETE_CANDIDATE] });
   assert.strictEqual(result.deleted, 1);
   assert.strictEqual(result.attempts[0].success, true);
   assert.strictEqual(result.attempts[0].deletePoint.nodeText, '删除任务');
   assert.strictEqual(result.attempts[0].confirmPoint.nodeText, '删除');
+});
+
+test('deleteSoloChats opens row context menu via contextmenu event instead of left-click', async () => {
+  const { driver, runtimeExpressions } = createDeleteHappyPathDriver();
+  await driver.deleteSoloChats({ candidates: [DELETE_CANDIDATE] });
   assert.ok(
     runtimeExpressions.some(expression =>
       expression.includes("MouseEvent('contextmenu'") || expression.includes('MouseEvent("contextmenu"')
     ),
     'should open row context menu via contextmenu event, not left-click'
   );
+});
+
+test('deleteSoloChats clicks delete and confirm buttons at computed coordinates', async () => {
+  const { driver, mouseEvents } = createDeleteHappyPathDriver();
+  await driver.deleteSoloChats({ candidates: [DELETE_CANDIDATE] });
   assert.ok(mouseEvents.some(event => event.type === 'mousePressed' && event.x === 99 && event.y === 273));
   assert.ok(mouseEvents.some(event => event.type === 'mousePressed' && event.x === 879 && event.y === 488));
+});
+
+test('deleteSoloChats re-queries sidebar to verify deletion by title', async () => {
+  const { driver, runtimeExpressions } = createDeleteHappyPathDriver();
+  await driver.deleteSoloChats({ candidates: [DELETE_CANDIDATE] });
   assert.ok(runtimeExpressions.some(expression => expression.includes('.soloaisidebar')));
 });
 
@@ -1217,17 +1308,23 @@ test('deleteSoloChats does not treat menu text insertion as deletion success', a
 
 test('getConfig respects TRAECN_COMPOSER_SELECTORS env var', () => {
   process.env.TRAECN_COMPOSER_SELECTORS = '.custom-input,textarea';
-  const config = getConfig();
-  assert.deepStrictEqual(config.composerSelectors, ['.custom-input', 'textarea']);
-  delete process.env.TRAECN_COMPOSER_SELECTORS;
+  try {
+    const config = getConfig();
+    assert.deepStrictEqual(config.composerSelectors, ['.custom-input', 'textarea']);
+  } finally {
+    delete process.env.TRAECN_COMPOSER_SELECTORS;
+  }
 });
 
 test('getConfig falls back to TRAE_COMPOSER_SELECTORS', () => {
   delete process.env.TRAECN_COMPOSER_SELECTORS;
   process.env.TRAE_COMPOSER_SELECTORS = '.trae-input';
-  const config = getConfig();
-  assert.deepStrictEqual(config.composerSelectors, ['.trae-input']);
-  delete process.env.TRAE_COMPOSER_SELECTORS;
+  try {
+    const config = getConfig();
+    assert.deepStrictEqual(config.composerSelectors, ['.trae-input']);
+  } finally {
+    delete process.env.TRAE_COMPOSER_SELECTORS;
+  }
 });
 
 (async () => {

@@ -98,55 +98,87 @@ The full command catalog remains available through `traecn_list_commands` and `t
 
 ## Tool catalog
 
+Each tool is tagged with a proficiency tier to guide adoption:
+
+- **基础** — covers ~80% of daily automation; safe to start here
+- **进阶** — adds environment control and review workflows
+- **专家** — adds unattended automation, recovery, and diagnostics
+
 ### Discovery and planning
 
-- `traecn_get_capabilities`: compact command, endpoint, model, settings, and recommended call-order catalog.
-- `traecn_list_commands`: stable command catalog for generic command routing.
-- `traecn_run_command`: execute a stable command ID from `traecn_list_commands`.
-- `traecn_plan_operation`: side-effect, confirmation, and preflight plan without operating TraeCN.
-- `traecn_preflight`: compact status, readiness, queue, dialog, and optional command-plan summary.
+- `traecn_get_capabilities` **基础** · `public`: compact command, endpoint, model, settings, and recommended call-order catalog. One call replaces manual endpoint discovery.
+- `traecn_preflight` **基础** · `public`: compact status, readiness, queue, dialog, and optional command-plan summary. Call before any side-effecting operation.
+- `traecn_list_commands` **进阶** · `public`: stable command catalog for generic command routing.
+- `traecn_run_command` **进阶** · `public`: execute a stable command ID from `traecn_list_commands`.
+- `traecn_plan_operation` **进阶** · `public`: side-effect, confirmation, and preflight plan without operating TraeCN.
 
 ### Task execution
 
-- `traecn_run_task`: submit a task and try to wait for the final result.
-- `traecn_queue_task`: submit a background task and return a `taskId`.
-- `traecn_poll_task`: inspect a queued task once.
-- `traecn_wait_task`: wait locally for terminal state or a review/approval decision point.
-- `traecn_adopt_current_task`: bind local tracking to an existing active TraeCN task. `ops`.
-- `traecn_cancel_task`: cancel a tracked task.
-- `traecn_stop_generation`: stop the current TraeCN generation. `ops`.
+- `traecn_run_task` **基础** · `public`: submit a task and try to wait for the final result. Typical latency 10–30s.
+- `traecn_queue_task` **基础** · `public`: submit a background task and return a `taskId`. Non-blocking.
+- `traecn_poll_task` **基础** · `public`: inspect a queued task once. Use for non-blocking status checks.
+- `traecn_wait_task` **基础** · `public`: wait locally for terminal state or a review/approval decision point. Blocks until done or gate.
+- `traecn_cancel_task` **基础** · `public`: cancel a tracked task.
+- `traecn_adopt_current_task` **专家** · `ops`: bind local tracking to an existing active TraeCN task.
+- `traecn_stop_generation` **专家** · `ops`: stop the current TraeCN generation.
 
 ### Review and dialogs
 
-- `traecn_review_code`: produce a findings-first review task from code, diff, files, and focus.
-- `traecn_get_review_gate_status`: inspect review-required task state. `ops`.
-- `traecn_resolve_review_gate`: approve or reject a review gate. `ops`.
-- `traecn_get_dialog_status`: inspect pending TraeCN dialogs.
-- `traecn_respond_dialog`: approve, deny, confirm, answer, or auto-handle a dialog.
-- `traecn_dismiss_dialog`: dismiss the current dialog. `full`; prefer `traecn_respond_dialog`.
+- `traecn_review_code` **进阶** · `public`: produce a findings-first review task from code, diff, files, and focus.
+- `traecn_get_dialog_status` **进阶** · `public`: inspect pending TraeCN dialogs.
+- `traecn_respond_dialog` **进阶** · `public`: approve, deny, confirm, answer, or auto-handle a dialog.
+- `traecn_get_review_gate_status` **专家** · `ops`: inspect review-required task state.
+- `traecn_resolve_review_gate` **专家** · `ops`: approve or reject a review gate.
+- `traecn_dismiss_dialog` **专家** · `full`: dismiss the current dialog. Prefer `traecn_respond_dialog`.
 
 ### TraeCN control
 
-- `traecn_get_status`: check gateway and TraeCN connection state. `full`; prefer `traecn_preflight`.
-- `traecn_switch_model`: switch the active model with fuzzy matching.
-- `traecn_switch_mode`: switch between Solo and IDE modes.
-- `traecn_create_chat`: create a new chat.
-- `traecn_open_project`: open a project path in TraeCN.
-- `traecn_get_settings`: read settings from the current or named section.
-- `traecn_set_setting`: set a setting by label and value.
-- `traecn_get_queue_status`: inspect model queue state. `full`; prefer `traecn_preflight`.
+- `traecn_switch_model` **进阶** · `public`: switch the active model with fuzzy matching (exact → prefix → substring).
+- `traecn_switch_mode` **进阶** · `public`: switch between Solo and IDE modes.
+- `traecn_create_chat` **进阶** · `public`: create a new chat.
+- `traecn_open_project` **进阶** · `public`: open a project path in TraeCN.
+- `traecn_get_settings` **进阶** · `public`: read settings from the current or named section.
+- `traecn_set_setting` **进阶** · `public`: set a setting by label and value.
+- `traecn_get_status` **专家** · `full`: check gateway and TraeCN connection state. Prefer `traecn_preflight`.
+- `traecn_get_queue_status` **专家** · `full`: inspect model queue state. Prefer `traecn_preflight`.
 
 ### Solo and unattended workflow
 
-- `traecn_list_solo_chats`: list real Solo-mode conversations. `ops`.
-- `traecn_switch_solo_chat`: switch to a Solo conversation by index or visible text. `ops`.
-- `traecn_submit_solo_task`: submit into a real Solo conversation and track the result. `full`; prefer `traecn_queue_task` or `traecn_run_unattended_workflow`.
-- `traecn_run_unattended_workflow`: run an unattended initial task plus follow-up tasks with auto-continue checkpoints.
-- `traecn_cleanup_queue_probe_chats`: find and optionally delete accidental queue-probe Solo conversations. `ops`.
-- `traecn_get_cleanup_watch_status`: inspect cleanup watcher lock, PID, and stale status. `ops`.
-- `traecn_start_long_queue_proof`: guarded GLM long-queue proof, dry-run by default. `ops`.
-- `traecn_get_long_queue_proof_status`: inspect proof status without sending another prompt. `ops`.
-- `traecn_cancel_long_queue_proof`: cancel marker-scoped proof watcher or task tracking. `ops`.
+- `traecn_run_unattended_workflow` **专家** · `public`: run an unattended initial task plus follow-up tasks with auto-continue checkpoints. One call drives a multi-step pipeline.
+- `traecn_list_solo_chats` **专家** · `ops`: list real Solo-mode conversations.
+- `traecn_switch_solo_chat` **专家** · `ops`: switch to a Solo conversation by index or visible text.
+- `traecn_cleanup_queue_probe_chats` **专家** · `ops`: find and optionally delete accidental queue-probe Solo conversations.
+- `traecn_get_cleanup_watch_status` **专家** · `ops`: inspect cleanup watcher lock, PID, and stale status.
+- `traecn_start_long_queue_proof` **专家** · `ops`: guarded GLM long-queue proof, dry-run by default.
+- `traecn_get_long_queue_proof_status` **专家** · `ops`: inspect proof status without sending another prompt.
+- `traecn_cancel_long_queue_proof` **专家** · `ops`: cancel marker-scoped proof watcher or task tracking.
+- `traecn_submit_solo_task` **专家** · `full`: submit into a real Solo conversation and track the result. Prefer `traecn_queue_task` or `traecn_run_unattended_workflow`.
+
+### Proficiency progression
+
+```text
+基础 (7 tools, public profile)
+  traecn_get_capabilities → traecn_preflight → traecn_run_task → traecn_queue_task
+  → traecn_poll_task → traecn_wait_task → traecn_cancel_task
+  │
+  └─ Master these first. They cover discovery, single-task execution, and queue management.
+     Typical call count per session: 2–5. Latency: 10–30s per task.
+
+进阶 (12 tools, public profile)
+  traecn_list_commands / traecn_run_command → traecn_plan_operation
+  → traecn_switch_model → traecn_switch_mode → traecn_review_code
+  → traecn_get_settings / traecn_set_setting → traecn_get_dialog_status / traecn_respond_dialog
+  │
+  └─ Adds environment control, code review, and dialog handling.
+     Typical call count per session: 5–15. Latency: 15–45s per review cycle.
+
+专家 (16 tools, ops + full profiles)
+  traecn_run_unattended_workflow → traecn_resolve_review_gate → batch operations
+  → Solo control → long-queue proof → cleanup → diagnostics
+  │
+  └─ Adds unattended automation, batch processing, and recovery.
+     Typical call count per session: 1–3 (workflow handles the rest). Latency: 2–10min per pipeline.
+```
 
 ## Names not to call on stdio MCP
 
@@ -166,3 +198,25 @@ Read these repo docs only when deeper details are needed:
 - `docs/openclaw-command-set.md`: OpenClaw command router names and examples.
 - `docs/OPENCLAW-MCP-SETUP.md`: OpenClaw-specific setup and troubleshooting.
 - `docs/development.md`: verification and unattended workflow development notes.
+
+## Error recovery
+
+When a tool call fails, the JSON-RPC error object carries `code: -32000` and a human-readable `message`. Common recovery patterns:
+
+| Error message pattern | Cause | Recovery |
+| --- | --- | --- |
+| `connect ECONNREFUSED 127.0.0.1:8788` | Gateway not running | `npm run start:gateway` |
+| `connect ECONNREFUSED 127.0.0.1:9222` | TraeCN CDP port closed | Restart TraeCN with `--remote-debugging-port=9222` |
+| `Unauthorized` / `401` | `TRAECN_GATEWAY_TOKEN` mismatch | Ensure the token matches between gateway and MCP client config |
+| `Task not found` | Task ID expired or already completed | Call `traecn_preflight` to re-discover active tasks |
+| `Dialog timeout` | No dialog appeared within the wait window | Retry `traecn_respond_dialog` or inspect with `traecn_get_dialog_status` |
+| `Model queue full` | External model provider throttling | Wait, switch model via `traecn_switch_model`, or cancel via `traecn_cancel_task` |
+| `ENOENT: mcp-server.js` | Launcher cannot locate the server | Set `TRAECN_MCP_SERVER_PATH` env var to the absolute path |
+
+### Retry strategy
+
+1. Call `traecn_preflight` to get a compact snapshot of connection, queue, and dialog state.
+2. If `connected: false`, run `npm run doctor` and restart the gateway.
+3. If a dialog is blocking, resolve it with `traecn_respond_dialog` before retrying the original task.
+4. If the model queue is full, either wait, switch models, or cancel — do not retry blindly.
+5. For unattended workflows, rely on `traecn_run_unattended_workflow`'s built-in auto-continue checkpoints instead of manual retry loops.

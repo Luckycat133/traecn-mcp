@@ -21,12 +21,15 @@
 - [ ] 创建 PR 并合并到 main 分支
 
 ## 本次已完成的代码修改
-- 删除死代码：src/skill/config.js、src/skill/ai-errors.js、utils.escapeJsString
-- 修复 simple-api.js checkQueue 路由错误：layered.batch → layered.dialog
-- 修复 submitSoloChatTask 返回类型不一致问题（统一返回完整对象而非仅 taskId）
-- errors.js 补充 TASK_REQUIRED factory 方法
-- 移除 openclaw-plugin 废弃的 slashCommands 导出及测试
-- mcp-server.js 元数据表合并：TOOL_METADATA 为单一数据源，PUBLIC/OPS/DESTRUCTIVE 列表从其派生
-- package.json exports["./errors"] 指向主错误文件 errors.js 而非已删除的 ai-errors.js
-- package.json lint 脚本移除已删除文件的检查
-- examples/layered-usage.js 清理 AIErrorHandler 引用
+
+以下修改已记录在 `CHANGELOG.md` 的 `[Unreleased]` 段中，留在这里仅作快速索引：
+
+- 删除死代码：`src/skill/config.js`、`src/skill/ai-errors.js`、`utils.escapeJsString`
+- 修复 `simple-api.js` `checkQueue` 路由错误：`layered.batch` → `layered.dialog`
+- 修复 `submitSoloChatTask` 返回类型不一致问题（统一返回完整对象而非仅 taskId）
+- `errors.js` 补充 `TASK_REQUIRED` factory 方法
+- 移除 openclaw-plugin 废弃的 `slashCommands` 导出及测试
+- `mcp-server.js` 元数据表合并：`TOOL_METADATA` 为单一数据源，`PUBLIC/OPS/DESTRUCTIVE` 列表从其派生
+- `package.json` `exports["./errors"]` 指向主错误文件 `errors.js` 而非已删除的 `ai-errors.js`
+- `package.json` lint 脚本移除已删除文件的检查
+- `examples/layered-usage.js` 清理 `AIErrorHandler` 引用

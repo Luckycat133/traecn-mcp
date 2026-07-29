@@ -5,6 +5,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { sleep } = require('../src/shared/utils');
 
 const DEFAULT_HOST = process.env.TRAECN_GATEWAY_HOST || process.env.TRAECN_HOST || '127.0.0.1';
 const DEFAULT_PORT = Number(process.env.TRAECN_GATEWAY_PORT || process.env.TRAECN_PORT || 8788);
@@ -429,10 +430,6 @@ async function requestWithRetry(options, method, route, body = null, timeoutMs =
     if (delayMs > 0) await sleep(delayMs);
   }
   return last;
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function buildTask(marker, model) {

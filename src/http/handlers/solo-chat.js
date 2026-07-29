@@ -1,7 +1,7 @@
 'use strict';
 
 const { parseBody } = require('../request-gate');
-const { isGenericQueueProbeTask } = require('../../shared/utils');
+const { isGenericQueueProbeTask, sleep } = require('../../shared/utils');
 
 /**
  * solo-chat handlers.
@@ -298,12 +298,8 @@ function clampInt(value, fallback, min, max) {
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function listCleanupCandidates(ctx) {
-  let listResult = null;
+  let listResult;
   try {
     listResult = await ctx.driver.listSoloChats();
   } catch (err) {
