@@ -19,6 +19,7 @@ const TOOL_METADATA = Object.freeze({
   traecn_queue_task: { layer: 'task', profile: 'public', risk: 'delegate' },
   traecn_poll_task: { layer: 'task', profile: 'public', risk: 'read' },
   traecn_wait_task: { layer: 'task', profile: 'public', risk: 'read-or-delegate' },
+  traecn_resolve_task_review: { layer: 'task-review', profile: 'public', risk: 'delegate' },
   traecn_cancel_task: { layer: 'task', profile: 'public', risk: 'delegate', destructive: true },
   traecn_review_code: { layer: 'review', profile: 'public', risk: 'delegate' },
   traecn_switch_model: { layer: 'control', profile: 'public', risk: 'write' },

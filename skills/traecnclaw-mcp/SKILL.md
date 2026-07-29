@@ -1,8 +1,8 @@
 ---
 name: traecnclaw-mcp
-description: Use when an MCP-capable agent must connect, configure, operate, test, or document TRAECNclaw's stdio MCP server for TraeCN automation, OpenClaw integration, unattended vibe workflows, settings/model/dialog control, code review delegation, or long-queue proof runs. Prefer this skill whenever the agent needs the real MCP tool surface instead of direct browser/GUI control.
+description: Use when an MCP-capable agent must connect, configure, operate, test, or document TRAECNclaw's stdio MCP server for TraeCN automation, OpenClaw integration, reviewed or unattended multi-step workflows, settings/model/dialog control, code review delegation, queue recovery, or long-queue proof runs. Prefer this skill whenever the agent needs the real MCP tool surface instead of direct browser or GUI control.
 license: MIT
-compatibility: Requires Node.js 22+, a running TraeCN IDE instance with CDP remote debugging on port 9222, and the local TRAECNclaw HTTP gateway on 127.0.0.1:8788. Use `npm run doctor` to verify readiness.
+compatibility: Requires Node.js 22+, a running TraeCN IDE instance with CDP remote debugging on port 9222 for live operations, and the local TRAECNclaw HTTP gateway on 127.0.0.1:8788. Use `npm run doctor` to verify readiness.
 metadata:
   author: TRAECNclaw
   version: "0.4.0"
@@ -10,124 +10,107 @@ metadata:
 
 # TRAECNclaw MCP
 
-Drive TraeCN through its real stdio MCP server, backed by the local HTTP gateway and CDP automation. Client-neutral: works for any agent that can call stdio MCP tools.
+Drive TraeCN through the real stdio MCP server backed by the local HTTP gateway and CDP automation. Discover the current tool surface before acting, preflight side effects, and keep gateway task checkpoints distinct from TraeCN's internal keep/revert gate.
 
-## When to use
+## Start here
 
-The skill organizes TraeCN automation into three proficiency tiers. Each tier builds on the previous one — start at **Fundamental** and advance as your workflow demands more autonomy.
+1. Confirm Node.js 22+ and run `npm run doctor` from the repository.
+2. Copy [assets/mcp-client-config.json](assets/mcp-client-config.json), replace `SKILL_DIR` with this skill folder's absolute path, and keep only its single `traecn` server entry.
+3. If the launcher cannot locate the repository, add `TRAECN_MCP_SERVER_PATH` to that entry's `env` with the absolute path to `mcp-server.js`. Alternatively use the separate [direct-path template](assets/mcp-client-config.direct.json); do not enable both entries.
+4. Start the gateway separately with `npm run start:gateway`. Use `TRAECN_ENABLE_MOCK_BRIDGE=1 npm run start:gateway` only for mock development; mock success is not live TraeCN evidence.
+5. Restart or reconnect the MCP client after changing `TRAECN_MCP_TOOL_PROFILE`.
+6. Discover before acting: `tools/list` → `traecn_get_capabilities` → `traecn_preflight` with the intended stable command and params.
 
-| Tier | Capabilities | Typical tools | Use case |
-| --- | --- | --- | --- |
-| **Fundamental** · covers ~80% of daily tasks | Discover capabilities; preflight before acting; run a task and get text back; queue long tasks; poll or wait for completion; cancel stale tasks | `traecn_get_capabilities`, `traecn_preflight`, `traecn_run_task`, `traecn_queue_task`, `traecn_poll_task`, `traecn_wait_task`, `traecn_cancel_task` | "分析这个项目的架构" → preflight + run_task → get a structured summary in ~2 calls |
-| **Intermediate** · adds environment control | Switch model with fuzzy matching; toggle Solo/IDE mode; read/write settings; resolve confirmation dialogs; delegate code review | `traecn_switch_model`, `traecn_switch_mode`, `traecn_get_settings`, `traecn_set_setting`, `traecn_respond_dialog`, `traecn_review_code` | "切换到 GLM-5.2 并审查 auth 模块安全性" → model switch + findings-first review |
-| **Advanced** · adds unattended automation | Run multi-step vibe workflows with auto-continue; long-queue proof runs; batch task execution with per-task error isolation; resolve review gates; MCP client configuration for any agent | `traecn_run_unattended_workflow`, `traecn_start_long_queue_proof`, `batch.runTasks`, `traecn_resolve_review_gate`, `traecn_plan_operation` | "修复登录页样式 → 补充快照测试 → 更新 CHANGELOG" → 3-step unattended pipeline with review gates |
+## Profiles
 
-**Scope rule:** Do NOT use this skill for direct browser automation or GUI clicking when an MCP tool exists. Prefer the MCP surface whenever the server can perform the operation — it is faster, more reliable, and leaves an auditable JSON-RPC trail.
-
-## Workflow
-
-1. Confirm Node 22+ and the gateway can reach TraeCN.
-2. Discover before acting: `tools/list` → `traecn_get_capabilities` → `traecn_preflight` with the intended command/params.
-3. For side effects, honor the `traecn_preflight` or `traecn_plan_operation` result (confirmation, readiness, queue, dialog) before operating.
-4. Use `traecn_list_commands` + `traecn_run_command` only when a client needs the stable command catalog rather than per-tool MCP names.
-5. Start the gateway separately: `npm run start:gateway` (or `TRAECN_ENABLE_MOCK_BRIDGE=1 npm run start:gateway` for mock mode).
-6. For exact tool names, profiles, and MCP client config JSON, read [references/mcp-surface.md](references/mcp-surface.md).
-
-## Start the MCP server
-
-Use the bundled launcher so the server inherits stdio for JSON-RPC:
-
-```bash
-node scripts/start-mcp.js
-```
-
-The launcher auto-locates `mcp-server.js` from the repo root. Set `TRAECN_MCP_SERVER_PATH` to override. For MCP client config templates (Cursor, Claude Desktop, Cline, Windsurf), copy [assets/mcp-client-config.json](assets/mcp-client-config.json) and replace `SKILL_DIR` with the absolute path to this skill folder.
-
-## Profile choice
-
-`TRAECN_MCP_TOOL_PROFILE` scopes `tools/list`:
+Profile counts are derived from the current server and guarded by tests:
 
 | Profile | Tools | Use |
 | --- | ---: | --- |
-| `public` | 20 | Default for published agent integrations |
-| `ops` | 32 | Recovery, cleanup, Solo control, long-queue proof |
-| `full` | 36 | Audits, compatibility checks, every explicit shortcut |
+| `public` | 21 | Normal task, review, settings, dialog, model, and workflow operations |
+| `ops` | 33 | Adds recovery, cleanup, Solo control, and long-queue proof tools |
+| `full` | 37 | Adds every explicit diagnostic and compatibility shortcut |
 
-The full command catalog stays reachable via `traecn_list_commands` / `traecn_run_command` regardless of profile.
+Profiles control discovery noise, not authorization. Calls still require the configured gateway and MCP permissions.
 
-## Application examples
+## Choose the operation
 
-### Fundamental: single-shot task execution
+- Short task: `traecn_preflight` → `traecn_run_task`.
+- Long task: `traecn_preflight` → `traecn_queue_task` → `traecn_wait_task` or `traecn_poll_task`; keep using the same `taskId` instead of resubmitting.
+- Code review: `traecn_switch_model` when needed, then `traecn_review_code` with findings-first instructions.
+- Fully automatic multi-step workflow: `traecn_run_unattended_workflow`; omit `autoContinue` or set it to `true`.
+- Human-reviewed multi-step workflow: call the same workflow tool with `reviewRequired:true` and `autoContinue:false`, wait for `awaiting_review`, then use `traecn_resolve_task_review`.
+- Batch commands: call `traecn_list_commands`, verify the stable `batch_submit` command, then use `traecn_run_command`. Do not treat JavaScript SDK helpers as stdio MCP tools.
+- Exact schemas: search [generated MCP contracts](references/mcp-tool-contracts.json) for the tool name. Copy validated examples from [MCP call examples](references/mcp-call-examples.json).
 
-```text
-Goal: get a project architecture summary
-Calls: 2 (preflight + run_task)
-Latency: ~10–30s depending on model
+## Correct call contracts
 
-1. traecn_preflight({ command: 'delegate', params: { task: '分析架构' } })
-   → verify connected: true, queue: ready
-2. traecn_run_task({ task: '分析这个项目的架构', projectPath: '/workspace/my-project' })
-   → returns { ok: true, text: '<structured summary>', elapsed: 12000 }
+Switch models with the dedicated MCP field `name`:
+
+```json
+{"name":"GLM-5.2","waitForQueue":false}
 ```
 
-### Intermediate: model-aware code review
+For a reviewed workflow, submit and wait:
 
-```text
-Goal: review auth module security with a specific model
-Calls: 3 (switch_model + review_code + get_dialog_status)
-Latency: ~15–45s
-
-1. traecn_switch_model({ model: 'glm' })          → fuzzy-matches GLM-5.2
-2. traecn_review_code({
-     instruction: '审查 auth 模块的安全性',
-     files: ['src/shared/mcp-auth.js'],
-     focus: ['safety', 'tests']
-   })                                               → findings-first review task
-3. If a confirmation dialog appears:
-   traecn_get_dialog_status() → traecn_respond_dialog({ action: 'trust' })
+```json
+{
+  "task": "修复登录页样式",
+  "steps": ["补充快照测试", "更新 CHANGELOG"],
+  "reviewRequired": true,
+  "autoContinue": false
+}
 ```
 
-### Advanced: unattended multi-step workflow
-
-```text
-Goal: fix login page → add snapshot tests → update changelog (unattended)
-Calls: 1 (run_unattended_workflow handles the rest)
-Latency: 2–10min depending on step complexity
-
-1. traecn_run_unattended_workflow({
-     task: '修复登录页样式',
-     steps: ['补充快照测试', '更新 CHANGELOG'],
-     reviewRequired: true
-   })
-   → returns { taskId, queued: true }
-2. traecn_wait_task(taskId) → blocks until terminal state or review gate
-3. If review gate triggers: traecn_resolve_review_gate({ decision: 'approve' })
+```json
+{"taskId":"TASK_ID","pollMs":5000,"timeoutMs":600000}
 ```
 
-## Safety rules
+When the task reaches `awaiting_review`, approve or reject that gateway checkpoint:
 
-- Keep the gateway bound to `127.0.0.1` unless remote access is intentionally required.
-- Never commit `.env`, tokens, auth headers, raw TraeCN profile data, `audit-logs/`, `demo-output/`, `logs/`, or `node_modules/`.
-- Prefer MCP/HTTP/CLI surfaces over GUI-control paths whenever the MCP server can perform the operation.
-- Treat live dialog text, gateway health, cleanup state, and external model queue behavior as environment-specific until revalidated.
+```json
+{"taskId":"TASK_ID","decision":"approve","notes":"Reviewed generated changes"}
+```
 
-## Troubleshooting
+The response may return `nextTaskId`; wait on that new ID for the next step. Valid decisions are `approve`, `continue`, and `reject`.
 
-| Symptom | Likely cause | Recovery |
+## Do not mix the two review mechanisms
+
+| Mechanism | Status/tool | Resolver contract | Profile |
+| --- | --- | --- | --- |
+| Gateway task checkpoint | `traecn_wait_task` reports `awaiting_review` | `traecn_resolve_task_review({taskId, decision, notes?})` | `public` |
+| TraeCN internal keep/revert gate | `traecn_get_review_gate_status` | `traecn_resolve_review_gate({action})`, where action is `keep_all`, `revert_all`, `keep`, or `discard` | `ops` |
+
+The second mechanism controls TraeCN's own UI review state; it does not approve a gateway workflow checkpoint.
+
+## Safety and recovery
+
+- Keep the gateway on `127.0.0.1` unless remote access is intentionally secured.
+- Never commit `.env`, tokens, authorization headers, raw TraeCN profiles, `audit-logs/`, `demo-output/`, `logs/`, or `node_modules/`.
+- Call `traecn_plan_operation` or `traecn_preflight` before side effects and honor readiness, confirmation, queue, and dialog results.
+- Inspect a dialog with `traecn_get_dialog_status` before choosing a `traecn_respond_dialog` action.
+- Keep long-queue proof in dry-run by default. A new quota-spending submission requires both `execute:true` and `allowQuotaSpend:true` and the `ops` profile.
+- Treat queued, `awaiting_review`, timed-out, and mock results as non-terminal unless the returned status proves completion.
+- Do not fall back to GUI control when an MCP or HTTP surface exists.
+
+## Troubleshooting order
+
+| Symptom | Diagnose first | Recovery |
 | --- | --- | --- |
-| `[traecnclaw-mcp] mcp-server.js not found.` | Skill installed outside the repo without `TRAECN_MCP_SERVER_PATH` | Set `TRAECN_MCP_SERVER_PATH` to the absolute path of `mcp-server.js` |
-| `[traecnclaw-mcp] Failed to load mcp-server.js:` | Node version < 22 or missing dependencies | Run `npm install` in the repo root; verify `node --version` ≥ 22 |
-| `[traecnclaw-mcp] Failed to set working directory:` | Repo root removed or permissions changed | Reinstall the repo; ensure the process has read/execute access |
-| MCP client shows no tools | Wrong `TRAECN_MCP_TOOL_PROFILE` or gateway not running | Start gateway (`npm run start:gateway`), then restart the MCP client |
-| `traecn_preflight` returns `connected: false` | TraeCN IDE not running or CDP port closed | Start TraeCN with `--remote-debugging-port=9222`; run `npm run doctor` |
-| Tasks stuck in `queued` | Model queue full or TraeCN unresponsive | Use `traecn_get_queue_status` (profile `full`) or `traecn_preflight` to inspect; cancel with `traecn_cancel_task` |
-| Dialog blocking task flow | Pending confirmation dialog in TraeCN | Call `traecn_get_dialog_status` then `traecn_respond_dialog` with the appropriate action |
-| Process lingers after client disconnect | SIGTERM not forwarded by client | The launcher now handles `SIGINT`/`SIGTERM`; if the issue persists, kill the process manually |
+| MCP client cannot initialize or shows no tools | Client config, absolute launcher path, Node 22+, stderr, stdio framing | Run the bundled launcher test and Content-Length smoke test; restart the MCP client |
+| `tools/list` works but gateway calls return `ECONNREFUSED 127.0.0.1:8788` | Gateway process | Start the gateway; tool discovery itself does not require it |
+| HTTP 401 / unauthorized | Gateway token mismatch | Make client and gateway tokens match, then reconnect |
+| Gateway responds but `connected:false` / CDP unavailable | TraeCN process and port 9222 | Start TraeCN with remote debugging and run `npm run doctor` |
+| `ready:false`, dialog, or queue busy | Preflight readiness/dialog/queue fields | Resolve the concrete blocker, wait, switch model, or cancel the known task ID |
+| Launcher cannot find `mcp-server.js` | Skill installed outside the repository | Set absolute `TRAECN_MCP_SERVER_PATH` or use the direct-path template |
 
 ## Validation
 
-- `npm run doctor` — local environment readiness.
-- `npm test` — maintained in-repo test sequence.
-- `npm run acceptance:audit -- --require-complete` — before claiming unattended end-to-end readiness.
-- `npm run test:all` — release-style changes when practical.
-- `node -e "console.log(require('./mcp-server').MCP_TOOLS.map(t => t.name).join('\n'))"` — verify live tool list from code.
+- `npm run check:skill-contracts` — verify generated schemas and examples match the live MCP implementation.
+- `node skills/traecnclaw-mcp/scripts/start-mcp.test.js` — launcher unit tests.
+- `node skills/traecnclaw-mcp/scripts/mcp-stdio-smoke.test.js` — real Content-Length `initialize` + `tools/list` smoke test.
+- `npm test` — maintained repository suite, including the skill contract and launcher tests.
+- `npm run acceptance:audit -- --require-complete` — required before claiming unattended live end-to-end readiness.
+- `npm run test:all` — release-style validation when practical.
+
+Read [references/mcp-surface.md](references/mcp-surface.md) for the full operating map and recovery detail. Latency is environment- and model-dependent; examples are not an SLA.

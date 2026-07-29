@@ -5,31 +5,6 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog v1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
-## [v0.4.0] - 2026-06-12
-
-Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No behavior break; all 538+ pre-existing tests still pass alongside 100+ new driver test cases.
-
-### Added
-
-- Added nine new CDP drivers: `CommandPaletteDriver`, `EditorDriver` (with accept/reject AI edit via the `.icube-apply-action-container`), `FileDriver` (open/close/save plus `readDisk` / `writeDisk` / `mkdirDisk` / `listTreeDisk` / `renameDisk`), `TerminalDriver` (toggle/send/snapshot plus `sendCtrlC` / `sendCtrlD` / `sendCtrlL` / `sendCtrlZ`), `GitDriver` (status/commit/push/pull/branch/stash plus `commitWithMessage` and `execGit` CLI fallback), `SearchDriver` (findInFiles/readResults/collapseAll), `DiagnosticsDriver` (readAll/readModelMarkers/count/hover), `SnapshotDriver` (dom/text/layout/pageHash/screenshot), and `ExtensionDriver` (list/install/uninstall plus marketplace search and CLI fallback).
-- Exposed the nine new drivers via `DomDriver` getters: `.palette`, `.editor`, `.file`, `.terminal`, `.git`, `.search`, `.diagnostics`, `.snapshot`, `.extension`.
-- Added HTTP gateway endpoints `POST /api/editor`, `/api/file`, `/api/terminal`, `/api/git`, `/api/search`, `/api/diagnostics`, `/api/snapshot`, `/api/extension`, and `/api/command`, all dispatching a unified `{action, ...args}` body through the new `DriverRouter` in `src/http/driver-router.js` (explicit per-driver action spec mapping param names to positional arguments).
-- Added HTTP-friendly action aliases on `SnapshotDriver`: `text`, `dom`, `layout`, `screenshotEl`.
-- Added `docs/REAL-DOM-FINDINGS.md` documenting the actual class names and selectors probed via CDP from a real TraeCN 1.107.1 instance.
-- Added `scripts/live-uat-v040.js`, an end-to-end live TraeCN smoke test driving the editor through the new driver stack.
-- TraeCNClaw can now drive TraeCN end-to-end without Peekaboo or any screen-automation tool (the first OAuth login still requires the user).
-
-### Changed
-
-- Fixed `TraeCNAutomationError` signature across all drivers to the documented `(message, code, details)` form.
-- Hardened `CommandPaletteDriver` to retry `Cmd+Shift+P` up to three times with 600 ms waits before reporting failure, eliminating the known first-open palette race on a fresh editor window.
-
-### Tests
-
-- Added 10 new test files with ~100+ new driver test cases; all green.
-- All 538+ pre-existing tests continue to pass (638+ total).
-- `scripts/live-uat-v040.js` reports 24/25 pass; the single failure is a documented first-attempt `terminal.newTerminal` palette race that the new retry path resolves on the second attempt.
-
 ## [Unreleased]
 
 ### Added
@@ -46,10 +21,15 @@ Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No be
 - Added `skills/traecnclaw-mcp/scripts/start-mcp.js` launcher so MCP clients
   can start the server through the skill itself (auto-locates `mcp-server.js`,
   overridable via `TRAECN_MCP_SERVER_PATH`).
-- Added `skills/traecnclaw-mcp/assets/mcp-client-config.json` template with
-  Option A (skill launcher) and Option B (direct path) configs for all major
-  MCP clients.
+- Added separate launcher and direct-server MCP client templates at
+  `skills/traecnclaw-mcp/assets/mcp-client-config.json` and
+  `skills/traecnclaw-mcp/assets/mcp-client-config.direct.json`.
 - Added `TASK_REQUIRED` factory method to `TraeCNSkillError` on `errors.js`.
+- Added the public `traecn_resolve_task_review` MCP tool and stable
+  `review_task` command so `awaiting_review` workflow checkpoints can be
+  approved or rejected entirely through stdio MCP.
+- Added generated MCP schema contracts, validated call examples, and a real
+  Content-Length launcher smoke test for the portable Agent Skill.
 
 ### Changed
 
@@ -88,6 +68,10 @@ Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No be
 - Fixed error leakage: `errorToBody` now returns a generic `'Internal server error'` message for bare `Error` instances instead of forwarding `err.message` (which could contain filesystem paths, CDP selector names, or other internals). Added `safeErrorMessage()` helper and applied it at all stored error sites (`task.error`, `batch.results[].error`, model probe results, settings handler errors). `TraeCNAutomationError` and `HttpError` continue to surface their purpose-built messages.
 - Consolidated the dual per-task lock structures: `Gateway.taskLocks` is now a read-only alias for `taskQueueService.stateMachine.taskLocks`. Mutations go through `taskQueueService.tryAcquire/release/clearLocks`, making the previously dead abstraction real and preventing future callers (e.g. adopt-current-task, batch executor) from missing locks held by the polling loop.
 - Added a startup warning when `TRAECN_GATEWAY_TOKEN` is unset and the gateway is bound to a non-loopback host — authenticated endpoints become open in that configuration.
+- Fixed reviewed workflows so explicit `autoContinue=false` is preserved
+  instead of being overwritten by the unattended workflow wrapper.
+- Fixed the Agent Skill's model-switch and review examples, split duplicate MCP
+  client entries into separate templates, and corrected no-tools diagnostics.
 - Fixed `simple-api.js` `checkQueue` routing: was calling `layered.batch.checkQueue()`
   (nonexistent); now correctly calls `layered.dialog.checkQueue()`.
 - Fixed `submitSoloChatTask` return type inconsistency in `simple-api.js`: the
@@ -112,3 +96,28 @@ Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No be
 
 - Added timing-safe token comparison and removed the identifying `X-Powered-By` response header.
 - Added security headers for JSON and HTML responses and response-size protection in the plugin HTTP client.
+
+## [v0.4.0] - 2026-06-12
+
+Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No behavior break; all 538+ pre-existing tests still pass alongside 100+ new driver test cases.
+
+### Added
+
+- Added nine new CDP drivers: `CommandPaletteDriver`, `EditorDriver` (with accept/reject AI edit via the `.icube-apply-action-container`), `FileDriver` (open/close/save plus `readDisk` / `writeDisk` / `mkdirDisk` / `listTreeDisk` / `renameDisk`), `TerminalDriver` (toggle/send/snapshot plus `sendCtrlC` / `sendCtrlD` / `sendCtrlL` / `sendCtrlZ`), `GitDriver` (status/commit/push/pull/branch/stash plus `commitWithMessage` and `execGit` CLI fallback), `SearchDriver` (findInFiles/readResults/collapseAll), `DiagnosticsDriver` (readAll/readModelMarkers/count/hover), `SnapshotDriver` (dom/text/layout/pageHash/screenshot), and `ExtensionDriver` (list/install/uninstall plus marketplace search and CLI fallback).
+- Exposed the nine new drivers via `DomDriver` getters: `.palette`, `.editor`, `.file`, `.terminal`, `.git`, `.search`, `.diagnostics`, `.snapshot`, `.extension`.
+- Added HTTP gateway endpoints `POST /api/editor`, `/api/file`, `/api/terminal`, `/api/git`, `/api/search`, `/api/diagnostics`, `/api/snapshot`, `/api/extension`, and `/api/command`, all dispatching a unified `{action, ...args}` body through the new `DriverRouter` in `src/http/driver-router.js` (explicit per-driver action spec mapping param names to positional arguments).
+- Added HTTP-friendly action aliases on `SnapshotDriver`: `text`, `dom`, `layout`, `screenshotEl`.
+- Added `docs/REAL-DOM-FINDINGS.md` documenting the actual class names and selectors probed via CDP from a real TraeCN 1.107.1 instance.
+- Added `scripts/live-uat-v040.js`, an end-to-end live TraeCN smoke test driving the editor through the new driver stack.
+- TraeCNClaw can now drive TraeCN end-to-end without Peekaboo or any screen-automation tool (the first OAuth login still requires the user).
+
+### Changed
+
+- Fixed `TraeCNAutomationError` signature across all drivers to the documented `(message, code, details)` form.
+- Hardened `CommandPaletteDriver` to retry `Cmd+Shift+P` up to three times with 600 ms waits before reporting failure, eliminating the known first-open palette race on a fresh editor window.
+
+### Tests
+
+- Added 10 new test files with ~100+ new driver test cases; all green.
+- All 538+ pre-existing tests continue to pass (638+ total).
+- `scripts/live-uat-v040.js` reports 24/25 pass; the single failure is a documented first-attempt `terminal.newTerminal` palette race that the new retry path resolves on the second attempt.

@@ -348,6 +348,24 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('resolveTaskReview uses the gateway task checkpoint route', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task_review_1', status: 'continued' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+
+    await client.resolveTaskReview('task_review_1', 'approve', 'looks good');
+
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/task/task_review_1/review');
+    assert.deepStrictEqual(lastRequest.body, {
+      decision: 'approve',
+      notes: 'looks good'
+    });
+    server.close();
+  });
+
   await asyncTest('delegate sends POST to /api/delegate', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });

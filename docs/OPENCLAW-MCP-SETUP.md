@@ -12,7 +12,7 @@
 | MCP transport | stdio JSON-RPC（`mcp-server.js`） |
 | HTTP gateway | `http://127.0.0.1:8788` |
 | HTTP 端点（v0.4.0 新增） | 9 个 driver endpoint（`POST /api/<driver>`） |
-| MCP tool 总数 | `public` 20 / `ops` 32 / `full` 36（由 `TRAECN_MCP_TOOL_PROFILE` 控制） |
+| MCP tool 总数 | `public` 21 / `ops` 33 / `full` 37（由 `TRAECN_MCP_TOOL_PROFILE` 控制） |
 | 配套要求 | Node 22+ · TraeCN 1.107+ · OpenClaw |
 
 ---
@@ -309,7 +309,7 @@ TRAECN_QUICKSTART_PROFILE_MODE=existing npm run quickstart
 # 4. 注册到 OpenClaw（编辑 openclaw.json → mcp.servers.traecn）
 
 # 5. 端到端 smoke
-#   traecn_capabilities      ← 20 个 public tool（默认 profile）
+#   traecn_capabilities      ← 21 个 public tool（默认 profile）
 #   traecn_preflight         ← status + readiness + queue + dialog
 #   traecn_editor action=saveAll
 ```
@@ -927,4 +927,4 @@ open /tmp/traecn-first.png    # 看到 TraeCN IDE 画面 = 端到端通了
 
 ---
 
-**TRAECNclaw v0.4.0 · 9 drivers / 100+ actions / 20 public MCP tools (32 ops / 36 full) / 9 HTTP driver endpoints**
+**TRAECNclaw v0.4.0 · 9 drivers / 100+ actions / 21 public MCP tools (33 ops / 37 full) / 9 HTTP driver endpoints**

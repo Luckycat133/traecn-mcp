@@ -48,7 +48,7 @@ const OPERATION_HINTS = Object.freeze({
   review_gate_status: 'Inspect whether Trae is waiting on its internal keep/revert review gate.',
   resolve_review_gate: 'Resolve Trae internal keep/revert gate so automation can continue.',
   review_code: 'Ask Trae CN for findings-first code review of code or diff.',
-  vibe_workflow: 'Run an unattended initial task plus follow-up tasks with auto-continue checkpoints.',
+  vibe_workflow: 'Run an initial task plus follow-ups; automatic by default, or preserve human checkpoints with reviewRequired=true and autoContinue=false.',
   approve_dialog: 'Handle permission, restricted-mode, or confirmation prompts explicitly.'
 });
 

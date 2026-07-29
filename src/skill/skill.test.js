@@ -400,6 +400,27 @@ test('vibeWorkflow queues unattended follow-up workflow', async () => {
   expect(captured.opts.followupTasks[0].autoContinue).toBe(true);
 });
 
+test('vibeWorkflow preserves explicit human review checkpoints', async () => {
+  const { TraeCNSkill } = require('./traecn-skill');
+  const skill = new TraeCNSkill();
+  let captured = null;
+  skill.client.delegateAsync = async (task, opts) => {
+    captured = { task, opts };
+    return { data: { taskId: 'task_reviewed_workflow', status: 'queued' } };
+  };
+
+  await skill.vibeWorkflow({
+    task: 'Implement feature',
+    reviewRequired: true,
+    autoContinue: false,
+    steps: ['Run tests', { task: 'Update changelog', reviewRequired: true }]
+  });
+
+  expect(captured.opts.autoContinue).toBe(false);
+  expect(captured.opts.followupTasks[0].autoContinue).toBe(false);
+  expect(captured.opts.followupTasks[1].autoContinue).toBe(false);
+});
+
 test('listSoloChats should forward to client', async () => {
   const { TraeCNSkill } = require('./traecn-skill');
   const skill = new TraeCNSkill();

@@ -322,6 +322,20 @@ test('buildConfirmationPlan marks settings writes as high-risk confirmation oper
   assert.ok(plan.recommendedFlow.includes('user_confirmation'));
 });
 
+test('buildConfirmationPlan treats gateway task review decisions as high risk', () => {
+  const plan = buildConfirmationPlan({
+    command: 'review_task',
+    params: { taskId: 'task_review_1', decision: 'approve' }
+  });
+
+  assert.strictEqual(plan.risk, 'high');
+  assert.strictEqual(plan.requiresConfirmation, true);
+  assert.ok(plan.sideEffects.some(item => item.includes('continue')));
+  assert.ok(plan.preflight.some(item => item.includes('task_review_1')));
+  assert.ok(plan.recommendedFlow.includes('task_status'));
+  assert.ok(plan.recommendedFlow.includes('user_confirmation'));
+});
+
 test('Gateway computes CORS headers for allowed origins', () => {
   const gateway = new Gateway();
   gateway.allowedOrigins = 'https://example.com';

@@ -168,8 +168,8 @@ preflight    ← pf
 delegate_async + wait_task + waitForQueue=true
 - When Trae shows its own queue, the gateway keeps the task in the local
   background queue instead of pushing immediately.
-- Pair with reviewRequired=true to stop on result review before continuing any
-  follow-up work.
+- Pair `reviewRequired=true` with `autoContinue=false` to stop on result review;
+  continue with `traecn_resolve_task_review` after inspecting the task result.
 - Add autoModelFallback=true or fallbackModels=[...] to let the gateway probe
   alternate models while the agent stops waiting.
 switchModel  ← model

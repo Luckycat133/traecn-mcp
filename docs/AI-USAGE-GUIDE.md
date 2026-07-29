@@ -159,8 +159,9 @@ HTTP/OpenClaw 参数等价：
 
 任务状态会包含 `fallbackModels`、`modelProbe.lastModelProbeAt`、
 `modelProbe.nextModelProbeAt` 和 `modelProbe.results`。当 TraeCN 生成结果后，
-`reviewRequired=true` 会把任务停在 `awaiting_review`，通知用户审查；用户通过
-`POST /api/task/{taskId}/review` 或对应工具确认后，后续任务才继续排队。
+`reviewRequired=true` 与 `autoContinue=false` 会把任务停在 `awaiting_review`，通知用户审查；用户通过
+`POST /api/task/{taskId}/review` 或 stdio MCP 的 `traecn_resolve_task_review`
+（参数为 `taskId`、`decision`、可选 `notes`）确认后，后续任务才继续排队。
 默认情况下，TraeCN 外部模型排队不会触发本地超时；只有调用方显式传入
 `maxQueueWaitMs` 或 `queueMaxWaitMs` 时，任务状态才会出现 deadline/remaining 并可能进入
 `queue_timeout`。

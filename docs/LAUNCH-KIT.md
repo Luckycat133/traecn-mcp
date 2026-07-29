@@ -59,7 +59,7 @@ real local tool interface.
 
 It exposes a profile-scoped stdio MCP surface:
 
-- `public`: 20 common tools for normal agent integrations
+- `public`: 21 common tools for normal agent integrations
 - `ops`: recovery, cleanup, Solo conversation control, and long-queue proof tools
 - `full`: every explicit shortcut for compatibility and audits
 
@@ -88,7 +88,7 @@ Repo: https://github.com/Luckycat133/TRAECNclaw
 Windsurf 等支持 MCP 的 agent，可以通过真实工具面操作 TraeCN，而不是依赖
 脆弱的屏幕控制。
 
-现在默认 public profile 只暴露 20 个常用工具，同时保留 ops/full 分层给恢复、
+现在默认 public profile 只暴露 21 个常用工具，同时保留 ops/full 分层给恢复、
 cleanup、Solo 对话、诊断和长队列 proof 使用。
 
 包含能力：

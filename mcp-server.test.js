@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const http = require('http');
 const {
   DEFAULT_MCP_TOOL_PROFILE,
   MCP_TOOLS,
@@ -42,6 +43,7 @@ async function test(name, fn) {
     assert.ok(names.includes('traecn_wait_task'));
     assert.ok(names.includes('traecn_adopt_current_task'));
     assert.ok(names.includes('traecn_cancel_task'));
+    assert.ok(names.includes('traecn_resolve_task_review'));
     assert.ok(names.includes('traecn_stop_generation'));
     assert.ok(names.includes('traecn_dismiss_dialog'));
     assert.ok(names.includes('traecn_restart_debug_session'));
@@ -80,6 +82,7 @@ async function test(name, fn) {
     assert.ok(publicNames.includes('traecn_preflight'));
     assert.ok(publicNames.includes('traecn_review_code'));
     assert.ok(publicNames.includes('traecn_run_unattended_workflow'));
+    assert.ok(publicNames.includes('traecn_resolve_task_review'));
     assert.ok(!publicNames.includes('traecn_start_long_queue_proof'));
     assert.ok(!publicNames.includes('traecn_cleanup_queue_probe_chats'));
     assert.ok(opsNames.includes('traecn_start_long_queue_proof'));
@@ -87,6 +90,9 @@ async function test(name, fn) {
     assert.ok(!opsNames.includes('traecn_get_status'));
     assert.ok(fullNames.includes('traecn_get_status'));
     assert.strictEqual(fullNames.length, MCP_TOOLS.length);
+    assert.strictEqual(publicNames.length, 21);
+    assert.strictEqual(opsNames.length, 33);
+    assert.strictEqual(fullNames.length, 37);
   });
 
   await test('initialize returns server capabilities', async () => {
@@ -145,6 +151,10 @@ async function test(name, fn) {
     assert.ok(queueTask.inputSchema.properties.soloChatTitleIncludes);
     assert.ok(queueTask.inputSchema.properties.forceBackground);
     assert.ok(queueTask.inputSchema.properties.maxQueueWaitMs);
+    const taskReview = result.tools.find(tool => tool.name === 'traecn_resolve_task_review');
+    assert.ok(taskReview);
+    assert.deepStrictEqual(taskReview.inputSchema.required, ['taskId', 'decision']);
+    assert.deepStrictEqual(taskReview.inputSchema.properties.decision.enum, ['approve', 'continue', 'reject']);
   });
 
   await test('MCP workflow tools expose completion checks', async () => {
@@ -230,6 +240,46 @@ async function test(name, fn) {
     assert.strictEqual(payload.risk, 'high');
     assert.strictEqual(payload.requiresConfirmation, true);
     assert.ok(payload.recommendedFlow.includes('check_dialog'));
+  });
+
+  await test('traecn_resolve_task_review forwards the gateway checkpoint decision', async () => {
+    let captured = null;
+    const server = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', chunk => chunks.push(chunk));
+      req.on('end', () => {
+        captured = {
+          method: req.method,
+          url: req.url,
+          body: JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ taskId: 'task_review_1', status: 'continued' }));
+      });
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+
+    try {
+      const result = await callTool('traecn_resolve_task_review', {
+        taskId: 'task_review_1',
+        decision: 'approve',
+        notes: 'looks good'
+      }, {
+        host: '127.0.0.1',
+        port: server.address().port,
+        token: '',
+        timeout: 3000
+      });
+      const payload = JSON.parse(result.content[0].text);
+      assert.strictEqual(payload.status, 'continued');
+      assert.deepStrictEqual(captured, {
+        method: 'POST',
+        url: '/api/task/task_review_1/review',
+        body: { decision: 'approve', notes: 'looks good' }
+      });
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
   });
 
   // ── MCP tool authorization (Batch C2) ────────────────────────────────────

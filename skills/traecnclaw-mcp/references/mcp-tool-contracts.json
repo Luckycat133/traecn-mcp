@@ -1,0 +1,2041 @@
+{
+  "source": "mcp-server.js",
+  "profiles": {
+    "public": {
+      "default": true,
+      "count": 21,
+      "description": "Default profile for general MCP clients. Keeps high-signal task, review, settings, dialog, and workflow tools visible.",
+      "tools": [
+        "traecn_get_capabilities",
+        "traecn_list_commands",
+        "traecn_run_command",
+        "traecn_plan_operation",
+        "traecn_preflight",
+        "traecn_run_task",
+        "traecn_queue_task",
+        "traecn_poll_task",
+        "traecn_wait_task",
+        "traecn_resolve_task_review",
+        "traecn_cancel_task",
+        "traecn_review_code",
+        "traecn_switch_model",
+        "traecn_switch_mode",
+        "traecn_create_chat",
+        "traecn_get_settings",
+        "traecn_set_setting",
+        "traecn_respond_dialog",
+        "traecn_get_dialog_status",
+        "traecn_open_project",
+        "traecn_run_unattended_workflow"
+      ]
+    },
+    "ops": {
+      "default": false,
+      "count": 33,
+      "description": "Operational profile for recovery, cleanup, Solo conversation management, and long-queue proof workflows.",
+      "tools": [
+        "traecn_get_capabilities",
+        "traecn_list_commands",
+        "traecn_run_command",
+        "traecn_plan_operation",
+        "traecn_preflight",
+        "traecn_run_task",
+        "traecn_queue_task",
+        "traecn_poll_task",
+        "traecn_wait_task",
+        "traecn_resolve_task_review",
+        "traecn_cancel_task",
+        "traecn_review_code",
+        "traecn_switch_model",
+        "traecn_switch_mode",
+        "traecn_create_chat",
+        "traecn_get_settings",
+        "traecn_set_setting",
+        "traecn_respond_dialog",
+        "traecn_get_dialog_status",
+        "traecn_open_project",
+        "traecn_run_unattended_workflow",
+        "traecn_adopt_current_task",
+        "traecn_stop_generation",
+        "traecn_get_review_gate_status",
+        "traecn_resolve_review_gate",
+        "traecn_restart_debug_session",
+        "traecn_list_solo_chats",
+        "traecn_switch_solo_chat",
+        "traecn_cleanup_queue_probe_chats",
+        "traecn_get_cleanup_watch_status",
+        "traecn_start_long_queue_proof",
+        "traecn_get_long_queue_proof_status",
+        "traecn_cancel_long_queue_proof"
+      ]
+    },
+    "full": {
+      "default": false,
+      "count": 37,
+      "description": "Complete explicit tool surface, including diagnostics and compatibility shortcuts that public clients can usually reach through traecn_preflight or traecn_run_command.",
+      "tools": [
+        "traecn_get_capabilities",
+        "traecn_list_commands",
+        "traecn_run_command",
+        "traecn_plan_operation",
+        "traecn_preflight",
+        "traecn_run_task",
+        "traecn_queue_task",
+        "traecn_poll_task",
+        "traecn_wait_task",
+        "traecn_resolve_task_review",
+        "traecn_adopt_current_task",
+        "traecn_cancel_task",
+        "traecn_stop_generation",
+        "traecn_get_review_gate_status",
+        "traecn_resolve_review_gate",
+        "traecn_dismiss_dialog",
+        "traecn_restart_debug_session",
+        "traecn_review_code",
+        "traecn_get_status",
+        "traecn_switch_model",
+        "traecn_switch_mode",
+        "traecn_create_chat",
+        "traecn_list_solo_chats",
+        "traecn_switch_solo_chat",
+        "traecn_cleanup_queue_probe_chats",
+        "traecn_get_cleanup_watch_status",
+        "traecn_start_long_queue_proof",
+        "traecn_get_long_queue_proof_status",
+        "traecn_cancel_long_queue_proof",
+        "traecn_submit_solo_task",
+        "traecn_get_settings",
+        "traecn_set_setting",
+        "traecn_respond_dialog",
+        "traecn_get_dialog_status",
+        "traecn_get_queue_status",
+        "traecn_open_project",
+        "traecn_run_unattended_workflow"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "name": "traecn_get_capabilities",
+      "description": "Return a compact agent-facing capability catalog for low-token discovery.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "discovery",
+        "profile": "public",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_list_commands",
+      "description": "List every stable TraeCNclaw command exposed to agents.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "discovery",
+        "profile": "public",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_run_command",
+      "description": "Execute a stable TraeCNclaw command by name. Use traecn_list_commands for parameters.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "capabilities",
+              "preflight",
+              "confirm_plan",
+              "restart_trae_debug",
+              "status",
+              "readiness",
+              "new_chat",
+              "list_solo_chats",
+              "switch_solo_chat",
+              "cleanup_foreign_solo_queue",
+              "cleanup_queue_watch_status",
+              "submit_solo_chat_task",
+              "delegate",
+              "delegate_async",
+              "task_status",
+              "wait_task",
+              "review_task",
+              "adopt_current_task",
+              "cancel_task",
+              "stop_generation",
+              "review_gate_status",
+              "resolve_review_gate",
+              "switch_mode",
+              "switch_model",
+              "queue_status",
+              "open_project",
+              "settings_read",
+              "settings_read_all",
+              "settings_set",
+              "settings_navigate",
+              "settings_back",
+              "dialog_status",
+              "approve_dialog",
+              "dismiss_dialog",
+              "batch_submit",
+              "batch_status",
+              "batch_cancel",
+              "long_queue_proof_start",
+              "long_queue_proof_status",
+              "long_queue_proof_cancel",
+              "review_code",
+              "vibe_workflow",
+              "editor",
+              "file",
+              "terminal",
+              "git",
+              "search",
+              "diagnostics",
+              "snapshot",
+              "extension",
+              "command"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "description": "Command-specific parameters."
+          }
+        },
+        "required": [
+          "command"
+        ]
+      },
+      "metadata": {
+        "layer": "escape-hatch",
+        "profile": "public",
+        "risk": "dynamic"
+      }
+    },
+    {
+      "name": "traecn_plan_operation",
+      "description": "Create a compact confirmation/preflight plan before executing a side-effecting TraeCN command.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object"
+          },
+          "forceConfirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "command"
+        ]
+      },
+      "metadata": {
+        "layer": "planning",
+        "profile": "public",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_preflight",
+      "description": "Return one compact status/readiness/queue/dialog summary plus optional command confirmation plan.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object"
+          },
+          "forceConfirm": {
+            "type": "boolean"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "planning",
+        "profile": "public",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_run_task",
+      "description": "Delegate a task to TraeCN and wait for the final response when possible.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string"
+          },
+          "projectPath": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "includeProcess": {
+            "type": "boolean"
+          },
+          "autoWait": {
+            "type": "boolean",
+            "default": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "solo",
+              "ide"
+            ]
+          },
+          "reviewRequired": {
+            "type": "boolean"
+          },
+          "autoContinue": {
+            "type": "boolean"
+          },
+          "followupTasks": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "task"
+                  ],
+                  "properties": {
+                    "task": {
+                      "type": "string"
+                    },
+                    "reviewRequired": {
+                      "type": "boolean"
+                    },
+                    "autoContinue": {
+                      "type": "boolean"
+                    },
+                    "includeProcessText": {
+                      "type": "boolean"
+                    },
+                    "completionChecks": {
+                      "type": "object",
+                      "properties": {
+                        "requiredFiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "requiredText": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "filePath",
+                              "includes"
+                            ],
+                            "properties": {
+                              "filePath": {
+                                "type": "string"
+                              },
+                              "includes": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "completionChecks": {
+            "type": "object",
+            "properties": {
+              "requiredFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredText": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "filePath",
+                    "includes"
+                  ],
+                  "properties": {
+                    "filePath": {
+                      "type": "string"
+                    },
+                    "includes": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "autoApproveDialog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "notifyUrl": {
+            "type": "string"
+          },
+          "fallbackModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "autoModelFallback": {
+            "type": "boolean"
+          },
+          "modelProbeIntervalMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "task"
+        ]
+      },
+      "metadata": {
+        "layer": "task",
+        "profile": "public",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_queue_task",
+      "description": "Submit a task for queue-aware background processing and return a taskId.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string"
+          },
+          "projectPath": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "soloChat": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "number"
+              },
+              "titleIncludes": {
+                "type": "string"
+              },
+              "textIncludes": {
+                "type": "string"
+              }
+            }
+          },
+          "soloChatIndex": {
+            "type": "number"
+          },
+          "soloChatTitleIncludes": {
+            "type": "string"
+          },
+          "soloChatTextIncludes": {
+            "type": "string"
+          },
+          "newChat": {
+            "type": "boolean"
+          },
+          "reviewRequired": {
+            "type": "boolean"
+          },
+          "autoContinue": {
+            "type": "boolean"
+          },
+          "followupTasks": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "task"
+                  ],
+                  "properties": {
+                    "task": {
+                      "type": "string"
+                    },
+                    "reviewRequired": {
+                      "type": "boolean"
+                    },
+                    "autoContinue": {
+                      "type": "boolean"
+                    },
+                    "includeProcessText": {
+                      "type": "boolean"
+                    },
+                    "completionChecks": {
+                      "type": "object",
+                      "properties": {
+                        "requiredFiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "requiredText": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "filePath",
+                              "includes"
+                            ],
+                            "properties": {
+                              "filePath": {
+                                "type": "string"
+                              },
+                              "includes": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "completionChecks": {
+            "type": "object",
+            "properties": {
+              "requiredFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredText": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "filePath",
+                    "includes"
+                  ],
+                  "properties": {
+                    "filePath": {
+                      "type": "string"
+                    },
+                    "includes": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "autoApproveDialog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "notifyUrl": {
+            "type": "string"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "forceBackground": {
+            "type": "boolean"
+          },
+          "waitForQueue": {
+            "type": "boolean"
+          },
+          "fallbackModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "autoModelFallback": {
+            "type": "boolean"
+          },
+          "modelProbeIntervalMs": {
+            "type": "number"
+          },
+          "maxQueueWaitMs": {
+            "type": "number"
+          },
+          "queueMaxWaitMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "task"
+        ]
+      },
+      "metadata": {
+        "layer": "task",
+        "profile": "public",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_poll_task",
+      "description": "Poll a queued TraeCN task by taskId.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "task",
+        "profile": "public",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_wait_task",
+      "description": "Wait locally for a queued TraeCN task to reach a terminal or decision-required state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "pollMs": {
+            "type": "number"
+          },
+          "timeoutMs": {
+            "type": "number"
+          },
+          "autoApproveDialog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "taskId"
+        ]
+      },
+      "metadata": {
+        "layer": "task",
+        "profile": "public",
+        "risk": "read-or-delegate"
+      }
+    },
+    {
+      "name": "traecn_resolve_task_review",
+      "description": "Resolve a gateway task checkpoint in awaiting_review state. This is separate from TraeCN internal keep/revert review gates.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "continue",
+              "reject"
+            ]
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId",
+          "decision"
+        ]
+      },
+      "metadata": {
+        "layer": "task-review",
+        "profile": "public",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_adopt_current_task",
+      "description": "Recover tracking for the currently queued/running TraeCN request without resending the prompt.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string"
+          },
+          "reviewRequired": {
+            "type": "boolean"
+          },
+          "autoContinue": {
+            "type": "boolean"
+          },
+          "followupTasks": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "task"
+                  ],
+                  "properties": {
+                    "task": {
+                      "type": "string"
+                    },
+                    "reviewRequired": {
+                      "type": "boolean"
+                    },
+                    "autoContinue": {
+                      "type": "boolean"
+                    },
+                    "includeProcessText": {
+                      "type": "boolean"
+                    },
+                    "completionChecks": {
+                      "type": "object",
+                      "properties": {
+                        "requiredFiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "requiredText": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "filePath",
+                              "includes"
+                            ],
+                            "properties": {
+                              "filePath": {
+                                "type": "string"
+                              },
+                              "includes": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "completionChecks": {
+            "type": "object",
+            "properties": {
+              "requiredFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredText": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "filePath",
+                    "includes"
+                  ],
+                  "properties": {
+                    "filePath": {
+                      "type": "string"
+                    },
+                    "includes": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "includeProcessText": {
+            "type": "boolean"
+          },
+          "autoApproveDialog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "notifyUrl": {
+            "type": "string"
+          },
+          "fallbackModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "autoModelFallback": {
+            "type": "boolean"
+          },
+          "modelProbeIntervalMs": {
+            "type": "number"
+          },
+          "submittedAt": {
+            "type": "number"
+          },
+          "force": {
+            "type": "boolean"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "recovery",
+        "profile": "ops",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_cancel_task",
+      "description": "Cancel a queued or review-waiting TraeCN background task.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId"
+        ]
+      },
+      "metadata": {
+        "layer": "task",
+        "profile": "public",
+        "risk": "delegate",
+        "destructive": true
+      }
+    },
+    {
+      "name": "traecn_stop_generation",
+      "description": "Stop the current TraeCN generation or queued model request.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "recovery",
+        "profile": "ops",
+        "risk": "delegate",
+        "destructive": true
+      }
+    },
+    {
+      "name": "traecn_get_review_gate_status",
+      "description": "Inspect whether TraeCN is blocked on its internal keep/revert review gate.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "recovery",
+        "profile": "ops",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_resolve_review_gate",
+      "description": "Resolve TraeCN internal keep/revert review gate.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "keep_all",
+              "revert_all",
+              "keep",
+              "discard"
+            ]
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "recovery",
+        "profile": "ops",
+        "risk": "delegate",
+        "destructive": true
+      }
+    },
+    {
+      "name": "traecn_dismiss_dialog",
+      "description": "Dismiss the current TraeCN dialog.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "dialog",
+        "profile": "full",
+        "risk": "delegate",
+        "destructive": true,
+        "alternative": "traecn_respond_dialog"
+      }
+    },
+    {
+      "name": "traecn_restart_debug_session",
+      "description": "Restart TraeCN with remote debugging enabled using the existing logged-in profile.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confirmationPhrase": {
+            "type": "string"
+          },
+          "confirmationId": {
+            "type": "string"
+          },
+          "projectPath": {
+            "type": "string"
+          },
+          "quitTimeoutMs": {
+            "type": "number"
+          },
+          "cdpWaitMs": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "recovery",
+        "profile": "ops",
+        "risk": "delegate",
+        "destructive": true
+      }
+    },
+    {
+      "name": "traecn_review_code",
+      "description": "Ask TraeCN to review code, a diff, or a review instruction with findings-first output.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "instruction": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "focus": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "code": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string"
+          },
+          "queue": {
+            "type": "boolean"
+          },
+          "projectPath": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "includeProcessText": {
+            "type": "boolean"
+          },
+          "waitForQueue": {
+            "type": "boolean"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "reviewRequired": {
+            "type": "boolean"
+          },
+          "autoContinue": {
+            "type": "boolean"
+          },
+          "followupTasks": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "task"
+                  ],
+                  "properties": {
+                    "task": {
+                      "type": "string"
+                    },
+                    "reviewRequired": {
+                      "type": "boolean"
+                    },
+                    "autoContinue": {
+                      "type": "boolean"
+                    },
+                    "includeProcessText": {
+                      "type": "boolean"
+                    },
+                    "completionChecks": {
+                      "type": "object",
+                      "properties": {
+                        "requiredFiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "requiredText": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "filePath",
+                              "includes"
+                            ],
+                            "properties": {
+                              "filePath": {
+                                "type": "string"
+                              },
+                              "includes": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "completionChecks": {
+            "type": "object",
+            "properties": {
+              "requiredFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredText": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "filePath",
+                    "includes"
+                  ],
+                  "properties": {
+                    "filePath": {
+                      "type": "string"
+                    },
+                    "includes": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "notifyUrl": {
+            "type": "string"
+          },
+          "fallbackModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "autoModelFallback": {
+            "type": "boolean"
+          },
+          "modelProbeIntervalMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "instruction"
+        ]
+      },
+      "metadata": {
+        "layer": "review",
+        "profile": "public",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_get_status",
+      "description": "Check whether the TraeCN gateway is connected.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "diagnostics",
+        "profile": "full",
+        "risk": "read",
+        "alternative": "traecn_preflight"
+      }
+    },
+    {
+      "name": "traecn_switch_model",
+      "description": "Switch the active TraeCN model with fuzzy matching.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "waitForQueue": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "metadata": {
+        "layer": "control",
+        "profile": "public",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_switch_mode",
+      "description": "Switch TraeCN between SOLO and IDE modes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "solo",
+              "ide"
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "metadata": {
+        "layer": "control",
+        "profile": "public",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_create_chat",
+      "description": "Create a new TraeCN chat.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "control",
+        "profile": "public",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_list_solo_chats",
+      "description": "List real Solo-mode TraeCN conversations from the Solo sidebar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "solo",
+        "profile": "ops",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_switch_solo_chat",
+      "description": "Switch to a real Solo-mode TraeCN conversation by index or visible text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "number"
+          },
+          "titleIncludes": {
+            "type": "string"
+          },
+          "textIncludes": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "solo",
+        "profile": "ops",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_cleanup_queue_probe_chats",
+      "description": "Find and optionally delete accidental queue-probe Solo conversations without sending another prompt to TraeCN.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "execute": {
+            "type": "boolean"
+          },
+          "maxPasses": {
+            "type": "number"
+          },
+          "settleMs": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "cleanup",
+        "profile": "ops",
+        "risk": "delegate",
+        "destructive": true
+      }
+    },
+    {
+      "name": "traecn_get_cleanup_watch_status",
+      "description": "Read local cleanup watcher lock/PID/stale status without contacting TraeCN or creating conversations.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "lockFile": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "cleanup",
+        "profile": "ops",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_start_long_queue_proof",
+      "description": "Start the guarded GLM-5.2 long-queue proof. Defaults to dry-run; execute=true plus allowQuotaSpend=true is required for a new real TraeCN submission.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "projectPath": {
+            "type": "string"
+          },
+          "execute": {
+            "type": "boolean"
+          },
+          "allowQuotaSpend": {
+            "type": "boolean"
+          },
+          "detach": {
+            "type": "boolean"
+          },
+          "forceNew": {
+            "type": "boolean"
+          },
+          "resumeTaskId": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "number"
+          },
+          "pollMs": {
+            "type": "number"
+          },
+          "outputDir": {
+            "type": "string"
+          },
+          "cleanupIntervalMs": {
+            "type": "number"
+          },
+          "cleanupStabilizeChecks": {
+            "type": "number"
+          },
+          "cleanupStabilizeDelayMs": {
+            "type": "number"
+          },
+          "cleanupMaxAttempts": {
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "acceptance",
+        "profile": "ops",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_get_long_queue_proof_status",
+      "description": "Read the latest or marker-scoped GLM-5.2 proof status without sending any TraeCN prompt.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string"
+          },
+          "outputDir": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "acceptance",
+        "profile": "ops",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_cancel_long_queue_proof",
+      "description": "Cancel the latest or marker-scoped GLM-5.2 proof watcher/task tracking without resubmitting a prompt.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "outputDir": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "acceptance",
+        "profile": "ops",
+        "risk": "delegate",
+        "destructive": true
+      }
+    },
+    {
+      "name": "traecn_submit_solo_task",
+      "description": "Submit a task into a real Solo conversation and return a taskId; background polling switches back to that conversation to collect queued results.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string"
+          },
+          "projectPath": {
+            "type": "string"
+          },
+          "soloChat": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "number"
+              },
+              "titleIncludes": {
+                "type": "string"
+              },
+              "textIncludes": {
+                "type": "string"
+              }
+            }
+          },
+          "soloChatIndex": {
+            "type": "number"
+          },
+          "soloChatTitleIncludes": {
+            "type": "string"
+          },
+          "soloChatTextIncludes": {
+            "type": "string"
+          },
+          "newChat": {
+            "type": "boolean"
+          },
+          "includeProcessText": {
+            "type": "boolean"
+          },
+          "reviewRequired": {
+            "type": "boolean"
+          },
+          "autoContinue": {
+            "type": "boolean"
+          },
+          "followupTasks": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "task"
+                  ],
+                  "properties": {
+                    "task": {
+                      "type": "string"
+                    },
+                    "reviewRequired": {
+                      "type": "boolean"
+                    },
+                    "autoContinue": {
+                      "type": "boolean"
+                    },
+                    "includeProcessText": {
+                      "type": "boolean"
+                    },
+                    "completionChecks": {
+                      "type": "object",
+                      "properties": {
+                        "requiredFiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "requiredText": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "filePath",
+                              "includes"
+                            ],
+                            "properties": {
+                              "filePath": {
+                                "type": "string"
+                              },
+                              "includes": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "completionChecks": {
+            "type": "object",
+            "properties": {
+              "requiredFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredText": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "filePath",
+                    "includes"
+                  ],
+                  "properties": {
+                    "filePath": {
+                      "type": "string"
+                    },
+                    "includes": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "autoApproveDialog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "notifyUrl": {
+            "type": "string"
+          },
+          "fallbackModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "autoModelFallback": {
+            "type": "boolean"
+          },
+          "modelProbeIntervalMs": {
+            "type": "number"
+          },
+          "maxQueueWaitMs": {
+            "type": "number"
+          },
+          "queueMaxWaitMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "task"
+        ]
+      },
+      "metadata": {
+        "layer": "solo",
+        "profile": "full",
+        "risk": "delegate",
+        "alternative": "traecn_queue_task"
+      }
+    },
+    {
+      "name": "traecn_get_settings",
+      "description": "Read TraeCN settings from the current or named section.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "settings",
+        "profile": "public",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_set_setting",
+      "description": "Set a TraeCN setting by label.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {},
+          "section": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ]
+      },
+      "metadata": {
+        "layer": "settings",
+        "profile": "public",
+        "risk": "admin"
+      }
+    },
+    {
+      "name": "traecn_respond_dialog",
+      "description": "Respond to the current TraeCN dialog by approving, denying, confirming, answering, or dismissing it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "wait": {
+            "type": "boolean"
+          }
+        },
+        "required": []
+      },
+      "metadata": {
+        "layer": "dialog",
+        "profile": "public",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_get_dialog_status",
+      "description": "Check whether TraeCN is showing a dialog that needs user confirmation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "dialog",
+        "profile": "public",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_get_queue_status",
+      "description": "Check current model queue/busy status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "diagnostics",
+        "profile": "full",
+        "risk": "read",
+        "alternative": "traecn_preflight"
+      }
+    },
+    {
+      "name": "traecn_open_project",
+      "description": "Open a local project path in TraeCN.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectPath"
+        ]
+      },
+      "metadata": {
+        "layer": "control",
+        "profile": "public",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_run_unattended_workflow",
+      "description": "Run a multi-step TraeCN workflow. Follow-ups auto-continue by default; set reviewRequired=true and autoContinue=false for human task checkpoints.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "task"
+                  ],
+                  "properties": {
+                    "task": {
+                      "type": "string"
+                    },
+                    "reviewRequired": {
+                      "type": "boolean"
+                    },
+                    "autoContinue": {
+                      "type": "boolean"
+                    },
+                    "includeProcessText": {
+                      "type": "boolean"
+                    },
+                    "completionChecks": {
+                      "type": "object",
+                      "properties": {
+                        "requiredFiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "requiredText": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "filePath",
+                              "includes"
+                            ],
+                            "properties": {
+                              "filePath": {
+                                "type": "string"
+                              },
+                              "includes": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "followupTasks": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "task"
+                  ],
+                  "properties": {
+                    "task": {
+                      "type": "string"
+                    },
+                    "reviewRequired": {
+                      "type": "boolean"
+                    },
+                    "autoContinue": {
+                      "type": "boolean"
+                    },
+                    "includeProcessText": {
+                      "type": "boolean"
+                    },
+                    "completionChecks": {
+                      "type": "object",
+                      "properties": {
+                        "requiredFiles": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "requiredText": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "filePath",
+                              "includes"
+                            ],
+                            "properties": {
+                              "filePath": {
+                                "type": "string"
+                              },
+                              "includes": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "projectPath": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "reviewRequired": {
+            "type": "boolean"
+          },
+          "autoContinue": {
+            "type": "boolean"
+          },
+          "includeProcessText": {
+            "type": "boolean"
+          },
+          "completionChecks": {
+            "type": "object",
+            "properties": {
+              "requiredFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredText": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "filePath",
+                    "includes"
+                  ],
+                  "properties": {
+                    "filePath": {
+                      "type": "string"
+                    },
+                    "includes": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "autoApproveDialog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "notifyUrl": {
+            "type": "string"
+          },
+          "fallbackModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "autoModelFallback": {
+            "type": "boolean"
+          },
+          "modelProbeIntervalMs": {
+            "type": "number"
+          },
+          "maxQueueWaitMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "task"
+        ]
+      },
+      "metadata": {
+        "layer": "workflow",
+        "profile": "public",
+        "risk": "delegate"
+      }
+    }
+  ]
+}

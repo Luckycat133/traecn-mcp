@@ -8,6 +8,8 @@ node_modules/
 audit-logs/
 demo-output/
 dist/
+# Local skill evaluation runs and generated review artifacts
+skills/*-workspace/
 # Local test-only skill install dirs (not the distributable skill under skills/)
 .codex/skills/
 .agents/skills/

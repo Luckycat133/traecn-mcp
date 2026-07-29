@@ -46,6 +46,7 @@ const TOOL_PERMISSIONS = Object.freeze({
   traecn_submit_solo_task: DELEGATE_PERMISSION,
   traecn_poll_task: READ_PERMISSION,
   traecn_wait_task: READ_PERMISSION,
+  traecn_resolve_task_review: DELEGATE_PERMISSION,
   traecn_adopt_current_task: DELEGATE_PERMISSION,
   traecn_cancel_task: DELEGATE_PERMISSION,
   traecn_stop_generation: DELEGATE_PERMISSION,

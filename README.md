@@ -177,13 +177,14 @@ Alternatively, point directly at `mcp-server.js`:
 }
 ```
 
-A ready-to-copy template with all options documented is at
-`skills/traecnclaw-mcp/assets/mcp-client-config.json`.
+A ready-to-copy single-entry launcher template is at
+`skills/traecnclaw-mcp/assets/mcp-client-config.json`; the direct fallback is
+kept separately at `skills/traecnclaw-mcp/assets/mcp-client-config.direct.json`.
 
 The MCP server exposes a profile-scoped tool surface. By default,
-`TRAECN_MCP_TOOL_PROFILE=public` lists the 20 common tools:
+`TRAECN_MCP_TOOL_PROFILE=public` lists the 21 common tools:
 `traecn_preflight`, `traecn_run_task`, `traecn_queue_task`,
-`traecn_poll_task`, `traecn_review_code`, settings/dialog/model controls,
+`traecn_poll_task`, `traecn_resolve_task_review`, `traecn_review_code`, settings/dialog/model controls,
 `traecn_run_unattended_workflow`, and the generic `traecn_run_command` catalog
 for full command coverage. Use `TRAECN_MCP_TOOL_PROFILE=ops` for recovery,
 cleanup, Solo conversation control, and long-queue proof tools; use `full` for
@@ -246,6 +247,7 @@ The OpenAPI schema is served at `/openapi.json` (requires the same auth token as
 - `POST /api/sessions/{sessionId}/delegate`
 - `POST /api/delegate`
 - `POST /api/delegate-async`
+- `POST /api/task/{taskId}/review`
 - `POST /api/confirm/plan`
 - `POST /api/new-chat`
 - `POST /api/switch-mode`
@@ -325,14 +327,26 @@ watcher is singleton-locked, so repeat detached starts return
 
 ```sh
 npm run lint
+npm run check:skill-contracts
 npm test
 npm run test:system
 npm run test:uat
 npm run test:live
+npm run test:all
 npm run audit:prod
 ```
 
-`npm test` runs unit and integration tests. Default CI uses mock and local test surfaces and never spends TraeCN quota. `test:system` starts the gateway in mock mode and verifies the HTTP flow. `test:uat` verifies documentation, OpenAPI coverage, and the machine-readable acceptance audit required for release acceptance. `npm run acceptance:audit` prints the current requirement-by-requirement status; add `-- --require-complete` before declaring the full unattended TraeCN goal complete.
+`npm run check:skill-contracts` verifies that generated MCP schemas, validated
+examples, and single-entry client templates match the live server. `npm test`
+runs unit and integration tests, including the skill launcher and real stdio
+`initialize`/`tools/list` smoke test. Default CI uses mock and local test
+surfaces and never spends TraeCN quota. `test:system` starts the gateway in mock
+mode and verifies the HTTP flow. `test:uat` verifies documentation, OpenAPI
+coverage, and the machine-readable acceptance audit required for release
+acceptance. `npm run acceptance:audit` prints the current
+requirement-by-requirement status; add `-- --require-complete` before declaring
+the full unattended TraeCN goal complete. Use `npm run test:all` for the
+release-style lint, test, system, UAT, and coverage sequence.
 `test:live` runs safe real Trae CN/CDP smoke checks when a live remote-debugging endpoint is available; otherwise it reports `SKIP` and exits successfully. Use `node scripts/live-uat.js --strict` when a live desktop instance is required, `--require-ready` when the UI must be logged in and automation-ready, and `--cleanup-queue-probes` when accidental `wait for Trae queue` Solo chats should be stopped, deleted, and rechecked to `matched: 0`. `--strict` fails if those queue-probe chats remain. Add `--delegate` only when sending a real test prompt is acceptable. `--delegate` is readiness-gated and fails with diagnostics instead of sending a prompt to an unready UI.
 `npm run proof:long-queue` is the guarded GLM-5.2 proof runner. It defaults to dry-run, verifies preflight readiness, refuses to start when queue-probe Solo chats or local tasks remain, and prints the exact evidence paths. Add `-- --execute --detach --allow-quota-spend` only when a real long-queue TraeCN submission is explicitly approved; execute mode automatically stops/deletes accidental queue-probe Solo chats and requires consecutive clean dry-runs before submitting. Tune that gate with `-- --cleanup-stabilize-checks <n> --cleanup-stabilize-delay-ms <ms> --cleanup-max-attempts <n>`. Re-running with the same marker resumes the existing task from the evidence log instead of submitting again; add `-- --force-new` only when an intentional new submission is acceptable. Use `npm run proof:status`, MCP `traecn_get_long_queue_proof_status`, OpenClaw `traecn_long_queue_proof_status`, CLI `traecnclaw proof status`, or `npm run proof:cancel -- --marker <id>` to inspect or stop detached proof runs without creating another TraeCN conversation.
 

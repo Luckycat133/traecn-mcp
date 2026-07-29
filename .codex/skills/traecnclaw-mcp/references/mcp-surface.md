@@ -46,9 +46,9 @@ OpenClaw may use its own `mcp.servers` config shape and plugin wrapper tools. Ge
 
 | Profile | Count | Purpose |
 | --- | ---: | --- |
-| `public` | 20 | Default for published agent integrations. High-signal task, review, settings, dialog, and workflow tools. |
-| `ops` | 32 | Adds recovery, cleanup, Solo conversation control, and long-queue proof tools. |
-| `full` | 36 | Adds every explicit compatibility shortcut and diagnostic tool. Use for audits or clients that need exact old surface parity. |
+| `public` | 21 | Default for published agent integrations. High-signal task, review, settings, dialog, and workflow tools. |
+| `ops` | 33 | Adds recovery, cleanup, Solo conversation control, and long-queue proof tools. |
+| `full` | 37 | Adds every explicit compatibility shortcut and diagnostic tool. Use for audits or clients that need exact old surface parity. |
 
 The full command catalog remains available through `traecn_list_commands` and `traecn_run_command`, so agents can still reach stable lower-level command IDs without making `tools/list` noisy.
 
@@ -70,6 +70,7 @@ choose tools instead of matching names heuristically.
 - `traecn_queue_task`: submit a background task and return a `taskId`.
 - `traecn_poll_task`: inspect a queued task once.
 - `traecn_wait_task`: wait locally for terminal state or a review/approval decision point.
+- `traecn_resolve_task_review`: approve, continue, or reject a gateway task in `awaiting_review`; requires `taskId` and `decision` and is available in `public`.
 - `traecn_adopt_current_task`: bind local tracking to an existing active TraeCN task. Requires `ops`.
 - `traecn_cancel_task`: cancel a tracked task.
 - `traecn_stop_generation`: stop the current TraeCN generation. Requires `ops`.
@@ -77,8 +78,8 @@ choose tools instead of matching names heuristically.
 ## Review And Dialogs
 
 - `traecn_review_code`: produce a findings-first review task from code, diff, files, and focus.
-- `traecn_get_review_gate_status`: inspect review-required task state. Requires `ops`.
-- `traecn_resolve_review_gate`: approve or reject a review gate. Requires `ops`.
+- `traecn_get_review_gate_status`: inspect TraeCN's internal keep/revert gate. Requires `ops`.
+- `traecn_resolve_review_gate`: resolve that internal gate with `action` equal to `keep_all`, `revert_all`, `keep`, or `discard`. Requires `ops`.
 - `traecn_get_dialog_status`: inspect pending TraeCN dialogs.
 - `traecn_respond_dialog`: approve, deny, confirm, answer, or auto-handle a dialog.
 - `traecn_dismiss_dialog`: dismiss the current dialog. Requires `full`; prefer `traecn_respond_dialog` in normal clients.
@@ -99,7 +100,7 @@ choose tools instead of matching names heuristically.
 - `traecn_list_solo_chats`: list real Solo-mode conversations. Requires `ops`.
 - `traecn_switch_solo_chat`: switch to a Solo conversation by index or visible text. Requires `ops`.
 - `traecn_submit_solo_task`: submit into a real Solo conversation and track the result. Requires `full`; prefer `traecn_queue_task` or `traecn_run_unattended_workflow`.
-- `traecn_run_unattended_workflow`: run an unattended initial task plus follow-up tasks with auto-continue checkpoints.
+- `traecn_run_unattended_workflow`: run an initial task plus follow-ups; automatic progression is the default, while explicit `reviewRequired:true, autoContinue:false` preserves human gateway checkpoints.
 - `traecn_cleanup_queue_probe_chats`: find and optionally delete accidental queue-probe Solo conversations. Requires `ops`.
 - `traecn_get_cleanup_watch_status`: inspect cleanup watcher lock, PID, and stale status. Requires `ops`.
 - `traecn_start_long_queue_proof`: guarded GLM long-queue proof, dry-run by default. Requires `ops`.

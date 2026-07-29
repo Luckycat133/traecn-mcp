@@ -7,6 +7,7 @@ const HIGH_RISK_COMMANDS = new Set([
   'batch_cancel',
   'cancel_task',
   'stop_generation',
+  'review_task',
   'cleanup_foreign_solo_queue',
   'resolve_review_gate',
   'update_self',
@@ -88,6 +89,10 @@ function buildChecklist(command, params = {}) {
     checklist.push('Run dryRun first and confirm only accidental queue-probe chats are matched.');
   }
 
+  if (command === 'review_task') {
+    checklist.push(`Confirm task ${JSON.stringify(params.taskId || '')}, review the result, and verify decision ${JSON.stringify(params.decision || '')}.`);
+  }
+
   if (command === 'batch_cancel' || command === 'cancel_task' || command === 'stop_generation' || command === 'cleanup_foreign_solo_queue' || command === 'resolve_review_gate') {
     checklist.push('Confirm the task or batch ID and that cancellation is still desired.');
   }
@@ -146,6 +151,8 @@ function describeSideEffects(command, params) {
       return ['May stop and delete accidental queue-probe Solo conversations.'];
     case 'resolve_review_gate':
       return ['May keep or revert changes at Trae CN internal task review gate.'];
+    case 'review_task':
+      return [`May continue follow-up tasks or reject gateway task ${JSON.stringify(params.taskId || '')}.`];
     case 'restart_trae_debug':
       return ['Quits Trae CN, then restarts it with remote debugging enabled and the existing logged-in profile.'];
     default:
@@ -159,6 +166,7 @@ function buildRecommendedFlow(command, risk, requiresConfirmation) {
   if (['delegate', 'delegate_async', 'review_code', 'vibe_workflow', 'batch_submit'].includes(command)) flow.push('check_queue');
   if (command === 'approve_dialog' || command === 'dismiss_dialog') flow.push('check_dialog');
   if (command === 'resolve_review_gate') flow.push('review_gate_status');
+  if (command === 'review_task') flow.push('task_status');
   if (command === 'cleanup_foreign_solo_queue') flow.push('list_solo_chats');
   if (command === 'settings_set') flow.push('get_settings');
   if (requiresConfirmation) flow.push('user_confirmation');

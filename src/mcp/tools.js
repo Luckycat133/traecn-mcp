@@ -181,6 +181,15 @@ const RAW_MCP_TOOLS = Object.freeze([
     }, ['taskId'])
   },
   {
+    name: 'traecn_resolve_task_review',
+    description: 'Resolve a gateway task checkpoint in awaiting_review state. This is separate from TraeCN internal keep/revert review gates.',
+    inputSchema: schema({
+      taskId: { type: 'string' },
+      decision: { type: 'string', enum: ['approve', 'continue', 'reject'] },
+      notes: { type: 'string' }
+    }, ['taskId', 'decision'])
+  },
+  {
     name: 'traecn_adopt_current_task',
     description: 'Recover tracking for the currently queued/running TraeCN request without resending the prompt.',
     inputSchema: schema({
@@ -427,7 +436,7 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_run_unattended_workflow',
-    description: 'Run an unattended TraeCN workflow: initial task plus auto-continued follow-up tasks.',
+    description: 'Run a multi-step TraeCN workflow. Follow-ups auto-continue by default; set reviewRequired=true and autoContinue=false for human task checkpoints.',
     inputSchema: schema({
       task: { type: 'string' },
       steps: { type: 'array', items: WORKFLOW_STEP_SCHEMA },
@@ -463,6 +472,7 @@ const MCP_TOOL_INTERNAL_NAMES = Object.freeze({
   traecn_queue_task: 'queue_task',
   traecn_poll_task: 'poll_task',
   traecn_wait_task: 'wait_task',
+  traecn_resolve_task_review: 'resolve_task_review',
   traecn_adopt_current_task: 'adopt_current_task',
   traecn_cancel_task: 'cancel_task',
   traecn_stop_generation: 'stop_generation',

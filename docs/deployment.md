@@ -109,8 +109,9 @@ When using `delegate-async`:
   on the task as `modelProbeResults` with `lastModelProbeAt` and
   `nextModelProbeAt`, so callers can inspect progress without resending task
   context.
-- `reviewRequired=true` stops the workflow at the review gate so a user can audit
-  the result and explicitly continue any follow-up tasks.
+- `reviewRequired=true` with `autoContinue=false` stops the workflow at a
+  gateway task checkpoint so a user can audit the result and explicitly
+  continue via `traecn_resolve_task_review` (or the HTTP task-review route).
 
 ## Rollback
 

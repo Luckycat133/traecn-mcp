@@ -34,6 +34,7 @@ test('requiredPermissionFor returns delegate for task-running tools', () => {
   assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_review_code'), 'delegate');
   assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_open_project'), 'delegate');
   assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_respond_dialog'), 'delegate');
+  assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_resolve_task_review'), 'delegate');
 });
 
 test('requiredPermissionFor returns admin for set_setting', () => {

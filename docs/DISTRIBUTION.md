@@ -86,6 +86,9 @@ with the absolute path to the skill folder:
 
 **Option B (fallback): direct mcp-server.js path**
 
+Use the separate `skills/traecnclaw-mcp/assets/mcp-client-config.direct.json`
+template. Do not register it alongside Option A.
+
 ```json
 {
   "mcpServers": {

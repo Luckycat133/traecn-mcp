@@ -28,6 +28,7 @@ const COMMANDS = Object.freeze({
   DELEGATE_ASYNC: 'delegate_async',
   TASK_STATUS: 'task_status',
   WAIT_TASK: 'wait_task',
+  TASK_REVIEW: 'review_task',
   ADOPT_CURRENT_TASK: 'adopt_current_task',
   CANCEL_TASK: 'cancel_task',
   STOP_GENERATION: 'stop_generation',
@@ -162,6 +163,12 @@ const COMMAND_DEFINITIONS = Object.freeze([
     summary: '在本地等待异步任务直到终态或需要代码决策的停点，适合长队列期间释放 agent 上下文',
     required: ['taskId'],
     optional: ['pollMs', 'timeoutMs', 'autoApproveDialog']
+  },
+  {
+    command: COMMANDS.TASK_REVIEW,
+    summary: '批准、继续或拒绝处于 awaiting_review 的网关任务检查点；与 Trae 内部 keep/revert review gate 不同',
+    required: ['taskId', 'decision'],
+    optional: ['notes']
   },
   {
     command: COMMANDS.ADOPT_CURRENT_TASK,
@@ -309,9 +316,9 @@ const COMMAND_DEFINITIONS = Object.freeze([
   },
   {
     command: COMMANDS.VIBE_WORKFLOW,
-    summary: '启动无人值守 vibe coding 工作流：提交初始任务并自动继续后续步骤，不需要人工审查推进',
+    summary: '启动多步 vibe coding 工作流；默认自动继续，显式 autoContinue=false 时保留人工任务审查停点',
     required: ['task'],
-    optional: ['steps', 'followupTasks', 'completionChecks', 'projectPath', 'sessionId', 'chatId', 'soloChat', 'soloChatIndex', 'soloChatTitleIncludes', 'soloChatTextIncludes', 'newChat', 'includeProcessText', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'notifyUrl', 'forceBackground', 'maxQueueWaitMs', 'queueMaxWaitMs']
+    optional: ['steps', 'followupTasks', 'reviewRequired', 'autoContinue', 'completionChecks', 'projectPath', 'sessionId', 'chatId', 'soloChat', 'soloChatIndex', 'soloChatTitleIncludes', 'soloChatTextIncludes', 'newChat', 'includeProcessText', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'notifyUrl', 'forceBackground', 'maxQueueWaitMs', 'queueMaxWaitMs']
   },
   {
     command: COMMANDS.EDITOR,
@@ -663,6 +670,10 @@ async function executeCommand(client, command, params = {}) {
           autoApproveDialog: params.autoApproveDialog
         })
       };
+    case COMMANDS.TASK_REVIEW:
+      requireParam(params, 'taskId');
+      requireParam(params, 'decision');
+      return client.resolveTaskReview(params.taskId, params.decision, params.notes);
     case COMMANDS.ADOPT_CURRENT_TASK:
       return client.adoptCurrentTask({
         task: params.task,
@@ -792,14 +803,15 @@ async function executeCommand(client, command, params = {}) {
     case COMMANDS.VIBE_WORKFLOW: {
       requireParam(params, 'task');
       const steps = Array.isArray(params.steps) ? params.steps : (Array.isArray(params.followupTasks) ? params.followupTasks : []);
+      const autoContinue = params.autoContinue !== false;
       const followupTasks = steps.map(step => {
         if (typeof step === 'string') {
-          return { task: step, reviewRequired: params.reviewRequired === true, autoContinue: true };
+          return { task: step, reviewRequired: params.reviewRequired === true, autoContinue };
         }
         return {
           ...step,
           reviewRequired: step.reviewRequired === true || params.reviewRequired === true,
-          autoContinue: true
+          autoContinue: typeof step.autoContinue === 'boolean' ? step.autoContinue : autoContinue
         };
       });
       return client.delegateAsync(withLayeredTask(command, params).task, {
@@ -816,7 +828,7 @@ async function executeCommand(client, command, params = {}) {
         background: true,
         forceBackground: params.forceBackground === true,
         reviewRequired: params.reviewRequired === true,
-        autoContinue: true,
+        autoContinue,
         followupTasks,
         completionChecks: params.completionChecks,
         autoApproveDialog: params.autoApproveDialog === undefined ? 'auto' : params.autoApproveDialog,

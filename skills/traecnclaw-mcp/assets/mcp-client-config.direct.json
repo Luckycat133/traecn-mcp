@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/mcp-servers.json",
+  "mcpServers": {
+    "traecn": {
+      "command": "node",
+      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
+      "env": {
+        "TRAECN_HOST": "127.0.0.1",
+        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_TOKEN": "",
+        "TRAECN_MCP_TOOL_PROFILE": "public"
+      }
+    }
+  }
+}

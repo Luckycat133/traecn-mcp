@@ -341,6 +341,61 @@ async function test(name, fn) {
     assert.deepStrictEqual(captured.options.completionChecks, completionChecks);
   });
 
+  await test('vibe_workflow preserves explicit human review checkpoints', async () => {
+    let captured = null;
+    const client = {
+      delegateAsync: async (task, options) => {
+        captured = { task, options };
+        return { status: 202, data: { taskId: 'task_reviewed_workflow', status: 'queued' } };
+      }
+    };
+
+    await executeCommand(client, 'vibe_workflow', {
+      task: 'Implement feature',
+      reviewRequired: true,
+      autoContinue: false,
+      steps: ['Run tests', { task: 'Update changelog', reviewRequired: true }]
+    });
+
+    assert.strictEqual(captured.options.autoContinue, false);
+    assert.strictEqual(captured.options.followupTasks[0].autoContinue, false);
+    assert.strictEqual(captured.options.followupTasks[1].autoContinue, false);
+  });
+
+  await test('vibe_workflow catalog advertises human review controls', async () => {
+    const command = listCommands().find(item => item.command === 'vibe_workflow');
+    assert.ok(command.optional.includes('reviewRequired'));
+    assert.ok(command.optional.includes('autoContinue'));
+  });
+
+  await test('review_task exposes and resolves a gateway task checkpoint', async () => {
+    const command = listCommands().find(item => item.command === 'review_task');
+    assert.ok(command);
+    assert.deepStrictEqual(command.required, ['taskId', 'decision']);
+    assert.ok(command.optional.includes('notes'));
+
+    let captured = null;
+    const client = {
+      resolveTaskReview: async (taskId, decision, notes) => {
+        captured = { taskId, decision, notes };
+        return { status: 200, data: { taskId, status: 'continued' } };
+      }
+    };
+
+    const result = await executeCommand(client, 'review_task', {
+      taskId: 'task_review_1',
+      decision: 'approve',
+      notes: 'looks good'
+    });
+
+    assert.strictEqual(result.data.status, 'continued');
+    assert.deepStrictEqual(captured, {
+      taskId: 'task_review_1',
+      decision: 'approve',
+      notes: 'looks good'
+    });
+  });
+
   console.log(`\n[command-set.test.js] Results: ${passed} passed, ${failed} failed\n`);
   process.exit(failed > 0 ? 1 : 0);
 })().catch(err => {

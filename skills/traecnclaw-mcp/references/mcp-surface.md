@@ -1,222 +1,172 @@
 # TRAECNclaw MCP Surface
 
-Reference for selecting exact tools, configuring MCP clients, or auditing docs against the server. Written for any MCP-capable agent.
+Use this reference to choose exact tools, configure a generic stdio MCP client, and recover failures without falling back to GUI control.
 
-## Server
+## Server and generated contracts
 
-- Entrypoint: `mcp-server.js` (repo root)
-- Skill launcher: `scripts/start-mcp.js` — auto-locates and starts the server, inheriting stdio for JSON-RPC
-- Local gateway default: `http://127.0.0.1:8788`
-- Start via skill: `node scripts/start-mcp.js`
-- Start via npm: `npm run mcp`
+- Entrypoint: repository-root `mcp-server.js`
+- Skill launcher: `scripts/start-mcp.js`
+- Gateway default: `http://127.0.0.1:8788`
+- Transport: stdio JSON-RPC with Content-Length framing
 - Package bin: `traecnclaw-mcp`
-- Transport: stdio JSON-RPC
-- Live tool list from code:
+- Exact generated tool schemas: [mcp-tool-contracts.json](mcp-tool-contracts.json)
+- Schema-validated calls: [mcp-call-examples.json](mcp-call-examples.json)
+
+Regenerate and check the contract after MCP changes:
 
 ```bash
-node -e "console.log(require('./mcp-server').MCP_TOOLS.map(t => t.name).join('\n'))"
+npm run sync:skill-contracts
+npm run check:skill-contracts
 ```
 
-## Client config
+## Client configuration
 
-Copy [`assets/mcp-client-config.json`](../assets/mcp-client-config.json) into your client's config and replace `SKILL_DIR` with the absolute path to this skill folder. Two entry points are provided:
+Use [the launcher template](../assets/mcp-client-config.json) for source checkouts. It contains one enabled server. Replace `SKILL_DIR` with the absolute skill directory.
 
-**Option A (recommended): skill launcher**
+If the skill is installed outside the repository, add this environment entry to the launcher configuration:
 
 ```json
-{
-  "mcpServers": {
-    "traecn": {
-      "command": "node",
-      "args": ["SKILL_DIR/scripts/start-mcp.js"],
-      "env": {
-        "TRAECN_HOST": "127.0.0.1",
-        "TRAECN_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": "",
-        "TRAECN_MCP_TOOL_PROFILE": "public"
-      }
-    }
-  }
-}
+"TRAECN_MCP_SERVER_PATH": "/absolute/path/to/TRAECNclaw/mcp-server.js"
 ```
 
-**Option B (fallback): direct mcp-server.js path**
+Alternatively use [the direct-path template](../assets/mcp-client-config.direct.json). Choose one template; registering both starts duplicate servers and leaves one dependent on a placeholder path.
 
-```json
-{
-  "mcpServers": {
-    "traecn": {
-      "command": "node",
-      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
-      "env": {
-        "TRAECN_HOST": "127.0.0.1",
-        "TRAECN_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": "",
-        "TRAECN_MCP_TOOL_PROFILE": "public"
-      }
-    }
-  }
-}
-```
-
-For agents using the published package globally, set `command: "traecnclaw-mcp"` when the bin is on `PATH`. Keep `TRAECN_HOST`, `TRAECN_PORT`, and `TRAECN_GATEWAY_TOKEN` explicit so the agent does not infer unsafe remote access.
-
-OpenClaw may use its own `mcp.servers` config shape and plugin wrapper tools. Generic stdio MCP clients should use the tool names returned by `tools/list`; those names are consistently prefixed with `traecn_` but are not guaranteed to match OpenClaw wrapper names.
+For a globally installed package, use `"command":"traecnclaw-mcp"` when the bin is on `PATH`. Keep host, port, token, and profile explicit.
 
 ## Tool profiles
 
-`tools/list` is profile-scoped. Set `TRAECN_MCP_TOOL_PROFILE` in the MCP server environment:
+`TRAECN_MCP_TOOL_PROFILE` is read when the stdio server starts. Restart or reconnect the client after changing it.
 
-| Profile | Count | Purpose |
+| Profile | Current count | Purpose |
 | --- | ---: | --- |
-| `public` | 20 | Default for published agent integrations. High-signal task, review, settings, dialog, and workflow tools. |
-| `ops` | 32 | Adds recovery, cleanup, Solo conversation control, and long-queue proof tools. |
-| `full` | 36 | Adds every explicit compatibility shortcut and diagnostic tool. Use for audits or clients that need exact old surface parity. |
+| `public` | 21 | Default task, review, settings, dialog, model, and workflow surface |
+| `ops` | 33 | Public plus recovery, cleanup, Solo conversation, and proof operations |
+| `full` | 37 | Ops plus every explicit diagnostic and compatibility shortcut |
 
-The full command catalog remains available through `traecn_list_commands` and `traecn_run_command`, so agents can still reach stable lower-level command IDs without making `tools/list` noisy.
+Use `traecn_get_capabilities` for runtime counts and metadata. Profiles reduce discovery noise; they are not an authorization boundary.
 
-`traecn_get_capabilities` also returns each visible MCP tool with `layer`, `profile`, `risk`, optional `alternative`, and MCP-style annotations. Use that metadata to choose tools instead of matching names heuristically.
+## Discovery and planning
 
-## Tool selection
+- `traecn_get_capabilities`: compact endpoint, command, profile, risk, and recommended-order catalog.
+- `traecn_list_commands`: stable command IDs, including lower-level batch actions.
+- `traecn_run_command`: invoke a stable command after checking its required fields.
+- `traecn_plan_operation`: compute risk, side effects, confirmation, and preflight steps without changing TraeCN.
+- `traecn_preflight`: summarize gateway, readiness, queue, dialog, and optional command-plan state.
 
-| Goal | Prefer |
-| --- | --- |
-| Discover capabilities | `traecn_get_capabilities` |
-| Plan side-effecting ops | `traecn_plan_operation` or `traecn_preflight` with `command`/`params` |
-| Status, readiness, queue, dialog summary | `traecn_preflight` (one call) |
-| Short task | `traecn_run_task` after a clean `traecn_preflight` |
-| Long or queued task | `traecn_queue_task` → `traecn_wait_task` / `traecn_poll_task` |
-| Queue state in `public` | `traecn_preflight`; use `traecn_get_queue_status` only in `full` |
-| Code review | `traecn_review_code` |
-| Model / mode / chat | `traecn_switch_model`, `traecn_switch_mode`, `traecn_create_chat` |
-| Settings (stdio MCP) | `traecn_get_settings`, `traecn_set_setting` |
-| Dialog (public) | `traecn_get_dialog_status`, `traecn_respond_dialog` |
-| Dismiss dialog | `traecn_dismiss_dialog` (`full` only; prefer `traecn_respond_dialog`) |
-| Status / queue shortcut | `traecn_get_status`, `traecn_get_queue_status` (`full` only; prefer `traecn_preflight`) |
-| Stable command catalog | `traecn_list_commands` + `traecn_run_command` |
-| Unattended workflow | `traecn_run_unattended_workflow` (public); direct Solo/proof/cleanup tools only from the profile that exposes them |
+Start side-effecting sequences with `traecn_preflight` or `traecn_plan_operation` and honor the returned result.
 
-## Tool catalog
+## Task execution
 
-Each tool is tagged with a proficiency tier to guide adoption:
+- `traecn_run_task`: submit a short task and wait when possible.
+- `traecn_queue_task`: submit background work and return a `taskId`.
+- `traecn_poll_task`: inspect one task once.
+- `traecn_wait_task`: wait on one `taskId` until terminal or decision-required state.
+- `traecn_resolve_task_review`: approve, continue, or reject a gateway task in `awaiting_review`.
+- `traecn_cancel_task`: cancel a known tracked task.
+- `traecn_adopt_current_task` (`ops`): recover tracking without resending a prompt.
+- `traecn_stop_generation` (`ops`): stop current generation or queued model work.
 
-- **基础** — covers ~80% of daily automation; safe to start here
-- **进阶** — adds environment control and review workflows
-- **专家** — adds unattended automation, recovery, and diagnostics
+Do not resubmit the same prompt merely because a wait timed out. Poll or wait on the same `taskId`, preflight current state, adopt only when the original task is visible, and cancel only a known target.
 
-### Discovery and planning
+## Code review and dialogs
 
-- `traecn_get_capabilities` **基础** · `public`: compact command, endpoint, model, settings, and recommended call-order catalog. One call replaces manual endpoint discovery.
-- `traecn_preflight` **基础** · `public`: compact status, readiness, queue, dialog, and optional command-plan summary. Call before any side-effecting operation.
-- `traecn_list_commands` **进阶** · `public`: stable command catalog for generic command routing.
-- `traecn_run_command` **进阶** · `public`: execute a stable command ID from `traecn_list_commands`.
-- `traecn_plan_operation` **进阶** · `public`: side-effect, confirmation, and preflight plan without operating TraeCN.
+- `traecn_review_code`: build a findings-first review from instruction, files, code, diff, and focus.
+- `traecn_get_dialog_status`: inspect the actual pending question and available actions.
+- `traecn_respond_dialog`: approve, deny, confirm, answer, or dismiss after inspection.
+- `traecn_dismiss_dialog` (`full`): compatibility shortcut; prefer the public responder.
 
-### Task execution
+Model switching uses the dedicated MCP argument `name`, while the stable `switch_model` command uses its catalog field `model`. Do not transfer parameter names between the explicit MCP tool and the command catalog.
 
-- `traecn_run_task` **基础** · `public`: submit a task and try to wait for the final result. Typical latency 10–30s.
-- `traecn_queue_task` **基础** · `public`: submit a background task and return a `taskId`. Non-blocking.
-- `traecn_poll_task` **基础** · `public`: inspect a queued task once. Use for non-blocking status checks.
-- `traecn_wait_task` **基础** · `public`: wait locally for terminal state or a review/approval decision point. Blocks until done or gate.
-- `traecn_cancel_task` **基础** · `public`: cancel a tracked task.
-- `traecn_adopt_current_task` **专家** · `ops`: bind local tracking to an existing active TraeCN task.
-- `traecn_stop_generation` **专家** · `ops`: stop the current TraeCN generation.
-
-### Review and dialogs
-
-- `traecn_review_code` **进阶** · `public`: produce a findings-first review task from code, diff, files, and focus.
-- `traecn_get_dialog_status` **进阶** · `public`: inspect pending TraeCN dialogs.
-- `traecn_respond_dialog` **进阶** · `public`: approve, deny, confirm, answer, or auto-handle a dialog.
-- `traecn_get_review_gate_status` **专家** · `ops`: inspect review-required task state.
-- `traecn_resolve_review_gate` **专家** · `ops`: approve or reject a review gate.
-- `traecn_dismiss_dialog` **专家** · `full`: dismiss the current dialog. Prefer `traecn_respond_dialog`.
-
-### TraeCN control
-
-- `traecn_switch_model` **进阶** · `public`: switch the active model with fuzzy matching (exact → prefix → substring).
-- `traecn_switch_mode` **进阶** · `public`: switch between Solo and IDE modes.
-- `traecn_create_chat` **进阶** · `public`: create a new chat.
-- `traecn_open_project` **进阶** · `public`: open a project path in TraeCN.
-- `traecn_get_settings` **进阶** · `public`: read settings from the current or named section.
-- `traecn_set_setting` **进阶** · `public`: set a setting by label and value.
-- `traecn_get_status` **专家** · `full`: check gateway and TraeCN connection state. Prefer `traecn_preflight`.
-- `traecn_get_queue_status` **专家** · `full`: inspect model queue state. Prefer `traecn_preflight`.
-
-### Solo and unattended workflow
-
-- `traecn_run_unattended_workflow` **专家** · `public`: run an unattended initial task plus follow-up tasks with auto-continue checkpoints. One call drives a multi-step pipeline.
-- `traecn_list_solo_chats` **专家** · `ops`: list real Solo-mode conversations.
-- `traecn_switch_solo_chat` **专家** · `ops`: switch to a Solo conversation by index or visible text.
-- `traecn_cleanup_queue_probe_chats` **专家** · `ops`: find and optionally delete accidental queue-probe Solo conversations.
-- `traecn_get_cleanup_watch_status` **专家** · `ops`: inspect cleanup watcher lock, PID, and stale status.
-- `traecn_start_long_queue_proof` **专家** · `ops`: guarded GLM long-queue proof, dry-run by default.
-- `traecn_get_long_queue_proof_status` **专家** · `ops`: inspect proof status without sending another prompt.
-- `traecn_cancel_long_queue_proof` **专家** · `ops`: cancel marker-scoped proof watcher or task tracking.
-- `traecn_submit_solo_task` **专家** · `full`: submit into a real Solo conversation and track the result. Prefer `traecn_queue_task` or `traecn_run_unattended_workflow`.
-
-### Proficiency progression
-
-```text
-基础 (7 tools, public profile)
-  traecn_get_capabilities → traecn_preflight → traecn_run_task → traecn_queue_task
-  → traecn_poll_task → traecn_wait_task → traecn_cancel_task
-  │
-  └─ Master these first. They cover discovery, single-task execution, and queue management.
-     Typical call count per session: 2–5. Latency: 10–30s per task.
-
-进阶 (12 tools, public profile)
-  traecn_list_commands / traecn_run_command → traecn_plan_operation
-  → traecn_switch_model → traecn_switch_mode → traecn_review_code
-  → traecn_get_settings / traecn_set_setting → traecn_get_dialog_status / traecn_respond_dialog
-  │
-  └─ Adds environment control, code review, and dialog handling.
-     Typical call count per session: 5–15. Latency: 15–45s per review cycle.
-
-专家 (16 tools, ops + full profiles)
-  traecn_run_unattended_workflow → traecn_resolve_review_gate → batch operations
-  → Solo control → long-queue proof → cleanup → diagnostics
-  │
-  └─ Adds unattended automation, batch processing, and recovery.
-     Typical call count per session: 1–3 (workflow handles the rest). Latency: 2–10min per pipeline.
+```json
+{
+  "name": "GLM-5.2",
+  "waitForQueue": false
+}
 ```
+
+## Two distinct review mechanisms
+
+### Gateway task checkpoint
+
+This checkpoint belongs to TRAECNclaw's background workflow state machine.
+
+1. Submit with `reviewRequired:true` and `autoContinue:false`.
+2. Wait until `traecn_wait_task` returns `awaiting_review`.
+3. Inspect the task result.
+4. Call `traecn_resolve_task_review` with the same `taskId` and `decision` equal to `approve`, `continue`, or `reject`.
+5. If approval returns `nextTaskId`, wait on that new task.
+
+This complete path is available in `public`.
+
+### TraeCN internal keep/revert gate
+
+This is a TraeCN UI state exposed for operational recovery:
+
+- Inspect: `traecn_get_review_gate_status` (`ops`).
+- Resolve: `traecn_resolve_review_gate` (`ops`) with `action` equal to `keep_all`, `revert_all`, `keep`, or `discard`.
+
+These tools do not approve a gateway `awaiting_review` task.
+
+## Multi-step workflows
+
+`traecn_run_unattended_workflow` accepts an initial `task`, `steps` or `followupTasks`, and the same queue/review controls as background delegation.
+
+- Omit `autoContinue` or set it to `true` for automatic progression.
+- Set `reviewRequired:true` and `autoContinue:false` for a human checkpoint after each reviewable step.
+- Use object steps when a step needs its own `reviewRequired`, `autoContinue`, `includeProcessText`, or `completionChecks` value.
+- The returned task ID identifies only the current step; approvals can return the next step's ID.
+
+The name remains for compatibility, but explicit `autoContinue:false` now takes precedence instead of being overwritten.
+
+## Batch operations
+
+Batch execution belongs to the stable command catalog rather than the explicit MCP tool list:
+
+1. Call `traecn_list_commands`.
+2. Confirm the current `batch_submit`, `batch_status`, and `batch_cancel` definitions.
+3. Call `traecn_run_command` with the chosen command and its catalog params.
+
+JavaScript wrapper methods documented elsewhere are not callable stdio MCP tool names.
+
+## TraeCN control
+
+- `traecn_switch_model`: fuzzy model matching; required field `name`.
+- `traecn_switch_mode`: switch `solo` / `ide`.
+- `traecn_create_chat`: create a chat.
+- `traecn_open_project`: open a local path.
+- `traecn_get_settings` / `traecn_set_setting`: read or update settings.
+- `traecn_get_status` and `traecn_get_queue_status` (`full`): compatibility diagnostics; prefer `traecn_preflight`.
+
+## Long-queue proof and cleanup
+
+- `traecn_start_long_queue_proof` (`ops`) is dry-run by default.
+- A new quota-spending submission requires `execute:true` and `allowQuotaSpend:true` together.
+- `traecn_get_long_queue_proof_status` (`ops`) reads evidence without sending a prompt.
+- `traecn_cancel_long_queue_proof` (`ops`) cancels marker-scoped tracking.
+- `traecn_cleanup_queue_probe_chats` (`ops`) should be run dry-first.
+- `traecn_get_cleanup_watch_status` (`ops`) reads local watcher state.
+
+Do not claim a live long-queue proof passed unless the acceptance evidence is complete.
+
+## Layered troubleshooting
+
+| Layer | Evidence | Recovery |
+| --- | --- | --- |
+| Client / stdio | MCP process fails, initialize fails, or `tools/list` is absent/empty | Check Node 22+, absolute command/args, stderr, Content-Length framing, and client restart |
+| Tool profile | Tools list works but expected ops/full tool is absent | Change profile and restart/reconnect the MCP server |
+| Gateway | Tools exist but a call reports `ECONNREFUSED 127.0.0.1:8788` | Start the gateway; tools/list does not depend on it |
+| Authentication | HTTP 401 / unauthorized | Align gateway and client token values |
+| CDP / TraeCN | Gateway responds but reports disconnected or CDP unavailable | Start TraeCN with port 9222 and run `npm run doctor` |
+| Readiness | Connected but `ready:false` / `canDelegate:false` | Follow the returned readiness, queue, and dialog actions |
+| Workflow | `queued`, `approval_required`, or `awaiting_review` | Keep the task ID, resolve the actual blocker, then wait again |
 
 ## Names not to call on stdio MCP
 
-These belong to older notes or the OpenClaw plugin compatibility layer. Do not call them on the stdio MCP server directly:
+Older notes and OpenClaw wrappers may use names such as `traecn_settings_action`, `traecn_settings_read`, or `traecn_approve_dialog`. For stdio MCP use the names returned by `tools/list`, including `traecn_get_settings`, `traecn_set_setting`, `traecn_switch_model`, and `traecn_respond_dialog`.
 
-- `traecn_settings_action`
-- `traecn_settings_read`
-- `traecn_approve_dialog`
+## Validation boundary
 
-Use `traecn_get_settings`, `traecn_set_setting`, `traecn_switch_model`, and `traecn_respond_dialog` instead.
-
-## Source docs
-
-Read these repo docs only when deeper details are needed:
-
-- `docs/MCP-SERVER-GUIDE.md`: client configuration and environment variables.
-- `docs/openclaw-command-set.md`: OpenClaw command router names and examples.
-- `docs/OPENCLAW-MCP-SETUP.md`: OpenClaw-specific setup and troubleshooting.
-- `docs/development.md`: verification and unattended workflow development notes.
-
-## Error recovery
-
-When a tool call fails, the JSON-RPC error object carries `code: -32000` and a human-readable `message`. Common recovery patterns:
-
-| Error message pattern | Cause | Recovery |
-| --- | --- | --- |
-| `connect ECONNREFUSED 127.0.0.1:8788` | Gateway not running | `npm run start:gateway` |
-| `connect ECONNREFUSED 127.0.0.1:9222` | TraeCN CDP port closed | Restart TraeCN with `--remote-debugging-port=9222` |
-| `Unauthorized` / `401` | `TRAECN_GATEWAY_TOKEN` mismatch | Ensure the token matches between gateway and MCP client config |
-| `Task not found` | Task ID expired or already completed | Call `traecn_preflight` to re-discover active tasks |
-| `Dialog timeout` | No dialog appeared within the wait window | Retry `traecn_respond_dialog` or inspect with `traecn_get_dialog_status` |
-| `Model queue full` | External model provider throttling | Wait, switch model via `traecn_switch_model`, or cancel via `traecn_cancel_task` |
-| `ENOENT: mcp-server.js` | Launcher cannot locate the server | Set `TRAECN_MCP_SERVER_PATH` env var to the absolute path |
-
-### Retry strategy
-
-1. Call `traecn_preflight` to get a compact snapshot of connection, queue, and dialog state.
-2. If `connected: false`, run `npm run doctor` and restart the gateway.
-3. If a dialog is blocking, resolve it with `traecn_respond_dialog` before retrying the original task.
-4. If the model queue is full, either wait, switch models, or cancel — do not retry blindly.
-5. For unattended workflows, rely on `traecn_run_unattended_workflow`'s built-in auto-continue checkpoints instead of manual retry loops.
+- `npm run doctor` checks the local environment but may legitimately warn when gateway/CDP are offline.
+- `npm test` covers the launcher, protocol smoke test, schema generation, and repository behavior.
+- `npm run acceptance:audit -- --require-complete` is required before claiming live unattended readiness.
+- Report measured latency with environment and sample count. Do not present example ranges as an SLA.

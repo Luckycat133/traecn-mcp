@@ -368,6 +368,13 @@ class TraeCNApiClient {
     return this._request('POST', '/api/task/' + encodeURIComponent(taskId) + '/cancel');
   }
 
+  async resolveTaskReview(taskId, decision, notes = '') {
+    return this._request('POST', '/api/task/' + encodeURIComponent(taskId) + '/review', {
+      decision,
+      notes
+    });
+  }
+
   async stopGeneration() {
     return this._request('POST', '/api/trae/stop-generation');
   }

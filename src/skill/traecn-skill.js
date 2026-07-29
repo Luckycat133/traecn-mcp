@@ -399,14 +399,15 @@ class TraeCNSkill {
     const steps = Array.isArray(input.steps)
       ? input.steps
       : (Array.isArray(input.followupTasks) ? input.followupTasks : []);
+    const autoContinue = input.autoContinue !== false;
     const followupTasks = steps.map(step => {
       if (typeof step === 'string') {
-        return { task: step, reviewRequired: input.reviewRequired === true, autoContinue: true };
+        return { task: step, reviewRequired: input.reviewRequired === true, autoContinue };
       }
       return {
         ...step,
         reviewRequired: step.reviewRequired === true || input.reviewRequired === true,
-        autoContinue: true
+        autoContinue: typeof step.autoContinue === 'boolean' ? step.autoContinue : autoContinue
       };
     });
     return this.queue(input.task, {
@@ -414,7 +415,7 @@ class TraeCNSkill {
       background: input.background !== false,
       forceBackground: input.forceBackground === true,
       reviewRequired: input.reviewRequired === true,
-      autoContinue: true,
+      autoContinue,
       autoApproveDialog: input.autoApproveDialog === undefined ? 'auto' : input.autoApproveDialog,
       followupTasks
     });

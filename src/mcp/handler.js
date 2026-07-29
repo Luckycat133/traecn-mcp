@@ -111,6 +111,11 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       const client = new TraeCNApiClient(context);
       return asMcpContent(await client.waitForTask(args.taskId, args));
     }
+    case 'resolve_task_review': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.resolveTaskReview(args.taskId, args.decision, args.notes || '');
+      return asMcpContent(result.data || result);
+    }
     case 'adopt_current_task': {
       const client = new TraeCNApiClient(context);
       const result = await client.adoptCurrentTask(args);

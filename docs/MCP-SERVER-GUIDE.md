@@ -10,7 +10,7 @@ Skill 自带启动器 `skills/traecnclaw-mcp/scripts/start-mcp.js`，会自动�
 "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"]
 ```
 
-完整配置模板（含 Option A 启动器 / Option B 直连两种方式）见 `skills/traecnclaw-mcp/assets/mcp-client-config.json`。也可设置环境变量 `TRAECN_MCP_SERVER_PATH` 手动指定 `mcp-server.js` 的绝对路径。
+单入口启动器模板见 `skills/traecnclaw-mcp/assets/mcp-client-config.json`；直连 fallback 单独放在 `skills/traecnclaw-mcp/assets/mcp-client-config.direct.json`，不要同时注册两者。也可设置环境变量 `TRAECN_MCP_SERVER_PATH` 手动指定 `mcp-server.js` 的绝对路径。
 
 ## 快速开始
 
@@ -90,15 +90,16 @@ Skill 自带启动器 `skills/traecnclaw-mcp/scripts/start-mcp.js`，会自动�
 
 | Profile | 数量 | 说明 |
 | --- | ---: | --- |
-| `public` | 20 | 默认发布面，适合通用 agent。 |
-| `ops` | 32 | 增加恢复、cleanup、Solo 对话和长队列证明工具。 |
-| `full` | 36 | 暴露所有显式工具，包括诊断/兼容快捷入口。 |
+| `public` | 21 | 默认发布面，适合通用 agent。 |
+| `ops` | 33 | 增加恢复、cleanup、Solo 对话和长队列证明工具。 |
+| `full` | 37 | 暴露所有显式工具，包括诊断/兼容快捷入口。 |
 
 核心工具包括：
 
 - `traecn_run_task`: 委派任务并尽量等待最终结果
 - `traecn_queue_task`: 提交后台队列任务并返回 `taskId`
 - `traecn_poll_task`: 查询队列任务状态
+- `traecn_resolve_task_review`: 用 `taskId` 和 `decision` 处理网关 `awaiting_review` 检查点
 - `traecn_review_code`: 对代码、diff 或指定文件范围生成 findings-first 审查
 - `traecn_preflight`: 默认状态、队列、弹窗和确认计划入口
 - `traecn_get_dialog_status`: 直接检查确认弹窗
