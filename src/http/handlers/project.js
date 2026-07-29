@@ -112,7 +112,7 @@ async function handleOpenProject(req, res, ctx) {
       return;
     }
 
-    const startResult = startTraeCN({ binPath, projectPath, newInstance });
+    const startResult = await startTraeCN({ binPath, projectPath, newInstance });
     result = {
       success: true,
       projectPath,
@@ -121,7 +121,8 @@ async function handleOpenProject(req, res, ctx) {
       command: startResult.command,
       args: startResult.args,
       cdp: { host: cdpHost, port: cdpPort },
-      started: true
+      started: true,
+      cdpReady: startResult.cdpReady
     };
 
     // Poll for CDP target readiness (replaces hardcoded sleep)

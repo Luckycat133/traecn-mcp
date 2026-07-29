@@ -59,7 +59,7 @@ async function listSoloChats(driver) {
             requestAnimationFrame(function() { requestAnimationFrame(resolve); });
           });
         }
-        var sidebar = document.querySelector('.soloaisidebar');
+        var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
         if (!sidebar) {
           return { mode: 'not_solo', chats: [], count: 0, reason: 'sidebar_element_not_found' };
         }
@@ -172,7 +172,7 @@ async function switchSoloChat(driver, criteria = {}) {
         var targetIndex = ${index === null ? 'null' : String(index)};
         var textIncludes = ${safeJsValue(textIncludes)};
         var titleIncludes = ${safeJsValue(titleIncludes)};
-        var sidebar = document.querySelector('.soloaisidebar');
+        var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
         if (!sidebar) {
           return { success: false, reason: 'sidebar_element_not_found' };
         }
@@ -268,7 +268,7 @@ async function _openRowContextMenu(driver, candidate) {
   const expression = `
     (function() {
       var candidate = ${safeJsValue(candidate)};
-      var sidebar = document.querySelector('.soloaisidebar');
+      var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
       if (!sidebar) return { success: false, reason: 'sidebar_not_visible' };
       var items = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
         .filter(function(el) {
@@ -283,9 +283,10 @@ async function _openRowContextMenu(driver, candidate) {
       }
       if (!target && candidate && Number.isInteger(candidate.index) && items[candidate.index]) target = items[candidate.index];
       if (!target) return { success: false, reason: 'row_not_found', count: items.length };
-      var rect = target.getBoundingClientRect();
-      var x = rect.x + rect.width / 2;
-      var y = rect.y + rect.height / 2;
+
+      var targetRect = target.getBoundingClientRect();
+      var x = Math.round(targetRect.left + targetRect.width - 24);
+      var y = Math.round(targetRect.top + targetRect.height / 2);
       try {
         var ev = new MouseEvent('contextmenu', {
           bubbles: true,
@@ -303,11 +304,21 @@ async function _openRowContextMenu(driver, candidate) {
       return { success: true, x: x, y: y, title: (target.innerText || '').slice(0, 80) };
     })()
   `;
-  return await driver.client.send('Runtime.evaluate', {
+  const openRes = await driver.client.send('Runtime.evaluate', {
     expression,
     returnByValue: true,
     awaitPromise: true
   }).then(r => r.result?.value || { success: false, reason: 'evaluate_failed' });
+
+  if (openRes && openRes.success && openRes.x && openRes.y) {
+    // Perform a real CDP right-click (contextmenu) at the action-button coordinates so the native menu opens reliably
+    try {
+      await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: openRes.x, y: openRes.y });
+      await driver.client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: openRes.x, y: openRes.y, button: 'right', clickCount: 1 });
+      await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: openRes.x, y: openRes.y, button: 'right', clickCount: 1 });
+    } catch (e) {}
+  }
+  return openRes;
 }
 
 /**
@@ -362,7 +373,11 @@ async function _locateCandidateRow(driver, candidate) {
       function norm(value) {
         return String(value || '').replace(/[\\u00a0\\t\\r\\n]+/g, ' ').replace(/\\s+/g, ' ').trim().toLowerCase();
       }
-      var sidebar = document.querySelector('.soloaisidebar');
+      var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
+      if (sidebar && sidebar.getBoundingClientRect().width === 0) {
+        var openBtn = document.querySelector('a.codicon-icube-NewChat, [class*="NewChat"], [class*="new-task-button"], [class*="sidebar-toggle"]');
+        if (openBtn) openBtn.click();
+      }
       if (!sidebar) {
         return { error: 'sidebar_element_not_found' };
       }
@@ -403,10 +418,13 @@ async function _locateCandidateRow(driver, candidate) {
         var rect = target.el.getBoundingClientRect();
         var action = target.el.querySelector('[class*="task-item-actions-wrap"], [class*="task-item-action"]');
         var actionRect = action && action.getBoundingClientRect ? action.getBoundingClientRect() : null;
-        var rowPoint = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, kind: 'row' };
-        var actionPoint = actionRect && actionRect.width >= 8 && actionRect.height >= 8
+        var sidebarRect = (sidebar && sidebar.getBoundingClientRect && sidebar.getBoundingClientRect().width > 80) ? sidebar.getBoundingClientRect() : null;
+        var rightX = sidebarRect ? (sidebarRect.right - 24) : 237;
+        var rowY = rect.y > 0 ? (rect.y + rect.height / 2) : (150 + target.index * 44);
+        var rowPoint = { x: rightX - 80, y: rowY, kind: 'row' };
+        var actionPoint = actionRect && actionRect.width >= 8 && actionRect.height >= 8 && actionRect.x > 0
           ? { x: actionRect.x + actionRect.width / 2, y: actionRect.y + actionRect.height / 2, kind: 'action' }
-          : { x: rect.x + rect.width - 24, y: rowPoint.y, kind: 'row-right' };
+          : { x: rightX, y: rowY, kind: 'row-right' };
         var scrollHost = findScrollHost(sidebar);
         var scrollTop = scrollHost ? scrollHost.scrollTop : 0;
         return {
@@ -464,23 +482,24 @@ async function _locateCandidateRow(driver, candidate) {
  * "删除" so we don't break when the menu renames an item.
  */
 async function _locateDeleteMenuPoint(driver) {
+  await new Promise(r => setTimeout(r, 350));
   const expression = `
     (function() {
       var containers = Array.from(document.querySelectorAll('.context-menu-container, [class*="context-menu"]'));
       var MENU_PATTERNS = [/^\\s*删除任务\\s*$/, /^\\s*删除对话\\s*$/, /^\\s*删除\\s*$/];
       for (var c = 0; c < containers.length; c++) {
         var container = containers[c];
-        if (container.offsetParent === null) continue;
+        if (container.offsetParent === null && container.offsetWidth === 0 && container.offsetHeight === 0) continue;
         var items = Array.from(container.querySelectorAll('*'))
           .filter(function(el) {
-            if (!el || el.offsetParent === null) return false;
+            if (!el) return false;
             var text = (el.innerText || el.textContent || '').trim();
             return text && text.length < 20;
           });
         for (var p = 0; p < MENU_PATTERNS.length; p++) {
           var match = items.find(function(el) { return MENU_PATTERNS[p].test((el.innerText || el.textContent || '').trim()); });
           if (match) {
-            var containerEl = match.closest('.context-menu-container-delete') || match.closest('[class*="delete"]') || match;
+            var containerEl = match.closest('[class*="context-menu-row"], [class*="context-menu-container"], [class*="context-menu-item"], .context-menu-container-delete') || match;
             var rect = containerEl.getBoundingClientRect();
             return {
               x: rect.x + rect.width / 2,
@@ -506,19 +525,20 @@ async function _locateDeleteMenuPoint(driver) {
 }
 
 /**
- * Locate the confirm button inside a Solo deletion dialog (role=dialog).
+ * Locate the confirm button inside a Solo deletion dialog (role=dialog or modal overlay).
  */
 async function _locateConfirmPoint(driver) {
+  await new Promise(r => setTimeout(r, 350));
   const expression = `
     (function() {
-      var dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+      var dialogs = Array.from(document.querySelectorAll('[role="dialog"], .icd-modal-v2-overlay, .icd-modal-v2-content, [class*="modal"]'));
       var best = null;
       for (var i = 0; i < dialogs.length; i++) {
         var dialog = dialogs[i];
-        if (dialog.offsetParent === null) continue;
+        if (dialog.offsetParent === null && dialog.offsetWidth === 0 && dialog.offsetHeight === 0) continue;
         var btns = Array.from(dialog.querySelectorAll('.icd-btn, button, [class*="btn"]'))
           .filter(function(el) {
-            if (!el || el.offsetParent === null) return false;
+            if (!el) return false;
             var text = (el.innerText || el.textContent || '').trim();
             return text === '删除';
           });

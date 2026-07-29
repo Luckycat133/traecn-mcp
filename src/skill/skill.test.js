@@ -212,8 +212,9 @@ test('_normalizeModel should match known models', () => {
   const skill = new TraeCNSkill();
   
   expect(skill._normalizeModel('glm')).toBe('GLM-5.2');
-  expect(skill._normalizeModel('deepseek')).toBe('DeepSeek-V3.1-Terminus');
-  expect(skill._normalizeModel('doubao')).toBe('Doubao-Seed-2.0-Code');
+  expect(skill._normalizeModel('deepseek')).toBe('DeepSeek-V4-Pro');
+  expect(skill._normalizeModel('deepseek-v3')).toBe('DeepSeek-V3.1-Terminus');
+  expect(skill._normalizeModel('doubao')).toBe('Doubao-Seed-2.1-Pro');
   expect(skill._normalizeModel('GLM-5.2')).toBe('GLM-5.2');
   expect(skill._normalizeModel('GLM-5.1')).toBe('GLM-5.1');
   expect(skill._normalizeModel('unknown-model')).toBe(null);

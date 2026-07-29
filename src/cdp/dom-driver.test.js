@@ -690,6 +690,10 @@ test('isModelErrorResponseText detects Trae model provider failures', () => {
     driver._isModelErrorResponseText('Agent\n模型请求失败，点击右侧箭头展开模型服务商错误信息进行排查。\n异常打断'),
     true
   );
+  assert.strictEqual(
+    driver._isModelErrorResponseText('Agent\n今日对话额度已耗尽。你可以等待至 2026-07-24 凌晨 0 点（北京时间）额度重置。'),
+    true
+  );
   assert.strictEqual(driver._isModelErrorResponseText('Findings:\\n[P2] no model issue'), false);
 });
 

@@ -413,7 +413,10 @@ function _isModelErrorResponseText(text) {
     'model request failed',
     'model service error',
     '服务商错误',
-    '展开模型服务商错误信息'
+    '展开模型服务商错误信息',
+    '今日对话额度已耗尽',
+    '额度已耗尽',
+    '额度重置'
   ].some(signal => normalized.toLowerCase().includes(signal.toLowerCase()));
 }
 

@@ -4,6 +4,7 @@ const { execFile, execSync, spawn } = require('child_process');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 const { getEnvWithFallback } = require('../shared/utils');
 
 function findTraeCNBinary() {
@@ -128,7 +129,7 @@ function buildStartCommand(binPath, args, options = {}) {
   return { command: binPath, commandArgs: args };
 }
 
-function startTraeCN(options = {}) {
+async function startTraeCN(options = {}) {
   const binPath = options.binPath || findTraeCNBinary();
   if (!binPath) {
     throw new Error('TraeCN binary not found. Set TRAECN_BIN environment variable.');
@@ -158,13 +159,45 @@ function startTraeCN(options = {}) {
 
   const { command, commandArgs } = buildStartCommand(binPath, args, options);
 
+  // Capture child stderr so launch failures (e.g. "bad option: --remote-debugging-port")
+  // surface instead of being swallowed by stdio:'ignore'. Cap the buffer to avoid
+  // unbounded growth for long-lived Trae instances.
+  let stderrTail = '';
   const child = spawn(command, commandArgs, {
     detached: true,
-    stdio: 'ignore'
+    stdio: ['ignore', 'ignore', 'pipe']
   });
+  if (child.stderr) {
+    child.stderr.on('data', (chunk) => {
+      stderrTail += chunk.toString();
+      if (stderrTail.length > 4096) stderrTail = stderrTail.slice(-4096);
+    });
+  }
   child.unref();
 
-  return { pid: child.pid, command, args: commandArgs };
+  // The process can start fine while CDP never comes up — e.g. a TraeCN build
+  // that rejects --remote-debugging-port (see launchError), or the port being
+  // blocked. Report readiness honestly instead of assuming the debug endpoint is listening.
+  const cdpReady = await verifyTraeCNCDP(remotePort, options.cdpTimeoutMs || 20000, 500);
+
+  return { pid: child.pid, command, args: commandArgs, remotePort, cdpReady, launchError: cdpReady ? null : stderrTail.trim() };
+}
+
+async function verifyTraeCNCDP(port, timeoutMs = 20000, pollMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const up = await new Promise((resolve) => {
+      const req = http.get({ host: '127.0.0.1', port, path: '/json/version', timeout: 2000 }, (res) => {
+        res.resume();
+        resolve(res.statusCode === 200);
+      });
+      req.on('error', () => { req.destroy(); resolve(false); });
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+    });
+    if (up) return true;
+    await sleep(pollMs);
+  }
+  return false;
 }
 
 async function restartTraeCNWithDebug(options = {}) {
@@ -178,13 +211,14 @@ async function restartTraeCNWithDebug(options = {}) {
     timeoutMs: options.quitTimeoutMs,
     pollMs: options.pollMs
   });
-  const launched = startTraeCN({
+  const launched = await startTraeCN({
     binPath,
     projectPath: options.projectPath,
     newInstance: quickstart.profileMode === 'isolated',
-    useIsolatedProfile: quickstart.useIsolatedProfile
+    useIsolatedProfile: quickstart.useIsolatedProfile,
+    cdpTimeoutMs: options.cdpTimeoutMs
   });
-  return { ok: true, quit, launched, profileMode: quickstart.profileMode };
+  return { ok: launched.cdpReady, quit, launched, profileMode: quickstart.profileMode, launchError: launched.launchError };
 }
 
 function getQuickstartConfig() {
@@ -211,5 +245,6 @@ module.exports = {
   quitTraeCN,
   restartTraeCNWithDebug,
   startTraeCN,
+  verifyTraeCNCDP,
   getQuickstartConfig
 };

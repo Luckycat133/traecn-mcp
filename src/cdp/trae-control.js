@@ -119,7 +119,7 @@ class TraeControl {
         quit = result.quit;
         launched = result.launched;
       } else {
-        launched = startTraeCN({
+        launched = await startTraeCN({
           binPath,
           newInstance: recoveryNewInstance,
           useIsolatedProfile: quickstart.profileMode === 'existing' ? false : quickstart.useIsolatedProfile

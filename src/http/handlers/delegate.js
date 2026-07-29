@@ -17,6 +17,7 @@
 
 const { parseBody } = require('../request-gate');
 const { getEnvWithFallback, isGenericQueueProbeTask } = require('../../shared/utils');
+const discovery = require('../../cdp/discovery');
 
 const ROUTES = [
   { method: 'POST', path: '/api/tasks/delegate', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
@@ -73,6 +74,24 @@ async function handleDelegateAsync(req, res, ctx) {
   const fallbackModels = ctx._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
   const modelProbeIntervalMs = ctx._modelProbeIntervalMs(body.modelProbeIntervalMs);
   await ctx._ensureConnection();
+
+  // Honest gate: a stale but still-OPEN CDP WebSocket can report isConnected
+  // while the underlying Trae browser is actually gone, so _ensureConnection
+  // may skip reconnection and driver.delegate would hand back a false
+  // "ok: true / unstable" result. Re-verify the CDP endpoint is truly
+  // reachable before delegating. The mock bridge skips this (tests/CI).
+  if (!ctx.mockBridge) {
+    try {
+      await discovery.resolveCDPEndpoint();
+    } catch (cdpErr) {
+      return ctx._json(req, res, {
+        ok: false,
+        error: 'CONNECTION_FAILED',
+        code: 'CDP_NOT_CONNECTED',
+        message: 'TraeCN CDP is not reachable: ' + (cdpErr && cdpErr.message ? cdpErr.message : String(cdpErr))
+      }, 503);
+    }
+  }
 
   // Get queue status with enhanced detection
   let queueStatus = await ctx.driver.checkQueueStatus();
