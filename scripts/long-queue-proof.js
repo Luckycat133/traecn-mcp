@@ -5,9 +5,9 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { readArg, resolveGatewayHostPort } = require('./lib/cli-config');
 
-const DEFAULT_HOST = process.env.TRAECN_GATEWAY_HOST || process.env.TRAECN_HOST || '127.0.0.1';
-const DEFAULT_PORT = Number(process.env.TRAECN_GATEWAY_PORT || process.env.TRAECN_PORT || 8788);
+const { host: DEFAULT_HOST, port: DEFAULT_PORT } = resolveGatewayHostPort({ useCliArgs: false, useLegacyEnv: true });
 const DEFAULT_MODEL = 'GLM-5.2';
 const DEFAULT_POLL_MS = 30000;
 const DEFAULT_CLEANUP_INTERVAL_MS = 120000;
@@ -20,12 +20,6 @@ function appSupportDir() {
     return path.join(os.homedir(), 'Library', 'Application Support', 'TRAECNclaw');
   }
   return path.join(os.homedir(), '.traecnclaw');
-}
-
-function readArg(name, fallback = null) {
-  const index = process.argv.indexOf(name);
-  if (index === -1) return fallback;
-  return process.argv[index + 1] || fallback;
 }
 
 function readNumberArg(name, fallback) {

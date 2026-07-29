@@ -97,26 +97,26 @@ function formatLifecyclePayload(event, gateway) {
   };
 }
 
-function createWebhookPlugin(config = {}) {
-  const webhookUrls = config.urls || parseWebhookUrls(
+function createWebhookPlugin(options = {}) {
+  const webhookUrls = options.urls || parseWebhookUrls(
     getEnv('TRAECN_WEBHOOK_URLS', getEnv('TRAE_WEBHOOK_URLS', ''))
   );
 
-  const enabledEvents = config.events || parseWebhookEvents(
+  const enabledEvents = options.events || parseWebhookEvents(
     getEnv('TRAECN_WEBHOOK_EVENTS', getEnv('TRAE_WEBHOOK_EVENTS', ''))
   );
 
-  const timeout = config.timeout || parseInt(
+  const timeout = options.timeout || parseInt(
     getEnv('TRAECN_WEBHOOK_TIMEOUT', getEnv('TRAE_WEBHOOK_TIMEOUT', '5000')),
     10
   );
 
-  const retryCount = config.retryCount || parseInt(
+  const retryCount = options.retryCount || parseInt(
     getEnv('TRAECN_WEBHOOK_RETRY_COUNT', getEnv('TRAE_WEBHOOK_RETRY_COUNT', '3')),
     10
   );
 
-  const retryDelay = config.retryDelay || parseInt(
+  const retryDelay = options.retryDelay || parseInt(
     getEnv('TRAECN_WEBHOOK_RETRY_DELAY', getEnv('TRAE_WEBHOOK_RETRY_DELAY', '1000')),
     10
   );

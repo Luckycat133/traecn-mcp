@@ -22,10 +22,10 @@ function reset() {
 // ============ 基础层 (Basic Layer) ============
 // 覆盖90%使用场景，5个核心函数
 
-async function runTask(task, opts = {}) {
+async function runTask(task, options = {}) {
   const skill = getSkill();
   try {
-    const result = await skill.run(task, opts);
+    const result = await skill.run(task, options);
     if (result.error) {
       throw TraeCNSkillError.taskFailed(result.error, { task });
     }
@@ -58,10 +58,10 @@ async function checkStatus() {
   }
 }
 
-async function queueTask(task, opts = {}) {
+async function queueTask(task, options = {}) {
   const skill = getSkill();
   try {
-    const result = await skill.queue(task, opts);
+    const result = await skill.queue(task, options);
     return result.taskId;
   } catch (error) {
     throw TraeCNSkillError.taskFailed(`队列任务失败: ${error.message}`, { task });
@@ -80,10 +80,10 @@ async function pollTask(taskId = null) {
   }
 }
 
-async function waitTask(taskId = null, opts = {}) {
+async function waitTask(taskId = null, options = {}) {
   const skill = getSkill();
   try {
-    return await skill.wait(taskId, opts);
+    return await skill.wait(taskId, options);
   } catch (error) {
     if (error.code === 'TASK_ID_MISSING') {
       throw error; // 保留原始错误
@@ -92,11 +92,11 @@ async function waitTask(taskId = null, opts = {}) {
   }
 }
 
-async function reviewCode(input, opts = {}) {
+async function reviewCode(input, options = {}) {
   const skill = getSkill();
   try {
-    const result = await skill.reviewCode(input, opts);
-    return opts.queue === true ? result.taskId : result.text;
+    const result = await skill.reviewCode(input, options);
+    return options.queue === true ? result.taskId : result.text;
   } catch (error) {
     throw TraeCNSkillError.taskFailed(`代码审查失败: ${error.message}`, { input });
   }
@@ -160,10 +160,10 @@ const advanced = {
     }
   },
 
-  async submitSoloChatTask(task, opts = {}) {
+  async submitSoloChatTask(task, options = {}) {
     const skill = getSkill();
     try {
-      return await skill.submitSoloChatTask(task, opts);
+      return await skill.submitSoloChatTask(task, options);
     } catch (error) {
       throw TraeCNSkillError.taskFailed(`提交 Solo 对话任务失败: ${error.message}`, { task });
     }
@@ -250,11 +250,11 @@ const dialog = {
 // 批量处理，高级场景
 
 const batch = {
-  async runTasks(tasks, opts = {}) {
+  async runTasks(tasks, options = {}) {
     const results = [];
     for (const task of tasks) {
       try {
-        const result = await runTask(task, opts);
+        const result = await runTask(task, options);
         results.push({ task, result, success: true });
       } catch (error) {
         results.push({ task, error: error.message, success: false });
@@ -263,11 +263,11 @@ const batch = {
     return results;
   },
 
-  async queueTasks(tasks, opts = {}) {
+  async queueTasks(tasks, options = {}) {
     const taskIds = [];
     for (const task of tasks) {
       try {
-        const taskId = await queueTask(task, opts);
+        const taskId = await queueTask(task, options);
         taskIds.push({ task, taskId, success: true });
       } catch (error) {
         taskIds.push({ task, error: error.message, success: false });

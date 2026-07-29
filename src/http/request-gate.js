@@ -58,6 +58,10 @@ const DEFAULT_HTML_HEADERS = {
 // is reused (reject + destroy() rather than buffering forever).
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
+// Only gzip responses bigger than 1 KiB — below that the gzip framing
+// overhead costs more bytes than it saves.
+const GZIP_MIN_BYTES = 1024;
+
 /**
  * Percent-encode any non-ASCII bytes in a raw URL. Returned value is safe to
  * log without mangling the path or query.
@@ -204,7 +208,7 @@ class HttpError extends Error {
 function jsonResponse(res, data, statusCode = 200, headers = {}, req = null) {
   const body = Buffer.from(JSON.stringify(data), 'utf8');
   const acceptEncoding = req ? (req.headers['accept-encoding'] || '') : '';
-  const useGzip = body.length > 1024 && acceptEncoding.includes('gzip');
+  const useGzip = body.length > GZIP_MIN_BYTES && acceptEncoding.includes('gzip');
   const responseHeaders = { ...DEFAULT_JSON_HEADERS, ...headers };
 
   if (useGzip) {

@@ -12,19 +12,13 @@ const { listCommands } = require('../integrations/openclaw-traecn-plugin/lib/com
 const { MCP_TOOLS } = require('../mcp-server');
 const openClawManifest = require('../integrations/openclaw-traecn-plugin/openclaw.plugin.json');
 const packageJson = require('../package.json');
+const { readArg, resolveGatewayHostPort, resolveGatewayToken } = require('./lib/cli-config');
 
 const root = path.resolve(__dirname, '..');
 const requireComplete = process.argv.includes('--require-complete');
 const includeLive = !process.argv.includes('--no-live');
-const host = readArg('--host') || process.env.TRAECN_GATEWAY_HOST || '127.0.0.1';
-const port = Number(readArg('--port') || process.env.TRAECN_GATEWAY_PORT || 8788);
-const token = process.env.TRAECN_GATEWAY_TOKEN || '';
-
-function readArg(name) {
-  const index = process.argv.indexOf(name);
-  if (index === -1) return null;
-  return process.argv[index + 1] || null;
-}
+const { host, port } = resolveGatewayHostPort({ useCliArgs: true, useLegacyEnv: false });
+const token = resolveGatewayToken();
 
 function resolveAppSupportPath(fileName) {
   if (process.platform === 'darwin') {

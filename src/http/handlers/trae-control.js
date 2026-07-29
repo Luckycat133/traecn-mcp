@@ -5,6 +5,7 @@ const { buildConfirmationPlan } = require('../../shared/operation-confirmation')
 const { getEnvWithFallback } = require('../../shared/utils');
 const { discoverTarget, describeCDPSurface } = require('../../cdp/discovery');
 const { getQuickstartConfig, restartTraeCNWithDebug } = require('../../config/quickstart');
+const { rejectBadRequest, hasDriverCapability } = require('./helpers');
 
 const defaultRestartDebugDeps = {
   getEnvWithFallback,
@@ -92,7 +93,7 @@ const ROUTES = [
 
 async function handleStopGeneration(req, res, ctx) {
   await ctx._ensureConnection();
-  const result = typeof ctx.driver.stopGeneration === 'function'
+  const result = hasDriverCapability(ctx, 'stopGeneration')
     ? await ctx.driver.stopGeneration()
     : { success: false, reason: 'driver_does_not_support_stop_generation' };
   ctx._json(req, res, result, result.success === false ? 409 : 200);
@@ -181,7 +182,7 @@ async function handleRestartTraeDebug(req, res, ctx) {
 }
 async function handleReviewGateStatus(req, res, ctx) {
   await ctx._ensureConnection();
-  const result = typeof ctx.driver.checkTaskReviewGate === 'function'
+  const result = hasDriverCapability(ctx, 'checkTaskReviewGate')
     ? await ctx.driver.checkTaskReviewGate()
     : { awaitingReview: false, reason: 'driver_does_not_support_review_gate' };
   ctx._json(req, res, result);
@@ -194,7 +195,7 @@ async function handleReviewGateResolve(req, res, ctx) {
   }
   await ctx._ensureConnection();
   const normalizedAction = action === 'keep' ? 'keep_all' : (action === 'discard' ? 'revert_all' : action);
-  const result = typeof ctx.driver.resolveTaskReviewGate === 'function'
+  const result = hasDriverCapability(ctx, 'resolveTaskReviewGate')
     ? await ctx.driver.resolveTaskReviewGate(normalizedAction)
     : { success: false, reason: 'driver_does_not_support_review_gate' };
   ctx._json(req, res, result, result.success === false ? 409 : 200);
@@ -211,7 +212,7 @@ async function handleDetectMode(req, res, ctx) {
 async function handleSwitchMode(req, res, ctx) {
   const body = await parseBody(req);
   if (!body.mode) {
-    return ctx._json(req, res, { error: 'mode is required' }, 400);
+    return rejectBadRequest(req, res, ctx, 'mode is required');
   }
   if (!['solo', 'ide'].includes(body.mode.toLowerCase())) {
     return ctx._json(req, res, { error: 'mode must be "solo" or "ide"' }, 400);
@@ -229,7 +230,7 @@ async function handleSwitchMode(req, res, ctx) {
 async function handleSwitchModel(req, res, ctx) {
   const body = await parseBody(req);
   if (!body.model) {
-    return ctx._json(req, res, { error: 'model is required' }, 400);
+    return rejectBadRequest(req, res, ctx, 'model is required');
   }
 
   await ctx._ensureConnection();

@@ -1,9 +1,23 @@
 'use strict';
 
 const packageInfo = require('../../package.json');
-const { generateOpenAPISpec } = require('../http/openapi');
-const promptLayers = require('../skill/prompt-layers');
-const { KNOWN_MODELS, SETTINGS_SECTIONS } = require('../skill/traecn-skill');
+
+// shared/ is the lowest layer of the codebase. To keep the dependency direction
+// strictly one-way (http/ and skill/ may depend on shared/, never the reverse),
+// the modules that source capability data are NOT required here at module load.
+// Instead they are injected by callers through `deps`. Every external caller that
+// cannot or does not inject (scripts, the integration plugin, gateway.test.js) gets
+// the exact same modules via lazy requires, so the produced capability document is
+// byte-for-byte identical to the previous static-require implementation.
+function loadOpenApiSpec() {
+  return require('../http/openapi').generateOpenAPISpec;
+}
+function loadPromptLayers() {
+  return require('../skill/prompt-layers');
+}
+function loadTraecnSkill() {
+  return require('../skill/traecn-skill');
+}
 
 const API_FAMILIES = Object.freeze({
   discovery: ['/api/capabilities', '/api/preflight', '/api/status', '/openapi.json'],
@@ -62,7 +76,8 @@ function compactOperation(path, method, operation) {
   };
 }
 
-function buildHttpOperations() {
+function buildHttpOperations(deps = {}) {
+  const generateOpenAPISpec = (deps && deps.generateOpenAPISpec) || loadOpenApiSpec();
   const spec = generateOpenAPISpec();
   const operations = [];
   for (const [path, methods] of Object.entries(spec.paths)) {
@@ -96,13 +111,17 @@ function compactTools(tools = [], metadata = {}) {
   }));
 }
 
-function buildCapabilities(options = {}) {
+function buildCapabilities(options = {}, deps = {}) {
+  const generateOpenAPISpec = (deps && deps.generateOpenAPISpec) || loadOpenApiSpec();
+  const promptLayers = (deps && deps.promptLayers) || loadPromptLayers();
+  const traecnSkill = (deps && deps.traecnSkill) || loadTraecnSkill();
+  const { KNOWN_MODELS, SETTINGS_SECTIONS } = traecnSkill;
   const commands = options.commands || [];
   const mcpTools = options.mcpTools || [];
   const mcpToolProfile = options.mcpToolProfile || 'public';
   const mcpToolProfiles = options.mcpToolProfiles || {};
   const mcpToolMetadata = options.mcpToolMetadata || {};
-  const operations = options.includeHttpOperations === false ? undefined : buildHttpOperations();
+  const operations = options.includeHttpOperations === false ? undefined : buildHttpOperations({ generateOpenAPISpec });
 
   return {
     name: 'traecnclaw',

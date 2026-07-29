@@ -434,7 +434,6 @@ async function _queryTaskSource(driver, skipText) {
 async function findTaskResponse(driver) {
   const skipText = driver._lastTaskText;
 
-  // Try mode-specific task source first
   const taskResult = await driver._queryTaskSource(skipText);
   if (taskResult) return taskResult;
 

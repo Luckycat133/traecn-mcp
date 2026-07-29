@@ -10,6 +10,7 @@ const { startGateway } = require('../src/http/gateway');
 const { MCP_TOOLS } = require('../mcp-server');
 const { toolDefinitions: openClawTools } = require('../integrations/openclaw-traecn-plugin');
 const { listCommands } = require('../integrations/openclaw-traecn-plugin/lib/command-set');
+const { readArg, resolveGatewayToken } = require('./lib/cli-config');
 
 loadEnv(path.resolve(__dirname, '..', '.env'));
 
@@ -24,12 +25,6 @@ const delegateTimeoutMs = Number(readArg('--delegate-timeout-ms') || 120000);
 const taskPollIntervalMs = Number(readArg('--task-poll-interval-ms') || 5000);
 const taskPollTimeoutMs = Number(readArg('--task-poll-timeout-ms') || 240000);
 const followupTask = readArg('--followup-task') || '请只回复 FOLLOWUP_REVIEW_OK';
-
-function readArg(name) {
-  const index = process.argv.indexOf(name);
-  if (index === -1) return null;
-  return process.argv[index + 1] || null;
-}
 
 function skip(reason) {
   console.log('[live-uat] ' + JSON.stringify({ status: 'SKIP', reason, strict }, null, 2));
@@ -208,7 +203,7 @@ async function main() {
     return skip(`Reachable CDP endpoint does not look like Trae CN: ${JSON.stringify(endpoint.version)}`);
   }
 
-  const token = process.env.TRAECN_GATEWAY_TOKEN || '';
+  const token = resolveGatewayToken();
   let server;
   const checks = [];
   let lastStatusData = null;

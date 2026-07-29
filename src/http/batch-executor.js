@@ -123,7 +123,13 @@ class BatchExecutor {
 
   _hasStrongCompletionEvidence(text) {
     const value = String(text || '').replace(/\s+/g, ' ').trim();
+    // 120 = minimum text length (chars) we trust as completion evidence;
+    // shorter output is too thin to prove the task actually finished.
     if (value.length < 120) return false;
+    // "Strong completion" phrases (Chinese + English): completion summary /
+    // final report, "all N tests passed", "N/N 已完成…总结", etc. Any one
+    // match counts as evidence that the agent reported a real completion
+    // rather than just echoing progress.
     return [
       /任务完成|完成总结|最终报告|final report|delivery summary|completed successfully/i,
       /(?:all|全部)\s+\d+\s+tests?\s+pass(?:ed)?/i,

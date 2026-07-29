@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { getQuickstartConfig } = require('../src/config/quickstart');
+const { readArg } = require('./lib/cli-config');
 
 const LABEL = 'com.traecnclaw.gateway';
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -19,15 +20,6 @@ const STDERR_PATH = path.join(LOG_DIR, 'gateway.stderr.log');
 const UID = String(process.getuid());
 const DOMAIN_TARGET = `gui/${UID}`;
 const LABEL_TARGET = `${DOMAIN_TARGET}/${LABEL}`;
-
-function readArg(name, fallback = null) {
-  const inlinePrefix = `${name}=`;
-  const inline = process.argv.slice(2).find(arg => arg.startsWith(inlinePrefix));
-  if (inline) return inline.slice(inlinePrefix.length);
-  const index = process.argv.indexOf(name);
-  if (index !== -1 && process.argv[index + 1]) return process.argv[index + 1];
-  return fallback;
-}
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {

@@ -16,8 +16,10 @@
  */
 
 const { parseBody } = require('../request-gate');
-const { getEnvWithFallback, isGenericQueueProbeTask } = require('../../shared/utils');
+const { isGenericQueueProbeTask } = require('../../shared/utils');
 const discovery = require('../../cdp/discovery');
+const { notifyOpenClaw, formatResult } = require('../task-notify');
+const { rejectBadRequest } = require('./helpers');
 
 const ROUTES = [
   { method: 'POST', path: '/api/tasks/delegate', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
@@ -25,53 +27,34 @@ const ROUTES = [
   { method: 'POST', path: '/api/delegate-async', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 ];
 
-async function notifyOpenClaw(chatId, message) {
-  try {
-    const openclawUrl = getEnvWithFallback('TRAECN_OPENCLAW_URL', 'TRAE_OPENCLAW_URL', 'http://127.0.0.1:18789/api/message/send');
-    const body = JSON.stringify({ chatId, text: message });
-    const res = await fetch(openclawUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      signal: AbortSignal.timeout(5000)
-    });
-    if (res.ok) await res.text();
-  } catch (e) {
-    console.error('[Delegate] OpenClaw notify failed:', e.message);
-  }
-}
-
-function formatResult(result) {
-  if (!result) return '✅ Trae 完成（无详情）';
-  if (result.needsConfirmation || result.needsApproval) {
-    return `🤖 Trae 需要确认:\n${result.question}\n\n输入你的决定继续。`;
-  }
-  if (result.error) {
-    return `❌ Trae 出错: ${result.error}`;
-  }
-  const msg = result.text || result.message || '';
-  return `✅ Trae 完成: ${msg.substring(0, 200)}`;
-}
-
-async function handleDelegateAsync(req, res, ctx) {
+async function validateDelegateRequest(req, res, ctx) {
   const body = await parseBody(req);
   if (isGenericQueueProbeTask(body && body.task)) {
-    return ctx._json(req, res, {
+    ctx._json(req, res, {
       error: 'generic_queue_probe_task_rejected',
       message: 'Do not send queue probe prompts to Trae. Use /api/queue-status, /api/preflight, or wait_task for local waiting.'
     }, 400);
+    return;
   }
   if (!body.task) {
-    return ctx._json(req, res, { error: 'task is required' }, 400);
+    rejectBadRequest(req, res, ctx, 'task is required');
+    return;
   }
   if (typeof body.task !== 'string' || body.task.length > 100000) {
-    return ctx._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
+    ctx._json(req, res, { error: 'task must be a string with max 100000 characters' }, 400);
+    return;
   }
+  return body;
+}
 
+function selectFallbackModel(body, ctx) {
+  return ctx._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
+}
+
+async function decideQueuePath(req, res, body, ctx) {
   const chatId = body.chatId || null;
   const includeProcessText = body.includeProcessText === true;
   const waitForQueue = body.waitForQueue !== false;
-  const fallbackModels = ctx._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
   const modelProbeIntervalMs = ctx._modelProbeIntervalMs(body.modelProbeIntervalMs);
   await ctx._ensureConnection();
 
@@ -84,45 +67,63 @@ async function handleDelegateAsync(req, res, ctx) {
     try {
       await discovery.resolveCDPEndpoint();
     } catch (cdpErr) {
-      return ctx._json(req, res, {
+      ctx._json(req, res, {
         ok: false,
         error: 'CONNECTION_FAILED',
         code: 'CDP_NOT_CONNECTED',
         message: 'TraeCN CDP is not reachable: ' + (cdpErr && cdpErr.message ? cdpErr.message : String(cdpErr))
       }, 503);
+      return null;
     }
   }
 
   // Get queue status with enhanced detection
-  let queueStatus = await ctx.driver.checkQueueStatus();
-  let modelProbe = null;
-  let queueVisible = queueStatus.queued === true;
-  let queueBlocked = queueStatus.running || (queueVisible && queueStatus.canSubmit !== true);
-  let shouldBackgroundWait = queueStatus.running || (waitForQueue && queueVisible);
+  const queueStatus = await ctx.driver.checkQueueStatus();
+  const modelProbe = null;
+  const queueVisible = queueStatus.queued === true;
+  const queueBlocked = queueStatus.running || (queueVisible && queueStatus.canSubmit !== true);
+  const shouldBackgroundWait = queueStatus.running || (waitForQueue && queueVisible);
 
-  if ((shouldBackgroundWait || queueBlocked) && fallbackModels.length > 0) {
-    const probeTask = {
-      taskId: 'probe_' + Date.now(),
-      fallbackModels,
-      modelProbeIntervalMs,
-      nextModelProbeAt: Date.now(),
-      modelProbeResults: [],
-      currentModel: queueStatus.currentModel || null,
-      queueState: queueStatus.running ? 'running' : (queueStatus.queued ? 'queued' : null)
-    };
-    modelProbe = await ctx._probeFallbackModels(probeTask, { recordHistory: false });
-    if (modelProbe.queueStatus) {
-      queueStatus = modelProbe.queueStatus;
-      queueVisible = queueStatus.queued === true;
-      queueBlocked = queueStatus.running || (queueVisible && queueStatus.canSubmit !== true);
-      shouldBackgroundWait = queueStatus.running || (waitForQueue && queueVisible && queueStatus.canSubmit !== true);
-    }
-    body.fallbackModels = fallbackModels;
-    body.modelProbeIntervalMs = modelProbeIntervalMs;
-    body.initialModelProbeResults = modelProbe.results || [];
-    body.initialLastModelProbeAt = probeTask.lastModelProbeAt || null;
-    body.initialNextModelProbeAt = probeTask.nextModelProbeAt || null;
+  return { chatId, includeProcessText, waitForQueue, modelProbeIntervalMs, queueStatus, modelProbe, queueVisible, queueBlocked, shouldBackgroundWait };
+}
+
+async function handleQueueProbe(req, res, ctx, body, fallbackModels, d) {
+  if (!((d.shouldBackgroundWait || d.queueBlocked) && fallbackModels.length > 0)) {
+    return d;
   }
+  const probeTask = {
+    taskId: 'probe_' + Date.now(),
+    fallbackModels,
+    modelProbeIntervalMs: d.modelProbeIntervalMs,
+    nextModelProbeAt: Date.now(),
+    modelProbeResults: [],
+    currentModel: d.queueStatus.currentModel || null,
+    queueState: d.queueStatus.running ? 'running' : (d.queueStatus.queued ? 'queued' : null)
+  };
+  const modelProbe = await ctx._probeFallbackModels(probeTask, { recordHistory: false });
+  if (modelProbe.queueStatus) {
+    d.queueStatus = modelProbe.queueStatus;
+    d.queueVisible = d.queueStatus.queued === true;
+    d.queueBlocked = d.queueStatus.running || (d.queueVisible && d.queueStatus.canSubmit !== true);
+    d.shouldBackgroundWait = d.queueStatus.running || (d.waitForQueue && d.queueVisible && d.queueStatus.canSubmit !== true);
+  }
+  body.fallbackModels = fallbackModels;
+  body.modelProbeIntervalMs = d.modelProbeIntervalMs;
+  body.initialModelProbeResults = modelProbe.results || [];
+  body.initialLastModelProbeAt = probeTask.lastModelProbeAt || null;
+  body.initialNextModelProbeAt = probeTask.nextModelProbeAt || null;
+  return d;
+}
+
+async function awaitBackgroundResult(deps) {
+  const { req, res, ctx, body } = deps;
+  const queueStatus = deps.queueStatus;
+  const queueVisible = deps.queueVisible;
+  const queueBlocked = deps.queueBlocked;
+  const shouldBackgroundWait = deps.shouldBackgroundWait;
+  const waitForQueue = deps.waitForQueue;
+  const chatId = deps.chatId;
+  const includeProcessText = deps.includeProcessText;
 
   // Build queue ETA message
   let queueEtaMessage = '';
@@ -138,7 +139,7 @@ async function handleDelegateAsync(req, res, ctx) {
         // Caller explicitly opted out of local waiting. Let Trae own the queue.
       } else {
       // Caller doesn't want to wait — return queue info immediately
-        return ctx._json(req, res, {
+        ctx._json(req, res, {
           status: queueStatus.queued ? 'queued' : 'running',
           queueDetails: {
             state: queueStatus.queued ? 'queued' : 'running',
@@ -150,6 +151,7 @@ async function handleDelegateAsync(req, res, ctx) {
           message: `${queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'}${queueEtaMessage}，请稍后重试或设置 waitForQueue=true 自动等待`,
           model: queueStatus.currentModel
         }, 202);
+        return true;
       }
     }
 
@@ -164,7 +166,7 @@ async function handleDelegateAsync(req, res, ctx) {
       }
       ctx._ensureBackgroundPolling();
 
-      return ctx._json(req, res, {
+      ctx._json(req, res, {
         taskId: task.taskId,
         status: 'queued',
         queueDetails: {
@@ -182,6 +184,7 @@ async function handleDelegateAsync(req, res, ctx) {
         message: `${queueStatus.running ? 'Trae 正在执行其他任务' : '模型排队中'}${queueEtaMessage}，任务已加入后台。用 traecn_task_status 查询进度`,
         model: queueStatus.currentModel
       }, 202);
+      return true;
     }
   }
 
@@ -199,7 +202,7 @@ async function handleDelegateAsync(req, res, ctx) {
       task.nextModelProbeAt = body.initialNextModelProbeAt;
     }
     ctx._ensureBackgroundPolling();
-    return ctx._json(req, res, {
+    ctx._json(req, res, {
       taskId: task.taskId,
       status: 'queued',
       queueDetails: {
@@ -217,7 +220,35 @@ async function handleDelegateAsync(req, res, ctx) {
       message: '任务已加入后台执行队列。用 traecn_task_status 查询进度',
       model: queueStatus.currentModel
     }, 202);
+    return true;
   }
+
+  return undefined;
+}
+
+async function handleDelegateAsync(req, res, ctx) {
+  const body = await validateDelegateRequest(req, res, ctx);
+  if (body === undefined) return;
+
+  const fallbackModels = selectFallbackModel(body, ctx);
+  const d = await decideQueuePath(req, res, body, ctx);
+  if (!d) return;
+  await handleQueueProbe(req, res, ctx, body, fallbackModels, d);
+
+  const handled = await awaitBackgroundResult({
+    req, res, ctx, body,
+    chatId: d.chatId,
+    includeProcessText: d.includeProcessText,
+    waitForQueue: d.waitForQueue,
+    queueStatus: d.queueStatus,
+    queueVisible: d.queueVisible,
+    queueBlocked: d.queueBlocked,
+    shouldBackgroundWait: d.shouldBackgroundWait
+  });
+  if (handled) return;
+
+  const chatId = d.chatId;
+  const includeProcessText = d.includeProcessText;
 
   // Model is idle/ready — execute synchronously with timeout protection
   if (!ctx.driver) {
@@ -326,7 +357,7 @@ async function handleDelegateAsync(req, res, ctx) {
   }
 
   if (chatId) {
-    await notifyOpenClaw(chatId, formatResult(result));
+    await notifyOpenClaw(chatId, formatResult(result), '[Delegate] OpenClaw notify failed:');
   }
 
   const responseData = {

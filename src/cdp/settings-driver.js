@@ -543,7 +543,6 @@ class SettingsDriver {
   async switchTab(section) {
     await _ensureClickHelper(this.client);
 
-    // Check if settings panel is already open by detecting settings editor elements
     const settingsOpen = await evaluate(
       this.client,
       `() => {
@@ -553,7 +552,6 @@ class SettingsDriver {
     );
 
     if (!settingsOpen) {
-      // Open settings first
       await _goToSettingsTab(this.client);
       await sleep(1500);
     }
@@ -607,7 +605,6 @@ class SettingsDriver {
     const overallHardLimitMs = 30000;
     const startedAt = Date.now();
 
-    // Go to Settings first
     await this.switchTab();
 
     let sections;
