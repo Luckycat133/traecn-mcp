@@ -367,12 +367,15 @@ async function main() {
       && commandNames.includes('cleanup_queue_watch_status')
       && hasAll(mcpToolNames, [
         'traecn_send_message', 'traecn_get_task', 'traecn_cancel_task',
+        'traecn_stop_generation',
         'traecn_open_workspace', 'traecn_list_models', 'traecn_select_model', 'traecn_select_mode',
+        'traecn_list_setting_sections', 'traecn_list_settings', 'traecn_list_setting_options',
+        'traecn_set_setting_toggle', 'traecn_select_setting_option', 'traecn_set_setting_text',
         'traecn_list_conversations', 'traecn_create_conversation',
         'traecn_select_conversation', 'traecn_delete_conversation',
         'traecn_answer_question', 'traecn_decide_approval'
       ])
-      && mcpToolNames.length === 13
+      && mcpToolNames.length === 20
       && openClawTools.includes('traecn_cleanup_queue')
       && openClawTools.includes('traecn_cleanup_watch_status')
   ) ? 'passed' : 'missing', 'MCP exposes focused atomic Agent operations while HTTP, CLI, and OpenClaw retain operator controls.', {
@@ -419,6 +422,8 @@ async function main() {
 
   add(results, 'settings_and_sessions', (
     spec.paths['/api/settings/read']
+      && spec.paths['/api/settings/sections']
+      && spec.paths['/api/settings/options']
       && spec.paths['/api/settings/read-all']
       && spec.paths['/api/settings/set']
       && spec.paths['/api/sessions']
@@ -447,6 +452,10 @@ async function main() {
       && mcpToolNames.includes('traecn_list_models')
       && mcpToolNames.includes('traecn_select_model')
       && mcpToolNames.includes('traecn_select_mode')
+      && hasAll(mcpToolNames, [
+        'traecn_list_setting_sections', 'traecn_list_settings', 'traecn_list_setting_options',
+        'traecn_set_setting_toggle', 'traecn_select_setting_option', 'traecn_set_setting_text'
+      ])
       && hasAll(openClawTools, ['traecn_plan_operation', 'traecn_settings_action', 'traecn_settings_read', 'traecn_settings_set', 'traecn_switch_mode', 'traecn_switch_model'])
       && hasAll(openClawCommandEnum, ['settings_read', 'settings_read_all', 'settings_set', 'settings_navigate', 'settings_back', 'switch_mode', 'switch_model'])
       && liveUatSource.includes('settings-read-model')
@@ -454,8 +463,8 @@ async function main() {
       && gatewayTestSource.includes('buildConfirmationPlan marks settings writes as high-risk confirmation operations')
       && gatewayTestSource.includes('Gateway switch-model can return immediately with queue details when waitForQueue is false')
       && hasAll(readFile('src/client/traecnapi-client.test.js'), ['settingsRead sends GET with section param', 'settingsWrite can send confirmation metadata', 'settingsAction maps navigate to implemented settings switch-tab endpoint', 'switchModel sends POST to /api/switch-model'])
-  ) ? 'passed' : 'missing', 'Settings and confirmation controls remain operator APIs; MCP exposes focused model and mode selection.', {
-    settingsPaths: ['/api/settings/read', '/api/settings/read-all', '/api/settings/set', '/api/settings/switch-tab', '/api/settings/back-to-chat']
+  ) ? 'passed' : 'missing', 'MCP exposes focused UI-backed settings, model, and mode controls while gateway mechanics remain internal.', {
+    settingsPaths: ['/api/settings/sections', '/api/settings/read', '/api/settings/options', '/api/settings/read-all', '/api/settings/set', '/api/settings/switch-tab', '/api/settings/back-to-chat']
       .filter(apiPath => Boolean(spec.paths[apiPath])),
     controlPaths: ['/api/detect-mode', '/api/switch-mode', '/api/switch-model'].filter(apiPath => Boolean(spec.paths[apiPath])),
     mcpTools: mcpToolNames,

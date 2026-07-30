@@ -3803,6 +3803,121 @@ asyncTest('Gateway auto-recovery bails early when mockBridge is on', async () =>
   assert.strictEqual(result, false, 'mockBridge should suppress recovery');
 });
 
+asyncTest('Gateway lists settings sections from Trae UI and restores chat', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      listSections: async () => { calls.push('open-settings'); return ['通用', '模型', 'MCP']; },
+      backToChat: async () => calls.push('back-to-chat')
+    }
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; return data; };
+
+  await gateway._handleSettingsListSections({ headers: { host: '127.0.0.1' }, url: '/api/settings/sections?restoreChat=true' }, {});
+
+  assert.deepStrictEqual(responseData.sections, ['通用', '模型', 'MCP']);
+  assert.deepStrictEqual(calls, ['open-settings', 'back-to-chat']);
+});
+
+asyncTest('Gateway reads one settings section from Trae UI and restores chat', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      switchTab: async section => calls.push(`section:${section}`),
+      getContent: async () => ({ sections: [], items: [{ label: 'Auto Save', hasToggle: true }] }),
+      backToChat: async () => calls.push('back-to-chat')
+    }
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; return data; };
+  const { req } = makeReqRes({}, '/api/settings/read?section=%E9%80%9A%E7%94%A8&restoreChat=true');
+
+  await gateway._handleSettingsRead(req, {});
+
+  assert.strictEqual(responseData.section, '通用');
+  assert.strictEqual(responseData.items[0].label, 'Auto Save');
+  assert.deepStrictEqual(calls, ['section:通用', 'back-to-chat']);
+});
+
+asyncTest('Gateway lists one setting dropdown options from Trae UI and restores chat', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      switchTab: async section => calls.push(`section:${section}`),
+      listOptions: async label => { calls.push(`options:${label}`); return ['简体中文', 'English']; },
+      backToChat: async () => calls.push('back-to-chat')
+    }
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; return data; };
+  const { req } = makeReqRes({}, '/api/settings/options?section=%E9%80%9A%E7%94%A8&label=%E8%AF%AD%E8%A8%80&restoreChat=true');
+
+  await gateway._handleSettingsListOptions(req, {});
+
+  assert.deepStrictEqual(responseData.options, ['简体中文', 'English']);
+  assert.deepStrictEqual(calls, ['section:通用', 'options:语言', 'back-to-chat']);
+});
+
+asyncTest('Gateway dispatches each settings control kind to its exact Trae UI action', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      switchTab: async section => calls.push(['section', section]),
+      setToggle: async (label, enabled) => calls.push(['toggle', label, enabled]),
+      setDropdown: async (label, value) => calls.push(['option', label, value]),
+      typeText: async (label, text) => calls.push(['text', label, text]),
+      backToChat: async () => calls.push(['back'])
+    }
+  };
+  gateway._json = (req, res, data) => data;
+  const cases = [
+    { kind: 'toggle', section: '通用', label: 'Auto Save', value: true },
+    { kind: 'option', section: '通用', label: '语言', value: 'English' },
+    { kind: 'text', section: 'MCP', label: '服务器地址', value: 'http://127.0.0.1' }
+  ];
+
+  for (const body of cases) {
+    const { req } = makeReqRes({}, '/api/settings/set', 'POST', { ...body, restoreChat: true });
+    await gateway._handleSettingsSet(req, {});
+  }
+
+  assert.deepStrictEqual(calls, [
+    ['section', '通用'], ['toggle', 'Auto Save', true], ['back'],
+    ['section', '通用'], ['option', '语言', 'English'], ['back'],
+    ['section', 'MCP'], ['text', '服务器地址', 'http://127.0.0.1'], ['back']
+  ]);
+});
+
+asyncTest('Gateway rejects a settings value that does not match its UI control kind', async () => {
+  const gateway = new Gateway();
+  gateway._ensureConnection = async () => {};
+  gateway.driver = { settings: { setToggle: async () => { throw new Error('must not mutate'); } } };
+  let responseStatus = null;
+  let responseData = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseStatus = status;
+    responseData = data;
+    return data;
+  };
+  const { req } = makeReqRes({}, '/api/settings/set', 'POST', {
+    section: '通用', label: 'Auto Save', value: 'yes', kind: 'toggle'
+  });
+
+  await gateway._handleSettingsSet(req, {});
+
+  assert.strictEqual(responseStatus, 400);
+  assert.match(responseData.error, /boolean/);
+});
+
 (async () => {
   for (const { name, fn } of pendingAsyncTests) {
     try {

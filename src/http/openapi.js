@@ -1424,7 +1424,8 @@ function generateOpenAPISpec() {
           operationId: 'settingsRead',
           security: [{ bearerAuth: [] }],
           parameters: [
-            { name: 'section', in: 'query', required: false, schema: { type: 'string' }, description: 'Settings sidebar section to navigate to first (e.g. 通用, 模型, Beta)' }
+            { name: 'section', in: 'query', required: false, schema: { type: 'string' }, description: 'Settings sidebar section to navigate to first (e.g. 通用, 模型, Beta)' },
+            { name: 'restoreChat', in: 'query', required: false, schema: { type: 'boolean' }, description: 'Return to the chat UI after reading settings' }
           ],
           responses: {
             '200': {
@@ -1445,9 +1446,61 @@ function generateOpenAPISpec() {
           }
         }
       },
+      '/api/settings/sections': {
+        get: {
+          summary: 'List settings sections visible in the TraeCN UI',
+          operationId: 'settingsListSections',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'restoreChat', in: 'query', required: false, schema: { type: 'boolean' } }
+          ],
+          responses: {
+            '200': {
+              description: 'Visible settings sections',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { sections: { type: 'array', items: { type: 'string' } } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/settings/options': {
+        get: {
+          summary: 'List visible options for one dropdown setting',
+          operationId: 'settingsListOptions',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'section', in: 'query', required: true, schema: { type: 'string' } },
+            { name: 'label', in: 'query', required: true, schema: { type: 'string' } },
+            { name: 'restoreChat', in: 'query', required: false, schema: { type: 'boolean' } }
+          ],
+          responses: {
+            '200': {
+              description: 'Dropdown choices read from the TraeCN UI',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      section: { type: 'string' },
+                      label: { type: 'string' },
+                      options: { type: 'array', items: { type: 'string' } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       '/api/settings/set': {
         post: {
-          summary: 'Set a settings value (dropdown or toggle)',
+          summary: 'Set one TraeCN UI setting using its exact control type',
           operationId: 'settingsSet',
           security: [{ bearerAuth: [] }],
           requestBody: {
@@ -1460,10 +1513,13 @@ function generateOpenAPISpec() {
                   properties: {
                     section: { type: 'string', description: 'Sidebar section to navigate to first' },
                     label: { type: 'string', description: 'Exact label text of the setting item' },
+                    kind: { type: 'string', enum: ['auto', 'toggle', 'option', 'text'] },
+                    restoreChat: { type: 'boolean' },
                     value: {
                       oneOf: [
                         { type: 'string', description: 'For dropdowns: exact option text to select' },
-                        { type: 'boolean', description: 'For toggles: true=on, false=off' }
+                        { type: 'boolean', description: 'For toggles: true=on, false=off' },
+                        { type: 'number', description: 'For numeric text inputs' }
                       ]
                     }
                   }
@@ -1520,6 +1576,8 @@ function generateOpenAPISpec() {
                                   currentValue: { type: 'string' },
                                   hasToggle: { type: 'boolean' },
                                   hasDropdown: { type: 'boolean' },
+                                  hasTextInput: { type: 'boolean' },
+                                  controlType: { type: 'string', enum: ['toggle', 'option', 'text', 'display'] },
                                   toggleChecked: { type: 'boolean' }
                                 }
                               }

@@ -25,12 +25,22 @@ class MockSettingsDriver {
           currentValue: this.values.get('Mock setting') || 'enabled',
           hasToggle: true,
           hasDropdown: false,
+          hasTextInput: false,
+          controlType: 'toggle',
           toggleChecked: this.values.get('Mock setting') !== false,
           visible: true
         }
       ],
       raw: { count: 1, type: 'mock' }
     };
+  }
+
+  async listSections() {
+    return SETTINGS_SECTIONS.slice();
+  }
+
+  async listOptions() {
+    return ['enabled', 'disabled'];
   }
 
   async readAll() {
@@ -45,6 +55,8 @@ class MockSettingsDriver {
             currentValue: 'enabled',
             hasToggle: true,
             hasDropdown: false,
+            hasTextInput: false,
+            controlType: 'toggle',
             toggleChecked: true,
             visible: true
           }
@@ -57,6 +69,18 @@ class MockSettingsDriver {
   async set(label, value) {
     this.values.set(label, value);
     return { success: true, label, value, mode: 'mock' };
+  }
+
+  async setToggle(label, enabled) {
+    return this.set(label, enabled);
+  }
+
+  async setDropdown(label, value) {
+    return this.set(label, value);
+  }
+
+  async typeText(label, text) {
+    return this.set(label, text);
   }
 
   async backToChat() {

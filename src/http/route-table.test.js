@@ -67,6 +67,11 @@ test('route-table: returns null for unknown paths', () => {
   assert.strictEqual(result, null);
 });
 
+test('route-table: exposes focused settings discovery routes', () => {
+  assert.strictEqual(matchRoute('GET', '/api/settings/sections').route.handler, '_handleSettingsListSections');
+  assert.strictEqual(matchRoute('GET', '/api/settings/options').route.handler, '_handleSettingsListOptions');
+});
+
 test('route-table: distinguishes DELETE on history vs DELETE on batch', () => {
   const historyResult = matchRoute('DELETE', '/api/tasks/history');
   const batchResult = matchRoute('DELETE', '/api/tasks/batch/batch-xyz');

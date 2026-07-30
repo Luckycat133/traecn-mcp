@@ -22,7 +22,7 @@ const API_FAMILIES = Object.freeze({
   queue: ['/api/queue-status', '/api/queue/status', '/api/tasks/batch', '/api/tasks/batch/{batchId}'],
   review: ['/api/delegate', '/api/delegate-async'],
   control: ['/api/new-chat', '/api/solo/chats', '/api/solo/chats/switch', '/api/solo/chats/cleanup-foreign-queue', '/api/solo/chats/submit', '/api/trae/stop-generation', '/api/trae/review-gate', '/api/detect-mode', '/api/switch-mode', '/api/switch-model', '/api/open-project'],
-  settings: ['/api/settings/read', '/api/settings/read-all', '/api/settings/set', '/api/settings/switch-tab', '/api/settings/back-to-chat'],
+  settings: ['/api/settings/sections', '/api/settings/read', '/api/settings/options', '/api/settings/read-all', '/api/settings/set', '/api/settings/switch-tab', '/api/settings/back-to-chat'],
   confirmation: ['/api/dialog/status', '/api/dialog/approve', '/api/dialog/dismiss'],
   confirmationPlan: ['/api/confirm/plan'],
   history: ['/api/tasks/history', '/api/tasks/{taskId}', '/api/tasks/{taskId}/replay']
@@ -122,7 +122,7 @@ function buildCapabilities(options = {}, deps = {}) {
   return {
     name: 'traecnclaw',
     version: packageInfo.version,
-    contractVersion: 3,
+    contractVersion: 4,
     tokenStrategy: {
       prefer: ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task'],
       gatewayManaged: true,

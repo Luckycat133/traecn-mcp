@@ -2569,6 +2569,38 @@ class Gateway {
     }
   }
 
+  async _handleSettingsListSections(req, res) {
+    const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
+    const restoreChat = parsedUrl.searchParams.get('restoreChat') === 'true';
+    await this._ensureConnection();
+    return this._withUiActionLock(async () => {
+      try {
+        const sections = await this.driver.settings.listSections();
+        return this._json(req, res, { sections });
+      } finally {
+        if (restoreChat) await this.driver.settings.backToChat();
+      }
+    });
+  }
+
+  async _handleSettingsListOptions(req, res) {
+    const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
+    const section = parsedUrl.searchParams.get('section');
+    const label = parsedUrl.searchParams.get('label');
+    const restoreChat = parsedUrl.searchParams.get('restoreChat') === 'true';
+    if (!section || !label) return this._json(req, res, { error: 'section and label are required' }, 400);
+    await this._ensureConnection();
+    return this._withUiActionLock(async () => {
+      try {
+        await this.driver.settings.switchTab(section);
+        const options = await this.driver.settings.listOptions(label);
+        return this._json(req, res, { section, label, options });
+      } finally {
+        if (restoreChat) await this.driver.settings.backToChat();
+      }
+    });
+  }
+
   async _handleSettingsRead(req, res) {
     const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
     const raw = parsedUrl.searchParams.get('section') || null;
@@ -2582,19 +2614,20 @@ class Gateway {
     const section = raw ? (SECTION_ALIASES[raw] || (() => {
       try { return decodeURIComponent(raw); } catch { return raw; }
     })()) : null;
+    const restoreChat = parsedUrl.searchParams.get('restoreChat') === 'true';
 
     await this._ensureConnection();
-
-    await this.driver.settings.switchTab(section);
-
-    let data;
-    try {
-      data = await this.driver.settings.getContent();
-    } catch(e) {
-      return this._json(req, res, { error: safeErrorMessage(e) }, 500);
-    }
-
-    this._json(req, res, { section: section || 'current', ...data });
+    return this._withUiActionLock(async () => {
+      try {
+        await this.driver.settings.switchTab(section);
+        const data = await this.driver.settings.getContent();
+        return this._json(req, res, { section: section || 'current', ...data });
+      } catch(e) {
+        return this._json(req, res, { error: safeErrorMessage(e) }, 500);
+      } finally {
+        if (restoreChat) await this.driver.settings.backToChat();
+      }
+    });
   }
 
   async _handleSettingsSet(req, res) {
@@ -2605,6 +2638,16 @@ class Gateway {
     if (body.value === undefined || body.value === null) {
       return this._json(req, res, { error: 'value is required' }, 400);
     }
+    const kind = body.kind || 'auto';
+    if (!['auto', 'toggle', 'option', 'text'].includes(kind)) {
+      return this._json(req, res, { error: 'kind must be auto, toggle, option, or text' }, 400);
+    }
+    if (kind === 'toggle' && typeof body.value !== 'boolean') {
+      return this._json(req, res, { error: 'toggle value must be boolean' }, 400);
+    }
+    if (['option', 'text'].includes(kind) && typeof body.value !== 'string') {
+      return this._json(req, res, { error: `${kind} value must be a string` }, 400);
+    }
     const confirmationFailure = this._confirmationFailure(req, body, 'settings_set', {
       label: body.label,
       value: body.value,
@@ -2614,13 +2657,19 @@ class Gateway {
 
     await this._ensureConnection();
 
-    // If section is specified, navigate there first
-    if (body.section) {
-      await this.driver.settings.switchTab(body.section);
-    }
-
-    const result = await this.driver.settings.set(body.label, body.value);
-    this._json(req, res, { label: body.label, value: body.value, result });
+    return this._withUiActionLock(async () => {
+      try {
+        if (body.section) await this.driver.settings.switchTab(body.section);
+        let result;
+        if (kind === 'toggle') result = await this.driver.settings.setToggle(body.label, body.value);
+        else if (kind === 'option') result = await this.driver.settings.setDropdown(body.label, body.value);
+        else if (kind === 'text') result = await this.driver.settings.typeText(body.label, body.value);
+        else result = await this.driver.settings.set(body.label, body.value);
+        return this._json(req, res, { label: body.label, value: body.value, kind, result });
+      } finally {
+        if (body.restoreChat === true) await this.driver.settings.backToChat();
+      }
+    });
   }
 
   async _handleSettingsSwitchTab(req, res) {

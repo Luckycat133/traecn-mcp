@@ -28,6 +28,16 @@
       "arguments": { "taskId": "TASK_ID" }
     },
     {
+      "name": "list_general_settings",
+      "tool": "traecn_list_settings",
+      "arguments": { "section": "通用" }
+    },
+    {
+      "name": "toggle_auto_save",
+      "tool": "traecn_set_setting_toggle",
+      "arguments": { "section": "通用", "label": "Auto Save", "enabled": true }
+    },
+    {
       "name": "select_conversation",
       "tool": "traecn_select_conversation",
       "arguments": { "conversationId": "solo:UmV2aWV3IEFQSQ" }

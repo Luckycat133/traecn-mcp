@@ -6,6 +6,7 @@
  */
 
 const promptLayers = require('../skill/prompt-layers');
+const { buildConfirmationPlan } = require('../shared/operation-confirmation');
 const { TraeCNApiClient } = require('../client/traecnapi-client');
 const { getGatewayContext, parsePositiveInt } = require('../shared/utils');
 const mcpAuth = require('../shared/mcp-auth');
@@ -21,6 +22,14 @@ const {
 } = require('./tool-metadata');
 
 const SERVER_INFO = Object.freeze({ name: 'traecnclaw', version: require('../../package.json').version });
+
+function settingsWriteOptions(section, label, value) {
+  const plan = buildConfirmationPlan({
+    command: 'settings_set',
+    params: { section, label, value }
+  });
+  return { restoreChat: true, confirmationId: plan.confirmationId };
+}
 
 function envContext() {
   const ctx = getGatewayContext();
@@ -77,6 +86,10 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       const result = await client.cancelTask(args.taskId);
       return asMcpContent(result.data || result);
     }
+    case 'stop_generation': {
+      const result = await client.stopGeneration();
+      return asMcpContent(result.data || result);
+    }
     case 'open_workspace': {
       const result = await client.openProject(args.path);
       return asMcpContent(result.data || result);
@@ -91,6 +104,42 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
     }
     case 'select_mode': {
       const result = await client.switchMode(args.mode);
+      return asMcpContent(result.data || result);
+    }
+    case 'list_setting_sections': {
+      const result = await client.settingsListSections({ restoreChat: true });
+      return asMcpContent(result.data || result);
+    }
+    case 'list_settings': {
+      const result = await client.settingsRead(args.section, { restoreChat: true });
+      return asMcpContent(result.data || result);
+    }
+    case 'list_setting_options': {
+      const result = await client.settingsListOptions(args.section, args.label, { restoreChat: true });
+      return asMcpContent(result.data || result);
+    }
+    case 'set_setting_toggle': {
+      const result = await client.settingsWrite(args.section, {
+        label: args.label,
+        value: args.enabled,
+        kind: 'toggle'
+      }, settingsWriteOptions(args.section, args.label, args.enabled));
+      return asMcpContent(result.data || result);
+    }
+    case 'select_setting_option': {
+      const result = await client.settingsWrite(args.section, {
+        label: args.label,
+        value: args.value,
+        kind: 'option'
+      }, settingsWriteOptions(args.section, args.label, args.value));
+      return asMcpContent(result.data || result);
+    }
+    case 'set_setting_text': {
+      const result = await client.settingsWrite(args.section, {
+        label: args.label,
+        value: args.text,
+        kind: 'text'
+      }, settingsWriteOptions(args.section, args.label, args.text));
       return asMcpContent(result.data || result);
     }
     case 'list_conversations': {

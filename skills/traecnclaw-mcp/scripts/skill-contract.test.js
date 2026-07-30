@@ -101,6 +101,6 @@ assert.strictEqual(
   0,
   `npm run test:mcp-stdio-smoke must execute the protocol smoke test:\n${stdioSmoke.stderr || stdioSmoke.stdout}`
 );
-assert.match(stdioSmoke.stdout, /PASS \(13 focused tools\)/, 'stdio smoke command must report the focused tool count');
+assert.match(stdioSmoke.stdout, /PASS \(20 focused tools\)/, 'stdio smoke command must report the focused tool count');
 
 console.log('[skill-contract.test.js] PASS');

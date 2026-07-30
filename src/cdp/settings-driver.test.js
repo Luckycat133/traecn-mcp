@@ -57,6 +57,15 @@ asyncTest('_listSettingsSidebarSections filters invalid return values', async ()
   assert.deepStrictEqual(await _listSettingsSidebarSections(makeClient([{ result: { value: '{bad json' } }])), []);
 });
 
+asyncTest('SettingsDriver.listSections discovers the visible second-level settings menu', async () => {
+  const driver = new SettingsDriver(makeClient([
+    { result: { value: 'installed' } },
+    { result: { value: true } },
+    { result: { value: JSON.stringify(['通用', '模型', 'MCP']) } }
+  ]), {});
+  assert.deepStrictEqual(await driver.listSections(), ['通用', '模型', 'MCP']);
+});
+
 asyncTest('_clickSidebarItem waits only after a click match', async () => {
   const client = makeClient([
     // clickByTextEx auto-installs the radix helper.
@@ -195,13 +204,25 @@ asyncTest('SettingsDriver.getContent de-duplicates items by label', async () => 
   const items = [
     { label: 'Dup', desc: 'first', currentValue: 'v1', hasToggle: false, hasDropdown: false, toggleChecked: null, y: 0, visible: true },
     { label: 'Dup', desc: 'second', currentValue: 'v2', hasToggle: false, hasDropdown: false, toggleChecked: null, y: 10, visible: true },
-    { label: 'Unique', desc: 'one', currentValue: 'v3', hasToggle: false, hasDropdown: false, toggleChecked: null, y: 20, visible: true }
+    { label: 'Unique', desc: 'one', currentValue: 'v3', hasToggle: false, hasDropdown: false, hasTextInput: true, toggleChecked: null, y: 20, visible: true }
   ];
   const driver = new SettingsDriver(makeClient([
     { result: { value: JSON.stringify({ count: items.length, items, type: 'standard' }) } }
   ]), {});
   const out = await driver.getContent();
   assert.deepStrictEqual(out.items.map(item => item.label), ['Dup', 'Unique']);
+  assert.deepStrictEqual(out.items.map(item => item.controlType), ['display', 'text']);
+});
+
+asyncTest('SettingsDriver.listOptions returns visible dropdown choices', async () => {
+  const driver = new SettingsDriver(makeClient([
+    { result: { value: 'installed' } },
+    { result: { value: 'installed' } },
+    { result: { value: { ok: true, matchedText: '语言' } } },
+    { result: { value: JSON.stringify(['简体中文', 'English']) } },
+    { result: { value: 'closed' } }
+  ]), {});
+  assert.deepStrictEqual(await driver.listOptions('语言'), ['简体中文', 'English']);
 });
 
 asyncTest('SettingsDriver.action(read) returns content shape', async () => {

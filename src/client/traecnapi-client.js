@@ -441,9 +441,24 @@ class TraeCNApiClient {
     });
   }
 
-  async settingsRead(section = null) {
-    const path = section ? `/api/settings/read?section=${encodeURIComponent(section)}` : '/api/settings/read';
+  async settingsListSections(options = {}) {
+    const suffix = options.restoreChat === true ? '?restoreChat=true' : '';
+    return this._request('GET', `/api/settings/sections${suffix}`);
+  }
+
+  async settingsRead(section = null, options = {}) {
+    const params = new URLSearchParams();
+    if (section) params.set('section', section);
+    if (options.restoreChat === true) params.set('restoreChat', 'true');
+    const query = params.toString();
+    const path = `/api/settings/read${query ? `?${query}` : ''}`;
     return this._request('GET', path);
+  }
+
+  async settingsListOptions(section, label, options = {}) {
+    const params = new URLSearchParams({ section, label });
+    if (options.restoreChat === true) params.set('restoreChat', 'true');
+    return this._request('GET', `/api/settings/options?${params.toString()}`);
   }
 
   async settingsReadAll() {
@@ -454,8 +469,9 @@ class TraeCNApiClient {
     return this._request('POST', '/api/settings/set', {
       section,
       ...data,
-      confirmationId: options.confirmationId,
-      requireConfirmation: options.requireConfirmation === true
+      ...(options.confirmationId ? { confirmationId: options.confirmationId } : {}),
+      ...(options.requireConfirmation === true ? { requireConfirmation: true } : {}),
+      restoreChat: options.restoreChat === true
     });
   }
 

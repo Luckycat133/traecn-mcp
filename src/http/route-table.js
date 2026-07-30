@@ -96,6 +96,8 @@ const ROUTES = [
   { method: 'POST', path: '/api/update-self', handler: '_handleUpdateSelf', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 
   // Settings
+  { method: 'GET', path: '/api/settings/sections', handler: '_handleSettingsListSections', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
+  { method: 'GET', path: '/api/settings/options', handler: '_handleSettingsListOptions', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/settings/read-all', handler: '_handleSettingsReadAll', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/settings/read', handler: '_handleSettingsRead', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/settings', handler: '_handleSettingsRead', requiresAuth: true, requiresRateLimit: true, requiresBody: false },

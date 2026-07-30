@@ -29,8 +29,13 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_cancel_task',
-    description: 'Cancel one task; the gateway chooses queued removal or active generation stop.',
+    description: 'Cancel one gateway-tracked task by task ID.',
     inputSchema: schema({ taskId: { type: 'string' } }, ['taskId'])
+  },
+  {
+    name: 'traecn_stop_generation',
+    description: 'Stop the generation currently visible in TraeCN, including work not submitted through this gateway.',
+    inputSchema: schema()
   },
   {
     name: 'traecn_open_workspace',
@@ -51,6 +56,51 @@ const RAW_MCP_TOOLS = Object.freeze([
     name: 'traecn_select_mode',
     description: 'Select TraeCN Solo or IDE mode.',
     inputSchema: schema({ mode: { type: 'string', enum: ['solo', 'ide'] } }, ['mode'])
+  },
+  {
+    name: 'traecn_list_setting_sections',
+    description: 'List the settings sections currently visible in the TraeCN UI.',
+    inputSchema: schema()
+  },
+  {
+    name: 'traecn_list_settings',
+    description: 'List the individual settings and control types visible in one TraeCN settings section.',
+    inputSchema: schema({ section: { type: 'string' } }, ['section'])
+  },
+  {
+    name: 'traecn_list_setting_options',
+    description: 'List the visible choices for one dropdown setting in the TraeCN UI.',
+    inputSchema: schema({
+      section: { type: 'string' },
+      label: { type: 'string' }
+    }, ['section', 'label'])
+  },
+  {
+    name: 'traecn_set_setting_toggle',
+    description: 'Enable or disable one toggle setting in the TraeCN UI.',
+    inputSchema: schema({
+      section: { type: 'string' },
+      label: { type: 'string' },
+      enabled: { type: 'boolean' }
+    }, ['section', 'label', 'enabled'])
+  },
+  {
+    name: 'traecn_select_setting_option',
+    description: 'Select one dropdown option for a setting in the TraeCN UI.',
+    inputSchema: schema({
+      section: { type: 'string' },
+      label: { type: 'string' },
+      value: { type: 'string' }
+    }, ['section', 'label', 'value'])
+  },
+  {
+    name: 'traecn_set_setting_text',
+    description: 'Enter one text value for a setting in the TraeCN UI.',
+    inputSchema: schema({
+      section: { type: 'string' },
+      label: { type: 'string' },
+      text: { type: 'string' }
+    }, ['section', 'label', 'text'])
   },
   {
     name: 'traecn_list_conversations',
@@ -88,10 +138,17 @@ const MCP_TOOL_INTERNAL_NAMES = Object.freeze({
   traecn_send_message: 'send_message',
   traecn_get_task: 'get_task',
   traecn_cancel_task: 'cancel_task',
+  traecn_stop_generation: 'stop_generation',
   traecn_open_workspace: 'open_workspace',
   traecn_list_models: 'list_models',
   traecn_select_model: 'select_model',
   traecn_select_mode: 'select_mode',
+  traecn_list_setting_sections: 'list_setting_sections',
+  traecn_list_settings: 'list_settings',
+  traecn_list_setting_options: 'list_setting_options',
+  traecn_set_setting_toggle: 'set_setting_toggle',
+  traecn_select_setting_option: 'select_setting_option',
+  traecn_set_setting_text: 'set_setting_text',
   traecn_list_conversations: 'list_conversations',
   traecn_create_conversation: 'create_conversation',
   traecn_select_conversation: 'select_conversation',

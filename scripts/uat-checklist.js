@@ -109,7 +109,7 @@ assert.strictEqual(spec.info.version, packageJson.version);
 const { buildCapabilities } = require('../src/capabilities');
 const { listCommands } = require('../src/client/command-set');
 const capabilities = buildCapabilities({ commands: listCommands() });
-assert.strictEqual(capabilities.contractVersion, 3);
+assert.strictEqual(capabilities.contractVersion, 4);
 assert.deepStrictEqual(capabilities.tokenStrategy.prefer, [
   'traecn_send_message',
   'traecn_list_conversations',

@@ -139,6 +139,7 @@ async function _waitForContent(client, maxWait = 8000) {
             const descEl = el.querySelector('.icb-setting-item-description');
             const toggleEl = el.querySelector('input[type="checkbox"]');
             const dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
+            const textInputEl = el.querySelector('input[type="text"], input:not([type]), textarea, input[type="search"], input[type="number"]');
             const r = el.getBoundingClientRect();
             results.push({
               label: labelEl ? labelEl.innerText.trim() : '',
@@ -146,6 +147,7 @@ async function _waitForContent(client, maxWait = 8000) {
               currentValue: dropdownEl ? dropdownEl.innerText.trim() : '',
               hasToggle: !!toggleEl,
               hasDropdown: !!dropdownEl,
+              hasTextInput: !!textInputEl,
               toggleChecked: toggleEl ? toggleEl.checked : null,
               y: Math.round(r.y),
               visible: r.width > 0 && r.height > 0
@@ -193,6 +195,7 @@ async function _readSettingsContent(client, waitMs = 8000) {
             const descEl = el.querySelector('.icb-setting-item-description');
             const toggleEl = el.querySelector('input[type="checkbox"]');
             const dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
+            const textInputEl = el.querySelector('input[type="text"], input:not([type]), textarea, input[type="search"], input[type="number"]');
             const r = el.getBoundingClientRect();
             containerResults.push({
               label: labelEl ? labelEl.innerText.trim() : '',
@@ -200,6 +203,7 @@ async function _readSettingsContent(client, waitMs = 8000) {
               currentValue: dropdownEl ? dropdownEl.innerText.trim() : '',
               hasToggle: !!toggleEl,
               hasDropdown: !!dropdownEl,
+              hasTextInput: !!textInputEl,
               toggleChecked: toggleEl ? toggleEl.checked : null,
               y: Math.round(r.y),
               visible: r.width > 0 && r.height > 0
@@ -221,6 +225,7 @@ async function _readSettingsContent(client, waitMs = 8000) {
                   currentValue: '',
                   hasToggle: false,
                   hasDropdown: false,
+                  hasTextInput: false,
                   toggleChecked: null,
                   y: Math.round(cells[0].getBoundingClientRect().y),
                   visible: true
@@ -317,6 +322,62 @@ async function _setDropdown(client, labelText, value) {
   await sleep(400);
   if (!selectedText) return 'option not found: ' + value;
   return 'selected: ' + selectedText;
+}
+
+async function _listDropdownOptions(client, labelText) {
+  await _ensureClickHelper(client);
+  const openResult = await clickByTextEx(
+    client,
+    [
+      '.icb-settings-container .icb-setting-item-container',
+      '.part.solo_settings .icb-setting-item-container',
+      '[class*="settings-content"] .icb-setting-item-container',
+      '.icb-setting-item-container'
+    ],
+    labelText,
+    { strategies: ['text'], exact: true, click: 'radix' }
+  );
+  if (!openResult.ok) return [];
+  await sleep(300);
+  let options;
+  try {
+    options = await evaluateJSON(
+      client,
+      `() => {
+        const selectors = ['[class*="auto-test-select-option"]', '[role="option"]'];
+        const seen = new Set();
+        const values = [];
+        for (const selector of selectors) {
+          for (const el of document.querySelectorAll(selector)) {
+            const rect = el.getBoundingClientRect();
+            const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (rect.width > 4 && rect.height > 4 && text && !seen.has(text)) {
+              seen.add(text);
+              values.push(text);
+            }
+          }
+        }
+        return values;
+      }`
+    );
+  } finally {
+    await evaluate(
+      client,
+      `() => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+        return 'closed';
+      }`
+    );
+  }
+  return Array.isArray(options) ? options : [];
+}
+
+function normalizeSettingItem(item) {
+  let controlType = 'display';
+  if (item.hasToggle) controlType = 'toggle';
+  else if (item.hasDropdown) controlType = 'option';
+  else if (item.hasTextInput) controlType = 'text';
+  return { ...item, controlType };
 }
 
 /**
@@ -566,6 +627,16 @@ class SettingsDriver {
     return { tab: 'settings', section: section || null };
   }
 
+  async listSections() {
+    await this.switchTab();
+    const discovered = await _listSettingsSidebarSections(this.client);
+    return discovered.length > 0 ? discovered : SETTINGS_SECTIONS.slice();
+  }
+
+  async listOptions(label) {
+    return _listDropdownOptions(this.client, label);
+  }
+
   /**
    * Read the current settings section content.
    * @returns {{ sections: Array, items: Array, raw: Object }}
@@ -580,7 +651,7 @@ class SettingsDriver {
     for (const item of (data.items || [])) {
       if (!item.label || seen.has(item.label)) continue;
       seen.add(item.label);
-      items.push(item);
+      items.push(normalizeSettingItem(item));
     }
 
     return {
@@ -666,7 +737,7 @@ class SettingsDriver {
       for (const item of (data.items || [])) {
         if (!item.label || seenItem.has(item.label)) continue;
         seenItem.add(item.label);
-        items.push(item);
+        items.push(normalizeSettingItem(item));
       }
 
       result[section] = {
