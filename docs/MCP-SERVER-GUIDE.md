@@ -1,7 +1,7 @@
 # TRAECNclaw MCP server
 
 TRAECNclaw exposes a local stdio MCP server for operating TraeCN. The Agent
-contract contains 13 focused tools; lower-level HTTP, CLI, proof, waiting, and
+contract contains 20 focused tools; lower-level HTTP, CLI, proof, waiting, and
 maintenance operations remain gateway or operator facilities.
 
 ## Configure
@@ -28,8 +28,9 @@ Start the gateway separately with `npm run start:gateway`.
 
 | Group | Tools |
 | --- | --- |
-| Work | `traecn_send_message`, `traecn_get_task`, `traecn_cancel_task` |
+| Work | `traecn_send_message`, `traecn_get_task`, `traecn_cancel_task`, `traecn_stop_generation` |
 | Context | `traecn_open_workspace`, `traecn_list_models`, `traecn_select_model`, `traecn_select_mode` |
+| Settings | `traecn_list_setting_sections`, `traecn_list_settings`, `traecn_list_setting_options`, `traecn_set_setting_toggle`, `traecn_select_setting_option`, `traecn_set_setting_text` |
 | Conversations | `traecn_list_conversations`, `traecn_create_conversation`, `traecn_select_conversation`, `traecn_delete_conversation` |
 | Exceptional interactions | `traecn_answer_question`, `traecn_decide_approval` |
 
@@ -46,6 +47,15 @@ needed:
 `traecn_send_message` accepts only `message` and optional `conversationId`.
 Workspace paths are never inserted into the model prompt. New conversations
 are explicit; sending without a conversation ID uses the selected conversation.
+
+Settings use progressive discovery rather than one generic command: list the
+visible sections, inspect one section, and list a dropdown's choices only when
+needed. Use the mutation tool matching the returned `controlType`. The gateway
+opens Trae settings, performs the UI operation, serializes concurrent UI work,
+and returns to chat automatically.
+
+`traecn_cancel_task` targets one gateway task. `traecn_stop_generation` is a
+separate direct UI action for the generation currently visible in TraeCN.
 
 ## Gateway ownership
 

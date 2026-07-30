@@ -43,7 +43,8 @@ Use the skill launcher:
 ```
 
 The MCP surface contains focused work, context, conversation, question, and
-approval tools. See [MCP Server Guide](MCP-SERVER-GUIDE.md) for the 13 names.
+approval and UI-backed settings tools. See
+[MCP Server Guide](MCP-SERVER-GUIDE.md) for the 20 names.
 
 Send example after any required context-selection calls:
 

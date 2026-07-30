@@ -7,10 +7,17 @@ TRAECNclaw exposes one focused Agent surface. There are no tool profiles.
 | `traecn_send_message` | `message` | `POST /api/tasks/submit` |
 | `traecn_get_task` | `taskId` | `GET /api/task/{taskId}` |
 | `traecn_cancel_task` | `taskId` | `POST /api/task/{taskId}/cancel` |
+| `traecn_stop_generation` | none | `POST /api/trae/stop-generation` |
 | `traecn_open_workspace` | `path` | `POST /api/open-project` |
 | `traecn_list_models` | none | `GET /api/models` |
 | `traecn_select_model` | `model` | `POST /api/switch-model` |
 | `traecn_select_mode` | `mode` | `POST /api/switch-mode` |
+| `traecn_list_setting_sections` | none | `GET /api/settings/sections` |
+| `traecn_list_settings` | `section` | `GET /api/settings/read` |
+| `traecn_list_setting_options` | `section`, `label` | `GET /api/settings/options` |
+| `traecn_set_setting_toggle` | `section`, `label`, `enabled` | `POST /api/settings/set` |
+| `traecn_select_setting_option` | `section`, `label`, `value` | `POST /api/settings/set` |
+| `traecn_set_setting_text` | `section`, `label`, `text` | `POST /api/settings/set` |
 | `traecn_list_conversations` | none | `GET /api/conversations` |
 | `traecn_create_conversation` | none | `POST /api/conversations/manage` |
 | `traecn_select_conversation` | `conversationId` | `POST /api/conversations/manage` |
@@ -27,6 +34,11 @@ queues, recovery, completion checks, notifications, routine questions, safe
 command approvals, and keep/revert gates. Agents do not wait, poll, acknowledge
 events, run preflight, or recover work. `traecn_get_task` is an optional
 explicit read, not a polling instruction.
+
+Settings tools form a second level: list visible sections, then list only one
+section's items and their `controlType`. List dropdown options before selecting
+one. Each write tool maps to one exact UI control operation, while the gateway
+opens settings and restores chat automatically.
 
 Safe command cards are approved automatically. Ambiguous or risky approvals
 are returned with compact details for `traecn_decide_approval`; unknown

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-07-30
+
+### Added
+
+- Added a separate `traecn_stop_generation` UI action instead of treating all
+  stop requests as task cancellation.
+- Added progressively discovered Trae settings tools for visible sections,
+  section items, dropdown choices, boolean toggles, dropdown selection, and
+  text input.
+
+### Changed
+
+- Expanded the focused MCP surface from 13 to 20 single-intent tools. Settings
+  remain a second-level capability and do not expose one generic command tool.
+- Advanced the capabilities contract to version 4 for the UI-backed settings
+  and separate generation-stop surface.
+- Settings operations now serialize access to the Trae UI and return to chat
+  automatically after Agent-facing reads or writes.
+
 ## [0.4.4] - 2026-07-30
 
 ### Added

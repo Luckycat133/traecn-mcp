@@ -1,10 +1,10 @@
 ---
 name: traecnclaw-mcp
-description: Operate TraeCN through TRAECNclaw's focused stdio MCP tools. Use when an MCP-capable agent must send work, choose a workspace/model/mode/conversation, inspect or cancel a task, manage conversations, or resolve an exceptional question or unsafe approval. Queueing, waiting, recovery, notifications, safe approvals, and keep/revert gates are gateway-managed.
+description: Operate TraeCN through TRAECNclaw's focused stdio MCP tools. Use when an MCP-capable agent must send or stop work, choose a workspace/model/mode/conversation, inspect or change Trae settings through its UI, manage conversations, or resolve an exceptional question or unsafe approval. Queueing, waiting, recovery, notifications, safe approvals, and keep/revert gates are gateway-managed.
 license: MIT-0
 metadata:
   author: TRAECNclaw
-  version: "0.4.4"
+  version: "0.4.5"
   openclaw:
     requires:
       bins:
@@ -59,9 +59,25 @@ accepted `taskId` and status.
 
 Do not wait or poll after sending. The stdio server delivers compact task
 notifications and acknowledges them internally. Call `traecn_get_task` only
-for an intentional status/result read. Use `traecn_cancel_task` when the user
-wants work stopped; the gateway decides whether to remove queued work or stop
-active generation.
+for an intentional status/result read. Use `traecn_cancel_task` for one known
+gateway task. Use `traecn_stop_generation` only when the user wants the
+generation currently visible in TraeCN stopped, including work not submitted
+through this gateway.
+
+## Inspect or change Trae settings
+
+Treat settings as a second-level capability. Call
+`traecn_list_setting_sections`, then `traecn_list_settings` for only the needed
+section. For dropdowns, call `traecn_list_setting_options` instead of guessing.
+Use exactly one matching mutation tool:
+
+- `traecn_set_setting_toggle` for a boolean switch.
+- `traecn_select_setting_option` for a dropdown choice.
+- `traecn_set_setting_text` for a text or numeric input.
+
+These commands make the change through Trae's visible settings UI. The gateway
+serializes UI access and returns to chat automatically; do not navigate back
+manually or repeat reads after a successful write.
 
 ## Resolve exceptional interactions
 

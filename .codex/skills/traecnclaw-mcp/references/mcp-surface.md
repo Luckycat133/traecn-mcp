@@ -1,8 +1,8 @@
 # Ownership boundary
 
 The Agent receives focused tools for messages, tasks, workspace, models, mode,
-conversations, questions, and exceptional approvals. Each tool performs one
-operation.
+settings, conversations, questions, and exceptional approvals. Each tool
+performs one operation.
 
 The gateway owns readiness, queue maintenance, waiting, polling, task
 persistence, recovery, task-event acknowledgement, completion delivery,
@@ -13,3 +13,7 @@ tools.
 Use the context tools only when the requested workspace, model, mode, or
 conversation must change. New conversations are explicit; otherwise messages
 remain in the selected conversation.
+
+Settings are a second-level capability: list sections, list one section's
+items, list dropdown options when needed, then use the exact toggle, option, or
+text mutation tool. The gateway navigates Trae's UI and returns to chat.

@@ -179,11 +179,14 @@ A ready-to-copy single-entry launcher template is at
 `skills/traecnclaw-mcp/assets/mcp-client-config.json`; the direct fallback is
 kept separately at `skills/traecnclaw-mcp/assets/mcp-client-config.direct.json`.
 
-The MCP server exposes 13 focused tools grouped by intent:
+The MCP server exposes 20 focused tools grouped by intent:
 
-- Work: `traecn_send_message`, `traecn_get_task`, `traecn_cancel_task`
+- Work: `traecn_send_message`, `traecn_get_task`, `traecn_cancel_task`,
+  `traecn_stop_generation`
 - Context: `traecn_open_workspace`, `traecn_list_models`,
   `traecn_select_model`, `traecn_select_mode`
+- Settings: list UI sections and settings, list dropdown choices, then use one
+  dedicated toggle, option, or text mutation tool
 - Conversations: `traecn_list_conversations`, `traecn_create_conversation`,
   `traecn_select_conversation`, `traecn_delete_conversation`
 - Exceptional interactions: `traecn_answer_question`,
@@ -193,6 +196,7 @@ The MCP server exposes 13 focused tools grouped by intent:
 conversation ID. Workspace, model, mode, and conversation changes are explicit
 single-purpose operations. The gateway still owns queues, persistence,
 recovery, routine approvals, file-review gates, and completion notifications.
+Settings commands operate Trae's visible UI and return to chat automatically.
 
 ### Agent Skill Distribution
 
