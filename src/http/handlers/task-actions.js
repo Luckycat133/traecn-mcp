@@ -3,8 +3,6 @@
 const { parseBody } = require('../request-gate');
 const { hasDriverCapability } = require('./helpers');
 
-const MAX_TASK_TEXT_LENGTH = 100000;
-
 /**
  * task-actions handlers.
  *

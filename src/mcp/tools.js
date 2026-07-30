@@ -5,7 +5,6 @@
  * 从 mcp-server.js 拆分，保持单一职责。
  */
 
-const promptLayers = require('../skill/prompt-layers');
 const { buildCapabilities } = require('../capabilities');
 const { listCommands } = require('../client/command-set');
 const { buildCodeReviewTask } = require('../skill/review');

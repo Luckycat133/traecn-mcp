@@ -5,7 +5,6 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { getQuickstartConfig } = require('../src/config/quickstart');
-const { readArg } = require('./lib/cli-config');
 
 const LABEL = 'com.traecnclaw.gateway';
 const REPO_ROOT = path.resolve(__dirname, '..');

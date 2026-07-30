@@ -12,7 +12,7 @@ const { listCommands } = require('../src/client/command-set');
 const { MCP_TOOLS } = require('../mcp-server');
 const openClawManifest = require('../integrations/openclaw-traecn-plugin/openclaw.plugin.json');
 const packageJson = require('../package.json');
-const { readArg, resolveGatewayHostPort, resolveGatewayToken } = require('./lib/cli-config');
+const { resolveGatewayHostPort, resolveGatewayToken } = require('./lib/cli-config');
 
 const root = path.resolve(__dirname, '..');
 const requireComplete = process.argv.includes('--require-complete');
@@ -341,7 +341,7 @@ async function main() {
   const openClawCommandEnum = openClawCommandTool?.parameters?.properties?.command?.enum || [];
   const mcpToolNames = MCP_TOOLS.map(tool => tool.name);
   const gatewaySource = readFile('src/http/gateway.js');
-  const utilsSource = readFile('src/shared/utils.js');
+  const queueProbeSource = readFile('src/shared/queue-probe.js');
   const httpHandlerSource = [
     readFile('src/http/handlers/delegate.js'),
     readFile('src/http/handlers/sessions.js'),
@@ -356,7 +356,11 @@ async function main() {
   const liveUatSource = readFile('scripts/live-uat.js');
   const longQueueProofSource = readFile('scripts/long-queue-proof.js');
   const cliSource = readFile('scripts/traecn-cli.js');
-  const mcpSource = readFile('mcp-server.js');
+  const mcpSource = [
+    readFile('mcp-server.js'),
+    readFile('src/mcp/tools.js'),
+    readFile('src/mcp/handler.js')
+  ].join('\n');
   const mcpTestSource = readFile('mcp-server.test.js');
   const skillSource = readFile('src/skill/traecn-skill.js');
   const skillTestSource = readFile('src/skill/skill.test.js');
@@ -378,9 +382,9 @@ async function main() {
 
   add(results, 'queue_probe_guard', (
     httpHandlerSource.includes('generic_queue_probe_task_rejected')
-      && utilsSource.includes('function isGenericQueueProbeTask')
-      && utilsSource.includes('isForeignQueueProbeText')
-      && utilsSource.includes('isQueueProbeStatusSuffix')
+      && queueProbeSource.includes('function isGenericQueueProbeTask')
+      && queueProbeSource.includes('isForeignQueueProbeText')
+      && queueProbeSource.includes('isQueueProbeStatusSuffix')
       && liveUatSource.includes('queue-probe-guard')
       && liveUatSource.includes('Wait for Trae Queue 进行中 17:34')
       && liveUatSource.includes('--cleanup-queue-probes')
@@ -397,7 +401,7 @@ async function main() {
       && hasAll(soloCleanupSource, ['async function _locateCandidateRow', 'candidate.title', 'candidate.text', 'candidate.index'])
       && titleBeforeIndex
       && hasAll(domDriverTestSource, [
-        'deleteSoloChats deletes matched Solo queue probe and verifies by title',
+        'deleteSoloChats re-queries sidebar to verify deletion by title',
         'deleteSoloChats does not treat menu text insertion as deletion success',
         'findScrollHost',
         'scrollTop',
@@ -496,8 +500,8 @@ async function main() {
       && openClawTools.includes('traecn_vibe_workflow')
       && hasAll(asyncDelegateAccepts, ['autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'forceBackground'])
       && hasAll(mcpSource, ['name: \'traecn_run_unattended_workflow\'', 'followupTasks', 'completionChecks', 'autoApproveDialog'])
-      && hasAll(commandSetSource, ['case COMMANDS.VIBE_WORKFLOW', 'autoContinue: true', 'followupTasks', 'completionChecks', 'autoApproveDialog'])
-      && hasAll(skillSource, ['async vibeWorkflow', 'autoContinue: true', 'autoApproveDialog: input.autoApproveDialog === undefined ? \'auto\'', 'followupTasks'])
+      && hasAll(commandSetSource, ['case COMMANDS.VIBE_WORKFLOW', 'const autoContinue = params.autoContinue !== false', 'followupTasks', 'completionChecks', 'autoApproveDialog'])
+      && hasAll(skillSource, ['async vibeWorkflow', 'const autoContinue = input.autoContinue !== false', 'autoApproveDialog: input.autoApproveDialog === undefined ? \'auto\'', 'followupTasks'])
       && hasAll(cliSource, ['case \'vibe\'', 'autoContinue: true', 'completionChecks', 'followupTasks'])
       && mcpTestSource.includes('MCP workflow tools expose completion checks')
       && skillTestSource.includes('vibeWorkflow queues unattended follow-up workflow')

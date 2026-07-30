@@ -1182,7 +1182,6 @@ function cleanupQueueDetach({
   outputFormat,
   lockFile,
   execute,
-  dryRun,
   maxPasses,
   watchMs,
   stableMs,
@@ -1416,8 +1415,6 @@ async function cleanupQueueWatch({
 }
 
 async function cleanupQueueDryRun({
-  outputFormat,
-  lockFile,
   execute,
   dryRun,
   maxPasses

@@ -164,26 +164,3 @@ TRAECN_NEW_CHAT_SELECTORS=[class*="new-task"],[class*='new-task-button'],[class*
 TRAECN_MODE_TAB_SELECTORS=.icube-mode-tab-item,.icube-mode-tab-item,[class*='icube-mode-tab-item'],...
 TRAECN_ACTIVITY_SELECTORS=.chat-list-wrapper,[class*="activity"],[class*="chat-list"]
 ```
-
----
-
-## 5. 接下来要写的 driver（v0.4.0 scope）
-
-按依赖顺序：
-
-1. `editor-driver.js` — accept/reject edit（走 `.icube-apply-action-container`）+ 文本操作
-2. `file-driver.js` — open/close/save/rename/delete/list
-3. `terminal-driver.js` — open/send/read/clear
-4. `git-driver.js` — status/commit/push/pull/branch
-5. `search-driver.js` — find/search
-6. `command-palette-driver.js` — open/run(commandId)
-7. `diagnostics-driver.js` — readProblems
-8. `snapshot-driver.js` — snapshot DOM + screenshot
-9. `extension-driver.js` — list/install/enable
-
-每个 driver 配对应：
-- HTTP endpoint
-- command-set entry
-- MCP tool
-- OpenClaw plugin tool
-- Unit + integration test

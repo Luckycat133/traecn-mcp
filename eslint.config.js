@@ -1,3 +1,4 @@
+/* eslint-disable no-undef */
 // Flat ESLint v9 config for TRAECNclaw.
 //
 // Scope: source code under src/, mcp-server.js, scripts/, and integrations/.
@@ -8,7 +9,7 @@
 // 'commonjs' makes ESLint recognise require/module/exports/__dirname/__filename
 // as built-in globals — without it, every CommonJS file emits hundreds of
 // no-undef false positives.
-import js from '@eslint/js';
+const js = require('@eslint/js');
 
 const NODE_GLOBALS = {
   // CommonJS built-ins (auto-recognised with sourceType: 'commonjs', listed here
@@ -61,7 +62,7 @@ const SHARED_RULES = {
   'object-shorthand': 'warn',
 };
 
-export default [
+module.exports = [
   js.configs.recommended,
   {
     ignores: [
