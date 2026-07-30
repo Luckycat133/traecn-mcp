@@ -298,10 +298,21 @@ by its transient sidebar index. If that identity cannot be found, collection
 waits instead of reading another conversation. Progress labels below 100%, such
 as `任务完成 16%`, remain non-terminal.
 
-Inline safe command cards are approved by a local classifier without model
-tokens. Unsafe or unknown cards and non-mechanical questions surface through
-`traecn_answer_question` or `traecn_decide_approval`. TraeCN file-review gates
-keep changes by default and revert only on clear fatal automation failures.
+Inline command cards are approved without model tokens only when every shell
+segment matches the strict read-only allowlist. Redirection, substitution,
+network/process/package commands, project scripts, mutating find/sed, and
+external ripgrep/Git hooks are rejected from automatic approval. Unsafe or
+unknown cards surface through `traecn_decide_approval`, which revalidates the
+exact visible command and requires a risk acknowledgement plus audit reason.
+TraeCN file-review gates keep changes by default and revert only on clear fatal
+automation failures.
+
+`traecn_stop_generation` is scoped to the supplied active Solo conversation
+and requires an untracked-work acknowledgement and audit reason. Permanent
+conversation deletion is limited to an inactive exact-title match and has no
+gateway recovery path. These actions and automatic command approvals are
+written to the local append-only audit log, enabled by default with sensitive
+field redaction and 30-day retention.
 
 The CLI retains detached wait and proof commands for maintainers and acceptance
 testing; these are not MCP Agent tools:

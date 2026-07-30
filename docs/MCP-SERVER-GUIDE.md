@@ -55,14 +55,24 @@ opens Trae settings, performs the UI operation, serializes concurrent UI work,
 and returns to chat automatically.
 
 `traecn_cancel_task` targets one gateway task. `traecn_stop_generation` is a
-separate direct UI action for the generation currently visible in TraeCN.
+separate direct UI action for untracked work: supply the active Solo
+`conversationId`, acknowledge that it may belong to another origin, and give a
+short audit reason. The gateway verifies that the ID is still active before it
+clicks stop.
+
+Conversation deletion is permanent and cannot target the active conversation.
+It requires the exact listed title and `acknowledgePermanentDeletion:true`.
+Unsafe-command approval requires the exact visible command,
+`acknowledgeRisk:true`, and an audit reason; the gateway rechecks the card to
+prevent stale approval. These high-impact operations use `delegate` permission
+and are recorded in the local append-only security audit log.
 
 ## Gateway ownership
 
 The Agent does not preflight, choose sync versus background execution, wait,
 poll, acknowledge events, recover tasks, clean queues, or operate keep/revert
 controls. The gateway persists accepted tasks, maintains queues, resumes work,
-auto-approves strictly safe cards, resolves file-review gates, and emits compact
+auto-approves a strict read-only command allowlist, resolves file-review gates, and emits compact
 MCP completion notifications.
 
 `traecn_get_task` exists for explicit progress/result reads or clients that do

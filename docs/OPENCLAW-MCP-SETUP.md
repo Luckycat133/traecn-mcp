@@ -69,10 +69,16 @@ the gateway bound to loopback unless remote access is secured.
 
 ## Approval behavior
 
-The gateway handles strictly safe command cards without an Agent call. It keeps
+The gateway handles only a documented strict read-only command allowlist without an Agent call. It keeps
 generated file changes by default and reverts only when the collected state
 contains a clear fatal automation failure. Questions and unsafe approvals are
 returned for `traecn_answer_question` or `traecn_decide_approval`.
+
+High-impact tools remain focused but policy-backed: direct stop is bound to the
+active Solo conversation and requires an untracked-work acknowledgement;
+permanent deletion requires an inactive exact-title match; unsafe approval
+requires exact-command revalidation. Each records a concise reason in the local
+append-only audit log instead of adding a separate confirmation tool.
 
 ## Troubleshooting
 
