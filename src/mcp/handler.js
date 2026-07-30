@@ -87,7 +87,11 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       return asMcpContent(result.data || result);
     }
     case 'stop_generation': {
-      const result = await client.stopGeneration();
+      const result = await client.stopGeneration({
+        conversationId: args.conversationId,
+        acknowledgeUntrackedWork: args.acknowledgeUntrackedWork,
+        reason: args.reason
+      });
       return asMcpContent(result.data || result);
     }
     case 'open_workspace': {
@@ -155,7 +159,12 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       return asMcpContent(result.data || result);
     }
     case 'delete_conversation': {
-      const result = await client.manageConversation({ action: 'delete', conversationId: args.conversationId });
+      const result = await client.manageConversation({
+        action: 'delete',
+        conversationId: args.conversationId,
+        expectedTitle: args.expectedTitle,
+        acknowledgePermanentDeletion: args.acknowledgePermanentDeletion
+      });
       return asMcpContent(result.data || result);
     }
     case 'answer_question': {
@@ -163,7 +172,12 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       return asMcpContent(result.data || result);
     }
     case 'decide_approval': {
-      const result = await client.resolveInteraction({ action: args.decision });
+      const result = await client.resolveInteraction({
+        action: args.decision,
+        ...(args.expectedCommand ? { expectedCommand: args.expectedCommand } : {}),
+        ...(args.acknowledgeRisk === true ? { acknowledgeRisk: true } : {}),
+        ...(args.reason ? { reason: args.reason } : {})
+      });
       return asMcpContent(result.data || result);
     }
     default:

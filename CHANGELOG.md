@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-07-30
+
+### Security
+
+- Bound direct generation stops to the verified active Solo conversation and
+  required an explicit untracked-work acknowledgement plus audit reason.
+- Made conversation deletion an inactive-target-only permanent operation with
+  exact-title verification, irreversible-deletion acknowledgement, elevated
+  `delegate` permission, and durable audit evidence.
+- Revalidated the exact visible command before approving unsafe or ambiguous
+  cards and required a risk acknowledgement plus authorization reason.
+- Reduced automatic command approval to a strict read-only allowlist and
+  blocked project scripts, mutating find/sed forms, ripgrep preprocessors, Git
+  external hooks, shell writes, network access, and process control.
+- Enabled append-only security audit records for automatic command approvals,
+  direct stops, conversation deletion, and exceptional approval decisions.
+
 ## [0.4.5] - 2026-07-30
 
 ### Added

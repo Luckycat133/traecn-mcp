@@ -229,10 +229,19 @@ test('TraeCNApiClient constructor accepts custom options', () => {
       res.end(JSON.stringify({ success: true }));
     });
     const client = new TraeCNApiClient({ port, timeout: 3000 });
-    const result = await client.stopGeneration();
+    const result = await client.stopGeneration({
+      conversationId: 'solo:Q3VycmVudCB0YXNr',
+      acknowledgeUntrackedWork: true,
+      reason: 'Stop requested by user'
+    });
     assert.strictEqual(result.data.success, true);
     assert.strictEqual(lastRequest.method, 'POST');
     assert.strictEqual(lastRequest.url, '/api/trae/stop-generation');
+    assert.deepStrictEqual(lastRequest.body, {
+      conversationId: 'solo:Q3VycmVudCB0YXNr',
+      acknowledgeUntrackedWork: true,
+      reason: 'Stop requested by user'
+    });
     server.close();
   });
 

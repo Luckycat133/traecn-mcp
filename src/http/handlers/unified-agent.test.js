@@ -6,7 +6,8 @@ const {
   handleSubmit,
   handleListModels,
   handleListConversations,
-  handleManageConversation
+  handleManageConversation,
+  handleResolveInteraction
 } = require('./unified-agent');
 const { generateOpenAPISpec } = require('../openapi');
 
@@ -16,6 +17,7 @@ function request(body) {
 
 (async () => {
   const calls = [];
+  const auditEntries = [];
   const task = {
     taskId: 'task_gateway_1',
     status: 'queued',
@@ -42,13 +44,28 @@ function request(body) {
       listModels: async () => ({ current: 'GLM-5.2', models: ['GLM-5.2', 'DeepSeek-V3.2'] }),
       listSoloChats: async () => ({
         mode: 'solo',
-        chats: [{ index: 2, title: 'Review API', active: true }],
-        count: 1
+        chats: [
+          { index: 2, title: 'Review API', active: true },
+          { index: 3, title: 'Old review', active: false }
+        ],
+        count: 2
       }),
       deleteSoloChats: async input => {
         calls.push(['delete', input]);
         return { deleted: 1 };
-      }
+      },
+      checkForApprovalDialog: async () => ({
+        needsApproval: true,
+        isCommandExec: true,
+        approvalDecision: 'agent_review',
+        command: 'git push origin main',
+        commandRisk: 'high',
+        riskReasons: ['git_write_or_remote']
+      }),
+      approveDialog: async action => ({ success: true, action })
+    },
+    auditLogger: {
+      log: entry => auditEntries.push(entry)
     }
   };
 
@@ -122,7 +139,10 @@ function request(body) {
   await handleListConversations(request({}), listRes, ctx);
   assert.deepStrictEqual(listRes.body, {
     mode: 'solo',
-    conversations: [{ id: 'solo:UmV2aWV3IEFQSQ', title: 'Review API', active: true }]
+    conversations: [
+      { id: 'solo:UmV2aWV3IEFQSQ', title: 'Review API', active: true },
+      { id: 'solo:T2xkIHJldmlldw', title: 'Old review', active: false }
+    ]
   });
 
   const modelRes = {};
@@ -135,16 +155,60 @@ function request(body) {
   const deleteRes = {};
   await handleManageConversation(request({
     action: 'delete',
-    conversationId: 'solo:UmV2aWV3IEFQSQ'
+    conversationId: 'solo:T2xkIHJldmlldw',
+    expectedTitle: 'Old review',
+    acknowledgePermanentDeletion: true
   }), deleteRes, ctx);
   assert.deepStrictEqual(deleteRes.body, {
     action: 'delete',
-    conversationId: 'solo:UmV2aWV3IEFQSQ',
-    deleted: 1
+    conversationId: 'solo:T2xkIHJldmlldw',
+    deleted: 1,
+    recoverable: false
   });
   assert.deepStrictEqual(calls.at(-1), ['delete', {
-    candidates: [{ index: 2, title: 'Review API' }]
+    candidates: [{ index: 3, title: 'Old review' }]
   }]);
+  assert.strictEqual(auditEntries.at(-1).action, 'conversation.delete');
+
+  const activeDeleteRes = {};
+  await handleManageConversation(request({
+    action: 'delete',
+    conversationId: 'solo:UmV2aWV3IEFQSQ',
+    expectedTitle: 'Review API',
+    acknowledgePermanentDeletion: true
+  }), activeDeleteRes, ctx);
+  assert.strictEqual(activeDeleteRes.status, 409);
+  assert.strictEqual(activeDeleteRes.body.error, 'active_conversation_delete_forbidden');
+
+  const unconfirmedDeleteRes = {};
+  await handleManageConversation(request({
+    action: 'delete',
+    conversationId: 'solo:T2xkIHJldmlldw',
+    expectedTitle: 'Old review'
+  }), unconfirmedDeleteRes, ctx);
+  assert.strictEqual(unconfirmedDeleteRes.status, 400);
+  assert.strictEqual(unconfirmedDeleteRes.body.error, 'permanent_deletion_acknowledgement_required');
+
+  const staleApprovalRes = {};
+  await handleResolveInteraction(request({
+    action: 'approve',
+    expectedCommand: 'rm -rf build',
+    acknowledgeRisk: true,
+    reason: 'User requested cleanup'
+  }), staleApprovalRes, ctx);
+  assert.strictEqual(staleApprovalRes.status, 409);
+  assert.strictEqual(staleApprovalRes.body.error, 'approval_command_mismatch');
+
+  const approvalRes = {};
+  await handleResolveInteraction(request({
+    action: 'approve',
+    expectedCommand: 'git push origin main',
+    acknowledgeRisk: true,
+    reason: 'User explicitly requested publishing the current branch'
+  }), approvalRes, ctx);
+  assert.strictEqual(approvalRes.status, 200);
+  assert.strictEqual(approvalRes.body.success, true);
+  assert.strictEqual(auditEntries.at(-1).action, 'interaction.approval_decision');
 
   const spec = generateOpenAPISpec();
   assert.ok(spec.paths['/api/tasks/submit']?.post);

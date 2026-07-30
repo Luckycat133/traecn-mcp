@@ -7,7 +7,7 @@ TRAECNclaw exposes one focused Agent surface. There are no tool profiles.
 | `traecn_send_message` | `message` | `POST /api/tasks/submit` |
 | `traecn_get_task` | `taskId` | `GET /api/task/{taskId}` |
 | `traecn_cancel_task` | `taskId` | `POST /api/task/{taskId}/cancel` |
-| `traecn_stop_generation` | none | `POST /api/trae/stop-generation` |
+| `traecn_stop_generation` | `conversationId`, `acknowledgeUntrackedWork`, `reason` | `POST /api/trae/stop-generation` |
 | `traecn_open_workspace` | `path` | `POST /api/open-project` |
 | `traecn_list_models` | none | `GET /api/models` |
 | `traecn_select_model` | `model` | `POST /api/switch-model` |
@@ -21,9 +21,9 @@ TRAECNclaw exposes one focused Agent surface. There are no tool profiles.
 | `traecn_list_conversations` | none | `GET /api/conversations` |
 | `traecn_create_conversation` | none | `POST /api/conversations/manage` |
 | `traecn_select_conversation` | `conversationId` | `POST /api/conversations/manage` |
-| `traecn_delete_conversation` | `conversationId` | `POST /api/conversations/manage` |
+| `traecn_delete_conversation` | `conversationId`, `expectedTitle`, `acknowledgePermanentDeletion` | `POST /api/conversations/manage` |
 | `traecn_answer_question` | `answer` | `POST /api/interactions/resolve` |
-| `traecn_decide_approval` | `decision` | `POST /api/interactions/resolve` |
+| `traecn_decide_approval` | `decision`; approve also needs `expectedCommand`, `acknowledgeRisk`, `reason` | `POST /api/interactions/resolve` |
 
 `traecn_send_message` accepts only `message` and optional `conversationId`.
 Set workspace, model, mode, and conversation through their focused tools. New
@@ -40,6 +40,19 @@ section's items and their `controlType`. List dropdown options before selecting
 one. Each write tool maps to one exact UI control operation, while the gateway
 opens settings and restores chat automatically.
 
-Safe command cards are approved automatically. Ambiguous or risky approvals
-are returned with compact details for `traecn_decide_approval`; unknown
-questions are returned with options for `traecn_answer_question`.
+Only strict read-only command chains are approved automatically: `cd`; basic
+inspection with `pwd`, `ls`, `rg`, `grep`, `cat`, `head`, `tail`, `wc`, or
+`stat`; read-only Git status/diff/log/show/branch/rev-parse/ls-files; and
+unredirected `echo`. Shell redirection/substitution, network, package, process,
+privilege, project-script, mutating find/sed, ripgrep preprocessor, and Git
+external-diff/textconv forms never auto-approve. Unknown commands go to Agent
+review. Automatic approvals and every high-impact Agent decision are written
+to the local append-only security audit log.
+
+The direct stop action works only in Solo mode and only when its supplied ID
+still matches the active conversation. It requires an acknowledgement that the
+visible generation may be untracked plus an audit reason. Conversation delete
+requires an inactive target, exact listed title, and permanent-deletion
+acknowledgement; it has no recovery path. Unsafe-command approval revalidates
+the exact currently visible command and records the risk acknowledgement and
+reason before clicking.

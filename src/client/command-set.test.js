@@ -77,6 +77,28 @@ async function test(name, fn) {
     });
   });
 
+  await test('stop_generation requires and forwards active-conversation scope', async () => {
+    const command = listCommands().find(item => item.command === 'stop_generation');
+    assert.deepStrictEqual(command.required, ['conversationId', 'acknowledgeUntrackedWork', 'reason']);
+    let captured = null;
+    const client = {
+      stopGeneration: async options => {
+        captured = options;
+        return { status: 200, data: { success: true } };
+      }
+    };
+    await executeCommand(client, 'stop_generation', {
+      conversationId: 'solo:Q3VycmVudCB0YXNr',
+      acknowledgeUntrackedWork: true,
+      reason: 'User requested stop'
+    });
+    assert.deepStrictEqual(captured, {
+      conversationId: 'solo:Q3VycmVudCB0YXNr',
+      acknowledgeUntrackedWork: true,
+      reason: 'User requested stop'
+    });
+  });
+
   await test('solo chat commands are exposed for real Solo sidebar control', async () => {
     const commands = listCommands();
     const list = commands.find(command => command.command === 'list_solo_chats');

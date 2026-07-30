@@ -184,8 +184,8 @@ const COMMAND_DEFINITIONS = Object.freeze([
   },
   {
     command: COMMANDS.STOP_GENERATION,
-    summary: '停止 TraeCN 当前正在生成或排队的请求，清理同步超时后残留的 UI 队列',
-    required: [],
+    summary: '仅停止指定且当前激活的 Solo 对话生成；可能影响非网关任务并写入安全审计日志',
+    required: ['conversationId', 'acknowledgeUntrackedWork', 'reason'],
     optional: []
   },
   {
@@ -693,7 +693,14 @@ async function executeCommand(client, command, params = {}) {
       requireParam(params, 'taskId');
       return client.cancelTask(params.taskId);
     case COMMANDS.STOP_GENERATION:
-      return client.stopGeneration();
+      requireParam(params, 'conversationId');
+      requireParam(params, 'acknowledgeUntrackedWork');
+      requireParam(params, 'reason');
+      return client.stopGeneration({
+        conversationId: params.conversationId,
+        acknowledgeUntrackedWork: params.acknowledgeUntrackedWork === true,
+        reason: params.reason
+      });
     case COMMANDS.REVIEW_GATE_STATUS:
       return client.getReviewGateStatus();
     case COMMANDS.RESOLVE_REVIEW_GATE:

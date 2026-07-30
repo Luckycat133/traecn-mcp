@@ -6,6 +6,7 @@ const { getEnvWithFallback } = require('../../shared/utils');
 const { discoverTarget, describeCDPSurface } = require('../../cdp/discovery');
 const { getQuickstartConfig, restartTraeCNWithDebug } = require('../../config/quickstart');
 const { rejectBadRequest, hasDriverCapability } = require('./helpers');
+const { conversationId } = require('./unified-agent');
 
 const defaultRestartDebugDeps = {
   getEnvWithFallback,
@@ -39,7 +40,7 @@ const ROUTES = [
       "handler": "_handleStopGeneration",
       "requiresAuth": true,
       "requiresRateLimit": true,
-      "requiresBody": false
+      "requiresBody": true
     },
     {
       "method": "POST",
@@ -92,11 +93,73 @@ const ROUTES = [
   ];
 
 async function handleStopGeneration(req, res, ctx) {
+  const body = await parseBody(req);
+  const requestedConversationId = String(body.conversationId || '').trim();
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  if (body.acknowledgeUntrackedWork !== true) {
+    return ctx._json(req, res, {
+      error: 'untracked_work_acknowledgement_required',
+      message: 'Visible generation may belong to the user or another agent.'
+    }, 400);
+  }
+  if (!requestedConversationId || !reason || reason.length > 500) {
+    return ctx._json(req, res, {
+      error: 'conversationId and a reason of 1-500 characters are required'
+    }, 400);
+  }
   await ctx._ensureConnection();
-  const result = hasDriverCapability(ctx, 'stopGeneration')
-    ? await ctx.driver.stopGeneration()
-    : { success: false, reason: 'driver_does_not_support_stop_generation' };
-  ctx._json(req, res, result, result.success === false ? 409 : 200);
+  const run = typeof ctx._withUiActionLock === 'function'
+    ? operation => ctx._withUiActionLock(operation)
+    : operation => operation();
+  return run(async () => {
+    const mode = typeof ctx.driver.detectMode === 'function'
+      ? (await ctx.driver.detectMode())?.mode
+      : null;
+    if (mode !== 'solo' || typeof ctx.driver.listSoloChats !== 'function') {
+      return ctx._json(req, res, {
+        error: 'scoped_stop_requires_solo_conversation',
+        message: 'Use traecn_cancel_task for gateway-tracked work; untracked stop requires a stable Solo conversation ID.'
+      }, 409);
+    }
+    const listed = await ctx.driver.listSoloChats();
+    const active = (listed.chats || []).find(chat => chat.active === true);
+    const activeConversationId = active ? conversationId(active) : null;
+    if (!activeConversationId || activeConversationId !== requestedConversationId) {
+      if (ctx.auditLogger && typeof ctx.auditLogger.log === 'function') {
+        ctx.auditLogger.log({
+          req,
+          action: 'trae.stop_generation',
+          resource: requestedConversationId,
+          params: { activeConversationId, reason },
+          status: 'failure',
+          error: 'active_conversation_mismatch'
+        });
+      }
+      return ctx._json(req, res, {
+        error: 'active_conversation_mismatch',
+        requestedConversationId,
+        activeConversationId
+      }, 409);
+    }
+    const result = hasDriverCapability(ctx, 'stopGeneration')
+      ? await ctx.driver.stopGeneration()
+      : { success: false, reason: 'driver_does_not_support_stop_generation' };
+    if (ctx.auditLogger && typeof ctx.auditLogger.log === 'function') {
+      ctx.auditLogger.log({
+        req,
+        action: 'trae.stop_generation',
+        resource: requestedConversationId,
+        params: { reason, acknowledgedUntrackedWork: true },
+        status: result.success === false ? 'failure' : 'success',
+        error: result.success === false ? result.reason || result.error || 'stop_failed' : null
+      });
+    }
+    return ctx._json(req, res, {
+      ...result,
+      conversationId: requestedConversationId,
+      scope: 'active_solo_conversation'
+    }, result.success === false ? 409 : 200);
+  });
 }
 async function handleRestartTraeDebug(req, res, ctx) {
   const body = await parseBody(req);

@@ -1,7 +1,7 @@
 {
   "id": "traecnclaw",
   "name": "TraeCNclaw",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Delegate IDE tasks from OpenClaw to a local TraeCNclaw instance that drives the TraeCN desktop app.",
   "baseUrl": "http://127.0.0.1:8788",
   "configSchema": {

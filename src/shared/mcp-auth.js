@@ -41,7 +41,7 @@ const TOOL_PERMISSIONS = Object.freeze({
   traecn_list_conversations: READ_PERMISSION,
   traecn_create_conversation: WRITE_PERMISSION,
   traecn_select_conversation: WRITE_PERMISSION,
-  traecn_delete_conversation: WRITE_PERMISSION,
+  traecn_delete_conversation: DELEGATE_PERMISSION,
   traecn_answer_question: DELEGATE_PERMISSION,
   traecn_decide_approval: DELEGATE_PERMISSION
 });

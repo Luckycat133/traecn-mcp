@@ -78,6 +78,20 @@ async function withServer(run) {
   const settingToggle = listed.tools.find(tool => tool.name === 'traecn_set_setting_toggle');
   assert.deepStrictEqual(settingToggle.inputSchema.required, ['section', 'label', 'enabled']);
 
+  const stopGeneration = listed.tools.find(tool => tool.name === 'traecn_stop_generation');
+  assert.deepStrictEqual(stopGeneration.inputSchema.required, [
+    'conversationId',
+    'acknowledgeUntrackedWork',
+    'reason'
+  ]);
+
+  const deleteConversation = listed.tools.find(tool => tool.name === 'traecn_delete_conversation');
+  assert.deepStrictEqual(deleteConversation.inputSchema.required, [
+    'conversationId',
+    'expectedTitle',
+    'acknowledgePermanentDeletion'
+  ]);
+
   await withServer(async (context, requests) => {
     const confirmationIdFor = (section, label, value) => buildConfirmationPlan({
       command: 'settings_set',
@@ -93,7 +107,11 @@ async function withServer(run) {
     });
 
     await callTool('traecn_open_workspace', { path: '/tmp/repo' }, context);
-    await callTool('traecn_stop_generation', {}, context);
+    await callTool('traecn_stop_generation', {
+      conversationId: 'solo:chat-a',
+      acknowledgeUntrackedWork: true,
+      reason: 'User asked to stop the visible generation'
+    }, context);
     await callTool('traecn_list_models', {}, context);
     await callTool('traecn_select_model', { model: 'GLM-5.2' }, context);
     await callTool('traecn_select_mode', { mode: 'solo' }, context);
@@ -105,14 +123,27 @@ async function withServer(run) {
     await callTool('traecn_set_setting_text', { section: 'MCP', label: '服务器地址', text: 'http://127.0.0.1' }, context);
     await callTool('traecn_create_conversation', {}, context);
     await callTool('traecn_select_conversation', { conversationId: 'solo:chat-a' }, context);
-    await callTool('traecn_delete_conversation', { conversationId: 'solo:chat-b' }, context);
+    await callTool('traecn_delete_conversation', {
+      conversationId: 'solo:chat-b',
+      expectedTitle: 'Old review',
+      acknowledgePermanentDeletion: true
+    }, context);
     await callTool('traecn_answer_question', { answer: '当前工作区' }, context);
-    await callTool('traecn_decide_approval', { decision: 'deny' }, context);
+    await callTool('traecn_decide_approval', {
+      decision: 'approve',
+      expectedCommand: 'git status',
+      acknowledgeRisk: true,
+      reason: 'Read-only repository inspection requested by the user'
+    }, context);
 
     assert.deepStrictEqual(requests, [
       { method: 'POST', url: '/api/tasks/submit', body: { message: 'Review the repository', conversationId: 'solo:UmV2aWV3IEFQSQ' } },
       { method: 'POST', url: '/api/open-project', body: { projectPath: '/tmp/repo' } },
-      { method: 'POST', url: '/api/trae/stop-generation', body: null },
+      { method: 'POST', url: '/api/trae/stop-generation', body: {
+        conversationId: 'solo:chat-a',
+        acknowledgeUntrackedWork: true,
+        reason: 'User asked to stop the visible generation'
+      } },
       { method: 'GET', url: '/api/models', body: null },
       { method: 'POST', url: '/api/switch-model', body: { model: 'GLM-5.2', waitForQueue: false } },
       { method: 'POST', url: '/api/switch-mode', body: { mode: 'solo', allowAutoStart: false } },
@@ -124,9 +155,19 @@ async function withServer(run) {
       { method: 'POST', url: '/api/settings/set', body: { section: 'MCP', label: '服务器地址', value: 'http://127.0.0.1', kind: 'text', confirmationId: confirmationIdFor('MCP', '服务器地址', 'http://127.0.0.1'), restoreChat: true } },
       { method: 'POST', url: '/api/conversations/manage', body: { action: 'create' } },
       { method: 'POST', url: '/api/conversations/manage', body: { action: 'select', conversationId: 'solo:chat-a' } },
-      { method: 'POST', url: '/api/conversations/manage', body: { action: 'delete', conversationId: 'solo:chat-b' } },
+      { method: 'POST', url: '/api/conversations/manage', body: {
+        action: 'delete',
+        conversationId: 'solo:chat-b',
+        expectedTitle: 'Old review',
+        acknowledgePermanentDeletion: true
+      } },
       { method: 'POST', url: '/api/interactions/resolve', body: { action: 'answer', answer: '当前工作区' } },
-      { method: 'POST', url: '/api/interactions/resolve', body: { action: 'deny' } }
+      { method: 'POST', url: '/api/interactions/resolve', body: {
+        action: 'approve',
+        expectedCommand: 'git status',
+        acknowledgeRisk: true,
+        reason: 'Read-only repository inspection requested by the user'
+      } }
     ]);
   });
 

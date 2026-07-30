@@ -45,7 +45,7 @@ const OPERATION_HINTS = Object.freeze({
   adopt_current_task: 'Recover tracking for a Trae request that is already queued/running without resending prompt content.',
   review_task: 'Approve or reject a completed background result before continuing follow-up work.',
   queue_status: 'Check model busy/queue state before sending expensive work.',
-  stop_generation: 'Stop the current Trae generation/queue request before recovering or switching tasks.',
+  stop_generation: 'Stop untracked visible work only after binding the action to the active Solo conversation and recording an audit reason.',
   review_gate_status: 'Inspect whether Trae is waiting on its internal keep/revert review gate.',
   resolve_review_gate: 'Resolve Trae internal keep/revert gate so automation can continue.',
   review_code: 'Ask Trae CN for findings-first code review of code or diff.',
@@ -122,7 +122,7 @@ function buildCapabilities(options = {}, deps = {}) {
   return {
     name: 'traecnclaw',
     version: packageInfo.version,
-    contractVersion: 4,
+    contractVersion: 5,
     tokenStrategy: {
       prefer: ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task'],
       gatewayManaged: true,

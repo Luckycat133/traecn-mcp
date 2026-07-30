@@ -34,8 +34,20 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_stop_generation',
-    description: 'Stop the generation currently visible in TraeCN, including work not submitted through this gateway.',
-    inputSchema: schema()
+    description: 'Stop only the generation visible in the named active TraeCN conversation. This may interrupt work not submitted through the gateway, so the caller must acknowledge that scope and provide an audit reason.',
+    inputSchema: schema({
+      conversationId: CONVERSATION_ID,
+      acknowledgeUntrackedWork: {
+        type: 'boolean',
+        description: 'Must be true to acknowledge that visible work may belong to the user or another agent.'
+      },
+      reason: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 500,
+        description: 'Concise reason recorded in the local security audit log.'
+      }
+    }, ['conversationId', 'acknowledgeUntrackedWork', 'reason'])
   },
   {
     name: 'traecn_open_workspace',
@@ -119,8 +131,19 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_delete_conversation',
-    description: 'Delete one existing TraeCN conversation.',
-    inputSchema: schema({ conversationId: CONVERSATION_ID }, ['conversationId'])
+    description: 'Permanently delete one inactive TraeCN conversation. The operation has no gateway recovery path and requires the listed title plus an explicit irreversible-deletion acknowledgement.',
+    inputSchema: schema({
+      conversationId: CONVERSATION_ID,
+      expectedTitle: {
+        type: 'string',
+        minLength: 1,
+        description: 'Exact title returned by traecn_list_conversations.'
+      },
+      acknowledgePermanentDeletion: {
+        type: 'boolean',
+        description: 'Must be true to acknowledge that the gateway cannot restore the deleted conversation.'
+      }
+    }, ['conversationId', 'expectedTitle', 'acknowledgePermanentDeletion'])
   },
   {
     name: 'traecn_answer_question',
@@ -129,8 +152,24 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_decide_approval',
-    description: 'Approve or deny an exceptional unsafe or ambiguous TraeCN approval card.',
-    inputSchema: schema({ decision: { type: 'string', enum: ['approve', 'deny'] } }, ['decision'])
+    description: 'Approve or deny the exceptional unsafe or ambiguous TraeCN command card currently visible. Approval revalidates the exact command and requires a risk acknowledgement plus an audit reason; denial needs only the decision.',
+    inputSchema: schema({
+      decision: { type: 'string', enum: ['approve', 'deny'] },
+      expectedCommand: {
+        type: 'string',
+        description: 'For approve, the exact command returned with the pending interaction.'
+      },
+      acknowledgeRisk: {
+        type: 'boolean',
+        description: 'For approve, must be true after checking the command against the user-authorized scope.'
+      },
+      reason: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 500,
+        description: 'For approve, a concise authorization reason recorded in the local security audit log.'
+      }
+    }, ['decision'])
   }
 ]);
 

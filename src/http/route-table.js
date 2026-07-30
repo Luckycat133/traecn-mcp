@@ -79,7 +79,7 @@ const ROUTES = [
   { method: 'POST', path: '/api/solo/chats/cleanup_foreign_solo_queue', handler: '_handleCleanupForeignQueue', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 
   // Trae control
-  { method: 'POST', path: '/api/trae/stop-generation', handler: '_handleStopGeneration', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
+  { method: 'POST', path: '/api/trae/stop-generation', handler: '_handleStopGeneration', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'POST', path: '/api/trae/restart-debug', handler: '_handleRestartTraeDebug', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/trae/review-gate', handler: '_handleReviewGateStatus', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'POST', path: '/api/trae/review-gate', handler: '_handleReviewGateResolve', requiresAuth: true, requiresRateLimit: true, requiresBody: true },

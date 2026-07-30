@@ -22,7 +22,7 @@ const TOOL_METADATA = Object.freeze({
   traecn_list_conversations: { layer: 'conversation', risk: 'read' },
   traecn_create_conversation: { layer: 'conversation', risk: 'write' },
   traecn_select_conversation: { layer: 'conversation', risk: 'write' },
-  traecn_delete_conversation: { layer: 'conversation', risk: 'write', destructive: true },
+  traecn_delete_conversation: { layer: 'conversation', risk: 'delegate', destructive: true },
   traecn_answer_question: { layer: 'interaction', risk: 'delegate' },
   traecn_decide_approval: { layer: 'interaction', risk: 'delegate', destructive: true }
 });

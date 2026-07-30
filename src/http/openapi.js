@@ -393,10 +393,15 @@ function generateOpenAPISpec() {
       },
       '/api/conversations/manage': {
         post: {
-          summary: 'Create, select, or delete a TraeCN conversation',
+          summary: 'Create, select, or permanently delete a TraeCN conversation',
           operationId: 'manageConversation',
           security: [{ bearerAuth: [] }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['action'], properties: { action: { type: 'string', enum: ['create', 'select', 'delete'] }, conversationId: { type: 'string' } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['action'], properties: {
+            action: { type: 'string', enum: ['create', 'select', 'delete'] },
+            conversationId: { type: 'string' },
+            expectedTitle: { type: 'string', description: 'Required for delete; exact title returned by the conversation list.' },
+            acknowledgePermanentDeletion: { type: 'boolean', description: 'Required true for delete; the gateway has no recovery path.' }
+          } } } } },
           responses: { '200': { description: 'Conversation operation result' } }
         }
       },
@@ -405,7 +410,13 @@ function generateOpenAPISpec() {
           summary: 'Resolve an exceptional TraeCN question or unsafe approval',
           operationId: 'resolveInteraction',
           security: [{ bearerAuth: [] }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['action'], properties: { action: { type: 'string', enum: ['approve', 'deny', 'answer', 'dismiss'] }, answer: { type: 'string' } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['action'], properties: {
+            action: { type: 'string', enum: ['approve', 'deny', 'answer', 'dismiss'] },
+            answer: { type: 'string' },
+            expectedCommand: { type: 'string', description: 'Required for approve; must exactly match the currently visible exceptional command.' },
+            acknowledgeRisk: { type: 'boolean', description: 'Required true for approve after checking user-authorized scope.' },
+            reason: { type: 'string', maxLength: 500, description: 'Required for approve and recorded in the local security audit log.' }
+          } } } } },
           responses: { '200': { description: 'Interaction resolution result' } }
         }
       },
@@ -1060,12 +1071,28 @@ function generateOpenAPISpec() {
       },
       '/api/trae/stop-generation': {
         post: {
-          summary: 'Stop the current Trae generation or queued model request in the visible UI',
+          summary: 'Stop the visible generation only in a verified active Solo conversation',
           operationId: 'stopTraeGeneration',
           security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['conversationId', 'acknowledgeUntrackedWork', 'reason'],
+                  properties: {
+                    conversationId: { type: 'string', description: 'Active ID returned by the conversation list.' },
+                    acknowledgeUntrackedWork: { type: 'boolean', description: 'Must be true because visible work may not belong to the gateway.' },
+                    reason: { type: 'string', minLength: 1, maxLength: 500, description: 'Security audit reason.' }
+                  }
+                }
+              }
+            }
+          },
           responses: {
-            '200': { description: 'Stop button clicked or no generation is active' },
-            '409': { description: 'Stop generation action is not currently available' }
+            '200': { description: 'The verified active conversation generation was stopped' },
+            '409': { description: 'Conversation scope mismatch or stop action unavailable' }
           }
         }
       },

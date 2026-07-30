@@ -39,6 +39,15 @@ function conversationId(chat) {
     : `solo:${chat.index}`;
 }
 
+function auditSecurityAction(ctx, req, action, resource, params, status = 'success', error = null) {
+  if (!ctx.auditLogger || typeof ctx.auditLogger.log !== 'function') return;
+  ctx.auditLogger.log({ req, action, resource, params, status, error });
+}
+
+function normalizeCommand(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
 function normalizeSteps(steps) {
   if (!Array.isArray(steps)) return [];
   return steps
@@ -160,6 +169,16 @@ async function handleManageConversation(req, res, ctx) {
   if (!['create', 'select', 'delete'].includes(action)) {
     return ctx._json(req, res, { error: 'action must be create, select, or delete' }, 400);
   }
+  if (action === 'delete' && body.acknowledgePermanentDeletion !== true) {
+    return ctx._json(req, res, {
+      error: 'permanent_deletion_acknowledgement_required',
+      message: 'Deleting a TraeCN conversation is permanent and cannot be recovered by the gateway.'
+    }, 400);
+  }
+  const expectedTitle = action === 'delete' ? stableConversationTitle(body.expectedTitle) : '';
+  if (action === 'delete' && !expectedTitle) {
+    return ctx._json(req, res, { error: 'expectedTitle is required for permanent deletion' }, 400);
+  }
   await ctx._ensureConnection();
   return ctx._withUiActionLock(async () => {
     if (action === 'create') {
@@ -176,11 +195,43 @@ async function handleManageConversation(req, res, ctx) {
     const chat = (listed.chats || []).find(candidate => (
       target.index !== undefined
         ? candidate.index === target.index
-        : stableConversationTitle(candidate.title || candidate.text).includes(target.titleIncludes)
+        : stableConversationTitle(candidate.title || candidate.text) === target.titleIncludes
     ));
     if (!chat) return ctx._json(req, res, { error: 'conversation not found' }, 404);
+    const actualTitle = stableConversationTitle(chat.title || chat.text);
+    if (actualTitle !== expectedTitle) {
+      auditSecurityAction(ctx, req, 'conversation.delete', String(body.conversationId), {
+        expectedTitle,
+        actualTitle
+      }, 'failure', 'conversation_title_mismatch');
+      return ctx._json(req, res, {
+        error: 'conversation_title_mismatch',
+        expectedTitle,
+        actualTitle
+      }, 409);
+    }
+    if (chat.active === true) {
+      auditSecurityAction(ctx, req, 'conversation.delete', String(body.conversationId), {
+        title: actualTitle
+      }, 'failure', 'active_conversation_delete_forbidden');
+      return ctx._json(req, res, {
+        error: 'active_conversation_delete_forbidden',
+        message: 'Select a different conversation before permanently deleting this one.'
+      }, 409);
+    }
     const result = await ctx.driver.deleteSoloChats({ candidates: [{ index: chat.index, title: chat.title || '' }] });
-    return ctx._json(req, res, { action, conversationId: body.conversationId, deleted: result.deleted || 0 });
+    const deleted = result.deleted || 0;
+    auditSecurityAction(ctx, req, 'conversation.delete', String(body.conversationId), {
+      title: actualTitle,
+      deleted,
+      recoverable: false
+    }, deleted > 0 ? 'success' : 'failure', deleted > 0 ? null : 'delete_failed');
+    return ctx._json(req, res, {
+      action,
+      conversationId: body.conversationId,
+      deleted,
+      recoverable: false
+    }, deleted > 0 ? 200 : 409);
   });
 }
 
@@ -198,7 +249,45 @@ async function handleResolveInteraction(req, res, ctx) {
     }
     result = await ctx.driver.answerQuestionDialog(body.answer);
   } else {
+    let dialog = null;
+    if (typeof ctx.driver.checkForApprovalDialog === 'function') {
+      dialog = await ctx.driver.checkForApprovalDialog();
+    }
+    if (action === 'approve') {
+      const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+      const expectedCommand = normalizeCommand(body.expectedCommand);
+      if (body.acknowledgeRisk !== true || !expectedCommand || !reason || reason.length > 500) {
+        return ctx._json(req, res, {
+          error: 'approval_authorization_context_required',
+          message: 'Approval requires expectedCommand, acknowledgeRisk=true, and an audit reason of 1-500 characters.'
+        }, 400);
+      }
+      if (!dialog?.needsApproval || !dialog.isCommandExec || dialog.approvalDecision === 'auto_approve') {
+        return ctx._json(req, res, {
+          error: 'exceptional_command_approval_not_found',
+          message: 'No unsafe or ambiguous command approval is currently pending.'
+        }, 409);
+      }
+      const actualCommand = normalizeCommand(dialog.command);
+      if (!actualCommand || actualCommand !== expectedCommand) {
+        auditSecurityAction(ctx, req, 'interaction.approval_decision', 'trae:current-dialog', {
+          decision: action,
+          risk: dialog.commandRisk || 'unknown',
+          reasonCodes: dialog.riskReasons || []
+        }, 'failure', 'approval_command_mismatch');
+        return ctx._json(req, res, {
+          error: 'approval_command_mismatch',
+          message: 'The visible command changed; inspect the current interaction before deciding.'
+        }, 409);
+      }
+    }
     result = await ctx.driver.approveDialog(action);
+    auditSecurityAction(ctx, req, 'interaction.approval_decision', 'trae:current-dialog', {
+      decision: action,
+      reason: typeof body.reason === 'string' ? body.reason.trim() : null,
+      risk: dialog?.commandRisk || null,
+      reasonCodes: dialog?.riskReasons || []
+    }, result.success === false ? 'failure' : 'success', result.error || null);
   }
   return ctx._json(req, res, result, result.success === false ? 409 : 200);
 }

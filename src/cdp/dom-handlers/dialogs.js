@@ -51,6 +51,22 @@ function _assessCommandApproval(command) {
     {
       pattern: /\b(?:sudo|su|chmod|chown|launchctl|kill|pkill|killall)\b/i,
       code: 'privilege_or_process_control'
+    },
+    {
+      pattern: /\bfind\b[^;&|]*(?:-delete|-exec(?:dir)?|-ok(?:dir)?|-fprint|-fprintf|-fls)\b/i,
+      code: 'filesystem_write_via_find'
+    },
+    {
+      pattern: /\bsed\b[^;&|]*(?:^|[;'"])[^;'"]*(?:w\s+\S+|e\s+\S+)/i,
+      code: 'filesystem_or_command_via_sed'
+    },
+    {
+      pattern: /\b(?:npm|pnpm|yarn)\s+(?:test|run)\b|\bnode\s+--test\b/i,
+      code: 'project_script_side_effects_unknown'
+    },
+    {
+      pattern: /\brg\b[^;&|]*--pre(?:-glob)?\b|\bgit\s+(?:diff|show|log)\b[^;&|]*(?:--ext-diff|--textconv)\b/i,
+      code: 'read_command_external_hook'
     }
   ];
   for (const rule of riskRules) {
@@ -70,15 +86,12 @@ function _assessCommandApproval(command) {
     .filter(Boolean);
   const safeSegmentPatterns = [
     /^cd\s+\S+(?:\s+\S+)*$/i,
-    /^(?:pwd|ls|find|rg|grep|cat|head|tail|wc|stat)\b/i,
-    /^sed\s+(?!.*(?:^|\s)-i(?:\s|$))\S+/i,
+    /^(?:pwd|ls|rg|grep|cat|head|tail|wc|stat)\b/i,
     /^git\s+(?:status|diff|log|show|branch|rev-parse|ls-files)\b/i,
-    /^node\s+--test\b/i,
-    /^npm\s+(?:test|run\s+(?:test(?::[\w-]+)?|lint(?::[\w-]+)?|format:check|check:[\w-]+|acceptance:audit))\b/i,
     /^echo\b/i
   ];
   if (segments.length > 0 && segments.every(segment => safeSegmentPatterns.some(pattern => pattern.test(segment)))) {
-    return { decision: 'auto_approve', risk: 'low', reasonCodes: ['read_only_chain'] };
+    return { decision: 'auto_approve', risk: 'low', reasonCodes: ['strict_read_only_allowlist'] };
   }
 
   return { decision: 'agent_review', risk: 'unknown', reasonCodes: ['unknown_command'] };

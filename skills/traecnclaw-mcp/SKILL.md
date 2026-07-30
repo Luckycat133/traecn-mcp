@@ -4,7 +4,7 @@ description: Operate TraeCN through TRAECNclaw's focused stdio MCP tools. Use wh
 license: MIT-0
 metadata:
   author: TRAECNclaw
-  version: "0.4.5"
+  version: "0.4.6"
   openclaw:
     requires:
       bins:
@@ -61,8 +61,11 @@ Do not wait or poll after sending. The stdio server delivers compact task
 notifications and acknowledges them internally. Call `traecn_get_task` only
 for an intentional status/result read. Use `traecn_cancel_task` for one known
 gateway task. Use `traecn_stop_generation` only when the user wants the
-generation currently visible in TraeCN stopped, including work not submitted
-through this gateway.
+generation currently visible in TraeCN stopped. First list conversations and
+pass the active `conversationId`; the gateway rejects a stale or different
+conversation. Because visible work may belong to the user or another agent,
+set `acknowledgeUntrackedWork:true` and include a short audit `reason`. Use
+`traecn_cancel_task` instead when the work has a gateway task ID.
 
 ## Inspect or change Trae settings
 
@@ -81,19 +84,30 @@ manually or repeat reads after a successful write.
 
 ## Resolve exceptional interactions
 
-The gateway automatically approves strictly safe command cards, answers known
-mechanical scope questions, and keeps generated changes unless a clear fatal
-automation failure requires revert.
+The gateway automatically approves only strict read-only shell chains. The
+allowlist covers directory changes, basic file inspection, and Git reads; it
+rejects redirection, substitution, network/process/package commands, project
+scripts, mutating `find`/`sed`, and external `rg`/Git hooks. Every automatic
+command approval is recorded in the local append-only audit log. Unknown or
+mutating commands are returned to the Agent instead.
 
 If a task reports an unresolved interaction:
 
 - Use `traecn_answer_question` for a returned question and one of its offered answers.
-- Use `traecn_decide_approval` only after checking the returned command and risk. Approve work inside the user's authorized scope; deny anything outside it.
+- Use `traecn_decide_approval` only after checking the returned command and risk. Approval requires the exact `expectedCommand`, `acknowledgeRisk:true`, and a short audit `reason`; the gateway re-reads the visible card and rejects stale or changed commands. Denial needs no risk acknowledgement.
+
+Conversation deletion is permanent. Delete only an inactive conversation and
+pass its exact listed title with `acknowledgePermanentDeletion:true`; the
+gateway rejects title mismatches and the active conversation, records the
+attempt, and cannot restore a successful deletion.
 
 ## Safety
 
 - Keep the gateway on `127.0.0.1` unless remote access is secured.
 - Never expose `.env`, tokens, authorization headers, or TraeCN profile data.
+- Keep the default security audit log enabled; high-impact approvals, stops,
+  and deletions are written to date-based JSONL files with sensitive fields
+  redacted and a default 30-day retention.
 - Treat mock results and non-terminal task states as incomplete.
 - Do not recreate removed low-level tools through shell, generic commands, or GUI control.
 

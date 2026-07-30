@@ -11,7 +11,11 @@ const SENSITIVE_ACTIONS = [
   'key.update',
   'admin.login',
   'admin.config',
-  'delegate'
+  'delegate',
+  'dialog.auto_approved',
+  'trae.stop_generation',
+  'conversation.delete',
+  'interaction.approval_decision'
 ];
 
 // Match is substring-based (`key.toLowerCase().includes(token)`). The list

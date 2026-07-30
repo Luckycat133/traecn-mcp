@@ -12,13 +12,16 @@ Use the real stdio MCP server. Do not replace it with browser or GUI control.
 1. Change context only when needed with `traecn_open_workspace`, `traecn_list_models` plus `traecn_select_model`, `traecn_select_mode`, and the focused conversation tools.
 2. Call `traecn_send_message` with the exact message and optional stable `conversationId`.
 3. Return after receiving `taskId`. Do not wait, poll, acknowledge events, recover tasks, or probe queues; the gateway persists work and pushes completion notifications.
-4. Call `traecn_get_task` only for an explicit query. Cancel a known task with `traecn_cancel_task`; stop the currently visible Trae generation with `traecn_stop_generation`.
+4. Call `traecn_get_task` only for an explicit query. Cancel a known task with `traecn_cancel_task`. For untracked visible work, list conversations and call `traecn_stop_generation` with the active conversation ID, explicit untracked-work acknowledgement, and an audit reason; the gateway rejects a mismatched conversation.
 5. For settings, list sections, list one section's items, optionally list a dropdown's choices, then call the matching toggle, option, or text tool. The gateway operates the Trae UI and restores chat.
-6. Use `traecn_answer_question` or `traecn_decide_approval` only for an exceptional interaction returned by the gateway.
+6. Use `traecn_answer_question` or `traecn_decide_approval` only for an exceptional interaction returned by the gateway. Approve only with the exact visible command, a risk acknowledgement, and an audit reason; the gateway rejects stale command cards.
 
-The gateway maintains queues, recovers persisted work, auto-approves safe
-cards, and resolves file-review gates with keep by default or revert for clear
-fatal automation failures. Never put a workspace path into the model message.
+The gateway maintains queues, recovers persisted work, auto-approves only a
+strict read-only shell allowlist, and resolves file-review gates with keep by
+default or revert for clear fatal automation failures. High-impact approvals,
+stops, and permanent inactive-conversation deletions are scoped and written to
+the local append-only security audit log. Never put a workspace path into the
+model message.
 
 Read [references/mcp-surface.md](references/mcp-surface.md) for exact ownership
 boundaries. The distributable skill and generated schemas live under

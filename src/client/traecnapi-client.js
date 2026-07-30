@@ -410,8 +410,8 @@ class TraeCNApiClient {
     });
   }
 
-  async stopGeneration() {
-    return this._request('POST', '/api/trae/stop-generation');
+  async stopGeneration(options = {}) {
+    return this._request('POST', '/api/trae/stop-generation', options);
   }
 
   async getReviewGateStatus() {

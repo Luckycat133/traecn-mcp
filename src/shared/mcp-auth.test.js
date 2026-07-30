@@ -14,6 +14,7 @@ assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_list_setting_sections')
 assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_list_setting_options'), 'read');
 assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_set_setting_toggle'), 'write');
 assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_stop_generation'), 'delegate');
+assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_delete_conversation'), 'delegate');
 assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_send_message'), 'delegate');
 assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_cancel_task'), 'delegate');
 assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_answer_question'), 'delegate');

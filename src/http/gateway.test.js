@@ -64,6 +64,12 @@ test('RateLimiter allows requests within limit', () => {
   }
 });
 
+test('Gateway owns a security audit logger and accepts an injected logger', () => {
+  const auditLogger = { log: () => {} };
+  const gateway = new Gateway({ auditLogger });
+  assert.strictEqual(gateway.auditLogger, auditLogger);
+});
+
 test('RateLimiter blocks requests over limit', () => {
   const limiter = new RateLimiter(60000, 3);
   limiter.check('key1');
@@ -1696,7 +1702,8 @@ asyncTest('Gateway auto-answers code-answerable dialogs for unattended backgroun
 });
 
 asyncTest('Gateway auto mode approves only command cards classified as safe', async () => {
-  const gateway = new Gateway();
+  const auditEntries = [];
+  const gateway = new Gateway({ auditLogger: { log: entry => auditEntries.push(entry) } });
   let approveCalls = 0;
   gateway._persistActiveQueue = () => {};
   gateway._syncTaskHistoryMirror = () => {};
@@ -1711,7 +1718,7 @@ asyncTest('Gateway auto mode approves only command cards classified as safe', as
       isCommandExec: true,
       canAutoApprove: true,
       approvalDecision: 'auto_approve',
-      command: 'git status && npm test'
+      command: 'git status && git diff --stat'
     }),
     approveDialog: async action => {
       approveCalls++;
@@ -1733,6 +1740,8 @@ asyncTest('Gateway auto mode approves only command cards classified as safe', as
   assert.strictEqual(approved, true);
   assert.strictEqual(approveCalls, 1);
   assert.strictEqual(task.answeredDialog.action, 'approve');
+  assert.strictEqual(auditEntries.at(-1).action, 'dialog.auto_approved');
+  assert.strictEqual(auditEntries.at(-1).params.policy, 'strict_read_only_allowlist');
 });
 
 asyncTest('Gateway auto mode leaves risky command cards for calling-agent review', async () => {

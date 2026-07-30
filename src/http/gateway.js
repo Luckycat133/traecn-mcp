@@ -26,6 +26,7 @@ const { WebSocketHandler } = require('./websocket-handler');
 const { isTraeCNRunning } = require('../config/quickstart');
 const { CDPHealthWatcher } = require('../cdp/health-watcher');
 const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
+const { AuditLogger } = require('../shared/audit-logger');
 
 // Local alias so the existing call site (`_redactUrl(req.url)`) keeps working
 // after the helpers moved to ./request-gate. The real implementation lives
@@ -115,6 +116,7 @@ class Gateway {
 
     this.taskHistoryStore = getGlobalStore();
     this.taskEventStore = options.taskEventStore || new TaskEventStore();
+    this.auditLogger = options.auditLogger || new AuditLogger();
 
     this.client = null;
     this.driver = null;
@@ -1164,6 +1166,7 @@ class Gateway {
 
     let approvalResult;
     let selectedAction;
+    let dialogEvidence = null;
     try {
       const isQuestion = result.dialogType === 'review_scope_question'
         || /review scope|what would you like me to review/i.test(result.question || '');
@@ -1173,6 +1176,7 @@ class Gateway {
         approvalResult = await this.driver.answerQuestionDialog(answer);
       } else {
         const dialog = await this.driver.checkForApprovalDialog();
+        dialogEvidence = dialog;
         if (!dialog.needsApproval) return false;
         if (action === 'auto' && dialog.isCommandExec && dialog.approvalDecision !== 'auto_approve') {
           return false;
@@ -1232,6 +1236,17 @@ class Gateway {
       success: true,
       details: task.answeredDialog
     });
+    if (dialogEvidence?.isCommandExec) {
+      this.auditLogger.log({
+        action: 'dialog.auto_approved',
+        resource: `task:${taskId}`,
+        params: {
+          policy: 'strict_read_only_allowlist',
+          risk: dialogEvidence.commandRisk || 'low',
+          reasonCodes: dialogEvidence.riskReasons || []
+        }
+      });
+    }
     if (this.wsHandler) {
       this.wsHandler.notifyTaskStatusChange(taskId, task);
     }

@@ -43,9 +43,37 @@
       "arguments": { "conversationId": "solo:UmV2aWV3IEFQSQ" }
     },
     {
+      "name": "stop_visible_untracked_generation",
+      "tool": "traecn_stop_generation",
+      "arguments": {
+        "conversationId": "solo:UmV2aWV3IEFQSQ",
+        "acknowledgeUntrackedWork": true,
+        "reason": "The user asked to stop the generation visible in this conversation"
+      }
+    },
+    {
+      "name": "delete_inactive_conversation",
+      "tool": "traecn_delete_conversation",
+      "arguments": {
+        "conversationId": "solo:T2xkIHJldmlldw",
+        "expectedTitle": "Old review",
+        "acknowledgePermanentDeletion": true
+      }
+    },
+    {
       "name": "answer_exceptional_question",
       "tool": "traecn_answer_question",
       "arguments": { "answer": "Review the current workspace changes" }
+    },
+    {
+      "name": "approve_exact_exceptional_command",
+      "tool": "traecn_decide_approval",
+      "arguments": {
+        "decision": "approve",
+        "expectedCommand": "git push origin main",
+        "acknowledgeRisk": true,
+        "reason": "The user explicitly requested publishing the current branch"
+      }
     }
   ]
 }

@@ -306,13 +306,13 @@ test('approveDialog approve labels include inline command run button', () => {
 test('command approval assessment auto-approves an entirely read-only command chain', () => {
   const driver = new DomDriver(null, getConfig());
   const assessment = driver._assessCommandApproval(
-    'git status && git diff --stat HEAD && npm test'
+    'git status && git diff --stat HEAD'
   );
 
   assert.deepStrictEqual(assessment, {
     decision: 'auto_approve',
     risk: 'low',
-    reasonCodes: ['read_only_chain']
+    reasonCodes: ['strict_read_only_allowlist']
   });
 });
 
@@ -335,6 +335,21 @@ test('command approval assessment sends write or network commands to the calling
       reasonCodes: ['network_or_data_transfer']
     }
   );
+});
+
+test('command approval assessment rejects commands with hidden side effects from auto approval', () => {
+  const driver = new DomDriver();
+  for (const command of [
+    'find . -name "*.tmp" -delete',
+    'sed -n "1,20w /tmp/copied" README.md',
+    'npm test',
+    'node --test',
+    'rg --pre ./formatter secret .',
+    'git diff --ext-diff'
+  ]) {
+    const assessment = driver._assessCommandApproval(command);
+    assert.notStrictEqual(assessment.decision, 'auto_approve', command);
+  }
 });
 
 test('command approval assessment sends unknown commands to the calling agent', () => {
@@ -363,7 +378,7 @@ asyncTest('checkForApprovalDialog detects inline command approval cards', async 
                 type: 'command_execution',
                 isCommandExec: true,
                 canAutoApprove: false,
-                command: 'git status && git diff --stat HEAD && npm test'
+                command: 'git status && git diff --stat HEAD'
               }
             : { found: false }
         }
@@ -379,7 +394,7 @@ asyncTest('checkForApprovalDialog detects inline command approval cards', async 
   assert.ok(dialog.buttons.includes('运行'));
   assert.strictEqual(dialog.canAutoApprove, true);
   assert.strictEqual(dialog.approvalDecision, 'auto_approve');
-  assert.deepStrictEqual(dialog.riskReasons, ['read_only_chain']);
+  assert.deepStrictEqual(dialog.riskReasons, ['strict_read_only_allowlist']);
 });
 
 test('restricted mode summary treats trusted workspace page as not restricted', () => {
