@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-07-30
+## [0.4.1] - 2026-07-30
 
 ### Added
 
@@ -40,6 +40,13 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Changed
 
+- Changed the release from `0.5.0` to the conservative `0.4.1` patch line and
+  made `package.json` the canonical version source, with synchronized package,
+  Skill, and OpenClaw distribution manifests.
+- Added explicit patch/minor/major version commands and documented when each
+  increment is appropriate before `1.0.0`.
+- Aligned the ESLint configuration with the repository's CommonJS runtime,
+  removing Node's module-type reparsing warning.
 - Changed `traecn_open_project` to reuse the active TraeCN window by default
   through the bundled CLI, reconnect CDP, and verify the exact workspace path;
   `newInstance:true` remains available for a separate window.
@@ -76,6 +83,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
+- Fixed the acceptance audit after queue-probe and MCP modules were split, and
+  promoted its previously orphaned regression test into the default test gate.
 - Fixed task `projectPath` handling at the gateway boundary. The path is now an
   optional workspace guard: guarded submissions fail with `PROJECT_NOT_OPEN`
   when another folder is open, and the gateway sends only the original task
@@ -114,6 +123,13 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Removed
 
+- Removed the orphaned optimization-metrics script tied to a deleted report,
+  the unused `trae-cn chat` wrapper, and the unreferenced duplicate project
+  structure guide. Existing gateway, MCP, CLI, and development documentation
+  remain the maintained entry points.
+- Removed the duplicate repo-local Codex Skill copy from the npm tarball; the
+  complete canonical `skills/traecnclaw-mcp` package now ships with its assets,
+  scripts, examples, and generated contracts.
 - Removed completed process documents, historical audit logs, and redundant
   API/architecture guides that had drifted behind the maintained README, MCP,
   OpenClaw, and structured-prompt documentation.
@@ -133,7 +149,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - Added timing-safe token comparison and removed the identifying `X-Powered-By` response header.
 - Added security headers for JSON and HTML responses and response-size protection in the plugin HTTP client.
 
-## [v0.4.0] - 2026-06-12
+## [0.4.0] - 2026-06-12
 
 Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No behavior break; all 538+ pre-existing tests still pass alongside 100+ new driver test cases.
 

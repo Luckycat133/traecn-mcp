@@ -1,26 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-const fs = require('node:fs');
-const path = require('node:path');
+const { readVersions } = require('./lib/version-surfaces');
 
-const root = path.resolve(__dirname, '..');
-const readJson = relative => JSON.parse(fs.readFileSync(path.join(root, relative), 'utf8'));
-const packageJson = readJson('package.json');
-const lock = readJson('package-lock.json');
-const pluginPackage = readJson('integrations/openclaw-traecn-plugin/package.json');
-const pluginManifest = readJson('integrations/openclaw-traecn-plugin/openclaw.plugin.json');
-const skill = fs.readFileSync(path.join(root, 'skills/traecnclaw-mcp/SKILL.md'), 'utf8');
-const skillVersion = skill.match(/^\s*version:\s*["']?([^"'\s]+)["']?\s*$/m)?.[1];
-
-const versions = {
-  package: packageJson.version,
-  lockfile: lock.version,
-  lockfileRoot: lock.packages?.['']?.version,
-  skill: skillVersion,
-  pluginPackage: pluginPackage.version,
-  pluginManifest: pluginManifest.version,
-};
+const versions = readVersions();
 
 const expected = versions.package;
 const mismatches = Object.entries(versions).filter(([, value]) => value !== expected);

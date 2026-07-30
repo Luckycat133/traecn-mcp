@@ -2,14 +2,18 @@
 
 ## Architecture
 
-TRAECNclaw is split into four layers:
+TRAECNclaw is split into seven maintained layers:
 
+- `src/shared`: reusable persistence, logging, security, metrics, and test utilities.
 - `src/config`: `.env` loading and quickstart configuration.
 - `src/cdp`: CDP discovery, WebSocket client, DOM driver, settings driver, and mock driver.
+- `src/client`: the shared HTTP client and stable command catalog.
 - `src/http`: REST gateway, OpenAPI generation, and built-in chat UI.
+- `src/mcp`: MCP tool schemas, authorization metadata, handlers, and stdio transport.
+- `src/skill`: programmatic JavaScript and TypeScript-facing automation APIs.
 - `integrations/openclaw-traecn-plugin`: OpenClaw tool and slash command registration.
 
-The production path is `OpenClaw -> HTTP gateway -> CDP WebSocket -> TraeCN DOM`. The CLI path is available through `traecn_chat` for fire-and-forget actions.
+The production path is `MCP/OpenClaw/CLI -> HTTP gateway -> CDP WebSocket -> TraeCN DOM`. The command-line entry point is `traecnclaw`.
 
 ## Local Development
 
@@ -104,6 +108,35 @@ npm run audit:prod
 - Use `parsePositiveInt` for numeric environment values so invalid config cannot become `NaN`.
 - Keep the gateway local by default and add explicit tests for every public route change.
 - Do not log raw tokens, authorization headers, passwords, secrets, credentials, or other sensitive values.
+
+## Versioning And Releases
+
+`package.json` is the canonical version source. For the normal compatible
+release, run:
+
+```sh
+npm run version:patch
+npm run check:versions
+```
+
+Use `npm run version:minor` or `npm run version:major` only when the release
+meets the policy below. The version commands update `package.json` without
+creating a Git tag, then copy the package version to `package-lock.json`, the
+portable MCP Skill, and both OpenClaw plugin manifests. Do not hand-edit those
+copies during a normal release.
+
+Until `1.0.0`, prefer the smallest meaningful increment:
+
+- Patch (`0.4.0` → `0.4.1`): compatible fixes, additive endpoints or tools,
+  documentation, tests, and internal refactors.
+- Minor (`0.4.x` → `0.5.0`): an intentional compatibility milestone or a
+  substantial new product surface that merits a distinct release line.
+- Major: a deliberately breaking public API, MCP contract, persisted-data, or
+  configuration change with migration notes.
+
+Keep `CHANGELOG.md` under `Unreleased` during development. At release time,
+move those entries under `## [X.Y.Z] - YYYY-MM-DD`; do not put commit-message
+dumps or a hard-coded current version in usage guides.
 
 ## Adding API Endpoints
 

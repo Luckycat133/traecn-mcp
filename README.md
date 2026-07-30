@@ -388,7 +388,14 @@ Bind the gateway to `127.0.0.1`, set `TRAECN_GATEWAY_TOKEN` before exposing prot
 ## Distribution
 
 All release surfaces share the version in `package.json`. Run
-`npm run check:versions` before release. Pushing a matching `v*` tag runs
+`npm run version:patch` for the default compatible release, or deliberately
+choose `version:minor`/`version:major`; these commands update `package.json`
+without creating a tag and synchronize every distribution surface. Run
+`npm run check:versions` before release. While the project is below `1.0.0`, use patch increments
+(`0.4.0` → `0.4.1`) for compatible fixes and additive automation, minor
+increments only for a deliberately larger compatibility milestone, and major
+increments only for an explicitly documented breaking contract. Pushing a
+matching `v*` tag runs
 lint, unit/integration tests, the mock system test, packages the Skill and npm
 tarball, generates `SHA256SUMS`, and creates a GitHub Release. Quota-consuming
 live acceptance is intentionally excluded.

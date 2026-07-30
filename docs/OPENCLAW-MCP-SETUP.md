@@ -1,4 +1,4 @@
-# OpenClaw MCP Setup Guide — TRAECNclaw v0.4.0
+# OpenClaw MCP Setup Guide — TRAECNclaw
 
 > 面向 OpenClaw coder agent（或人类开发者）的端到端接入文档。把
 > TRAECNclaw 注册为 OpenClaw 的一个 MCP server，让 OpenClaw agent
@@ -8,10 +8,10 @@
 
 | 项 | 值 |
 |---|---|
-| 包名 | `traecnclaw@0.4.0` |
+| 包名 | `traecnclaw`（版本以 `package.json` 为准） |
 | MCP transport | stdio JSON-RPC（`mcp-server.js`） |
 | HTTP gateway | `http://127.0.0.1:8788` |
-| HTTP 端点（v0.4.0 新增） | 9 个 driver endpoint（`POST /api/<driver>`） |
+| HTTP driver 端点 | 9 个（`POST /api/<driver>`） |
 | MCP tool 总数 | `public` 23 / `ops` 35 / `full` 39（由 `TRAECN_MCP_TOOL_PROFILE` 控制） |
 | 配套要求 | Node 22+ · TraeCN 1.107+ · OpenClaw |
 
@@ -38,7 +38,7 @@
 | 组件 | 版本 | 备注 |
 |---|---|---|
 | Node.js | **22+** | `package.json` 已声明 `"engines": { "node": ">=22" }` |
-| TraeCN | **1.107+** | 实测 v0.4.0 基于 TraeCN 1.107.1 / Chrome 142 / Electron 39；DOM 见 `docs/REAL-DOM-FINDINGS.md` |
+| TraeCN | **1.107+** | 初始实测基于 TraeCN 1.107.1 / Chrome 142 / Electron 39；DOM 见 `docs/REAL-DOM-FINDINGS.md` |
 | OpenClaw | MCP-capable | 配置文件 `~/.openclaw/openclaw.json` |
 | 平台 | macOS / Linux / Win | macOS 推荐（LaunchAgent 持久化） |
 
@@ -270,7 +270,7 @@ TraeCN 1.107+ 把功能分成两个区域：
 | **AI 聊天 / 委派 / 改文件 / 切模型** | ✅ | 走 `.chat-input-v2-input-box-editable` / `.assistant-chat-turn-content` 等；未登录态进入 `.ai-ng-welcome-nologin` |
 | **编辑器 / 文件 / Terminal / Git / Search / Extensions / Settings** | ❌ | 走 VS Code workbench command + DOM，不需要登录 |
 
-v0.4.0 的 **9 个 driver 全在第二区**，所以编辑器/文件/Terminal/Git/Search/Snapshot 等无人工。
+当前 **9 个 driver 全在第二区**，所以编辑器/文件/Terminal/Git/Search/Snapshot 等无人工。
 
 但只要你想让 TraeCN **本身**做 AI 工作（`run_task` / `review_code` / `switch_model`），要先登录一次。
 
@@ -339,7 +339,7 @@ curl -s http://127.0.0.1:8788/api/capabilities | jq .
 
 ```json
 {
-  "server": { "name": "traecnclaw", "version": "0.4.0" },
+  "server": { "name": "traecnclaw", "version": "<package.json version>" },
   "drivers": {
     "editor":      ["acceptAll", "rejectAll", "save", "saveAll", "writeActive", ...],
     "file":        ["openFileByPath", "readDisk", "writeDisk", "listTreeDisk", ...],
@@ -926,4 +926,4 @@ open /tmp/traecn-first.png    # 看到 TraeCN IDE 画面 = 端到端通了
 
 ---
 
-**TRAECNclaw v0.4.0 · 9 drivers / 100+ actions / 21 public MCP tools (33 ops / 37 full) / 9 HTTP driver endpoints**
+**TRAECNclaw · 9 drivers / 100+ actions / 23 public MCP tools (35 ops / 39 full) / 9 HTTP driver endpoints**
