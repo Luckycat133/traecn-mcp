@@ -75,6 +75,17 @@ for (const example of examples.calls) {
   assert.ok(tool, `Unknown MCP tool in example: ${example.tool}`);
   assertArgumentsMatchSchema(tool, example.arguments || {});
 }
+const deleteExample = examples.calls.find(example => example.tool === 'traecn_delete_conversation');
+assert.match(
+  deleteExample?.precondition || '',
+  /current user request.*explicitly/i,
+  'permanent deletion example must require an explicit current user request'
+);
+assert.match(
+  deleteExample?.warning || '',
+  /permanent.*cannot.*restore/i,
+  'permanent deletion example must warn that the conversation cannot be restored'
+);
 
 assert.deepStrictEqual(readJson('references/mcp-tool-contracts.json'), expectedContract());
 

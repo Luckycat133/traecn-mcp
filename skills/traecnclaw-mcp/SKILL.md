@@ -4,7 +4,7 @@ description: Operate TraeCN through TRAECNclaw's focused stdio MCP tools. Use wh
 license: MIT-0
 metadata:
   author: TRAECNclaw
-  version: "0.4.6"
+  version: "0.4.7"
   openclaw:
     requires:
       bins:
@@ -97,9 +97,12 @@ If a task reports an unresolved interaction:
 - Use `traecn_decide_approval` only after checking the returned command and risk. Approval requires the exact `expectedCommand`, `acknowledgeRisk:true`, and a short audit `reason`; the gateway re-reads the visible card and rejects stale or changed commands. Denial needs no risk acknowledgement.
 
 Conversation deletion is permanent. Delete only an inactive conversation and
-pass its exact listed title with `acknowledgePermanentDeletion:true`; the
-gateway rejects title mismatches and the active conversation, records the
-attempt, and cannot restore a successful deletion.
+only when the current user request explicitly names or unambiguously identifies
+it for deletion. Re-read its listed ID and exact title, then pass the title with
+`acknowledgePermanentDeletion:true`; the gateway rejects title mismatches and
+the active conversation, records the attempt, and cannot restore a successful
+deletion. This uses the user's existing instruction and does not add a separate
+confirmation round trip.
 
 ## Safety
 

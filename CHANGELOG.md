@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-07-30
+
+### Security
+
+- Made the permanent-deletion example require an explicit current user request,
+  repeat the no-recovery warning, and direct the Agent to re-read the exact
+  listed conversation ID and title without adding a confirmation round trip.
+- Added a contract regression check so destructive examples cannot silently
+  lose their authorization prerequisite or irreversible-action warning.
+
 ## [0.4.6] - 2026-07-30
 
 ### Security

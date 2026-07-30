@@ -20,8 +20,11 @@ The gateway maintains queues, recovers persisted work, auto-approves only a
 strict read-only shell allowlist, and resolves file-review gates with keep by
 default or revert for clear fatal automation failures. High-impact approvals,
 stops, and permanent inactive-conversation deletions are scoped and written to
-the local append-only security audit log. Never put a workspace path into the
-model message.
+the local append-only security audit log. Delete only when the current user
+request explicitly names or unambiguously identifies the inactive conversation;
+re-read its listed ID and exact title because deletion cannot be restored. This
+does not add a separate confirmation round trip. Never put a workspace path
+into the model message.
 
 Read [references/mcp-surface.md](references/mcp-surface.md) for exact ownership
 boundaries. The distributable skill and generated schemas live under

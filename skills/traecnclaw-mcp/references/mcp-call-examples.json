@@ -54,6 +54,8 @@
     {
       "name": "delete_inactive_conversation",
       "tool": "traecn_delete_conversation",
+      "precondition": "Use only when the current user request explicitly names or unambiguously identifies this conversation for deletion; do not infer deletion from cleanup or maintenance intent.",
+      "warning": "Deletion is permanent, and the gateway cannot restore the conversation. Re-read the listed conversation ID and exact title before sending this call.",
       "arguments": {
         "conversationId": "solo:T2xkIHJldmlldw",
         "expectedTitle": "Old review",
