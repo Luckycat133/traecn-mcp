@@ -111,7 +111,7 @@ npm run audit:prod
 2. Add or update a plugin client method in `integrations/openclaw-traecn-plugin/lib/traecnapi-client.js` when OpenClaw needs it.
 3. Update `src/http/openapi.js`.
 4. Add unit, integration, or system coverage depending on behavior.
-5. Update `README.md`, `docs/user-manual.md`, and `CHANGELOG.md` when user-visible behavior changes.
+5. Update `README.md`, the relevant maintained guide under `docs/`, and `CHANGELOG.md` when user-visible behavior changes.
 
 ## DOM Selector Updates
 

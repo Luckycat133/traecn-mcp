@@ -18,6 +18,8 @@ const TOOL_METADATA = Object.freeze({
   traecn_run_task: { layer: 'task', profile: 'public', risk: 'delegate' },
   traecn_queue_task: { layer: 'task', profile: 'public', risk: 'delegate' },
   traecn_poll_task: { layer: 'task', profile: 'public', risk: 'read' },
+  traecn_list_task_events: { layer: 'task-events', profile: 'public', risk: 'read' },
+  traecn_ack_task_event: { layer: 'task-events', profile: 'public', risk: 'read' },
   traecn_wait_task: { layer: 'task', profile: 'public', risk: 'read-or-delegate' },
   traecn_resolve_task_review: { layer: 'task-review', profile: 'public', risk: 'delegate' },
   traecn_cancel_task: { layer: 'task', profile: 'public', risk: 'delegate', destructive: true },

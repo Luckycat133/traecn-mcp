@@ -107,6 +107,16 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       return asMcpContent(await skill.queue(args.task, args));
     case 'poll_task':
       return asMcpContent(await skill.poll(args.taskId || null));
+    case 'list_task_events': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.listTaskEvents(args.clientId, args);
+      return asMcpContent(result.data || result);
+    }
+    case 'ack_task_event': {
+      const client = new TraeCNApiClient(context);
+      const result = await client.ackTaskEvent(args.clientId, args.eventId);
+      return asMcpContent(result.data || result);
+    }
     case 'wait_task': {
       const client = new TraeCNApiClient(context);
       return asMcpContent(await client.waitForTask(args.taskId, args));
@@ -212,7 +222,9 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
     case 'check_queue':
       return asMcpContent(await skill.queueStatus());
     case 'open_project':
-      return asMcpContent(await skill.openProject(args.projectPath));
+      return asMcpContent(await skill.openProject(args.projectPath, {
+        newInstance: args.newInstance === true
+      }));
     case 'vibe_workflow':
       return asMcpContent(await skill.vibeWorkflow(args));
     default:

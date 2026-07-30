@@ -129,6 +129,35 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('listTaskEvents sends a client-scoped long-poll request', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ clientId: 'codex-main', events: [], cursor: 'evt_4' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+
+    await client.listTaskEvents('codex-main', { after: 'evt_4', limit: 10, waitMs: 25000 });
+
+    assert.strictEqual(lastRequest.method, 'GET');
+    assert.strictEqual(lastRequest.url, '/api/task-events?clientId=codex-main&after=evt_4&limit=10&waitMs=25000');
+    server.close();
+  });
+
+  await asyncTest('ackTaskEvent sends the IDE client cursor to the gateway', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ acknowledged: true, eventId: 'evt_5' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+
+    await client.ackTaskEvent('codex-main', 'evt_5');
+
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/task-events/ack');
+    assert.deepStrictEqual(lastRequest.body, { clientId: 'codex-main', eventId: 'evt_5' });
+    server.close();
+  });
+
   await asyncTest('createConfirmationPlan sends POST to /api/confirm/plan', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -173,6 +202,24 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     assert.strictEqual(lastRequest.url, '/api/trae/restart-debug');
     assert.strictEqual(lastRequest.body.confirmationPhrase, 'restart-trae-cn-with-debug-existing-profile');
     assert.strictEqual(lastRequest.body.cdpWaitMs, 1000);
+    server.close();
+  });
+
+  await asyncTest('openProject forwards newInstance to the gateway', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ opened: true }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+
+    await client.openProject('/tmp/second-project', { newInstance: true });
+
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/open-project');
+    assert.deepStrictEqual(lastRequest.body, {
+      projectPath: '/tmp/second-project',
+      newInstance: true
+    });
     server.close();
   });
 

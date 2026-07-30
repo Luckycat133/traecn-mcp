@@ -11,7 +11,7 @@ const openClawManifest = require('../integrations/openclaw-traecn-plugin/opencla
 const root = path.resolve(__dirname, '..');
 const requiredDocs = [
   'README.md',
-  'docs/user-manual.md',
+  'docs/MCP-SERVER-GUIDE.md',
   'docs/development.md',
   'docs/deployment.md',
   'CHANGELOG.md',

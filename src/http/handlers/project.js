@@ -52,6 +52,7 @@ async function handleOpenProject(req, res, ctx) {
     const {
       findTraeCNBinary,
       isTraeCNRunning,
+      openProjectInExistingWindow,
       startTraeCN
     } = require('../../config/quickstart');
 
@@ -61,41 +62,86 @@ async function handleOpenProject(req, res, ctx) {
     const alreadyRunning = isTraeCNRunning();
 
     if (alreadyRunning && !newInstance) {
-      // TraeCN is already running. Restarting it would lose the user's session,
-      // unsaved buffers, and AI chat context. We refuse to spawn a duplicate and
-      // report the current surface so the caller can decide what to do (e.g.
-      // ask the user to switch projects manually, or call --newInstance=true
-      // to opt into spawning a separate window).
-      let currentSurface = null;
       try {
-        const { fetchCDPTargets } = require('../../cdp/discovery');
-        const targets = await fetchCDPTargets(cdpHost, cdpPort);
-        const page = targets.find(t => t.type === 'page');
-        if (page) {
-          currentSurface = {
-            targetId: page.id,
-            title: page.title,
-            url: page.url
-          };
+        await ctx._ensureConnection();
+        const current = await ctx._assertProjectWorkspace(projectPath);
+        if (current) {
+          ctx._json(req, res, {
+            success: true,
+            alreadyRunning: true,
+            alreadyOpen: true,
+            reusedWindow: false,
+            projectPath,
+            verifiedWorkspace: {
+              folderName: current.currentFolder,
+              rootPath: current.currentPath
+            },
+            cdp: { host: cdpHost, port: cdpPort }
+          }, 200);
+          return;
         }
       } catch {
-        // CDP probe failed — TraeCN may be running but unreachable. Fall through
-        // to the not-running path so the caller can still try to start a fresh
-        // instance.
+        // A mismatch or temporarily unavailable CDP surface means the requested
+        // workspace still needs to be opened. The post-switch verification below
+        // remains authoritative.
+      }
+
+      const binPath = findTraeCNBinary();
+      if (!binPath) {
+        ctx._json(req, res, {
+          success: false,
+          projectPath,
+          error: 'TraeCN binary not found. Set TRAECN_BIN environment variable.'
+        }, 404);
+        return;
+      }
+
+      const switchResult = await openProjectInExistingWindow({
+        binPath,
+        projectPath,
+        timeoutMs: body.timeoutMs
+      });
+      const verifyTimeoutMs = Number.isFinite(body.verifyTimeoutMs) && body.verifyTimeoutMs > 0
+        ? body.verifyTimeoutMs
+        : 15000;
+      const deadline = Date.now() + verifyTimeoutMs;
+      let verifiedWorkspace = null;
+      let lastVerificationError = null;
+
+      while (Date.now() < deadline) {
+        try {
+          await ctx._ensureConnection();
+          const verified = await ctx._assertProjectWorkspace(projectPath);
+          verifiedWorkspace = {
+            folderName: verified.currentFolder,
+            rootPath: verified.currentPath
+          };
+          break;
+        } catch (error) {
+          lastVerificationError = error;
+          await new Promise(resolve => ctx._setTimeout(resolve, 250));
+        }
+      }
+
+      if (!verifiedWorkspace) {
+        const error = new Error(`Timed out verifying TraeCN workspace switch to ${projectPath}`);
+        error.code = 'WORKSPACE_SWITCH_TIMEOUT';
+        error.cause = lastVerificationError;
+        throw error;
       }
 
       result = {
-        success: false,
+        success: true,
         alreadyRunning: true,
+        reusedWindow: true,
         projectPath,
-        currentSurface,
-        cdp: { host: cdpHost, port: cdpPort },
-        hint: 'TraeCN is already running. Pass newInstance=true to spawn a separate window, or stop TraeCN first.',
-        error: currentSurface
-          ? `TraeCN is already running on workspace "${currentSurface.title || '(untitled)'}".`
-          : 'TraeCN is already running but CDP did not return any page target.'
+        binPath,
+        command: switchResult.command,
+        args: switchResult.args,
+        verifiedWorkspace,
+        cdp: { host: cdpHost, port: cdpPort }
       };
-      ctx._json(req, res, result, 409);
+      ctx._json(req, res, result, 200);
       return;
     }
 

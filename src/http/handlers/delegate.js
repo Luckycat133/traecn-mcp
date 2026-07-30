@@ -48,6 +48,7 @@ async function handleDelegateAsync(req, res, ctx) {
   const fallbackModels = ctx._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
   const modelProbeIntervalMs = ctx._modelProbeIntervalMs(body.modelProbeIntervalMs);
   await ctx._ensureConnection();
+  await ctx._assertProjectWorkspace(body.projectPath);
 
   // Honest gate: a stale but still-OPEN CDP WebSocket can report isConnected
   // while the underlying Trae browser is actually gone, so _ensureConnection
@@ -206,7 +207,7 @@ async function handleDelegateAsync(req, res, ctx) {
     const timeoutPromise = new Promise((_, reject) =>
       { timeoutId = ctx._setTimeout(() => reject(new Error('delegate timeout (' + syncTimeout + 'ms)')), syncTimeout); }
     );
-    delegatePromise = ctx.driver.delegate(ctx._taskWithProjectContext(body.task, body.projectPath));
+    delegatePromise = ctx.driver.delegate(body.task);
     result = await Promise.race([delegatePromise, timeoutPromise]);
   } catch (e) {
     if (/delegate timeout/i.test(e.message || '') && delegatePromise) {

@@ -136,7 +136,7 @@ const COMMAND_DEFINITIONS = Object.freeze([
   },
   {
     command: COMMANDS.SUBMIT_SOLO_CHAT_TASK,
-    summary: '提交任务到一个真实 Solo 对话并立即返回 taskId；后台会切回该对话收集排队后的结果',
+    summary: '提交任务到一个真实 Solo 对话并立即返回 taskId；后台会切回该对话收集排队后的结果。projectPath 仅作为网关工作区校验，不会注入模型提示词',
     required: ['task'],
     optional: ['projectPath', 'chatId', 'soloChat', 'soloChatIndex', 'soloChatTitleIncludes', 'soloChatTextIncludes', 'newChat', 'includeProcessText', 'reviewRequired', 'autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'notifyUrl', 'fallbackModels', 'autoModelFallback', 'modelProbeIntervalMs', 'maxQueueWaitMs', 'queueMaxWaitMs']
   },
@@ -220,9 +220,9 @@ const COMMAND_DEFINITIONS = Object.freeze([
   },
   {
     command: COMMANDS.OPEN_PROJECT,
-    summary: '让 TraeCN 打开指定本地项目路径',
+    summary: '让 TraeCN 打开指定本地项目路径；默认复用并核验现有窗口，可选择新建窗口',
     required: ['projectPath'],
-    optional: []
+    optional: ['newInstance']
   },
   {
     command: COMMANDS.SETTINGS_READ,
@@ -708,7 +708,9 @@ async function executeCommand(client, command, params = {}) {
       return client.checkQueueStatus();
     case COMMANDS.OPEN_PROJECT:
       requireParam(params, 'projectPath');
-      return client.openProject(params.projectPath);
+      return client.openProject(params.projectPath, {
+        newInstance: params.newInstance === true
+      });
     case COMMANDS.SETTINGS_READ:
       return client.settingsRead(params.section || null);
     case COMMANDS.SETTINGS_READ_ALL:

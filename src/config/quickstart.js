@@ -125,6 +125,56 @@ function buildStartCommand(binPath, args, options = {}) {
   return { command: binPath, commandArgs: args };
 }
 
+function buildReuseWindowCommand(binPath, projectPath, options = {}) {
+  const platform = options.platform || process.platform;
+  const pathExists = options.pathExists || fs.existsSync;
+
+  if (platform === 'darwin' && /\.app\/?$/.test(binPath)) {
+    const candidates = [
+      path.join(binPath, 'Contents', 'Resources', 'app', 'bin', 'trae-cn'),
+      path.join(binPath, 'Contents', 'Resources', 'app', 'bin', 'code')
+    ];
+    const cliPath = candidates.find(candidate => pathExists(candidate));
+    if (!cliPath) {
+      throw new Error(`TraeCN CLI not found inside ${binPath}`);
+    }
+    return { command: cliPath, commandArgs: ['--reuse-window', projectPath] };
+  }
+
+  return { command: binPath, commandArgs: ['--reuse-window', projectPath] };
+}
+
+async function openProjectInExistingWindow(options = {}) {
+  const binPath = options.binPath || findTraeCNBinary();
+  if (!binPath) {
+    throw new Error('TraeCN binary not found. Set TRAECN_BIN environment variable.');
+  }
+
+  const projectPath = path.resolve(String(options.projectPath || ''));
+  let projectStat;
+  try {
+    projectStat = fs.statSync(projectPath);
+  } catch {
+    throw new Error(`Project path does not exist: ${projectPath}`);
+  }
+  if (!projectStat.isDirectory()) {
+    throw new Error(`Project path is not a directory: ${projectPath}`);
+  }
+
+  const { command, commandArgs } = buildReuseWindowCommand(binPath, projectPath);
+  const { stdout, stderr } = await execFilePromise(command, commandArgs, {
+    encoding: 'utf8',
+    timeout: options.timeoutMs || 30000,
+    maxBuffer: 1024 * 1024
+  });
+  return {
+    command,
+    args: commandArgs,
+    stdout: String(stdout || '').trim(),
+    stderr: String(stderr || '').trim()
+  };
+}
+
 async function startTraeCN(options = {}) {
   const binPath = options.binPath || findTraeCNBinary();
   if (!binPath) {
@@ -235,11 +285,13 @@ function getQuickstartConfig() {
 
 module.exports = {
   buildStartCommand,
+  buildReuseWindowCommand,
   findTraeCNBinary,
   isTraeCNMainProcessCommand,
   isTraeCNRunning,
   quitTraeCN,
   restartTraeCNWithDebug,
+  openProjectInExistingWindow,
   startTraeCN,
   verifyTraeCNCDP,
   getQuickstartConfig

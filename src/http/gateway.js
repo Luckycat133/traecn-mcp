@@ -16,6 +16,7 @@ const { getEnvWithFallback, parsePositiveInt, sanitizeLog, isGenericQueueProbeTa
 const { errorToHttpStatus, errorToBody, safeErrorMessage } = require('./error-mapping');
 const { ConfigManager } = require('../shared/config-manager');
 const { getGlobalStore } = require('../shared/task-history');
+const { TaskEventStore } = require('../shared/task-event-store');
 const { buildCapabilities } = require('../capabilities');
 const { buildConfirmationPlan } = require('../shared/operation-confirmation');
 const requestContext = require('../shared/request-context');
@@ -36,6 +37,7 @@ const { TraeControl } = require('../cdp/trae-control');
 const { matchRoute, resolveHandler } = require('./route-table');
 const statusHandlers = require('./handlers/status');
 const tasksHandlers = require('./handlers/tasks');
+const taskEventHandlers = require('./handlers/task-events');
 const delegateHandlers = require('./handlers/delegate');
 const sessionsHandlers = require('./handlers/sessions');
 const soloChatHandlers = require('./handlers/solo-chat');
@@ -111,6 +113,7 @@ class Gateway {
     this.rateLimiter = new RateLimiter(config.rateLimit.windowMs, config.rateLimit.maxRequests);
 
     this.taskHistoryStore = getGlobalStore();
+    this.taskEventStore = options.taskEventStore || new TaskEventStore();
 
     this.client = null;
     this.driver = null;
@@ -500,17 +503,33 @@ class Gateway {
     return { ok: missingFiles.length === 0 && missingText.length === 0, missingFiles, missingText };
   }
 
-  _taskWithProjectContext(taskText, projectPath) {
-    const task = String(taskText || '').trim();
-    const path = typeof projectPath === 'string' ? projectPath.trim() : '';
-    if (!path) return task;
-    if (task.includes(`Project path: ${path}`) || task.includes(`项目路径：${path}`)) return task;
-    return [
-      `Project path: ${path}`,
-      'Work only in this project path unless the user explicitly says otherwise.',
-      '',
-      task
-    ].join('\n');
+  async _assertProjectWorkspace(projectPath) {
+    const requestedPath = typeof projectPath === 'string' ? projectPath.trim() : '';
+    if (!requestedPath || this.mockBridge) return null;
+    if (!this.driver || typeof this.driver.getWorkspaceContext !== 'function') return null;
+
+    const workspace = await this.driver.getWorkspaceContext();
+    const requestedFolder = path.basename(path.resolve(requestedPath));
+    const currentFolder = String(workspace?.folderName || '').trim();
+    if (!currentFolder) {
+      throw TraeCNAutomationError.workspaceContextUnavailable(requestedPath);
+    }
+    const rawCurrentPath = String(workspace?.rootPath || '').trim();
+    const expandedCurrentPath = rawCurrentPath.startsWith('~/')
+      ? path.join(os.homedir(), rawCurrentPath.slice(2))
+      : rawCurrentPath;
+    const currentPath = expandedCurrentPath ? path.resolve(expandedCurrentPath) : null;
+    const normalizedRequestedPath = path.resolve(requestedPath);
+    if ((currentPath && currentPath !== normalizedRequestedPath) ||
+        (!currentPath && currentFolder !== requestedFolder)) {
+      throw TraeCNAutomationError.projectNotOpen(
+        normalizedRequestedPath,
+        requestedFolder,
+        currentFolder,
+        currentPath
+      );
+    }
+    return { requestedPath: normalizedRequestedPath, requestedFolder, currentFolder, currentPath };
   }
 
   _normalizeFallbackModels(items, autoModelFallback = false) {
@@ -855,6 +874,26 @@ class Gateway {
   }
 
   async _emitTaskNotification(taskId, task, eventType, extra = {}) {
+    if (this.taskEventStore && typeof this.taskEventStore.append === 'function') {
+      const summary = String(
+        task.result?.text
+        || task.result?.question
+        || task.error
+        || extra.message
+        || ''
+      ).replace(/\s+/g, ' ').trim().slice(0, 240);
+      this.taskEventStore.append({
+        type: eventType,
+        taskId,
+        status: task.status,
+        terminal: ['task.completed', 'task.error', 'task.queue_timeout', 'task.review_rejected'].includes(eventType),
+        attentionRequired: ['task.review_required', 'task.approval_required'].includes(eventType),
+        resultAvailable: !!task.result,
+        sessionId: task.sessionId || null,
+        summary
+      });
+    }
+
     if (this.wsHandler) {
       this.wsHandler.broadcastEvent(eventType, { taskId, status: task.status, ...extra });
     }
@@ -1131,8 +1170,11 @@ class Gateway {
       } else {
         const dialog = await this.driver.checkForApprovalDialog();
         if (!dialog.needsApproval) return false;
+        if (action === 'auto' && dialog.isCommandExec && dialog.approvalDecision !== 'auto_approve') {
+          return false;
+        }
         selectedAction = action === 'auto'
-          ? (dialog.canAutoApprove ? 'trust' : 'allow')
+          ? (dialog.isCommandExec ? 'approve' : (dialog.canAutoApprove ? 'trust' : 'allow'))
           : action;
         approvalResult = await this.driver.approveDialog(selectedAction);
       }
@@ -1718,6 +1760,14 @@ class Gateway {
     return tasksHandlers.handleTaskReplay(req, res, this, taskId);
   }
 
+  _handleListTaskEvents(req, res) {
+    return taskEventHandlers.handleListTaskEvents(req, res, this);
+  }
+
+  _handleAckTaskEvent(req, res) {
+    return taskEventHandlers.handleAckTaskEvent(req, res, this);
+  }
+
   async _handleConfirmPlan(req, res) {
     const body = await parseBody(req);
     if (!body.command || typeof body.command !== 'string') {
@@ -1824,7 +1874,10 @@ class Gateway {
       question: dialog.question || null,
       buttonCount: Array.isArray(dialog.buttons) ? dialog.buttons.length : 0,
       buttons: Array.isArray(dialog.buttons) ? dialog.buttons.slice(0, 6) : [],
-      canAutoApprove: dialog.canAutoApprove === true
+      canAutoApprove: dialog.canAutoApprove === true,
+      approvalDecision: dialog.approvalDecision || null,
+      commandRisk: dialog.commandRisk || null,
+      riskReasons: Array.isArray(dialog.riskReasons) ? dialog.riskReasons.slice(0, 4) : []
     };
   }
 
@@ -2301,7 +2354,8 @@ class Gateway {
       criteriaList.push({ titleIncludes: candidate });
       criteriaList.push({ textIncludes: candidate });
     }
-    if (Number.isInteger(task.soloChat.index)) {
+    const hasTextualIdentity = criteriaList.some(item => item.titleIncludes || item.textIncludes);
+    if (!hasTextualIdentity && Number.isInteger(task.soloChat.index)) {
       criteriaList.push({ index: task.soloChat.index });
     }
     if (criteriaList.length === 0) return { skipped: true, reason: 'invalid_solo_chat_target' };
@@ -2333,7 +2387,16 @@ class Gateway {
     if (!active) return null;
     const candidates = this._soloChatCandidateTexts(task.task, active.title, active.text);
     const activeCandidates = this._soloChatCandidateTexts(active.title, active.text);
-    const primary = activeCandidates[0] || candidates[0] || active.title || active.text;
+    const stableTaskCandidate = candidates.find(candidate => (
+      /^TRAECN[A-Za-z0-9_:-]{6,}$/.test(candidate)
+      || /^(?:src\/[A-Za-z0-9_./-]+|[A-Za-z0-9_.-]+\.js|settings\/read-all|readAll|read-all)$/.test(candidate)
+    ));
+    const activePrimary = activeCandidates[0] || active.title || active.text;
+    const activeIsGenericProjectContext = /^Project path:\s/i.test(String(activePrimary || ''))
+      && /Work only in this project path/i.test(String(activePrimary || ''));
+    const primary = activeIsGenericProjectContext
+      ? (stableTaskCandidate || candidates[0] || activePrimary)
+      : (activePrimary || stableTaskCandidate || candidates[0]);
     const soloChat = this._normalizeSoloChatTarget({
       titleIncludes: primary,
       textIncludes: primary,
@@ -2533,7 +2596,20 @@ class Gateway {
         }
         return this._json(req, res, { success: false, error: 'No dialog found to approve' });
       }
-      const autoAction = dialog.canAutoApprove ? 'trust' : 'allow';
+      if (dialog.isCommandExec && dialog.approvalDecision !== 'auto_approve') {
+        return this._json(req, res, {
+          success: false,
+          action: 'agent_review',
+          dialogType: dialog.dialogType,
+          requiresAgentReview: true,
+          command: dialog.command || null,
+          risk: dialog.commandRisk || 'unknown',
+          reasonCodes: dialog.riskReasons || []
+        });
+      }
+      const autoAction = dialog.isCommandExec
+        ? 'approve'
+        : (dialog.canAutoApprove ? 'trust' : 'allow');
       const result = await this.driver.approveDialog(autoAction);
       return this._json(req, res, {
         success: result.success,
@@ -2629,7 +2705,11 @@ class Gateway {
       answerAction: dialog.dialogType === 'review_scope_question'
         ? { endpoint: '/api/dialog/approve', method: 'POST', body: { action: 'answer', answer: '<option label>' } }
         : null,
-      canAutoApprove: dialog.canAutoApprove || false
+      canAutoApprove: dialog.canAutoApprove || false,
+      approvalDecision: dialog.approvalDecision || null,
+      commandRisk: dialog.commandRisk || null,
+      riskReasons: dialog.riskReasons || [],
+      command: dialog.command || null
     });
   }
 
@@ -2810,7 +2890,8 @@ class Gateway {
 
     try {
       await this._ensureConnection();
-      const result = await this.driver.delegate(this._taskWithProjectContext(task.task, task.projectPath));
+      await this._assertProjectWorkspace(task.projectPath);
+      const result = await this.driver.delegate(task.task);
 
       task.status = 'done';
       task.result = {
@@ -3337,7 +3418,8 @@ class Gateway {
                 } else {
                   await this.driver.newChat();
                 }
-                await this.driver.sendMessage(this._taskWithProjectContext(task.task, task.projectPath));
+                await this._assertProjectWorkspace(task.projectPath);
+                await this.driver.sendMessage(task.task);
                 task.submittedToTrae = true;
                 task.submittedAt = Date.now();
                 if (!task.soloChat) {

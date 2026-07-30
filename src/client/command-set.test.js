@@ -54,6 +54,29 @@ async function test(name, fn) {
     assert.strictEqual(captured.options.timeoutMs, 5);
   });
 
+  await test('open_project exposes and forwards newInstance', async () => {
+    const command = listCommands().find(item => item.command === 'open_project');
+    assert.ok(command.optional.includes('newInstance'));
+
+    let captured = null;
+    const client = {
+      openProject: async (projectPath, options) => {
+        captured = { projectPath, options };
+        return { status: 200, data: { opened: true } };
+      }
+    };
+
+    await executeCommand(client, 'open_project', {
+      projectPath: '/tmp/second-project',
+      newInstance: true
+    });
+
+    assert.deepStrictEqual(captured, {
+      projectPath: '/tmp/second-project',
+      options: { newInstance: true }
+    });
+  });
+
   await test('solo chat commands are exposed for real Solo sidebar control', async () => {
     const commands = listCommands();
     const list = commands.find(command => command.command === 'list_solo_chats');

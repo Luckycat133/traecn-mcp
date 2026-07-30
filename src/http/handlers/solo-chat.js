@@ -143,7 +143,8 @@ async function handleSubmitSoloChatTask(req, res, ctx) {
       await ctx.driver.newChat();
     }
 
-    await ctx.driver.sendMessage(ctx._taskWithProjectContext(body.task, body.projectPath));
+    await ctx._assertProjectWorkspace(body.projectPath);
+    await ctx.driver.sendMessage(body.task);
     const queueStatus = typeof ctx.driver.checkQueueStatus === 'function'
       ? await ctx.driver.checkQueueStatus()
       : { queued: true, running: false, canSubmit: false };

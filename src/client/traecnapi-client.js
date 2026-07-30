@@ -100,6 +100,21 @@ class TraeCNApiClient {
     return this._request('GET', '/api/capabilities');
   }
 
+  async listTaskEvents(clientId, options = {}) {
+    if (!clientId) throw new Error('clientId is required');
+    const params = new URLSearchParams({ clientId: String(clientId) });
+    if (options.after) params.set('after', String(options.after));
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    if (options.waitMs !== undefined) params.set('waitMs', String(options.waitMs));
+    return this._request('GET', `/api/task-events?${params.toString()}`);
+  }
+
+  async ackTaskEvent(clientId, eventId) {
+    if (!clientId) throw new Error('clientId is required');
+    if (!eventId) throw new Error('eventId is required');
+    return this._request('POST', '/api/task-events/ack', { clientId, eventId });
+  }
+
   async createConfirmationPlan(command, params = {}, options = {}) {
     return this._request('POST', '/api/confirm/plan', {
       command,
@@ -399,8 +414,11 @@ class TraeCNApiClient {
     return this._request('GET', '/api/queue-status');
   }
 
-  async openProject(projectPath) {
-    return this._request('POST', '/api/open-project', { projectPath });
+  async openProject(projectPath, options = {}) {
+    return this._request('POST', '/api/open-project', {
+      projectPath,
+      ...(options.newInstance === true ? { newInstance: true } : {})
+    });
   }
 
   async settingsRead(section = null) {

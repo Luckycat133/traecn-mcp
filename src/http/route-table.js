@@ -48,6 +48,8 @@ const ROUTES = [
   { method: 'POST', path: '/api/delegate', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'POST', path: '/api/delegate-async', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'POST', path: '/api/task/adopt-current', handler: '_handleAdoptCurrentTask', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
+  { method: 'GET', path: '/api/task-events', handler: '_handleListTaskEvents', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
+  { method: 'POST', path: '/api/task-events/ack', handler: '_handleAckTaskEvent', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 
   // Batch tasks
   { method: 'POST', path: '/api/tasks/batch', handler: '_handleBatchSubmit', requiresAuth: true, requiresRateLimit: true, requiresBody: true },

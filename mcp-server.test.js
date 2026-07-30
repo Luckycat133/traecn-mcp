@@ -41,6 +41,8 @@ async function test(name, fn) {
     assert.ok(names.includes('traecn_run_task'));
     assert.ok(names.includes('traecn_queue_task'));
     assert.ok(names.includes('traecn_wait_task'));
+    assert.ok(names.includes('traecn_list_task_events'));
+    assert.ok(names.includes('traecn_ack_task_event'));
     assert.ok(names.includes('traecn_adopt_current_task'));
     assert.ok(names.includes('traecn_cancel_task'));
     assert.ok(names.includes('traecn_resolve_task_review'));
@@ -90,9 +92,9 @@ async function test(name, fn) {
     assert.ok(!opsNames.includes('traecn_get_status'));
     assert.ok(fullNames.includes('traecn_get_status'));
     assert.strictEqual(fullNames.length, MCP_TOOLS.length);
-    assert.strictEqual(publicNames.length, 21);
-    assert.strictEqual(opsNames.length, 33);
-    assert.strictEqual(fullNames.length, 37);
+    assert.strictEqual(publicNames.length, 23);
+    assert.strictEqual(opsNames.length, 35);
+    assert.strictEqual(fullNames.length, 39);
   });
 
   await test('initialize returns server capabilities', async () => {
@@ -102,6 +104,7 @@ async function test(name, fn) {
     assert.ok(result.capabilities.tools);
     assert.ok(result.capabilities.prompts);
     assert.ok(result.capabilities.resources);
+    assert.ok(result.capabilities.logging);
   });
 
   await test('tools/list uses the public profile by default', async () => {
@@ -155,6 +158,10 @@ async function test(name, fn) {
     assert.ok(taskReview);
     assert.deepStrictEqual(taskReview.inputSchema.required, ['taskId', 'decision']);
     assert.deepStrictEqual(taskReview.inputSchema.properties.decision.enum, ['approve', 'continue', 'reject']);
+    const openProject = result.tools.find(tool => tool.name === 'traecn_open_project');
+    assert.ok(openProject);
+    assert.deepStrictEqual(openProject.inputSchema.required, ['projectPath']);
+    assert.deepStrictEqual(openProject.inputSchema.properties.newInstance, { type: 'boolean' });
   });
 
   await test('MCP workflow tools expose completion checks', async () => {
@@ -282,6 +289,65 @@ async function test(name, fn) {
     }
   });
 
+  await test('task event tools list and acknowledge a durable IDE cursor', async () => {
+    const captured = [];
+    const server = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', chunk => chunks.push(chunk));
+      req.on('end', () => {
+        const bodyText = Buffer.concat(chunks).toString('utf8');
+        captured.push({
+          method: req.method,
+          url: req.url,
+          body: bodyText ? JSON.parse(bodyText) : null
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(req.method === 'GET'
+          ? { events: [{ eventId: 'evt_7', taskId: 'task_1', status: 'completed' }] }
+          : { acknowledged: true, eventId: 'evt_7' }));
+      });
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+
+    const context = {
+      host: '127.0.0.1',
+      port: server.address().port,
+      token: '',
+      timeout: 3000
+    };
+    try {
+      const listed = await callTool('traecn_list_task_events', {
+        clientId: 'codex-main',
+        after: 'evt_6',
+        limit: 5,
+        waitMs: 100
+      }, context);
+      const listPayload = JSON.parse(listed.content[0].text);
+      assert.strictEqual(listPayload.events[0].eventId, 'evt_7');
+
+      const acked = await callTool('traecn_ack_task_event', {
+        clientId: 'codex-main',
+        eventId: 'evt_7'
+      }, context);
+      const ackPayload = JSON.parse(acked.content[0].text);
+      assert.strictEqual(ackPayload.acknowledged, true);
+      assert.deepStrictEqual(captured, [
+        {
+          method: 'GET',
+          url: '/api/task-events?clientId=codex-main&after=evt_6&limit=5&waitMs=100',
+          body: null
+        },
+        {
+          method: 'POST',
+          url: '/api/task-events/ack',
+          body: { clientId: 'codex-main', eventId: 'evt_7' }
+        }
+      ]);
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
   // ── MCP tool authorization (Batch C2) ────────────────────────────────────
 
   await test('MCP tools/call allows calls when auth layer is disabled', async () => {
@@ -342,6 +408,40 @@ async function test(name, fn) {
     assert.notStrictEqual(result.isError, true);
     const payload = JSON.parse(result.content[0].text);
     assert.strictEqual(payload.name, 'traecnclaw');
+  });
+
+  await test('traecn_open_project sends newInstance through the MCP-to-HTTP path', async () => {
+    let requestBody = null;
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        requestBody = JSON.parse(body);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ opened: true }));
+      });
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+
+    try {
+      const result = await callTool('traecn_open_project', {
+        projectPath: '/tmp/second-project',
+        newInstance: true
+      }, {
+        host: '127.0.0.1',
+        port: server.address().port,
+        token: '',
+        timeout: 3000
+      });
+
+      assert.notStrictEqual(result.isError, true);
+      assert.deepStrictEqual(requestBody, {
+        projectPath: '/tmp/second-project',
+        newInstance: true
+      });
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
   });
 
   await test('MCP tools/call honors traecn_run_command permission from arguments', async () => {

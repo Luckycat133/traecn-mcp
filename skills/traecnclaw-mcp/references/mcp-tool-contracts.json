@@ -3,7 +3,7 @@
   "profiles": {
     "public": {
       "default": true,
-      "count": 21,
+      "count": 23,
       "description": "Default profile for general MCP clients. Keeps high-signal task, review, settings, dialog, and workflow tools visible.",
       "tools": [
         "traecn_get_capabilities",
@@ -14,6 +14,8 @@
         "traecn_run_task",
         "traecn_queue_task",
         "traecn_poll_task",
+        "traecn_list_task_events",
+        "traecn_ack_task_event",
         "traecn_wait_task",
         "traecn_resolve_task_review",
         "traecn_cancel_task",
@@ -31,7 +33,7 @@
     },
     "ops": {
       "default": false,
-      "count": 33,
+      "count": 35,
       "description": "Operational profile for recovery, cleanup, Solo conversation management, and long-queue proof workflows.",
       "tools": [
         "traecn_get_capabilities",
@@ -42,6 +44,8 @@
         "traecn_run_task",
         "traecn_queue_task",
         "traecn_poll_task",
+        "traecn_list_task_events",
+        "traecn_ack_task_event",
         "traecn_wait_task",
         "traecn_resolve_task_review",
         "traecn_cancel_task",
@@ -71,7 +75,7 @@
     },
     "full": {
       "default": false,
-      "count": 37,
+      "count": 39,
       "description": "Complete explicit tool surface, including diagnostics and compatibility shortcuts that public clients can usually reach through traecn_preflight or traecn_run_command.",
       "tools": [
         "traecn_get_capabilities",
@@ -82,6 +86,8 @@
         "traecn_run_task",
         "traecn_queue_task",
         "traecn_poll_task",
+        "traecn_list_task_events",
+        "traecn_ack_task_event",
         "traecn_wait_task",
         "traecn_resolve_task_review",
         "traecn_adopt_current_task",
@@ -672,6 +678,62 @@
       },
       "metadata": {
         "layer": "task",
+        "profile": "public",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_list_task_events",
+      "description": "Read compact durable task-status events for one stable IDE client cursor. Use waitMs for token-efficient long polling.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string",
+            "description": "Stable identifier for this IDE or MCP client."
+          },
+          "after": {
+            "type": "string",
+            "description": "Optional event id to resume after."
+          },
+          "limit": {
+            "type": "number"
+          },
+          "waitMs": {
+            "type": "number",
+            "description": "Long-poll timeout, capped by the gateway."
+          }
+        },
+        "required": [
+          "clientId"
+        ]
+      },
+      "metadata": {
+        "layer": "task-events",
+        "profile": "public",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_ack_task_event",
+      "description": "Advance one IDE client cursor after a task event has been delivered successfully.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "clientId",
+          "eventId"
+        ]
+      },
+      "metadata": {
+        "layer": "task-events",
         "profile": "public",
         "risk": "read"
       }
@@ -1488,7 +1550,7 @@
     },
     {
       "name": "traecn_submit_solo_task",
-      "description": "Submit a task into a real Solo conversation and return a taskId; background polling switches back to that conversation to collect queued results.",
+      "description": "Submit a task into a real Solo conversation and return a taskId; background polling switches back to that conversation to collect queued results. Optional projectPath is a gateway workspace guard: it is verified against the open TraeCN workspace path and is never added to the model prompt.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1496,7 +1558,8 @@
             "type": "string"
           },
           "projectPath": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional workspace guard. The gateway rejects a mismatch with PROJECT_NOT_OPEN and never inserts this path into the model prompt."
           },
           "soloChat": {
             "type": "object",
@@ -1779,12 +1842,15 @@
     },
     {
       "name": "traecn_open_project",
-      "description": "Open a local project path in TraeCN.",
+      "description": "Open a local project path in TraeCN. An existing TraeCN window is reused and path-verified by default; set newInstance=true only for a separate window.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "projectPath": {
             "type": "string"
+          },
+          "newInstance": {
+            "type": "boolean"
           }
         },
         "required": [

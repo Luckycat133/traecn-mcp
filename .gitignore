@@ -15,6 +15,7 @@ skills/*-workspace/
 .agents/skills/
 # Generated test coverage data
 .coverage/
+.workbuddy/
 coverage/
 # Generated inspection artifacts
 inspect-report.json

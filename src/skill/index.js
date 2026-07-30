@@ -143,12 +143,12 @@ const advanced = {
     return withSkillError('提交 Solo 对话任务失败', { task }, () => skill.submitSoloChatTask(task, opts));
   },
 
-  async openProject(projectPath) {
+  async openProject(projectPath, options = {}) {
     const skill = getSkill();
     return withSkillError(
       `打开项目失败. 请检查路径是否存在: ${projectPath}`,
-      { projectPath },
-      () => skill.openProject(projectPath)
+      { projectPath, newInstance: options.newInstance === true },
+      () => skill.openProject(projectPath, options)
     );
   }
 };

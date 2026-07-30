@@ -100,6 +100,7 @@
               "delegate_async",
               "task_status",
               "wait_task",
+              "review_task",
               "adopt_current_task",
               "cancel_task",
               "stop_generation",
@@ -851,6 +852,10 @@
           "projectPath": {
             "type": "string",
             "description": "Path to the project to open"
+          },
+          "newInstance": {
+            "type": "boolean",
+            "description": "Open the project in a separate TraeCN window when TraeCN is already running"
           }
         }
       }

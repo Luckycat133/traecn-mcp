@@ -27,9 +27,9 @@ Profile counts are derived from the current server and guarded by tests:
 
 | Profile | Tools | Use |
 | --- | ---: | --- |
-| `public` | 21 | Normal task, review, settings, dialog, model, and workflow operations |
-| `ops` | 33 | Adds recovery, cleanup, Solo control, and long-queue proof tools |
-| `full` | 37 | Adds every explicit diagnostic and compatibility shortcut |
+| `public` | 23 | Normal task, event, review, settings, dialog, model, and workflow operations |
+| `ops` | 35 | Adds recovery, cleanup, Solo control, and long-queue proof tools |
+| `full` | 39 | Adds every explicit diagnostic and compatibility shortcut |
 
 Profiles control discovery noise, not authorization. Calls still require the configured gateway and MCP permissions.
 
@@ -37,11 +37,20 @@ Profiles control discovery noise, not authorization. Calls still require the con
 
 - Short task: `traecn_preflight` → `traecn_run_task`.
 - Long task: `traecn_preflight` → `traecn_queue_task` → `traecn_wait_task` or `traecn_poll_task`; keep using the same `taskId` instead of resubmitting.
+- IDE completion delivery: rely on compact stdio `notifications/message` when the client displays MCP logging; otherwise use `traecn_list_task_events` and acknowledge successful delivery with `traecn_ack_task_event`. Fetch full results by `taskId` only when needed.
 - Code review: `traecn_switch_model` when needed, then `traecn_review_code` with findings-first instructions.
+- Workspace selection: `traecn_open_project` reuses and verifies the active
+  TraeCN window by default; pass `newInstance:true` only for a separate window.
 - Fully automatic multi-step workflow: `traecn_run_unattended_workflow`; omit `autoContinue` or set it to `true`.
 - Human-reviewed multi-step workflow: call the same workflow tool with `reviewRequired:true` and `autoContinue:false`, wait for `awaiting_review`, then use `traecn_resolve_task_review`.
 - Batch commands: call `traecn_list_commands`, verify the stable `batch_submit` command, then use `traecn_run_command`. Do not treat JavaScript SDK helpers as stdio MCP tools.
 - Exact schemas: search [generated MCP contracts](references/mcp-tool-contracts.json) for the tool name. Copy validated examples from [MCP call examples](references/mcp-call-examples.json).
+
+`projectPath` is an optional gateway workspace guard, not prompt content. An
+agent may pass it without spending model tokens: the gateway compares it with
+the workspace path open in TraeCN, rejects a mismatch as `PROJECT_NOT_OPEN`,
+and sends only the original task text. Omit it only when no workspace guard is
+needed.
 
 ## Correct call contracts
 
@@ -89,8 +98,14 @@ The second mechanism controls TraeCN's own UI review state; it does not approve 
 - Never commit `.env`, tokens, authorization headers, raw TraeCN profiles, `audit-logs/`, `demo-output/`, `logs/`, or `node_modules/`.
 - Call `traecn_plan_operation` or `traecn_preflight` before side effects and honor readiness, confirmation, queue, and dialog results.
 - Inspect a dialog with `traecn_get_dialog_status` before choosing a `traecn_respond_dialog` action.
+- Treat an active inline command card as a dialog. Use `action:"auto"` first:
+  the local classifier approves read-only chains without model tokens. If it
+  returns `approvalDecision:"agent_review"`, review only the compact command
+  and reason codes, then use `action:"approve"` or `action:"deny"`; do not
+  request human confirmation.
 - Keep long-queue proof in dry-run by default. A new quota-spending submission requires both `execute:true` and `allowQuotaSpend:true` and the `ops` profile.
 - Treat queued, `awaiting_review`, timed-out, and mock results as non-terminal unless the returned status proves completion.
+- Treat completion percentages below 100 as non-terminal, even when the label contains `任务完成`.
 - Do not fall back to GUI control when an MCP or HTTP surface exists.
 
 ## Troubleshooting order
@@ -108,7 +123,7 @@ The second mechanism controls TraeCN's own UI review state; it does not approve 
 
 - `npm run check:skill-contracts` — verify generated schemas and examples match the live MCP implementation.
 - `node skills/traecnclaw-mcp/scripts/start-mcp.test.js` — launcher unit tests.
-- `node skills/traecnclaw-mcp/scripts/mcp-stdio-smoke.test.js` — real Content-Length `initialize` + `tools/list` smoke test.
+- From a source checkout, run `npm run test:mcp-stdio-smoke` for a standalone Content-Length `initialize` + `tools/list` smoke test; it does not require the gateway.
 - `npm test` — maintained repository suite, including the skill contract and launcher tests.
 - `npm run acceptance:audit -- --require-complete` — required before claiming unattended live end-to-end readiness.
 - `npm run test:all` — release-style validation when practical.

@@ -74,6 +74,22 @@ class TraeCNAutomationError extends Error {
     );
   }
 
+  static projectNotOpen(requestedPath, requestedFolder, currentFolder, currentPath = null) {
+    return new TraeCNAutomationError(
+      `Requested project folder '${requestedFolder}' is not open in TraeCN`,
+      'PROJECT_NOT_OPEN',
+      { requestedPath, requestedFolder, currentFolder, currentPath }
+    );
+  }
+
+  static workspaceContextUnavailable(requestedPath) {
+    return new TraeCNAutomationError(
+      'Cannot verify which project folder is open in TraeCN',
+      'WORKSPACE_CONTEXT_UNAVAILABLE',
+      { requestedPath }
+    );
+  }
+
   // ── 5xx — something went wrong in the bridge / driver / TraeCN ──────
 
   static connectionFailed(host, port, cause) {

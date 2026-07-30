@@ -176,6 +176,24 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('openProject forwards newInstance to the gateway', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ opened: true }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+
+    await client.openProject('/tmp/second-project', { newInstance: true });
+
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/open-project');
+    assert.deepStrictEqual(lastRequest.body, {
+      projectPath: '/tmp/second-project',
+      newInstance: true
+    });
+    server.close();
+  });
+
   await asyncTest('stopGeneration sends POST to /api/trae/stop-generation', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });

@@ -29,6 +29,61 @@ const DIALOG_BUTTON_SELECTOR = [
   '[role="button"]'
 ].join(', ');
 
+function _assessCommandApproval(command) {
+  const value = String(command || '').replace(/\s+/g, ' ').trim();
+  if (!value) {
+    return { decision: 'agent_review', risk: 'unknown', reasonCodes: ['unknown_command'] };
+  }
+
+  const riskRules = [
+    {
+      pattern: /\bgit\s+(?:push|commit|reset|checkout|switch|clean|restore|rebase|merge|cherry-pick|tag)\b/i,
+      code: 'git_write_or_remote'
+    },
+    {
+      pattern: /\b(?:curl|wget|scp|sftp|ssh|nc|netcat|rsync)\b/i,
+      code: 'network_or_data_transfer'
+    },
+    {
+      pattern: /\b(?:rm|mv|cp|install|unlink|truncate|dd)\b|\b(?:npm|pnpm|yarn)\s+(?:install|add|remove|uninstall|publish)\b/i,
+      code: 'filesystem_or_package_write'
+    },
+    {
+      pattern: /\b(?:sudo|su|chmod|chown|launchctl|kill|pkill|killall)\b/i,
+      code: 'privilege_or_process_control'
+    }
+  ];
+  for (const rule of riskRules) {
+    if (rule.pattern.test(value)) {
+      return { decision: 'agent_review', risk: 'high', reasonCodes: [rule.code] };
+    }
+  }
+
+  const withoutDevNull = value.replace(/\s*\d?>\s*\/dev\/null\b/g, '');
+  if (/(^|[^<])>{1,2}(?!\s*\/dev\/null)|<<|\x60|\$\(/.test(withoutDevNull)) {
+    return { decision: 'agent_review', risk: 'high', reasonCodes: ['shell_write_or_expansion'] };
+  }
+
+  const segments = withoutDevNull
+    .split(/\s*(?:&&|\|\||;|\|)\s*/)
+    .map(segment => segment.trim())
+    .filter(Boolean);
+  const safeSegmentPatterns = [
+    /^cd\s+\S+(?:\s+\S+)*$/i,
+    /^(?:pwd|ls|find|rg|grep|cat|head|tail|wc|stat)\b/i,
+    /^sed\s+(?!.*(?:^|\s)-i(?:\s|$))\S+/i,
+    /^git\s+(?:status|diff|log|show|branch|rev-parse|ls-files)\b/i,
+    /^node\s+--test\b/i,
+    /^npm\s+(?:test|run\s+(?:test(?::[\w-]+)?|lint(?::[\w-]+)?|format:check|check:[\w-]+|acceptance:audit))\b/i,
+    /^echo\b/i
+  ];
+  if (segments.length > 0 && segments.every(segment => safeSegmentPatterns.some(pattern => pattern.test(segment)))) {
+    return { decision: 'auto_approve', risk: 'low', reasonCodes: ['read_only_chain'] };
+  }
+
+  return { decision: 'agent_review', risk: 'unknown', reasonCodes: ['unknown_command'] };
+}
+
 async function checkForApprovalDialog(driver) {
   try {
     const result = await driver.client.send('Runtime.evaluate', {
@@ -200,6 +255,44 @@ async function checkForApprovalDialog(driver) {
               canAutoApprove: false
             };
           }
+
+          var inlineCommandButtons = document.querySelectorAll(${safeJsValue(DIALOG_BUTTON_SELECTOR)});
+          for (var ic = 0; ic < inlineCommandButtons.length; ic++) {
+            var runButton = inlineCommandButtons[ic];
+            if (!runButton || runButton.offsetParent === null) continue;
+            var runText = (runButton.innerText || runButton.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!/^(\\u8fd0\\u884c|Run)$/i.test(runText)) continue;
+            var commandCard = runButton;
+            var commandText = '';
+            for (var up = 0; up < 8 && commandCard; up++) {
+              commandText = (commandCard.innerText || commandCard.textContent || '').replace(/\\s+/g, ' ').trim();
+              var isActiveCommandCard = commandCard.matches('.icd-run-command-card-v2.icd-card-container-active, [class*="run-command-card"][class*="active"]');
+              if (isActiveCommandCard
+                && /\\u547d\\u4ee4\\u5728\\u6c99\\u7bb1\\u4e2d\\u8fd0\\u884c\\u4e0d\\u901a\\u8fc7|outside (?:the )?sandbox|run .*outside/i.test(commandText)) {
+                var commandButtons = [];
+                var commandInput = commandCard.querySelector('textarea, input[type="text"], [contenteditable="true"]');
+                var commandValue = commandInput
+                  ? (commandInput.value || commandInput.innerText || commandInput.textContent || '').trim()
+                  : '';
+                commandCard.querySelectorAll(${safeJsValue(DIALOG_BUTTON_SELECTOR)}).forEach(function(button) {
+                  if (!button || button.offsetParent === null) return;
+                  var label = (button.innerText || button.textContent || '').replace(/\\s+/g, ' ').trim();
+                  if (label && !commandButtons.includes(label)) commandButtons.push(label);
+                });
+                return {
+                  found: true,
+                  title: commandText.substring(0, 200),
+                  buttons: commandButtons.slice(0, 5),
+                  type: 'command_execution',
+                  isCommandExec: true,
+                  canAutoApprove: false,
+                  command: commandValue
+                };
+              }
+              commandCard = commandCard.parentElement;
+            }
+          }
+
           var approvalPatterns = ['\\u9700\\u8981\\u60a8\\u6388\\u6743', '\\u9700\\u8981\\u60a8\\u7684\\u6279\\u51c6', '\\u662f\\u5426\\u5141\\u8bb8', 'Do you want to proceed', 'requires your confirmation'];
           for (var j = 0; j < approvalPatterns.length; j++) {
             if (bodyText.includes(approvalPatterns[j])) {
@@ -215,6 +308,9 @@ async function checkForApprovalDialog(driver) {
 
     const dialog = result.result?.value;
     if (dialog && dialog.found) {
+      const commandAssessment = dialog.isCommandExec
+        ? _assessCommandApproval(dialog.command)
+        : null;
       return {
         needsApproval: true,
         question: dialog.title || 'Trae\\u9700\\u8981\\u60a8\\u786e\\u8ba4',
@@ -222,7 +318,11 @@ async function checkForApprovalDialog(driver) {
         buttons: dialog.buttons || [],
         options: dialog.options || [],
         isCommandExec: dialog.isCommandExec || false,
-        canAutoApprove: dialog.canAutoApprove === true,
+        canAutoApprove: dialog.canAutoApprove === true || commandAssessment?.decision === 'auto_approve',
+        command: dialog.command ? String(dialog.command).slice(0, 1200) : null,
+        approvalDecision: commandAssessment?.decision || null,
+        commandRisk: commandAssessment?.risk || null,
+        riskReasons: commandAssessment?.reasonCodes || [],
       };
     }
     return { needsApproval: false };
@@ -305,6 +405,25 @@ async function approveDialog(driver, action) {
               var nodeRect = clickable.getBoundingClientRect();
               if (nodeRect.width < 12 || nodeRect.height < 12) continue;
               if (!buttonsToSearch.includes(clickable)) buttonsToSearch.push(clickable);
+            }
+          }
+
+          var inlineRunButtons = document.querySelectorAll(${safeJsValue(DIALOG_BUTTON_SELECTOR)});
+          for (var ir = 0; ir < inlineRunButtons.length; ir++) {
+            var inlineButton = inlineRunButtons[ir];
+            if (!inlineButton || inlineButton.offsetParent === null) continue;
+            var inlineText = (inlineButton.innerText || inlineButton.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!/^(\\u8fd0\\u884c|Run)$/i.test(inlineText)) continue;
+            var inlineCard = inlineButton;
+            for (var iu = 0; iu < 8 && inlineCard; iu++) {
+              var inlineCardText = (inlineCard.innerText || inlineCard.textContent || '').replace(/\\s+/g, ' ').trim();
+              var isActiveInlineCard = inlineCard.matches('.icd-run-command-card-v2.icd-card-container-active, [class*="run-command-card"][class*="active"]');
+              if (isActiveInlineCard
+                && /\\u547d\\u4ee4\\u5728\\u6c99\\u7bb1\\u4e2d\\u8fd0\\u884c\\u4e0d\\u901a\\u8fc7|outside (?:the )?sandbox|run .*outside/i.test(inlineCardText)) {
+                if (!buttonsToSearch.includes(inlineButton)) buttonsToSearch.push(inlineButton);
+                break;
+              }
+              inlineCard = inlineCard.parentElement;
             }
           }
 
@@ -409,13 +528,13 @@ async function approveDialog(driver, action) {
 function _getButtonLabelsForAction(action) {
   switch (action) {
     case 'trust':
-      return ['是，我信任此作者', '信任此作者', '信任', 'Trust', '信任此文件夹', '信任文件夹', '打开'];
+      return ['是，我信任此作者', '信任此作者', '信任', 'Trust', '信任此文件夹', '信任文件夹', '打开', '运行', 'Run'];
     case 'allow':
       return ['允许', 'Allow', '批准', 'Approve', '允许此操作'];
     case 'confirm':
       return ['确认', 'Confirm', '确定', 'OK', '确认执行', '运行'];
     case 'approve':
-      return ['是，我信任此作者', '批准', 'Approve', '允许', 'Allow', '确认', 'Confirm', '信任', 'Trust'];
+      return ['是，我信任此作者', '批准', 'Approve', '允许', 'Allow', '确认', 'Confirm', '信任', 'Trust', '运行', 'Run'];
     case 'deny':
       return ['拒绝', 'Deny', '不允许', '禁止', '拒绝此操作'];
     case 'cancel':
@@ -506,6 +625,7 @@ async function checkReadiness(driver) {
 module.exports = {
   checkForApprovalDialog,
   approveDialog,
+  _assessCommandApproval,
   _getButtonLabelsForAction,
   checkReadiness
 };

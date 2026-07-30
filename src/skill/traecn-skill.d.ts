@@ -174,6 +174,10 @@ export interface ApproveResult {
   success: boolean;
   action: string;
   clicked: string | null;
+  requiresAgentReview?: boolean;
+  risk?: 'low' | 'high' | 'unknown' | null;
+  reasonCodes?: string[];
+  command?: string | null;
 }
 
 // 对话框状态
@@ -183,6 +187,11 @@ export interface DialogStatus {
   type: string | null;
   question: string | null;
   buttons: string[];
+  canAutoApprove?: boolean;
+  approvalDecision?: 'auto_approve' | 'agent_review' | null;
+  risk?: 'low' | 'high' | 'unknown' | null;
+  reasonCodes?: string[];
+  command?: string | null;
 }
 
 // 队列状态
@@ -351,7 +360,7 @@ export declare class TraeCNSkill {
    * 打开项目
    * @param projectPath - 项目路径
    */
-  openProject(projectPath: string): Promise<any>;
+  openProject(projectPath: string, options?: { newInstance?: boolean }): Promise<any>;
 
   /**
    * 代码审查辅助

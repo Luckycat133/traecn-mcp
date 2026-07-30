@@ -43,6 +43,35 @@ test('getConfig returns numeric timeout', () => {
   assert.ok(config.timeoutMs > 0);
 });
 
+asyncTest('getWorkspaceContext reports the open Trae folder from the workspace surface', async () => {
+  const fakeClient = {
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      assert.ok(payload.expression.includes('.explorer-folders-view'));
+      return {
+        result: {
+          value: {
+            title: 'gemini-web-mcp',
+            folderName: 'gemini-web-mcp',
+            rootPath: '~/Documents/gh-repos/gemini-web-mcp',
+            hasExplorer: true
+          }
+        }
+      };
+    }
+  };
+  const driver = new DomDriver(fakeClient, getConfig());
+
+  const workspace = await driver.getWorkspaceContext();
+
+  assert.deepStrictEqual(workspace, {
+    title: 'gemini-web-mcp',
+    folderName: 'gemini-web-mcp',
+    rootPath: '~/Documents/gh-repos/gemini-web-mcp',
+    hasExplorer: true
+  });
+});
+
 test('getConfig leaves queueMaxWaitMs unset by default', () => {
   delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
   delete process.env.TRAE_QUEUE_MAX_WAIT_MS;
@@ -266,6 +295,91 @@ test('approveDialog approve labels include Monaco trust button text', () => {
   const driver = new DomDriver(null, getConfig());
   const labels = driver._getButtonLabelsForAction('approve');
   assert.ok(labels.includes('是，我信任此作者'));
+});
+
+test('approveDialog approve labels include inline command run button', () => {
+  const driver = new DomDriver(null, getConfig());
+  const labels = driver._getButtonLabelsForAction('approve');
+  assert.ok(labels.includes('运行'));
+});
+
+test('command approval assessment auto-approves an entirely read-only command chain', () => {
+  const driver = new DomDriver(null, getConfig());
+  const assessment = driver._assessCommandApproval(
+    'git status && git diff --stat HEAD && npm test'
+  );
+
+  assert.deepStrictEqual(assessment, {
+    decision: 'auto_approve',
+    risk: 'low',
+    reasonCodes: ['read_only_chain']
+  });
+});
+
+test('command approval assessment sends write or network commands to the calling agent', () => {
+  const driver = new DomDriver(null, getConfig());
+
+  assert.deepStrictEqual(
+    driver._assessCommandApproval('git status && git push origin main'),
+    {
+      decision: 'agent_review',
+      risk: 'high',
+      reasonCodes: ['git_write_or_remote']
+    }
+  );
+  assert.deepStrictEqual(
+    driver._assessCommandApproval('curl https://example.com/upload --data @report.json'),
+    {
+      decision: 'agent_review',
+      risk: 'high',
+      reasonCodes: ['network_or_data_transfer']
+    }
+  );
+});
+
+test('command approval assessment sends unknown commands to the calling agent', () => {
+  const driver = new DomDriver(null, getConfig());
+  assert.deepStrictEqual(driver._assessCommandApproval('custom-tool inspect repo'), {
+    decision: 'agent_review',
+    risk: 'unknown',
+    reasonCodes: ['unknown_command']
+  });
+});
+
+asyncTest('checkForApprovalDialog detects inline command approval cards', async () => {
+  let evaluatedExpression = '';
+  const driver = new DomDriver({
+    send: async (_method, params) => {
+      evaluatedExpression = params.expression;
+      const supportsInlineCommandApproval = evaluatedExpression.includes('icd-run-command-card-v2')
+        && evaluatedExpression.includes('\\u547d\\u4ee4\\u5728\\u6c99\\u7bb1\\u4e2d\\u8fd0\\u884c\\u4e0d\\u901a\\u8fc7');
+      return {
+        result: {
+          value: supportsInlineCommandApproval
+            ? {
+                found: true,
+                title: '命令在沙箱中运行不通过，是否仍然要在沙箱外运行？',
+                buttons: ['跳过', '添加 3 个命令到白名单', '运行'],
+                type: 'command_execution',
+                isCommandExec: true,
+                canAutoApprove: false,
+                command: 'git status && git diff --stat HEAD && npm test'
+              }
+            : { found: false }
+        }
+      };
+    }
+  }, getConfig());
+
+  const dialog = await driver.checkForApprovalDialog();
+
+  assert.strictEqual(dialog.needsApproval, true);
+  assert.strictEqual(dialog.dialogType, 'command_execution');
+  assert.strictEqual(dialog.isCommandExec, true);
+  assert.ok(dialog.buttons.includes('运行'));
+  assert.strictEqual(dialog.canAutoApprove, true);
+  assert.strictEqual(dialog.approvalDecision, 'auto_approve');
+  assert.deepStrictEqual(dialog.riskReasons, ['read_only_chain']);
 });
 
 test('restricted mode summary treats trusted workspace page as not restricted', () => {
@@ -730,6 +844,21 @@ test('extractLatestIdeAssistantState prefers assistant turn after latest user tu
   assert.ok(state.text.includes('正在分析问题'));
 });
 
+test('extractLatestIdeAssistantState does not mark percentage progress as complete', () => {
+  const driver = new DomDriver(null, getConfig());
+  const state = driver._extractLatestIdeAssistantState({
+    fullText: '用户新问题 Agent 正在处理 任务完成 16%',
+    turns: [
+      { className: 'chat-turn user', text: '用户新问题' },
+      { className: 'chat-turn assistant task', text: 'Agent\n任务完成 16%' }
+    ]
+  }, '');
+
+  assert.strictEqual(state.inProgress, true);
+  assert.strictEqual(state.isComplete, false);
+  assert.strictEqual(state.hasResponse, false);
+});
+
 test('isIncompleteResponseText treats skill invocation preamble as incomplete', () => {
   const driver = new DomDriver(null, getConfig());
   assert.strictEqual(driver._isIncompleteResponseText('Agent'), true);
@@ -792,12 +921,27 @@ test('collectResponse returns mid-stream approval without currentText initializa
     approvalChecks++;
     return approvalChecks === 1
       ? { needsApproval: false }
-      : { needsApproval: true, question: '批准执行命令?', dialogType: 'command', buttons: ['允许'] };
+      : {
+          needsApproval: true,
+          question: '批准执行命令?',
+          dialogType: 'command_execution',
+          buttons: ['运行'],
+          isCommandExec: true,
+          canAutoApprove: false,
+          approvalDecision: 'agent_review',
+          commandRisk: 'high',
+          riskReasons: ['git_write_or_remote'],
+          command: 'git push origin main'
+        };
   };
 
   const result = await driver.collectResponse();
   assert.strictEqual(result.needsApproval, true);
-  assert.strictEqual(result.dialogType, 'command');
+  assert.strictEqual(result.dialogType, 'command_execution');
+  assert.strictEqual(result.approvalDecision, 'agent_review');
+  assert.strictEqual(result.commandRisk, 'high');
+  assert.deepStrictEqual(result.riskReasons, ['git_write_or_remote']);
+  assert.strictEqual(result.command, 'git push origin main');
   assert.ok(typeof result.text === 'string');
 });
 

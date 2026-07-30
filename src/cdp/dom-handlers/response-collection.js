@@ -373,10 +373,10 @@ async function collectResponse(driver) {
         if (approvalDialog.needsApproval) {
           // Auto-approve command execution dialogs (e.g., "批准执行命令")
           // Questions (dialog without command keywords) still get forwarded to the caller.
-          if (approvalDialog.isCommandExec) {
+          if (approvalDialog.isCommandExec && approvalDialog.canAutoApprove) {
             driver._approvalDialogFirstSeenAt = undefined;
             driver._lastApprovalCheckAt = undefined;
-            const approveResult = await driver.approveDialog('trust');
+            const approveResult = await driver.approveDialog('approve');
             if (approveResult.success) {
               await sleep(500);
               continue;
@@ -399,6 +399,10 @@ async function collectResponse(driver) {
               needsApproval: true,
               question: approvalDialog.question,
               dialogType: approvalDialog.dialogType,
+              approvalDecision: approvalDialog.approvalDecision || null,
+              commandRisk: approvalDialog.commandRisk || null,
+              riskReasons: approvalDialog.riskReasons || [],
+              command: approvalDialog.command || null,
               approvalTimedOut: true
             };
           }
@@ -412,7 +416,11 @@ async function collectResponse(driver) {
             needsApproval: true,
             question: approvalDialog.question,
             dialogType: approvalDialog.dialogType,
-            buttons: approvalDialog.buttons
+            buttons: approvalDialog.buttons,
+            approvalDecision: approvalDialog.approvalDecision || null,
+            commandRisk: approvalDialog.commandRisk || null,
+            riskReasons: approvalDialog.riskReasons || [],
+            command: approvalDialog.command || null
           };
         }
       }

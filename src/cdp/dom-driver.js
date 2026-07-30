@@ -77,6 +77,10 @@ class DomDriver {
 
   // ── Sidebar / panel text capture ───────────────────────────────────────
 
+  async getWorkspaceContext() {
+    return panelModule.getWorkspaceContext(this);
+  }
+
   async _captureSidebarText() {
     return panelModule._captureSidebarText(this);
   }
@@ -220,6 +224,10 @@ class DomDriver {
 
   async checkForApprovalDialog() {
     return dialogsModule.checkForApprovalDialog(this);
+  }
+
+  _assessCommandApproval(command) {
+    return dialogsModule._assessCommandApproval(command);
   }
 
   // ── Delegation ─────────────────────────────────────────────────────────

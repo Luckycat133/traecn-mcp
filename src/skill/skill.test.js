@@ -486,7 +486,12 @@ test('_normalizeDialogStatus should create correct format', () => {
       hasDialog: true,
       dialogType: 'approval',
       question: 'Allow this action?',
-      buttons: ['Approve', 'Cancel']
+      buttons: ['Approve', 'Cancel'],
+      canAutoApprove: false,
+      approvalDecision: 'agent_review',
+      commandRisk: 'high',
+      riskReasons: ['git_write_or_remote'],
+      command: 'git push origin main'
     }
   });
   
@@ -495,6 +500,30 @@ test('_normalizeDialogStatus should create correct format', () => {
   expect(result.type).toBe('approval');
   expect(result.question).toBe('Allow this action?');
   expect(result.buttons).toEqual(['Approve', 'Cancel']);
+  expect(result.approvalDecision).toBe('agent_review');
+  expect(result.risk).toBe('high');
+  expect(result.reasonCodes).toEqual(['git_write_or_remote']);
+  expect(result.command).toBe('git push origin main');
+});
+
+test('_normalizeApproveResult preserves compact calling-agent review fields', () => {
+  const { TraeCNSkill } = require('./traecn-skill');
+  const skill = new TraeCNSkill();
+  const result = skill._normalizeApproveResult({
+    data: {
+      success: false,
+      action: 'agent_review',
+      requiresAgentReview: true,
+      risk: 'high',
+      reasonCodes: ['network_or_data_transfer'],
+      command: 'curl https://example.com'
+    }
+  });
+
+  expect(result.requiresAgentReview).toBe(true);
+  expect(result.risk).toBe('high');
+  expect(result.reasonCodes).toEqual(['network_or_data_transfer']);
+  expect(result.command).toBe('curl https://example.com');
 });
 
 test('_normalizeQueueStatus should create correct format', () => {
@@ -900,14 +929,20 @@ test('queueStatus forwards to client.checkQueueStatus', async () => {
   expect(result.position).toBe(2);
 });
 
-test('openProject forwards to client', async () => {
+test('openProject forwards path and new-instance option to client', async () => {
   const { TraeCNSkill } = require('./traecn-skill');
   const skill = new TraeCNSkill();
   let captured = null;
-  skill.client.openProject = async (p) => { captured = p; return { data: { ok: true } }; };
+  skill.client.openProject = async (projectPath, options) => {
+    captured = { projectPath, options };
+    return { data: { ok: true } };
+  };
 
-  await skill.openProject('/path/to/proj');
-  expect(captured).toBe('/path/to/proj');
+  await skill.openProject('/path/to/proj', { newInstance: true });
+  expect(captured).toEqual({
+    projectPath: '/path/to/proj',
+    options: { newInstance: true }
+  });
 });
 
 test('reviewCode sync path calls run with built task', async () => {

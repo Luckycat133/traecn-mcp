@@ -3,6 +3,7 @@
 const assert = require('assert');
 const {
   buildStartCommand,
+  buildReuseWindowCommand,
   findTraeCNBinary,
   isTraeCNMainProcessCommand,
   isTraeCNRunning,
@@ -108,6 +109,19 @@ test('buildStartCommand uses macOS open for normal app bundle launches', () => {
   });
   assert.strictEqual(result.command, 'open');
   assert.deepStrictEqual(result.commandArgs, ['-a', '/Applications/Trae CN.app', '--args', '--remote-debugging-port=9222']);
+});
+
+test('buildReuseWindowCommand uses the bundled TraeCN CLI and reuses the active window', () => {
+  const result = buildReuseWindowCommand(
+    '/Applications/Trae CN.app',
+    '/Users/jack/Documents/gh-repos/gemini-web-mcp',
+    { platform: 'darwin', pathExists: () => true }
+  );
+
+  assert.deepStrictEqual(result, {
+    command: '/Applications/Trae CN.app/Contents/Resources/app/bin/trae-cn',
+    commandArgs: ['--reuse-window', '/Users/jack/Documents/gh-repos/gemini-web-mcp']
+  });
 });
 
 test('buildStartCommand uses direct Electron executable for debug new instances when present', () => {

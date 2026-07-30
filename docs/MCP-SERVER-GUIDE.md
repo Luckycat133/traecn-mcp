@@ -90,15 +90,17 @@ Skill 自带启动器 `skills/traecnclaw-mcp/scripts/start-mcp.js`，会自动�
 
 | Profile | 数量 | 说明 |
 | --- | ---: | --- |
-| `public` | 21 | 默认发布面，适合通用 agent。 |
-| `ops` | 33 | 增加恢复、cleanup、Solo 对话和长队列证明工具。 |
-| `full` | 37 | 暴露所有显式工具，包括诊断/兼容快捷入口。 |
+| `public` | 23 | 默认发布面，适合通用 agent。 |
+| `ops` | 35 | 增加恢复、cleanup、Solo 对话和长队列证明工具。 |
+| `full` | 39 | 暴露所有显式工具，包括诊断/兼容快捷入口。 |
 
 核心工具包括：
 
 - `traecn_run_task`: 委派任务并尽量等待最终结果
 - `traecn_queue_task`: 提交后台队列任务并返回 `taskId`
 - `traecn_poll_task`: 查询队列任务状态
+- `traecn_list_task_events`: 按 IDE 客户端游标长轮询持久化任务事件
+- `traecn_ack_task_event`: 在事件成功送达后推进该客户端游标
 - `traecn_resolve_task_review`: 用 `taskId` 和 `decision` 处理网关 `awaiting_review` 检查点
 - `traecn_review_code`: 对代码、diff 或指定文件范围生成 findings-first 审查
 - `traecn_preflight`: 默认状态、队列、弹窗和确认计划入口
@@ -111,6 +113,30 @@ Skill 自带启动器 `skills/traecnclaw-mcp/scripts/start-mcp.js`，会自动�
 
 `traecn_get_status` 和 `traecn_get_queue_status` 属于 `full` 兼容诊断工具；默认
 agent 应优先用 `traecn_preflight`。
+
+`projectPath` 是网关层的可选工作区校验，不是模型提示词。提交任务时，
+网关会确认 TraeCN 当前打开的工作区完整路径是否与该路径一致；不一致时
+返回 `PROJECT_NOT_OPEN`，一致时只发送原始任务文本，不会向对话注入路径。
+
+TraeCN 的行内命令卡（包括“命令在沙箱中运行不通过”）也属于 dialog
+状态。先调用 `traecn_get_dialog_status`；返回
+`type: "command_execution"` 后，优先调用
+`traecn_respond_dialog({"action":"auto"})`。本地分类器不消耗模型 token：
+完整只读命令链直接运行；写入、联网、权限、进程控制和未知命令返回
+`approvalDecision:"agent_review"`、`commandRisk`、`riskReasons` 和命令，
+由调用 Agent 紧凑审核，不请求人工确认。Agent 批准后调用
+`traecn_respond_dialog({"action":"approve"})`，该操作会点击活动卡片的
+`运行` 按钮。
+
+后台 Solo 任务使用任务相关的可见文本重新定位对话，不依赖会随新建对话
+变化的侧栏索引。无法重新定位时任务继续等待，不会转而收集其他对话。
+`任务完成 1%` 至 `任务完成 99%` 等进度文本同样保持非终态。
+
+TraeCN 已运行时，`traecn_open_project` 默认通过内置 CLI 的
+`--reuse-window` 切换当前窗口，重连 CDP，并在返回成功前核验完整工作区路径。
+目标路径本来就已打开时会直接返回，不触发重载。仅在需要独立窗口时传入
+`{"projectPath":"/absolute/project/path","newInstance":true}`。
+`traecn_run_command` 的 `open_project` 命令支持同名参数。
 
 ## 环境变量
 
@@ -128,7 +154,17 @@ export TRAECN_LOG_FORMAT=json
 
 # 超时设置（毫秒）
 export TRAECN_TIMEOUT=120000
+
+# 可选：同一网关上的每个 IDE/MCP 连接使用稳定且唯一的事件游标
+export TRAECN_MCP_CLIENT_ID=codex-main
 ```
+
+MCP 初始化后，stdio 服务器会通过标准 `notifications/message` 推送紧凑任务
+状态。网关会持久化事件，离线重连后继续补收，并且仅在通知写入 stdio 后才
+确认。通知不携带完整答案；收到 `resultAvailable:true` 后用
+`traecn_poll_task` 按 `taskId` 获取结果，以减少 token 和传输量。不展示 MCP
+logging notification 的 IDE 仍可显式调用上述两个事件工具。网关不能保证把
+消息插入 IDE 的某个具体对话；该能力取决于 IDE 的 MCP 适配层。
 
 ## 故障排除
 

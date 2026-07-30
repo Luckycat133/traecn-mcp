@@ -2,6 +2,7 @@
 'use strict';
 
 const assert = require('assert');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -90,5 +91,16 @@ for (const testFile of [
 ]) {
   assert.ok(packageJson.scripts.test.includes(testFile), `${testFile} must run in npm test`);
 }
+
+const stdioSmoke = spawnSync('npm', ['run', 'test:mcp-stdio-smoke', '--silent'], {
+  cwd: repoRoot,
+  encoding: 'utf8'
+});
+assert.strictEqual(
+  stdioSmoke.status,
+  0,
+  `npm run test:mcp-stdio-smoke must execute the protocol smoke test:\n${stdioSmoke.stderr || stdioSmoke.stdout}`
+);
+assert.match(stdioSmoke.stdout, /PASS \(\d+ public tools\)/, 'stdio smoke command must report the public tool count');
 
 console.log('[skill-contract.test.js] PASS');

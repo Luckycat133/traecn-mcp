@@ -377,6 +377,7 @@ function readMcpResource(uri) {
 
 function getMcpCapabilities() {
   return {
+    logging: {},
     prompts: { listChanged: true },
     resources: { listChanged: true },
     tools: { listChanged: true }

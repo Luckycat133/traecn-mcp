@@ -208,6 +208,8 @@ class QueueStateMachine {
   isIncompleteReviewText(text) {
     const value = String(text || '').replace(/\s+/g, ' ').trim();
     if (!value) return true;
+    const percentageProgress = value.match(/(?:\u4efb\u52a1\u5b8c\u6210|completed?)\s*[:：]?\s*(\d{1,3})\s*%/i);
+    if (percentageProgress && Number(percentageProgress[1]) < 100) return true;
     const hasStructuredReportMarker = /^(?:TRAECNclaw\s+)?Code\s+Review\s*[—-]\s*Findings\s+First\b/i.test(value)
       || (/\b1\.\s*Findings\s*\(ordered by severity\)/i.test(value) && /\b(?:final verdict|review complete)\b/i.test(value));
     // 120 = minimum text length (chars) for a marker to count as a real

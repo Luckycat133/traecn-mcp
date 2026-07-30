@@ -43,8 +43,8 @@ async function switchSoloChat(criteria = {}) {
 async function submitSoloChatTask(task, options = {}) {
   return layered.advanced.submitSoloChatTask(task, options);
 }
-async function openProject(p) {
-  return layered.advanced.openProject(p);
+async function openProject(projectPath, options = {}) {
+  return layered.advanced.openProject(projectPath, options);
 }
 
 // ── Config + dialog + batch passthroughs ─────────────────────────────────

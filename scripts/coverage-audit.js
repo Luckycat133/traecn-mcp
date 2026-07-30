@@ -159,9 +159,7 @@ assert.ok(packageJson.scripts['audit:prod'], 'production audit script is require
 
 const docs = [
   read('README.md'),
-  read('docs/AI-USAGE-GUIDE.md'),
   read('docs/MCP-SERVER-GUIDE.md'),
-  read('docs/QUICK-REFERENCE.md'),
   read('docs/openclaw-command-set.md')
 ].join('\n');
 assertArrayIncludesAll(docs, ['traecn_preflight', 'reviewCode', 'queueTask', 'traecn_plan_operation', 'traecn_run_command'], 'docs');

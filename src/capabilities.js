@@ -17,6 +17,7 @@ function loadTraecnSkill() {
 const API_FAMILIES = Object.freeze({
   discovery: ['/api/capabilities', '/api/preflight', '/api/status', '/openapi.json'],
   delegation: ['/api/delegate', '/api/delegate-async', '/api/task/adopt-current', '/api/task/{taskId}', '/api/task/{taskId}/review', '/api/task/{taskId}/cancel'],
+  taskEvents: ['/api/task-events', '/api/task-events/ack'],
   sessions: ['/api/sessions', '/api/sessions/{sessionId}', '/api/sessions/{sessionId}/delegate'],
   queue: ['/api/queue-status', '/api/queue/status', '/api/tasks/batch', '/api/tasks/batch/{batchId}'],
   review: ['/api/delegate', '/api/delegate-async'],
@@ -123,11 +124,12 @@ function buildCapabilities(options = {}, deps = {}) {
     version: packageInfo.version,
     contractVersion: 1,
     tokenStrategy: {
-      prefer: ['traecn_get_capabilities', 'traecn_preflight', 'traecn_queue_task', 'traecn_wait_task', 'traecn_poll_task'],
+      prefer: ['traecn_get_capabilities', 'traecn_preflight', 'traecn_queue_task', 'traecn_list_task_events', 'traecn_poll_task'],
       preflight: 'Call traecn_preflight once before side-effecting work instead of separate status/readiness/queue/dialog checks.',
       avoid: 'Fetch /openapi.json only when schema detail is needed.',
       maxTaskBytes: 100000,
       asyncPolling: true,
+      durableTaskEvents: true,
       compactResponses: true
     },
     coverage: {
@@ -141,6 +143,7 @@ function buildCapabilities(options = {}, deps = {}) {
       modelAndModeControl: true,
       soloMultiConversationControl: true,
       soloQueuedResultCollection: true,
+      durableIdeTaskNotifications: true,
       projectOpening: true,
       historyReplay: true,
       unattendedVibeWorkflow: true,

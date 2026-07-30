@@ -20,6 +20,37 @@
 
 const { safeJsValue } = require('../../shared/utils');
 
+async function getWorkspaceContext(driver) {
+  const result = await driver.client.send('Runtime.evaluate', {
+    expression: `(() => {
+      var title = String(document.title || '').trim();
+      var explorer = document.querySelector('.explorer-folders-view, .explorer-viewlet');
+      var firstRow = explorer && explorer.querySelector('[role="treeitem"][aria-level="1"]');
+      var resource = firstRow && firstRow.querySelector('.explorer-item[aria-label]');
+      var childName = firstRow ? String(firstRow.getAttribute('aria-label') || '').trim() : '';
+      var resourceLabel = resource ? String(resource.getAttribute('aria-label') || '').trim() : '';
+      var rootPath = null;
+      if (resourceLabel && childName) {
+        var slashSuffix = '/' + childName;
+        var backslashSuffix = '\\\\' + childName;
+        if (resourceLabel.endsWith(slashSuffix)) {
+          rootPath = resourceLabel.slice(0, -slashSuffix.length);
+        } else if (resourceLabel.endsWith(backslashSuffix)) {
+          rootPath = resourceLabel.slice(0, -backslashSuffix.length);
+        }
+      }
+      return {
+        title: title,
+        folderName: explorer && title ? title : null,
+        rootPath: rootPath,
+        hasExplorer: !!explorer
+      };
+    })()`,
+    returnByValue: true
+  });
+  return result.result?.value || { title: '', folderName: null, rootPath: null, hasExplorer: false };
+}
+
 async function _captureSidebarText(driver) {
   try {
     const result = await driver.client.send('Runtime.evaluate', {
@@ -351,7 +382,10 @@ function _extractLatestIdeAssistantState(panelState, skipText) {
   }
 
   const latestLower = normalizedLatest.toLowerCase();
+  const percentageProgress = `${fullText} ${latestText}`.match(/(?:\u4efb\u52a1\u5b8c\u6210|completed?)\s*[:：]?\s*(\d{1,3})\s*%/i);
+  const hasIncompletePercentage = Boolean(percentageProgress && Number(percentageProgress[1]) < 100);
   const inProgress = (
+    hasIncompletePercentage ||
     fullText.includes('进行中') ||
     fullText.includes('正在思考') ||
     fullText.includes('正在分析') ||
@@ -367,9 +401,11 @@ function _extractLatestIdeAssistantState(panelState, skipText) {
     latestLower.includes('queue')
   );
   const isComplete = (
-    latestText.includes('任务完成') ||
-    latestText.includes('已完成') ||
-    fullText.includes('任务完成')
+    !hasIncompletePercentage && (
+      latestText.includes('任务完成') ||
+      latestText.includes('已完成') ||
+      fullText.includes('任务完成')
+    )
   );
 
   return {
@@ -488,6 +524,7 @@ async function findTaskResponse(driver) {
 }
 
 module.exports = {
+  getWorkspaceContext,
   _captureSidebarText,
   _captureIdePanelText,
   _captureVisibleText,

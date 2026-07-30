@@ -198,7 +198,10 @@ function generateOpenAPISpec() {
                 schema: {
                   type: 'object',
                   properties: {
-                    projectPath: { type: 'string' }
+                    projectPath: {
+                      type: 'string',
+                      description: 'Optional workspace guard. The path must match the project open in TraeCN.'
+                    }
                   }
                 }
               }
@@ -283,7 +286,10 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string', description: 'The task to delegate' },
-                    projectPath: { type: 'string' },
+                    projectPath: {
+                      type: 'string',
+                      description: 'Optional workspace guard. The path must match the project open in TraeCN; it is never added to the model prompt.'
+                    },
                     includeProcessText: { type: 'boolean', description: 'Include process information in response' },
                     waitForQueue: { type: 'boolean', default: true },
                     autoApproveDialog: {
@@ -337,7 +343,10 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string', description: 'The task to delegate', maxLength: 100000 },
-                    projectPath: { type: 'string' },
+                    projectPath: {
+                      type: 'string',
+                      description: 'Optional workspace guard. The folder name must match the project open in TraeCN; it is never added to the model prompt.'
+                    },
                     sessionId: { type: 'string' },
                     includeProcessText: { type: 'boolean', default: false },
                     waitForQueue: { type: 'boolean', default: true },
@@ -392,7 +401,7 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string', description: 'The task to delegate', maxLength: 100000 },
-                    projectPath: { type: 'string', description: 'Optional local project path TraeCN should work in' },
+                    projectPath: { type: 'string', description: 'Optional workspace-path guard; rejected on mismatch and never inserted into the model prompt' },
                     sessionId: { type: 'string', description: 'Logical session to append the user prompt and eventual assistant result to' },
                     chatId: { type: 'string', description: 'Optional chat ID for notification callback' },
                     soloChat: {
@@ -625,7 +634,10 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string' },
-                    projectPath: { type: 'string' },
+                    projectPath: {
+                      type: 'string',
+                      description: 'Optional workspace guard. The path must match the project open in TraeCN; it is never added to the model prompt.'
+                    },
                     soloChat: {
                       type: 'object',
                       properties: {
@@ -658,7 +670,9 @@ function generateOpenAPISpec() {
           responses: {
             '202': { description: 'Submitted task tracking result' },
             '400': { description: 'Invalid task payload' },
-            '404': { description: 'Requested Solo chat not found' }
+            '404': { description: 'Requested Solo chat not found' },
+            '409': { description: 'projectPath does not match the project folder open in TraeCN' },
+            '503': { description: 'The open TraeCN workspace could not be identified' }
           }
         }
       },
@@ -841,6 +855,81 @@ function generateOpenAPISpec() {
           responses: {
             '200': { description: 'Task status' },
             '404': { description: 'Task not found' }
+          }
+        }
+      },
+      '/api/task-events': {
+        get: {
+          summary: 'Long-poll compact durable task events for one IDE client cursor',
+          operationId: 'listTaskEvents',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'clientId', in: 'query', required: true, schema: { type: 'string' } },
+            { name: 'after', in: 'query', required: false, schema: { type: 'string' } },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100 } },
+            { name: 'waitMs', in: 'query', required: false, schema: { type: 'integer', minimum: 0, maximum: 30000 } }
+          ],
+          responses: {
+            '200': {
+              description: 'Client-scoped event batch and replay cursor',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      clientId: { type: 'string' },
+                      events: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            eventId: { type: 'string' },
+                            type: { type: 'string' },
+                            taskId: { type: 'string' },
+                            status: { type: 'string' },
+                            createdAt: { type: 'string', format: 'date-time' },
+                            terminal: { type: 'boolean' },
+                            attentionRequired: { type: 'boolean' },
+                            resultAvailable: { type: 'boolean' },
+                            sessionId: { type: 'string', nullable: true },
+                            summary: { type: 'string', maxLength: 240 }
+                          }
+                        }
+                      },
+                      cursor: { type: 'string', nullable: true },
+                      hasMore: { type: 'boolean' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/task-events/ack': {
+        post: {
+          summary: 'Advance one IDE client task-event cursor after successful delivery',
+          operationId: 'ackTaskEvent',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['clientId', 'eventId'],
+                  properties: {
+                    clientId: { type: 'string' },
+                    eventId: { type: 'string' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Event cursor acknowledged' },
+            '400': { description: 'Missing clientId or eventId' },
+            '404': { description: 'Event no longer exists' }
           }
         }
       },
@@ -1163,7 +1252,7 @@ function generateOpenAPISpec() {
       },
       '/api/open-project': {
         post: {
-          summary: 'Open a project in TraeCN',
+          summary: 'Open or switch the active TraeCN project',
           operationId: 'openProject',
           security: [{ bearerAuth: [] }],
           requestBody: {
@@ -1174,14 +1263,16 @@ function generateOpenAPISpec() {
                   type: 'object',
                   required: ['projectPath'],
                   properties: {
-                    projectPath: { type: 'string' }
+                    projectPath: { type: 'string', description: 'Absolute local project directory' },
+                    newInstance: { type: 'boolean', description: 'Open a separate window instead of reusing the active TraeCN window', default: false }
                   }
                 }
               }
             }
           },
           responses: {
-            '200': { description: 'Project open result' }
+            '200': { description: 'Project opened and exact workspace path verified' },
+            '404': { description: 'TraeCN binary or bundled CLI was not found' }
           }
         }
       },
@@ -1438,7 +1529,11 @@ function generateOpenAPISpec() {
                       dialogType: { type: 'string', nullable: true },
                       question: { type: 'string', nullable: true },
                       buttons: { type: 'array', items: { type: 'string' } },
-                      canAutoApprove: { type: 'boolean' }
+                      canAutoApprove: { type: 'boolean' },
+                      approvalDecision: { type: 'string', enum: ['auto_approve', 'agent_review'], nullable: true },
+                      commandRisk: { type: 'string', enum: ['low', 'high', 'unknown'], nullable: true },
+                      riskReasons: { type: 'array', items: { type: 'string' } },
+                      command: { type: 'string', nullable: true }
                     }
                   }
                 }

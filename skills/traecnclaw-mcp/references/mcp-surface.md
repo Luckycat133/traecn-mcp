@@ -39,9 +39,9 @@ For a globally installed package, use `"command":"traecnclaw-mcp"` when the bin 
 
 | Profile | Current count | Purpose |
 | --- | ---: | --- |
-| `public` | 21 | Default task, review, settings, dialog, model, and workflow surface |
-| `ops` | 33 | Public plus recovery, cleanup, Solo conversation, and proof operations |
-| `full` | 37 | Ops plus every explicit diagnostic and compatibility shortcut |
+| `public` | 23 | Default task, event, review, settings, dialog, model, and workflow surface |
+| `ops` | 35 | Public plus recovery, cleanup, Solo conversation, and proof operations |
+| `full` | 39 | Ops plus every explicit diagnostic and compatibility shortcut |
 
 Use `traecn_get_capabilities` for runtime counts and metadata. Profiles reduce discovery noise; they are not an authorization boundary.
 
@@ -61,6 +61,8 @@ Start side-effecting sequences with `traecn_preflight` or `traecn_plan_operation
 - `traecn_queue_task`: submit background work and return a `taskId`.
 - `traecn_poll_task`: inspect one task once.
 - `traecn_wait_task`: wait on one `taskId` until terminal or decision-required state.
+- `traecn_list_task_events`: long-poll compact durable events for a stable IDE client cursor.
+- `traecn_ack_task_event`: advance that cursor only after successful delivery.
 - `traecn_resolve_task_review`: approve, continue, or reject a gateway task in `awaiting_review`.
 - `traecn_cancel_task`: cancel a known tracked task.
 - `traecn_adopt_current_task` (`ops`): recover tracking without resending a prompt.
@@ -68,11 +70,21 @@ Start side-effecting sequences with `traecn_preflight` or `traecn_plan_operation
 
 Do not resubmit the same prompt merely because a wait timed out. Poll or wait on the same `taskId`, preflight current state, adopt only when the original task is visible, and cancel only a known target.
 
+After MCP initialization, the stdio server emits standard
+`notifications/message` records from the same durable inbox. Set a unique,
+stable `TRAECN_MCP_CLIENT_ID` per IDE connection when the MCP client name is not
+unique. Notifications carry only compact status and summary fields; retrieve a
+full answer with `traecn_poll_task`. Displaying or inserting the notification in
+a specific IDE chat depends on that IDE's MCP adapter.
+
 ## Code review and dialogs
 
 - `traecn_review_code`: build a findings-first review from instruction, files, code, diff, and focus.
 - `traecn_get_dialog_status`: inspect the actual pending question and available actions.
-- `traecn_respond_dialog`: approve, deny, confirm, answer, or dismiss after inspection.
+- `traecn_respond_dialog`: use `action:"auto"` for token-free local approval
+  of read-only command chains. Risky or unknown commands return compact
+  calling-agent review fields; approve, deny, confirm, answer, or dismiss after
+  inspection without requesting human confirmation.
 - `traecn_dismiss_dialog` (`full`): compatibility shortcut; prefer the public responder.
 
 Model switching uses the dedicated MCP argument `name`, while the stable `switch_model` command uses its catalog field `model`. Do not transfer parameter names between the explicit MCP tool and the command catalog.
@@ -118,6 +130,11 @@ These tools do not approve a gateway `awaiting_review` task.
 
 The name remains for compatibility, but explicit `autoContinue:false` now takes precedence instead of being overwritten.
 
+For `traecn_submit_solo_task`, `projectPath` is an optional gateway guard. The
+gateway compares it with the workspace path open in TraeCN and returns
+`PROJECT_NOT_OPEN` on mismatch. It never expands the path into visible prompt
+text, so callers can use the guard without spending model tokens.
+
 ## Batch operations
 
 Batch execution belongs to the stable command catalog rather than the explicit MCP tool list:
@@ -133,7 +150,9 @@ JavaScript wrapper methods documented elsewhere are not callable stdio MCP tool 
 - `traecn_switch_model`: fuzzy model matching; required field `name`.
 - `traecn_switch_mode`: switch `solo` / `ide`.
 - `traecn_create_chat`: create a chat.
-- `traecn_open_project`: open a local path.
+- `traecn_open_project`: open a local path. When TraeCN is already running,
+  the default reuses the active window and verifies the exact path; pass
+  `newInstance:true` only for a separate window.
 - `traecn_get_settings` / `traecn_set_setting`: read or update settings.
 - `traecn_get_status` and `traecn_get_queue_status` (`full`): compatibility diagnostics; prefer `traecn_preflight`.
 
@@ -167,6 +186,7 @@ Older notes and OpenClaw wrappers may use names such as `traecn_settings_action`
 ## Validation boundary
 
 - `npm run doctor` checks the local environment but may legitimately warn when gateway/CDP are offline.
+- From a source checkout, `npm run test:mcp-stdio-smoke` checks stdio `initialize` and `tools/list` independently of the gateway.
 - `npm test` covers the launcher, protocol smoke test, schema generation, and repository behavior.
 - `npm run acceptance:audit -- --require-complete` is required before claiming live unattended readiness.
 - Report measured latency with environment and sample count. Do not present example ranges as an SLA.

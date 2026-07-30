@@ -38,6 +38,9 @@ const {
 } = require('./handler');
 
 const {
+  TaskEventPump,
+  stableMcpClientId,
+  taskEventNotification,
   writeMessage,
   startStdioServer
 } = require('./stdio-server');
@@ -74,6 +77,9 @@ module.exports = {
   envContext,
 
   // Stdio
+  TaskEventPump,
+  stableMcpClientId,
+  taskEventNotification,
   writeMessage,
   startStdioServer
 };

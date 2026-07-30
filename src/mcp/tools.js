@@ -166,6 +166,24 @@ const RAW_MCP_TOOLS = Object.freeze([
     inputSchema: schema({ taskId: { type: 'string' } })
   },
   {
+    name: 'traecn_list_task_events',
+    description: 'Read compact durable task-status events for one stable IDE client cursor. Use waitMs for token-efficient long polling.',
+    inputSchema: schema({
+      clientId: { type: 'string', description: 'Stable identifier for this IDE or MCP client.' },
+      after: { type: 'string', description: 'Optional event id to resume after.' },
+      limit: { type: 'number' },
+      waitMs: { type: 'number', description: 'Long-poll timeout, capped by the gateway.' }
+    }, ['clientId'])
+  },
+  {
+    name: 'traecn_ack_task_event',
+    description: 'Advance one IDE client cursor after a task event has been delivered successfully.',
+    inputSchema: schema({
+      clientId: { type: 'string' },
+      eventId: { type: 'string' }
+    }, ['clientId', 'eventId'])
+  },
+  {
     name: 'traecn_wait_task',
     description: 'Wait locally for a queued TraeCN task to reach a terminal or decision-required state.',
     inputSchema: schema({
@@ -369,10 +387,13 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_submit_solo_task',
-    description: 'Submit a task into a real Solo conversation and return a taskId; background polling switches back to that conversation to collect queued results.',
+    description: 'Submit a task into a real Solo conversation and return a taskId; background polling switches back to that conversation to collect queued results. Optional projectPath is a gateway workspace guard: it is verified against the open TraeCN workspace path and is never added to the model prompt.',
     inputSchema: schema({
       task: { type: 'string' },
-      projectPath: { type: 'string' },
+      projectPath: {
+        type: 'string',
+        description: 'Optional workspace guard. The gateway rejects a mismatch with PROJECT_NOT_OPEN and never inserts this path into the model prompt.'
+      },
       soloChat: {
         type: 'object',
         properties: {
@@ -431,8 +452,11 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_open_project',
-    description: 'Open a local project path in TraeCN.',
-    inputSchema: schema({ projectPath: { type: 'string' } }, ['projectPath'])
+    description: 'Open a local project path in TraeCN. An existing TraeCN window is reused and path-verified by default; set newInstance=true only for a separate window.',
+    inputSchema: schema({
+      projectPath: { type: 'string' },
+      newInstance: { type: 'boolean' }
+    }, ['projectPath'])
   },
   {
     name: 'traecn_run_unattended_workflow',
@@ -471,6 +495,8 @@ const MCP_TOOL_INTERNAL_NAMES = Object.freeze({
   traecn_run_task: 'run_task',
   traecn_queue_task: 'queue_task',
   traecn_poll_task: 'poll_task',
+  traecn_list_task_events: 'list_task_events',
+  traecn_ack_task_event: 'ack_task_event',
   traecn_wait_task: 'wait_task',
   traecn_resolve_task_review: 'resolve_task_review',
   traecn_adopt_current_task: 'adopt_current_task',

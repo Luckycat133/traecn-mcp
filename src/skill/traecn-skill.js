@@ -367,10 +367,12 @@ class TraeCNSkill {
   /**
    * 打开项目
    * @param {string} projectPath - 项目路径
+   * @param {object} [options={}] - 打开选项
+   * @param {boolean} [options.newInstance=false] - TraeCN 已运行时是否新建窗口
    * @returns {Promise<object>} 打开结果
    */
-  async openProject(projectPath) {
-    return await this.client.openProject(projectPath);
+  async openProject(projectPath, options = {}) {
+    return await this.client.openProject(projectPath, options);
   }
 
   /**
@@ -578,7 +580,11 @@ class TraeCNSkill {
       ok: true,
       success: d.success,
       action: d.action,
-      clicked: d.buttonClicked || null
+      clicked: d.buttonClicked || null,
+      requiresAgentReview: d.requiresAgentReview === true,
+      risk: d.risk || null,
+      reasonCodes: d.reasonCodes || [],
+      command: d.command || null
     };
   }
 
@@ -595,7 +601,12 @@ class TraeCNSkill {
       hasDialog: d.hasDialog || false,
       type: d.dialogType || null,
       question: d.question || null,
-      buttons: d.buttons || []
+      buttons: d.buttons || [],
+      canAutoApprove: d.canAutoApprove === true,
+      approvalDecision: d.approvalDecision || null,
+      risk: d.commandRisk || null,
+      reasonCodes: d.riskReasons || [],
+      command: d.command || null
     };
   }
 

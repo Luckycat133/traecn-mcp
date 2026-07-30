@@ -165,7 +165,7 @@ export declare function checkQueue(): Promise<QueueStatus>;
  * 打开项目
  * @param path - 项目路径
  */
-export declare function openProject(path: string): Promise<any>;
+export declare function openProject(path: string, options?: { newInstance?: boolean }): Promise<any>;
 
 /**
  * 代码审查辅助

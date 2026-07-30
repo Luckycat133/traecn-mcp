@@ -182,13 +182,21 @@ A ready-to-copy single-entry launcher template is at
 kept separately at `skills/traecnclaw-mcp/assets/mcp-client-config.direct.json`.
 
 The MCP server exposes a profile-scoped tool surface. By default,
-`TRAECN_MCP_TOOL_PROFILE=public` lists the 21 common tools:
+`TRAECN_MCP_TOOL_PROFILE=public` lists the 23 common tools:
 `traecn_preflight`, `traecn_run_task`, `traecn_queue_task`,
-`traecn_poll_task`, `traecn_resolve_task_review`, `traecn_review_code`, settings/dialog/model controls,
+`traecn_poll_task`, `traecn_list_task_events`, `traecn_ack_task_event`,
+`traecn_resolve_task_review`, `traecn_review_code`, settings/dialog/model controls,
 `traecn_run_unattended_workflow`, and the generic `traecn_run_command` catalog
 for full command coverage. Use `TRAECN_MCP_TOOL_PROFILE=ops` for recovery,
 cleanup, Solo conversation control, and long-queue proof tools; use `full` for
 compatibility audits and every explicit shortcut.
+
+When TraeCN is already running, `traecn_open_project` reuses the active window
+by default through TraeCN's bundled CLI, reconnects CDP, and verifies the exact
+workspace path before returning success. Pass
+`{"projectPath":"/absolute/project/path","newInstance":true}` only when a
+separate window is wanted. If the requested project is already open, the
+gateway returns immediately without reloading the window.
 
 ### Agent Skill Distribution
 
@@ -211,8 +219,7 @@ npm run pack:skill
 
 This writes `dist/traecnclaw-mcp-skill.tgz`, a zip artifact when `zip` is
 available, and `dist/traecnclaw-mcp-release.json` with checksums. See
-[Distribution](docs/DISTRIBUTION.md) for catalog submission fields and
-[Launch Kit](docs/LAUNCH-KIT.md) for public announcement copy.
+[Distribution](docs/DISTRIBUTION.md) for catalog submission fields.
 
 ### Layered Architecture
 
@@ -229,10 +236,7 @@ TraeCNSkill uses a layered architecture for selective loading and minimal contex
 
 Complete skill documentation:
 
-- [Layered Architecture Guide](docs/LAYERED-ARCHITECTURE.md)
-- [AI Usage Guide](docs/AI-USAGE-GUIDE.md)
 - [MCP Server Guide](docs/MCP-SERVER-GUIDE.md)
-- [Quick Reference](docs/QUICK-REFERENCE.md)
 - [OpenClaw Command Set](docs/openclaw-command-set.md)
 - [Structured Prompt Mechanism](docs/structured-prompt-mechanism.md)
 
@@ -278,6 +282,30 @@ probe alternate models while the task waits. The agent can then release its
 context after receiving `taskId`; the local gateway persists the queue, refreshes
 `modelProbeResults`, and sends webhook/OpenClaw notifications when the task
 reaches review or completion.
+The stdio server also long-polls a durable, per-client task-event inbox after
+MCP initialization and emits compact standard `notifications/message` events.
+Set a stable, unique `TRAECN_MCP_CLIENT_ID` for each IDE connection when the
+derived MCP client name is not unique. Events are acknowledged only after the
+stdio write succeeds, survive gateway restarts, and contain only status plus a
+short summary; fetch the full result with `traecn_poll_task`. An IDE that does
+not display MCP logging notifications can call `traecn_list_task_events` and
+`traecn_ack_task_event` explicitly. Injection into a particular chat remains
+an IDE-adapter capability, not something the gateway can guarantee.
+Each submitted Solo task is rebound by task-specific visible text rather than
+by its transient sidebar index. If that identity cannot be found, collection
+waits instead of reading another conversation. Progress labels below 100%, such
+as `任务完成 16%`, remain non-terminal.
+
+When TraeCN pauses on an inline command card, call
+`traecn_get_dialog_status` and inspect `type`, `question`, and `buttons`.
+`{"action":"auto"}` uses a local classifier and consumes no model tokens:
+read-only command chains are approved immediately. Write, network, privilege,
+process-control, and unknown commands return `approvalDecision:"agent_review"`
+with `commandRisk`, `riskReasons`, and the command for compact calling-agent
+review; the gateway does not request human confirmation. After approval,
+`traecn_respond_dialog` with `{"action":"approve"}` maps to the visible
+`运行` button.
+
 For a single local process that waits quietly until completion, use MCP
 `traecn_wait_task`, OpenClaw `traecn_delegate`, or the CLI. Add `--detach` when the wait should continue under a
 local `screen` session after the calling agent releases context:
@@ -328,6 +356,7 @@ watcher is singleton-locked, so repeat detached starts return
 ```sh
 npm run lint
 npm run check:skill-contracts
+npm run test:mcp-stdio-smoke
 npm test
 npm run test:system
 npm run test:uat
@@ -337,9 +366,11 @@ npm run audit:prod
 ```
 
 `npm run check:skill-contracts` verifies that generated MCP schemas, validated
-examples, and single-entry client templates match the live server. `npm test`
-runs unit and integration tests, including the skill launcher and real stdio
-`initialize`/`tools/list` smoke test. Default CI uses mock and local test
+examples, and single-entry client templates match the live server.
+`npm run test:mcp-stdio-smoke` runs the standalone Content-Length
+`initialize`/`tools/list` protocol check without requiring the gateway.
+`npm test` runs unit and integration tests, including that smoke test and the
+skill launcher checks. Default CI uses mock and local test
 surfaces and never spends TraeCN quota. `test:system` starts the gateway in mock
 mode and verifies the HTTP flow. `test:uat` verifies documentation, OpenAPI
 coverage, and the machine-readable acceptance audit required for release
@@ -371,21 +402,15 @@ or `traecnclaw-mcp` for the server entrypoint.
 ## Documentation
 
 - [Compatibility Matrix](docs/COMPATIBILITY.md)
-- [User Manual](docs/user-manual.md)
 - [Development Guide](docs/development.md)
 - [Deployment Guide](docs/deployment.md)
 - [Distribution Guide](docs/DISTRIBUTION.md)
-- [Launch Kit](docs/LAUNCH-KIT.md)
-- [Layered Architecture Guide](docs/LAYERED-ARCHITECTURE.md)
-- [AI Usage Guide](docs/AI-USAGE-GUIDE.md)
 - [MCP Server Guide](docs/MCP-SERVER-GUIDE.md)
 - [OpenClaw MCP Setup Guide](docs/OPENCLAW-MCP-SETUP.md)
 - [OpenClaw Command Set](docs/openclaw-command-set.md)
 - [Structured Prompt Mechanism](docs/structured-prompt-mechanism.md)
-- [Continuous Development Loop](docs/CONTINUOUS-DEVELOPMENT-LOOP.md)
 - [First Login Runbook](docs/FIRST-LOGIN-RUNBOOK.md)
 - [Real DOM Findings](docs/REAL-DOM-FINDINGS.md)
-- [Quick Reference](docs/QUICK-REFERENCE.md)
 
 ## Maintainers
 

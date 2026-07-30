@@ -41,7 +41,7 @@ needs to send the raw task text unchanged.
 | `switch_mode` | Switch between `solo` and `ide` modes | `mode` |
 | `switch_model` | Switch the active model | `model` |
 | `queue_status` | Check if the model is queued or busy | none |
-| `open_project` | Open a project in TraeCN | `projectPath` |
+| `open_project` | Open a project in TraeCN; use optional `newInstance: true` when TraeCN is already running | `projectPath` |
 | `settings_read` | Read current or selected settings section | none |
 | `settings_read_all` | Read all settings sections | none |
 | `settings_set` | Change a setting by label | `label`, `value` |

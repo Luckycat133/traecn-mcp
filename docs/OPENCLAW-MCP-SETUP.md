@@ -12,7 +12,7 @@
 | MCP transport | stdio JSON-RPC（`mcp-server.js`） |
 | HTTP gateway | `http://127.0.0.1:8788` |
 | HTTP 端点（v0.4.0 新增） | 9 个 driver endpoint（`POST /api/<driver>`） |
-| MCP tool 总数 | `public` 21 / `ops` 33 / `full` 37（由 `TRAECN_MCP_TOOL_PROFILE` 控制） |
+| MCP tool 总数 | `public` 23 / `ops` 35 / `full` 39（由 `TRAECN_MCP_TOOL_PROFILE` 控制） |
 | 配套要求 | Node 22+ · TraeCN 1.107+ · OpenClaw |
 
 ---
@@ -919,11 +919,10 @@ open /tmp/traecn-first.png    # 看到 TraeCN IDE 画面 = 端到端通了
 ## 相关文档
 
 - [README.md](../README.md) — 项目总览
-- [QUICK-REFERENCE.md](./QUICK-REFERENCE.md) — 5 个核心函数快速参考
 - [MCP-SERVER-GUIDE.md](./MCP-SERVER-GUIDE.md) — 通用 MCP 配置（Cursor / Claude Desktop / Cline / Windsurf）
-- [AI-USAGE-GUIDE.md](./AI-USAGE-GUIDE.md) — AI agent 完整使用指南
+- [openclaw-command-set.md](./openclaw-command-set.md) — OpenClaw 命令与参数
+- [structured-prompt-mechanism.md](./structured-prompt-mechanism.md) — 结构化 prompt 分层机制
 - [REAL-DOM-FINDINGS.md](./REAL-DOM-FINDINGS.md) — TraeCN 1.107 实测 DOM 选择器
-- [LAYERED-ARCHITECTURE.md](./LAYERED-ARCHITECTURE.md) — Skill 分层架构
 
 ---
 

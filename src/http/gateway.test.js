@@ -8,13 +8,18 @@ const { Readable } = require('stream');
 
 const TEST_QUEUE_PERSISTENCE_PATH = path.join(os.tmpdir(), 'traecnclaw-gateway-test-active-queue.json');
 const TEST_HISTORY_PERSISTENCE_PATH = path.join(os.tmpdir(), 'traecnclaw-gateway-test-history.json');
+const TEST_EVENT_PERSISTENCE_PATH = path.join(os.tmpdir(), 'traecnclaw-gateway-test-events.json');
 process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH = TEST_QUEUE_PERSISTENCE_PATH;
 process.env.TRAECN_TASK_HISTORY_PERSISTENCE_PATH = TEST_HISTORY_PERSISTENCE_PATH;
+process.env.TRAECN_TASK_EVENT_PERSISTENCE_PATH = TEST_EVENT_PERSISTENCE_PATH;
 try {
   fs.unlinkSync(TEST_QUEUE_PERSISTENCE_PATH);
 } catch {}
 try {
   fs.unlinkSync(TEST_HISTORY_PERSISTENCE_PATH);
+} catch {}
+try {
+  fs.unlinkSync(TEST_EVENT_PERSISTENCE_PATH);
 } catch {}
 
 const { Gateway, RateLimiter, sanitizeLog } = require('./gateway');
@@ -545,7 +550,104 @@ asyncTest('Gateway submits Solo chat task and captures chat target for result co
   assert.strictEqual(task.submittedToTrae, true);
   assert.strictEqual(task.soloChat.titleIncludes, 'Solo queued task');
   assert.ok(calls.some(call => call[0] === 'newChat'));
-  assert.ok(calls.some(call => call[0] === 'sendMessage' && call[1].includes('/tmp/solo-project')));
+  assert.ok(calls.some(call => call[0] === 'sendMessage' && call[1] === 'Implement isolated feature'));
+});
+
+asyncTest('Gateway rejects Solo submission when the requested project folder is not open', async () => {
+  const gateway = new Gateway();
+  let sent = false;
+  gateway._ensureConnection = async () => {};
+  gateway._ensureBackgroundPolling = () => {};
+  gateway.driver = {
+    config: { queuePerTaskTimeoutMs: 1000 },
+    switchMode: async () => {},
+    switchSoloChat: async () => ({ success: true, index: 0, title: 'Existing review' }),
+    getWorkspaceContext: async () => ({ title: 'gemini-web-mcp', folderName: 'gemini-web-mcp' }),
+    sendMessage: async () => { sent = true; }
+  };
+  const { req, res } = makeReqRes({}, '/api/solo/chats/submit', 'POST', {
+    task: 'Continue the review',
+    projectPath: '/Users/jack/Documents/gh-repos/TRAECNclaw',
+    soloChat: { index: 0 }
+  });
+
+  await gateway.handleRequest(req, res);
+
+  const payload = JSON.parse(res._body);
+  assert.strictEqual(res.statusCode, 409);
+  assert.strictEqual(payload.code, 'PROJECT_NOT_OPEN');
+  assert.strictEqual(payload.details.requestedFolder, 'TRAECNclaw');
+  assert.strictEqual(payload.details.currentFolder, 'gemini-web-mcp');
+  assert.strictEqual(sent, false);
+});
+
+asyncTest('Gateway uses projectPath as a workspace guard without injecting it into the Solo prompt', async () => {
+  const gateway = new Gateway();
+  let sentMessage = null;
+  gateway._ensureConnection = async () => {};
+  gateway._ensureBackgroundPolling = () => {};
+  gateway.taskHistoryStore = {
+    createTask: () => 'task_workspace_guard',
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway.driver = {
+    config: { queuePerTaskTimeoutMs: 1000 },
+    switchMode: async () => {},
+    switchSoloChat: async () => ({ success: true, index: 0, title: 'Existing review' }),
+    getWorkspaceContext: async () => ({ title: 'TRAECNclaw', folderName: 'TRAECNclaw' }),
+    sendMessage: async (message) => { sentMessage = message; },
+    checkQueueStatus: async () => ({ queued: true, running: false }),
+    getActiveSoloChat: async () => ({
+      mode: 'solo',
+      active: { index: 0, title: 'Existing review', text: 'Existing review' },
+      count: 1
+    })
+  };
+  const { req, res } = makeReqRes({}, '/api/solo/chats/submit', 'POST', {
+    task: 'Continue the review',
+    projectPath: '/Users/jack/Documents/gh-repos/TRAECNclaw',
+    soloChat: { index: 0 }
+  });
+
+  await gateway.handleRequest(req, res);
+
+  assert.strictEqual(res.statusCode, 202);
+  assert.strictEqual(sentMessage, 'Continue the review');
+});
+
+asyncTest('Gateway refuses guarded submission when the open workspace cannot be identified', async () => {
+  const gateway = new Gateway();
+  gateway.driver = {
+    getWorkspaceContext: async () => ({ title: '', folderName: null, hasExplorer: false })
+  };
+
+  await assert.rejects(
+    () => gateway._assertProjectWorkspace('/Users/jack/Documents/gh-repos/TRAECNclaw'),
+    error => error && error.code === 'WORKSPACE_CONTEXT_UNAVAILABLE'
+  );
+});
+
+asyncTest('Gateway rejects a different workspace path even when the folder name matches', async () => {
+  const gateway = new Gateway();
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: 'TRAECNclaw',
+      folderName: 'TRAECNclaw',
+      rootPath: '/Users/jack/other/TRAECNclaw',
+      hasExplorer: true
+    })
+  };
+
+  await assert.rejects(
+    () => gateway._assertProjectWorkspace('/Users/jack/Documents/gh-repos/TRAECNclaw'),
+    error => error &&
+      error.code === 'PROJECT_NOT_OPEN' &&
+      error.details.currentPath === '/Users/jack/other/TRAECNclaw'
+  );
 });
 
 asyncTest('Gateway cleanup endpoint repeats passes for queue probes revealed after deletion', async () => {
@@ -1160,6 +1262,42 @@ asyncTest('Gateway captures task-specific Solo chat candidates before generic pr
   assert.ok(soloChat.candidates.includes('src/cdp/settings-driver.js'));
   assert.ok(!soloChat.candidates.includes('Project'));
   assert.ok(soloChat.candidates.indexOf('settings/read-all') < soloChat.candidates.findIndex(item => item.startsWith('Project path:')));
+  assert.strictEqual(soloChat.titleIncludes, 'settings/read-all');
+  assert.strictEqual(soloChat.textIncludes, 'settings/read-all');
+});
+
+asyncTest('Gateway never falls back to a stale Solo chat index when textual identity exists', async () => {
+  const gateway = new Gateway();
+  const attempts = [];
+  const task = {
+    taskId: 'task_stale_solo_index',
+    task: '审查 src/http/gateway.js 的任务隔离',
+    status: 'executing',
+    soloChat: {
+      index: 0,
+      titleIncludes: 'src/http/gateway.js',
+      textIncludes: 'src/http/gateway.js',
+      candidates: ['src/http/gateway.js', '任务隔离']
+    }
+  };
+  gateway._persistActiveQueue = () => {};
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.driver = {
+    switchSoloChat: async (criteria) => {
+      attempts.push(criteria);
+      if (Number.isInteger(criteria.index)) {
+        return { success: true, index: 0, title: '另一个新建任务 任务完成' };
+      }
+      return { success: false, reason: 'chat_not_found' };
+    }
+  };
+
+  await assert.rejects(
+    () => gateway._switchToTaskSoloChat(task, 'collect_result'),
+    /Solo chat|chat_not_found/i
+  );
+  assert.ok(attempts.length > 0);
+  assert.ok(!attempts.some(criteria => Number.isInteger(criteria.index)));
 });
 
 asyncTest('Gateway skips collectResponse while submitted Solo chat is still queued', async () => {
@@ -1556,6 +1694,154 @@ asyncTest('Gateway auto-answers code-answerable dialogs for unattended backgroun
   assert.strictEqual(steps.at(-1).action, 'dialog_auto_approved');
 });
 
+asyncTest('Gateway auto mode approves only command cards classified as safe', async () => {
+  const gateway = new Gateway();
+  let approveCalls = 0;
+  gateway._persistActiveQueue = () => {};
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.taskHistoryStore = {
+    recordStep: () => {},
+    ensureTask: () => {}
+  };
+  gateway.driver = {
+    checkForApprovalDialog: async () => ({
+      needsApproval: true,
+      dialogType: 'command_execution',
+      isCommandExec: true,
+      canAutoApprove: true,
+      approvalDecision: 'auto_approve',
+      command: 'git status && npm test'
+    }),
+    approveDialog: async action => {
+      approveCalls++;
+      return { success: true, action, buttonClicked: '运行' };
+    }
+  };
+  const task = {
+    taskId: 'task_safe_command_dialog',
+    status: 'approval_required',
+    submittedToTrae: true,
+    autoApproveDialog: 'auto'
+  };
+
+  const approved = await gateway._tryAutoApproveTaskDialog(task.taskId, task, {
+    needsApproval: true,
+    dialogType: 'command_execution'
+  });
+
+  assert.strictEqual(approved, true);
+  assert.strictEqual(approveCalls, 1);
+  assert.strictEqual(task.answeredDialog.action, 'approve');
+});
+
+asyncTest('Gateway auto mode leaves risky command cards for calling-agent review', async () => {
+  const gateway = new Gateway();
+  let approveCalls = 0;
+  gateway._persistActiveQueue = () => {};
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.taskHistoryStore = {
+    recordStep: () => {},
+    ensureTask: () => {}
+  };
+  gateway.driver = {
+    checkForApprovalDialog: async () => ({
+      needsApproval: true,
+      dialogType: 'command_execution',
+      isCommandExec: true,
+      canAutoApprove: false,
+      approvalDecision: 'agent_review',
+      commandRisk: 'high',
+      riskReasons: ['git_write_or_remote'],
+      command: 'git push origin main'
+    }),
+    approveDialog: async () => {
+      approveCalls++;
+      return { success: true };
+    }
+  };
+  const task = {
+    taskId: 'task_risky_command_dialog',
+    status: 'approval_required',
+    submittedToTrae: true,
+    autoApproveDialog: 'auto'
+  };
+
+  const approved = await gateway._tryAutoApproveTaskDialog(task.taskId, task, {
+    needsApproval: true,
+    dialogType: 'command_execution'
+  });
+
+  assert.strictEqual(approved, false);
+  assert.strictEqual(approveCalls, 0);
+});
+
+asyncTest('Gateway records a compact durable event before delivering task notifications', async () => {
+  const gateway = new Gateway();
+  const recorded = [];
+  gateway.taskEventStore = {
+    append: event => {
+      recorded.push(event);
+      return { eventId: 'evt_1', ...event };
+    }
+  };
+
+  await gateway._emitTaskNotification('task-event-1', {
+    taskId: 'task-event-1',
+    status: 'done',
+    sessionId: 'session-1',
+    result: { text: 'Review complete. No high-severity findings were found.' }
+  }, 'task.completed');
+
+  assert.deepStrictEqual(recorded, [{
+    type: 'task.completed',
+    taskId: 'task-event-1',
+    status: 'done',
+    terminal: true,
+    attentionRequired: false,
+    resultAvailable: true,
+    sessionId: 'session-1',
+    summary: 'Review complete. No high-severity findings were found.'
+  }]);
+});
+
+asyncTest('Gateway task-event API lists pending events and acknowledges a client cursor', async () => {
+  const gateway = new Gateway({
+    taskEventStore: new (require('../shared/task-event-store').TaskEventStore)({ persistencePath: null })
+  });
+  const event = gateway.taskEventStore.append({
+    type: 'task.completed',
+    taskId: 'task-api-event',
+    status: 'done',
+    terminal: true,
+    resultAvailable: true
+  });
+
+  let listed = null;
+  gateway._json = (req, res, data) => {
+    listed = data;
+    return data;
+  };
+  const listReq = new Readable({ read() {} });
+  listReq.url = '/api/task-events?clientId=codex-test&waitMs=0';
+  listReq.headers = { host: '127.0.0.1:8788' };
+  await gateway._handleListTaskEvents(listReq, {});
+  assert.deepStrictEqual(listed.events.map(item => item.taskId), ['task-api-event']);
+
+  let acknowledged = null;
+  gateway._json = (req, res, data) => {
+    acknowledged = data;
+    return data;
+  };
+  const ackReq = new Readable({ read() {} });
+  ackReq.url = '/api/task-events/ack';
+  ackReq.headers = { host: '127.0.0.1:8788', 'content-type': 'application/json' };
+  ackReq.push(JSON.stringify({ clientId: 'codex-test', eventId: event.eventId }));
+  ackReq.push(null);
+  await gateway._handleAckTaskEvent(ackReq, {});
+  assert.strictEqual(acknowledged.acknowledged, true);
+  assert.deepStrictEqual(gateway.taskEventStore.list({ clientId: 'codex-test' }).events, []);
+});
+
 asyncTest('Gateway continues workflow without mutating parent followup list', async () => {
   const gateway = new Gateway();
   let idCounter = 0;
@@ -1597,6 +1883,7 @@ asyncTest('Gateway continues workflow without mutating parent followup list', as
 
 asyncTest('Gateway background cleanup preserves old paused tasks', async () => {
   const gateway = new Gateway();
+  gateway.taskQueue.clear();
   let pollOnce = null;
   gateway._setInterval = (fn) => {
     pollOnce = fn;
@@ -2745,7 +3032,7 @@ asyncTest('Gateway sync delegate timeout converts submitted request to tracked b
   assert.strictEqual(responseData.status, 'executing');
   assert.strictEqual(responseData.submittedToTrae, true);
   assert.strictEqual(responseData.taskId, 'task_timeout_background');
-  assert.match(delegatedPrompt, /Project path: \/tmp\/sync-project/);
+  assert.strictEqual(delegatedPrompt, 'review repo');
   assert.strictEqual(gateway.taskQueue.get('task_timeout_background').submittedToTrae, true);
   assert.strictEqual(gateway.taskQueue.get('task_timeout_background').projectPath, '/tmp/sync-project');
 
@@ -3293,25 +3580,33 @@ asyncTest('Gateway open-project returns 400 when projectPath is missing', async 
   assert.ok(responseData.error.includes('projectPath'));
 });
 
-asyncTest('Gateway open-project refuses to spawn when TraeCN is already running', async () => {
+asyncTest('Gateway open-project reuses the active TraeCN window when it is already running', async () => {
   const gateway = new Gateway();
-  // Stub quickstart to simulate TraeCN already running with a live CDP target.
   const quickstart = require('../config/quickstart');
   const origIsRunning = quickstart.isTraeCNRunning;
-  const origFind = quickstart.findTraeCNBinary;
   const origStart = quickstart.startTraeCN;
+  const origOpenExisting = quickstart.openProjectInExistingWindow;
   quickstart.isTraeCNRunning = () => true;
-  // Should never be called in this branch, but be defensive.
   quickstart.startTraeCN = () => {
     throw new Error('startTraeCN must not be invoked when TraeCN is already running');
   };
-
-  // Stub the CDP discovery used inside the handler to report a stable surface.
-  const discovery = require('../cdp/discovery');
-  const origFetch = discovery.fetchCDPTargets;
-  discovery.fetchCDPTargets = async () => ([
-    { type: 'page', id: 'page-1', title: 'hello.py — TraeCNClaw', webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/page-1' }
-  ]);
+  let openedWith = null;
+  quickstart.openProjectInExistingWindow = async options => {
+    openedWith = options;
+    return {
+      command: '/Applications/Trae CN.app/Contents/Resources/app/bin/trae-cn',
+      args: ['--reuse-window', '/tmp/some-project']
+    };
+  };
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: openedWith ? 'some-project' : 'old-project',
+      folderName: openedWith ? 'some-project' : 'old-project',
+      rootPath: openedWith ? '/tmp/some-project' : '/tmp/old-project',
+      hasExplorer: true
+    })
+  };
 
   let responseData = null;
   let responseStatus = null;
@@ -3328,19 +3623,61 @@ asyncTest('Gateway open-project refuses to spawn when TraeCN is already running'
     req.push(null);
 
     await gateway._handleOpenProject(req, {});
-    assert.strictEqual(responseStatus, 409);
-    assert.strictEqual(responseData.success, false);
-    assert.strictEqual(responseData.alreadyRunning, true);
+    assert.strictEqual(responseStatus, 200);
+    assert.strictEqual(responseData.success, true);
+    assert.strictEqual(responseData.reusedWindow, true);
     assert.strictEqual(responseData.projectPath, '/tmp/some-project');
-    assert.ok(responseData.currentSurface);
-    assert.strictEqual(responseData.currentSurface.title, 'hello.py — TraeCNClaw');
-    assert.ok(/already running/i.test(responseData.error));
-    assert.ok(/newInstance/.test(responseData.hint));
+    assert.strictEqual(openedWith.projectPath, '/tmp/some-project');
+    assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/some-project');
   } finally {
     quickstart.isTraeCNRunning = origIsRunning;
-    quickstart.findTraeCNBinary = origFind;
     quickstart.startTraeCN = origStart;
-    discovery.fetchCDPTargets = origFetch;
+    quickstart.openProjectInExistingWindow = origOpenExisting;
+  }
+});
+
+asyncTest('Gateway open-project does not reload an already-open workspace', async () => {
+  const gateway = new Gateway();
+  const quickstart = require('../config/quickstart');
+  const origIsRunning = quickstart.isTraeCNRunning;
+  const origOpenExisting = quickstart.openProjectInExistingWindow;
+  quickstart.isTraeCNRunning = () => true;
+  quickstart.openProjectInExistingWindow = async () => {
+    throw new Error('workspace switch must not run for the already-open path');
+  };
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: 'some-project',
+      folderName: 'some-project',
+      rootPath: '/tmp/some-project',
+      hasExplorer: true
+    })
+  };
+
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+
+  try {
+    const req = new Readable({ read() {} });
+    req.headers = { 'content-type': 'application/json' };
+    req.push(JSON.stringify({ projectPath: '/tmp/some-project' }));
+    req.push(null);
+
+    await gateway._handleOpenProject(req, {});
+    assert.strictEqual(responseStatus, 200);
+    assert.strictEqual(responseData.success, true);
+    assert.strictEqual(responseData.alreadyOpen, true);
+    assert.strictEqual(responseData.reusedWindow, false);
+    assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/some-project');
+  } finally {
+    quickstart.isTraeCNRunning = origIsRunning;
+    quickstart.openProjectInExistingWindow = origOpenExisting;
   }
 });
 
@@ -3677,6 +4014,9 @@ asyncTest('Gateway auto-recovery bails early when mockBridge is on', async () =>
   try {
     fs.unlinkSync(TEST_HISTORY_PERSISTENCE_PATH);
   } catch {}
+  try {
+    fs.unlinkSync(TEST_EVENT_PERSISTENCE_PATH);
+  } catch {}
   process.exit(failed > 0 ? 1 : 0);
 })().catch(err => {
   console.error(err);
@@ -3685,6 +4025,9 @@ asyncTest('Gateway auto-recovery bails early when mockBridge is on', async () =>
   } catch {}
   try {
     fs.unlinkSync(TEST_HISTORY_PERSISTENCE_PATH);
+  } catch {}
+  try {
+    fs.unlinkSync(TEST_EVENT_PERSISTENCE_PATH);
   } catch {}
   process.exit(1);
 });

@@ -106,6 +106,7 @@ function jsonReq(body) {
 
 function fakeCtx() {
   return {
+    _assertProjectWorkspace: async () => null,
     _json: (req, res, body, status) => { res.status = status; res.body = body; return res; }
   };
 }
@@ -136,7 +137,6 @@ asyncTest('handleDelegateAsync with chatId sends OpenClaw notification', async (
     _normalizeFallbackModels: () => [],
     _modelProbeIntervalMs: () => 60000,
     _ensureConnection: async () => {},
-    _taskWithProjectContext: task => task,
     _setTimeout: (cb, delay) => {
       const id = setTimeout(cb, delay);
       timeoutIds.add(id);

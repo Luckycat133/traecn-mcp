@@ -7,6 +7,7 @@ Use this reference when selecting exact tools, configuring an MCP client, or che
 - Entrypoint: `mcp-server.js`
 - Local gateway default: `http://127.0.0.1:8788`
 - Start server directly: `npm run mcp`
+- Source-checkout protocol smoke: `npm run test:mcp-stdio-smoke`
 - Package bin: `traecnclaw-mcp`
 - Transport: stdio JSON-RPC
 - Current tool list from code:
@@ -46,9 +47,9 @@ OpenClaw may use its own `mcp.servers` config shape and plugin wrapper tools. Ge
 
 | Profile | Count | Purpose |
 | --- | ---: | --- |
-| `public` | 21 | Default for published agent integrations. High-signal task, review, settings, dialog, and workflow tools. |
-| `ops` | 33 | Adds recovery, cleanup, Solo conversation control, and long-queue proof tools. |
-| `full` | 37 | Adds every explicit compatibility shortcut and diagnostic tool. Use for audits or clients that need exact old surface parity. |
+| `public` | 23 | Default for published agent integrations. High-signal task, event, review, settings, dialog, and workflow tools. |
+| `ops` | 35 | Adds recovery, cleanup, Solo conversation control, and long-queue proof tools. |
+| `full` | 39 | Adds every explicit compatibility shortcut and diagnostic tool. Use for audits or clients that need exact old surface parity. |
 
 The full command catalog remains available through `traecn_list_commands` and `traecn_run_command`, so agents can still reach stable lower-level command IDs without making `tools/list` noisy.
 
@@ -70,10 +71,18 @@ choose tools instead of matching names heuristically.
 - `traecn_queue_task`: submit a background task and return a `taskId`.
 - `traecn_poll_task`: inspect a queued task once.
 - `traecn_wait_task`: wait locally for terminal state or a review/approval decision point.
+- `traecn_list_task_events`: long-poll compact durable events for a stable IDE client cursor.
+- `traecn_ack_task_event`: advance that cursor after successful delivery.
 - `traecn_resolve_task_review`: approve, continue, or reject a gateway task in `awaiting_review`; requires `taskId` and `decision` and is available in `public`.
 - `traecn_adopt_current_task`: bind local tracking to an existing active TraeCN task. Requires `ops`.
 - `traecn_cancel_task`: cancel a tracked task.
 - `traecn_stop_generation`: stop the current TraeCN generation. Requires `ops`.
+
+The stdio server reads the same inbox and emits standard
+`notifications/message` records after initialization. Set a stable, unique
+`TRAECN_MCP_CLIENT_ID` when the IDE's MCP client name is not unique. Only compact
+status fields are pushed; use `traecn_poll_task` for the full result. Whether a
+notification appears in a specific chat depends on the IDE adapter.
 
 ## Review And Dialogs
 
@@ -81,7 +90,10 @@ choose tools instead of matching names heuristically.
 - `traecn_get_review_gate_status`: inspect TraeCN's internal keep/revert gate. Requires `ops`.
 - `traecn_resolve_review_gate`: resolve that internal gate with `action` equal to `keep_all`, `revert_all`, `keep`, or `discard`. Requires `ops`.
 - `traecn_get_dialog_status`: inspect pending TraeCN dialogs.
-- `traecn_respond_dialog`: approve, deny, confirm, answer, or auto-handle a dialog.
+- `traecn_respond_dialog`: use `action:"auto"` for token-free local approval
+  of read-only command chains. Risky or unknown commands return compact
+  calling-agent review fields; approve, deny, confirm, answer, or dismiss after
+  inspection without requesting human confirmation.
 - `traecn_dismiss_dialog`: dismiss the current dialog. Requires `full`; prefer `traecn_respond_dialog` in normal clients.
 
 ## TraeCN Control
@@ -90,7 +102,9 @@ choose tools instead of matching names heuristically.
 - `traecn_switch_model`: switch the active model with fuzzy matching.
 - `traecn_switch_mode`: switch between Solo and IDE modes.
 - `traecn_create_chat`: create a new chat.
-- `traecn_open_project`: open a project path in TraeCN.
+- `traecn_open_project`: open a project path in TraeCN. When TraeCN is already
+  running, the default reuses the active window and verifies the exact path;
+  pass `newInstance:true` only for a separate window.
 - `traecn_get_settings`: read settings from the current or named section.
 - `traecn_set_setting`: set a setting by label and value.
 - `traecn_get_queue_status`: inspect model queue state. Requires `full`; prefer `traecn_preflight`.
@@ -99,7 +113,7 @@ choose tools instead of matching names heuristically.
 
 - `traecn_list_solo_chats`: list real Solo-mode conversations. Requires `ops`.
 - `traecn_switch_solo_chat`: switch to a Solo conversation by index or visible text. Requires `ops`.
-- `traecn_submit_solo_task`: submit into a real Solo conversation and track the result. Requires `full`; prefer `traecn_queue_task` or `traecn_run_unattended_workflow`.
+- `traecn_submit_solo_task`: submit into a real Solo conversation and track the result. Requires `full`; prefer `traecn_queue_task` or `traecn_run_unattended_workflow`. Optional `projectPath` is a gateway workspace-path guard: a mismatch returns `PROJECT_NOT_OPEN`, and the path is never inserted into the model prompt.
 - `traecn_run_unattended_workflow`: run an initial task plus follow-ups; automatic progression is the default, while explicit `reviewRequired:true, autoContinue:false` preserves human gateway checkpoints.
 - `traecn_cleanup_queue_probe_chats`: find and optionally delete accidental queue-probe Solo conversations. Requires `ops`.
 - `traecn_get_cleanup_watch_status`: inspect cleanup watcher lock, PID, and stale status. Requires `ops`.

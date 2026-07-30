@@ -175,7 +175,7 @@ const toolDefinitions = [
   },
   {
     name: 'traecn_command',
-    description: 'Execute a preset TraeCN command through the local TraeCNclaw gateway. Use traecn_command_set to discover available commands. Core commands include status, readiness, restart_trae_debug, new_chat, delegate, delegate_async, vibe_workflow, task_status, adopt_current_task, cancel_task, stop_generation, cleanup_foreign_solo_queue, cleanup_queue_watch_status, long_queue_proof_start, long_queue_proof_status, long_queue_proof_cancel, review_gate_status, resolve_review_gate, switch_mode, switch_model, queue_status, open_project, settings_read, settings_read_all, settings_set, settings_navigate, settings_back, dialog_status, approve_dialog, dismiss_dialog, batch_submit, batch_status, batch_cancel, and review_code.',
+    description: 'Execute a preset TraeCN command through the local TraeCNclaw gateway. Use traecn_command_set to discover available commands. Core commands include status, readiness, restart_trae_debug, new_chat, delegate, delegate_async, vibe_workflow, task_status, wait_task, review_task, adopt_current_task, cancel_task, stop_generation, cleanup_foreign_solo_queue, cleanup_queue_watch_status, long_queue_proof_start, long_queue_proof_status, long_queue_proof_cancel, review_gate_status, resolve_review_gate, switch_mode, switch_model, queue_status, open_project, settings_read, settings_read_all, settings_set, settings_navigate, settings_back, dialog_status, approve_dialog, dismiss_dialog, batch_submit, batch_status, batch_cancel, and review_code.',
     parameters: {
       type: 'object',
       required: ['command'],
@@ -600,17 +600,23 @@ const toolDefinitions = [
   },
   {
     name: 'traecn_open_project',
-    description: 'Open a project in TraeCN.',
+    description: 'Open a project in TraeCN. Set newInstance=true to open a separate window when TraeCN is already running.',
     parameters: {
       type: 'object',
       required: ['projectPath'],
       properties: {
-        projectPath: { type: 'string', description: 'Path to the project to open' }
+        projectPath: { type: 'string', description: 'Path to the project to open' },
+        newInstance: {
+          type: 'boolean',
+          description: 'Open the project in a separate TraeCN window when TraeCN is already running'
+        }
       }
     },
     handler: async (params, context) => {
       const client = new TraeCNApiClient(context);
-      return client.openProject(params.projectPath);
+      return client.openProject(params.projectPath, {
+        newInstance: params.newInstance === true
+      });
     }
   },
   {

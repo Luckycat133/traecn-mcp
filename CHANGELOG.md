@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- Added a persistent, per-client task-event inbox with long-poll and
+  acknowledgement HTTP/MCP APIs, plus compact stdio MCP logging notifications
+  that replay after reconnect without retransmitting full task results.
 - Added the portable `skills/traecnclaw-mcp` Agent Skill for MCP-capable
   clients.
 - Added `npm run pack:skill` to generate direct-download skill release
@@ -30,9 +33,18 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   approved or rejected entirely through stdio MCP.
 - Added generated MCP schema contracts, validated call examples, and a real
   Content-Length launcher smoke test for the portable Agent Skill.
+- Added `npm run test:mcp-stdio-smoke` as a standalone, gateway-independent
+  MCP `initialize` and `tools/list` verification command.
 
 ### Changed
 
+- Changed `traecn_open_project` to reuse the active TraeCN window by default
+  through the bundled CLI, reconnect CDP, and verify the exact workspace path;
+  `newInstance:true` remains available for a separate window.
+- Changed automatic command approvals to a local, token-free two-stage policy:
+  fully read-only command chains run automatically, while write, network,
+  privilege, process-control, and unknown commands return compact risk codes
+  for calling-agent review without requesting human confirmation.
 - Standardized stdio MCP public tool names under the `traecn_*` prefix and
   grouped the tool surface into `public`, `ops`, and `full` profiles.
 - Improved gateway response headers, CORS handling, status version reporting, numeric environment parsing, and background queue polling lifecycle.
@@ -62,6 +74,23 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
+- Fixed task `projectPath` handling at the gateway boundary. The path is now an
+  optional workspace guard: guarded submissions fail with `PROJECT_NOT_OPEN`
+  when another folder is open, and the gateway sends only the original task
+  text instead of injecting redundant path instructions into the model prompt.
+- Fixed inline TraeCN command approvals so active out-of-sandbox command cards
+  are reported by `traecn_get_dialog_status` and
+  `traecn_respond_dialog({action:"approve"})` can click `运行`.
+- Fixed background Solo task isolation by preferring task-specific text
+  identities and refusing stale sidebar-index fallback when a textual identity
+  exists. A newer conversation can no longer be collected as an older task
+  merely because it moved into that task's former list position.
+- Fixed partial progress such as `任务完成 16%` being classified as a terminal
+  result; percentages below 100 remain in progress.
+- Fixed `traecn_open_project` and the stable `open_project` command so the
+  optional `newInstance` flag reaches the gateway, allowing a project to open
+  in a separate TraeCN window when TraeCN is already running. The OpenClaw
+  runtime and manifest now expose the same option.
 - Fixed plugin client settings API paths to match gateway routes.
 - Added `/api/delegate-async` compatibility for async delegation clients.
 - Added mock queue status support so mock-mode delegate flows work through the async path.
@@ -70,6 +99,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - Added a startup warning when `TRAECN_GATEWAY_TOKEN` is unset and the gateway is bound to a non-loopback host — authenticated endpoints become open in that configuration.
 - Fixed reviewed workflows so explicit `autoContinue=false` is preserved
   instead of being overwritten by the unattended workflow wrapper.
+- Fixed the OpenClaw manifest command enum so the stable `review_task` command
+  advertised by the runtime can be selected by manifest-validating clients.
 - Fixed the Agent Skill's model-switch and review examples, split duplicate MCP
   client entries into separate templates, and corrected no-tools diagnostics.
 - Fixed `simple-api.js` `checkQueue` routing: was calling `layered.batch.checkQueue()`
@@ -81,6 +112,9 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Removed
 
+- Removed completed process documents, historical audit logs, and redundant
+  API/architecture guides that had drifted behind the maintained README, MCP,
+  OpenClaw, and structured-prompt documentation.
 - Removed dead code `src/skill/config.js` (74 lines, zero references).
 - Removed dead code `src/skill/ai-errors.js` (375 lines, only referenced by
   examples; had circular `require('./index')` calls). Export path
