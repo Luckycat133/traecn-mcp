@@ -1,11 +1,37 @@
 ---
 name: traecnclaw-mcp
-description: Use when an MCP-capable agent must connect, configure, operate, test, or document TRAECNclaw's stdio MCP server for TraeCN automation, OpenClaw integration, reviewed or unattended multi-step workflows, settings/model/dialog control, code review delegation, queue recovery, or long-queue proof runs. Prefer this skill whenever the agent needs the real MCP tool surface instead of direct browser or GUI control.
-license: MIT
+description: Use when an MCP-capable agent must operate or configure the TRAECNclaw stdio MCP server for TraeCN automation, including task delegation, queue-aware result collection, model or settings control, dialogs, and reviewed workflows. Use the public profile by default. Do not use for ordinary code edits that do not require TraeCN, and require explicit user authorization before enabling unattended, destructive, quota-spending, or ops/full-profile actions.
+license: MIT-0
 compatibility: Requires Node.js 22+, a running TraeCN IDE instance with CDP remote debugging on port 9222 for live operations, and the local TRAECNclaw HTTP gateway on 127.0.0.1:8788. Use `npm run doctor` to verify readiness.
 metadata:
   author: TRAECNclaw
-  version: "0.4.1"
+  version: "0.4.2"
+  openclaw:
+    requires:
+      bins:
+        - node
+    envVars:
+      - name: TRAECN_MCP_SERVER_PATH
+        required: false
+        description: Optional absolute path to the trusted local TRAECNclaw mcp-server.js entry point.
+      - name: TRAECN_MCP_TOOL_PROFILE
+        required: false
+        description: Optional tool-discovery profile; use public unless ops or full access was explicitly requested.
+      - name: TRAECN_HOST
+        required: false
+        description: Optional local gateway host override; keep the default loopback address unless remote access is secured.
+      - name: TRAECN_PORT
+        required: false
+        description: Optional local gateway port override.
+      - name: TRAECN_GATEWAY_TOKEN
+        required: false
+        description: Optional secret used to authenticate to the local gateway; never print, log, or persist it in generated files.
+      - name: TRAECN_MCP_CLIENT_ID
+        required: false
+        description: Optional stable client identifier used for compact durable task notifications.
+      - name: TRAECN_ENABLE_MOCK_BRIDGE
+        required: false
+        description: Development-only mock switch; mock results are never live TraeCN evidence.
 ---
 
 # TRAECNclaw MCP
@@ -98,11 +124,13 @@ The second mechanism controls TraeCN's own UI review state; it does not approve 
 - Never commit `.env`, tokens, authorization headers, raw TraeCN profiles, `audit-logs/`, `demo-output/`, `logs/`, or `node_modules/`.
 - Call `traecn_plan_operation` or `traecn_preflight` before side effects and honor readiness, confirmation, queue, and dialog results.
 - Inspect a dialog with `traecn_get_dialog_status` before choosing a `traecn_respond_dialog` action.
-- Treat an active inline command card as a dialog. Use `action:"auto"` first:
-  the local classifier approves read-only chains without model tokens. If it
-  returns `approvalDecision:"agent_review"`, review only the compact command
-  and reason codes, then use `action:"approve"` or `action:"deny"`; do not
-  request human confirmation.
+- Treat an active inline command card as a dialog. Use `action:"auto"` only
+  for the gateway's strictly allowlisted read-only command chains. If it
+  returns `approvalDecision:"agent_review"`, review the compact command, reason
+  codes, and expected side effects against the scope the user already
+  authorized for the active task. Approve only when it is within that scope;
+  otherwise deny it or leave it pending. Do not ask for redundant per-card
+  confirmation after the user has explicitly authorized an unattended workflow.
 - Keep long-queue proof in dry-run by default. A new quota-spending submission requires both `execute:true` and `allowQuotaSpend:true` and the `ops` profile.
 - Treat queued, `awaiting_review`, timed-out, and mock results as non-terminal unless the returned status proves completion.
 - Treat completion percentages below 100 as non-terminal, even when the label contains `任务完成`.

@@ -81,10 +81,13 @@ a specific IDE chat depends on that IDE's MCP adapter.
 
 - `traecn_review_code`: build a findings-first review from instruction, files, code, diff, and focus.
 - `traecn_get_dialog_status`: inspect the actual pending question and available actions.
-- `traecn_respond_dialog`: use `action:"auto"` for token-free local approval
-  of read-only command chains. Risky or unknown commands return compact
-  calling-agent review fields; approve, deny, confirm, answer, or dismiss after
-  inspection without requesting human confirmation.
+- `traecn_respond_dialog`: use `action:"auto"` only for token-free local
+  approval of the gateway's strictly allowlisted read-only command chains.
+  Risky or unknown commands return compact calling-agent review fields. Review
+  them against the scope the user already authorized for the active task and
+  approve only when they stay within that scope; otherwise deny or leave
+  pending. An explicitly authorized unattended workflow does not need a new
+  human confirmation for every card.
 - `traecn_dismiss_dialog` (`full`): compatibility shortcut; prefer the public responder.
 
 Model switching uses the dedicated MCP argument `name`, while the stable `switch_model` command uses its catalog field `model`. Do not transfer parameter names between the explicit MCP tool and the command catalog.

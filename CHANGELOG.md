@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-30
+
+### Changed
+
+- Declared ClawHub runtime requirements and optional environment variables in
+  the portable Skill metadata, with the public MCP profile as the default.
+- Clarified that automatic dialog approval is restricted to the gateway's
+  read-only allowlist; risky, unknown, destructive, or privilege-affecting
+  actions must remain within the user's explicitly authorized task scope.
+- Excluded maintainer-only tests and the contract generator from the ClawHub
+  artifact while keeping them in the source repository and npm test gate.
+
 ## [0.4.1] - 2026-07-30
 
 ### Added
