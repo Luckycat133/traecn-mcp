@@ -329,6 +329,63 @@ function generateOpenAPISpec() {
           }
         }
       },
+      '/api/tasks/submit': {
+        post: {
+          summary: 'Submit gateway-managed work for TraeCN',
+          operationId: 'submitManagedTask',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['message'],
+                  properties: {
+                    message: { type: 'string', maxLength: 100000 },
+                    model: { type: 'string' },
+                    mode: { type: 'string', enum: ['solo', 'ide'] },
+                    workspace: { type: 'string', description: 'Folder opened and verified by the gateway; never inserted into the message.' },
+                    conversationId: { type: 'string' },
+                    newConversation: { type: 'boolean' },
+                    steps: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object' }] } },
+                    completionChecks: completionChecksSchema
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '202': { description: 'Task accepted', content: { 'application/json': { schema: { type: 'object', properties: { taskId: { type: 'string' }, status: { type: 'string', enum: ['accepted'] } } } } } }
+          }
+        }
+      },
+      '/api/conversations': {
+        get: {
+          summary: 'List conversations for the current TraeCN mode',
+          operationId: 'listConversations',
+          security: [{ bearerAuth: [] }],
+          responses: { '200': { description: 'Conversation list' } }
+        }
+      },
+      '/api/conversations/manage': {
+        post: {
+          summary: 'Create, select, or delete a TraeCN conversation',
+          operationId: 'manageConversation',
+          security: [{ bearerAuth: [] }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['action'], properties: { action: { type: 'string', enum: ['create', 'select', 'delete'] }, conversationId: { type: 'string' } } } } } },
+          responses: { '200': { description: 'Conversation operation result' } }
+        }
+      },
+      '/api/interactions/resolve': {
+        post: {
+          summary: 'Resolve an exceptional TraeCN question or unsafe approval',
+          operationId: 'resolveInteraction',
+          security: [{ bearerAuth: [] }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['action'], properties: { action: { type: 'string', enum: ['approve', 'deny', 'answer', 'dismiss'] }, answer: { type: 'string' } } } } } },
+          responses: { '200': { description: 'Interaction resolution result' } }
+        }
+      },
       '/api/delegate': {
         post: {
           summary: 'Delegate a task (auto-creates session)',

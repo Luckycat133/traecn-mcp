@@ -47,6 +47,7 @@ const taskActionsHandlers = require('./handlers/task-actions');
 const batchHandlers = require('./handlers/batch');
 const projectHandlers = require('./handlers/project');
 const driverDispatchHandlers = require('./handlers/driver-dispatch');
+const unifiedAgentHandlers = require('./handlers/unified-agent');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -601,6 +602,9 @@ class Gateway {
       }),
       task: body.task,
       projectPath,
+      desiredModel: typeof body.desiredModel === 'string' ? body.desiredModel : null,
+      desiredMode: body.desiredMode === 'solo' || body.desiredMode === 'ide' ? body.desiredMode : null,
+      newConversation: body.newConversation !== false,
       status: 'queued',
       createdAt: now,
       deadline: queueMaxWaitMs ? now + Math.min(perTaskTimeoutMs, queueMaxWaitMs) : null,
@@ -1574,6 +1578,67 @@ class Gateway {
     }
   }
 
+  async _ensureRequestedWorkspace(projectPath) {
+    if (!projectPath) return null;
+    try {
+      return await this._assertProjectWorkspace(projectPath);
+    } catch {
+      const { findTraeCNBinary, openProjectInExistingWindow } = require('../config/quickstart');
+      const binPath = findTraeCNBinary();
+      if (!binPath) {
+        const error = new Error('TraeCN binary not found. Set TRAECN_BIN environment variable.');
+        error.code = 'TRAE_BINARY_NOT_FOUND';
+        throw error;
+      }
+      await openProjectInExistingWindow({ binPath, projectPath });
+      const deadline = Date.now() + 15000;
+      let lastError = null;
+      while (Date.now() < deadline) {
+        try {
+          await this._ensureConnection();
+          return await this._assertProjectWorkspace(projectPath);
+        } catch (error) {
+          lastError = error;
+          await new Promise(resolve => this._setTimeout(resolve, 250));
+        }
+      }
+      const error = new Error(`Timed out verifying TraeCN workspace switch to ${projectPath}`);
+      error.code = 'WORKSPACE_SWITCH_TIMEOUT';
+      error.cause = lastError;
+      throw error;
+    }
+  }
+
+  async _prepareQueuedTask(task) {
+    if (!task) return false;
+    if (task.gatewayPrepared === true) return true;
+    if (task.projectPath) await this._ensureRequestedWorkspace(task.projectPath);
+    if (task.desiredMode && typeof this.driver.switchMode === 'function') {
+      const result = await this.driver.switchMode(task.desiredMode);
+      if (result && result.success === false) {
+        throw new Error(`Failed to switch TraeCN mode to ${task.desiredMode}`);
+      }
+    }
+    const queueStatus = typeof this.driver.checkQueueStatus === 'function'
+      ? await this.driver.checkQueueStatus()
+      : { running: false, queued: false };
+    if (queueStatus.running === true || (queueStatus.queued === true && queueStatus.canSubmit !== true)) {
+      return false;
+    }
+    if (task.desiredModel && typeof this.driver.switchModel === 'function') {
+      const result = this._normalizeModelSwitchResult(await this.driver.switchModel(task.desiredModel));
+      if (!result.success) {
+        throw new Error(result.error || `Failed to switch TraeCN model to ${task.desiredModel}`);
+      }
+      task.currentModel = result.model || task.desiredModel;
+    }
+    task.gatewayPrepared = true;
+    task.preparedAt = Date.now();
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+    return true;
+  }
+
   async handleRequest(req, res) {
     // Resolve and pin a request id for this HTTP transaction. The header is
     // validated so attackers cannot inject log-poisoning characters; if the
@@ -1758,6 +1823,22 @@ class Gateway {
 
   _handleTaskReplay(req, res, taskId) {
     return tasksHandlers.handleTaskReplay(req, res, this, taskId);
+  }
+
+  _handleUnifiedSubmit(req, res) {
+    return unifiedAgentHandlers.handleSubmit(req, res, this);
+  }
+
+  _handleListConversations(req, res) {
+    return unifiedAgentHandlers.handleListConversations(req, res, this);
+  }
+
+  _handleManageConversation(req, res) {
+    return unifiedAgentHandlers.handleManageConversation(req, res, this);
+  }
+
+  _handleResolveInteraction(req, res) {
+    return unifiedAgentHandlers.handleResolveInteraction(req, res, this);
   }
 
   _handleListTaskEvents(req, res) {
@@ -3309,16 +3390,14 @@ class Gateway {
         // Hoist queue status check above the per-task loop — queue status is
         // a property of the Trae IDE, not per-task, so one CDP round-trip per
         // polling cycle suffices regardless of how many tasks are queued.
-        let cachedQueueStatus = null;
         const hasQueuedTasks = Array.from(this.taskQueue.values()).some(
           t => t.status === 'queued' && !isGenericQueueProbeTask(t && t.task)
         );
         if (hasQueuedTasks) {
           try {
             await this._ensureConnection();
-            cachedQueueStatus = await this.driver.checkQueueStatus();
           } catch (e) {
-            console.error('[Queue] checkQueueStatus failed:', e.message);
+            console.error('[Queue] connection preparation failed:', e.message);
           }
         }
 
@@ -3365,15 +3444,14 @@ class Gateway {
           if (task.status !== 'queued') continue;
 
           try {
-            if (!cachedQueueStatus) continue;
-            let queueStatus = cachedQueueStatus;
+            await this._withUiActionLock(() => this._prepareQueuedTask(task));
+            let queueStatus = await this.driver.checkQueueStatus();
             this._updateQueuedTaskSnapshot(task, queueStatus);
 
             if ((queueStatus.queued || queueStatus.running) && Array.isArray(task.fallbackModels) && task.fallbackModels.length > 0) {
               const probe = await this._probeFallbackModels(task);
               if (probe.queueStatus) {
                 queueStatus = probe.queueStatus;
-                cachedQueueStatus = queueStatus;
                 this._updateQueuedTaskSnapshot(task, queueStatus);
               }
             }
@@ -3415,10 +3493,10 @@ class Gateway {
                 // delegate() which would also call newChat)
                 if (task.soloChat) {
                   await this._switchToTaskSoloChat(task, 'send_task');
-                } else {
+                } else if (task.newConversation !== false) {
                   await this.driver.newChat();
                 }
-                await this._assertProjectWorkspace(task.projectPath);
+                await this._ensureRequestedWorkspace(task.projectPath);
                 await this.driver.sendMessage(task.task);
                 task.submittedToTrae = true;
                 task.submittedAt = Date.now();

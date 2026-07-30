@@ -109,7 +109,14 @@ assert.strictEqual(spec.info.version, packageJson.version);
 const { buildCapabilities } = require('../src/capabilities');
 const { listCommands } = require('../src/client/command-set');
 const capabilities = buildCapabilities({ commands: listCommands() });
-assert.strictEqual(capabilities.contractVersion, 1);
+assert.strictEqual(capabilities.contractVersion, 2);
+assert.deepStrictEqual(capabilities.tokenStrategy.prefer, [
+  'traecn_submit',
+  'traecn_get_task',
+  'traecn_list_conversations'
+]);
+assert.strictEqual(capabilities.tokenStrategy.gatewayManaged, true);
+assert.strictEqual(capabilities.tokenStrategy.asyncPolling, false);
 assert.ok(capabilities.commands.some(command => command.command === 'capabilities'), 'capabilities command is missing');
 assert.ok(capabilities.commands.some(command => command.command === 'preflight'), 'preflight command is missing');
 assert.ok(capabilities.commands.some(command => command.command === 'review_code'), 'review_code command is missing from capabilities');
@@ -122,6 +129,9 @@ assert.ok(cliSource.includes('runCleanupWatchAttempt') && cliSource.includes('tr
 assert.ok(capabilities.http.some(operation => operation.path === '/api/capabilities'), '/api/capabilities operation is missing');
 assert.ok(capabilities.http.some(operation => operation.path === '/api/preflight'), '/api/preflight operation is missing');
 assert.ok(capabilities.http.some(operation => operation.path === '/api/solo/chats/cleanup-foreign-queue'), '/api/solo/chats/cleanup-foreign-queue operation is missing');
+for (const unifiedPath of ['/api/tasks/submit', '/api/conversations', '/api/conversations/manage', '/api/interactions/resolve']) {
+  assert.ok(capabilities.http.some(operation => operation.path === unifiedPath), `${unifiedPath} operation is missing`);
+}
 assert.ok(capabilities.apiFamilies.confirmationPlan.includes('/api/confirm/plan'), 'confirmation plan route is missing from capabilities');
 assert.ok(capabilities.apiFamilies.settings.includes('/api/settings/switch-tab'), 'settings switch-tab route is missing from capabilities');
 assert.ok(capabilities.apiFamilies.settings.includes('/api/settings/back-to-chat'), 'settings back-to-chat route is missing from capabilities');
@@ -149,7 +159,7 @@ assert.ok(acceptanceAuditSource.includes('multi_session_result_isolation'), 'acc
 assert.ok(gatewayTestSource.includes('keeps parallel queued session Solo results isolated when completion is out of order'), 'gateway tests must prove out-of-order queued session result isolation');
 assert.ok(gatewayTestSource.includes('TRAECN_SESSION_A_001') && gatewayTestSource.includes('TRAECN_SESSION_B_001'), 'gateway multi-session isolation test must use distinct ownership tokens');
 assert.ok(acceptanceAuditSource.includes('unattended_vibe_workflow_contract'), 'acceptance audit must track the unattended vibe workflow contract');
-assert.ok(mcpTestSource.includes('MCP workflow tools expose completion checks'), 'MCP tests must prove workflow completion-check schema exposure');
+assert.ok(mcpTestSource.includes('MCP exposes one compact tool surface'), 'MCP tests must lock the compact six-tool Agent surface');
 assert.ok(skillTestSource.includes('vibeWorkflow queues unattended follow-up workflow'), 'Skill tests must prove vibe workflow queues follow-up steps');
 assert.ok(gatewayTestSource.includes('Gateway auto-continues reviewable workflow followups without human review'), 'Gateway tests must prove auto-continued workflow followups');
 assert.ok(acceptanceAuditSource.includes('proofLockEvidence'), 'acceptance audit must track proof lock acquisition evidence');

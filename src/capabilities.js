@@ -114,7 +114,7 @@ function buildCapabilities(options = {}, deps = {}) {
   const { KNOWN_MODELS, SETTINGS_SECTIONS } = traecnSkill;
   const commands = options.commands || [];
   const mcpTools = options.mcpTools || [];
-  const mcpToolProfile = options.mcpToolProfile || 'public';
+  const mcpToolProfile = options.mcpToolProfile || 'default';
   const mcpToolProfiles = options.mcpToolProfiles || {};
   const mcpToolMetadata = options.mcpToolMetadata || {};
   const operations = options.includeHttpOperations === false ? undefined : buildHttpOperations({ generateOpenAPISpec });
@@ -122,13 +122,14 @@ function buildCapabilities(options = {}, deps = {}) {
   return {
     name: 'traecnclaw',
     version: packageInfo.version,
-    contractVersion: 1,
+    contractVersion: 2,
     tokenStrategy: {
-      prefer: ['traecn_get_capabilities', 'traecn_preflight', 'traecn_queue_task', 'traecn_list_task_events', 'traecn_poll_task'],
-      preflight: 'Call traecn_preflight once before side-effecting work instead of separate status/readiness/queue/dialog checks.',
-      avoid: 'Fetch /openapi.json only when schema detail is needed.',
+      prefer: ['traecn_submit', 'traecn_get_task', 'traecn_list_conversations'],
+      gatewayManaged: true,
+      submission: 'Submit once, release context, and rely on automatic compact completion notifications.',
+      avoid: 'Do not preflight, wait, poll, acknowledge events, recover tasks, or fetch /openapi.json unless diagnosing the gateway.',
       maxTaskBytes: 100000,
-      asyncPolling: true,
+      asyncPolling: false,
       durableTaskEvents: true,
       compactResponses: true
     },

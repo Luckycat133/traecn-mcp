@@ -4,8 +4,7 @@
  * MCP tool authorization.
  *
  * Each tool is tagged with the minimum permission a caller must hold. The
- * optional `traecn_run_command` tool requires a special check: the permission is
- * inferred from the command being invoked.
+ * The compact MCP surface maps directly to read, write, or delegated work.
  *
  * Permission ladder (cumulative; admin implies everything):
  *   read       – read-only discovery: capabilities, status, settings reads,
@@ -25,85 +24,16 @@ const PERMISSION_LEVELS = [READ_PERMISSION, WRITE_PERMISSION, DELEGATE_PERMISSIO
 
 // Map of tool name -> minimum permission required.
 const TOOL_PERMISSIONS = Object.freeze({
-  traecn_get_capabilities: READ_PERMISSION,
-  traecn_list_commands: READ_PERMISSION,
-  traecn_get_status: READ_PERMISSION,
-  traecn_get_dialog_status: READ_PERMISSION,
-  traecn_get_queue_status: READ_PERMISSION,
-  traecn_get_settings: READ_PERMISSION,
-  traecn_preflight: READ_PERMISSION,
-  traecn_plan_operation: READ_PERMISSION,
-  traecn_switch_model: WRITE_PERMISSION,
-  traecn_switch_mode: WRITE_PERMISSION,
-  traecn_create_chat: WRITE_PERMISSION,
-  traecn_list_solo_chats: READ_PERMISSION,
-  traecn_switch_solo_chat: WRITE_PERMISSION,
-  traecn_cleanup_queue_probe_chats: DELEGATE_PERMISSION,
-  traecn_get_cleanup_watch_status: READ_PERMISSION,
-  traecn_get_long_queue_proof_status: READ_PERMISSION,
-  traecn_start_long_queue_proof: DELEGATE_PERMISSION,
-  traecn_cancel_long_queue_proof: DELEGATE_PERMISSION,
-  traecn_submit_solo_task: DELEGATE_PERMISSION,
-  traecn_poll_task: READ_PERMISSION,
-  traecn_list_task_events: READ_PERMISSION,
-  traecn_ack_task_event: READ_PERMISSION,
-  traecn_wait_task: READ_PERMISSION,
-  traecn_resolve_task_review: DELEGATE_PERMISSION,
-  traecn_adopt_current_task: DELEGATE_PERMISSION,
+  traecn_submit: DELEGATE_PERMISSION,
+  traecn_get_task: READ_PERMISSION,
   traecn_cancel_task: DELEGATE_PERMISSION,
-  traecn_stop_generation: DELEGATE_PERMISSION,
-  traecn_dismiss_dialog: DELEGATE_PERMISSION,
-  traecn_restart_debug_session: DELEGATE_PERMISSION,
-  traecn_get_review_gate_status: READ_PERMISSION,
-  traecn_resolve_review_gate: DELEGATE_PERMISSION,
-  traecn_run_task: DELEGATE_PERMISSION,
-  traecn_queue_task: DELEGATE_PERMISSION,
-  traecn_run_unattended_workflow: DELEGATE_PERMISSION,
-  traecn_review_code: DELEGATE_PERMISSION,
-  traecn_set_setting: ADMIN_PERMISSION,
-  traecn_respond_dialog: DELEGATE_PERMISSION,
-  traecn_open_project: DELEGATE_PERMISSION,
-  // traecn_run_command has dynamic permission resolution (see resolveCommandPermission).
+  traecn_list_conversations: READ_PERMISSION,
+  traecn_manage_conversation: WRITE_PERMISSION,
+  traecn_resolve_interaction: DELEGATE_PERMISSION
 });
 
-// Commands that escalate to admin permission; everything else with side effects
-// is "delegate" or below.
-const ADMIN_COMMANDS = new Set([
-  // placeholder for future admin-level commands
-]);
-
-const READ_COMMANDS = new Set([
-  'batch_status',
-  'dialog_status',
-  'cleanup_queue_watch_status',
-  'long_queue_proof_status',
-  'queue_status',
-  'review_gate_status',
-  'settings_read',
-  'settings_read_all',
-  'task_status'
-]);
-
-function resolveCommandPermission(command) {
-  if (typeof command !== 'string' || !command) return READ_PERMISSION;
-  if (ADMIN_COMMANDS.has(command)) return ADMIN_PERMISSION;
-  if (READ_COMMANDS.has(command)) return READ_PERMISSION;
-  // Conservative default: assume side effect -> require delegate.
-  // Read-only commands start with `get_`, `list_`, `check_`, `read_`.
-  if (/^(get|list|check|read|preflight|status|describe)/i.test(command)) return READ_PERMISSION;
-  return DELEGATE_PERMISSION;
-}
-
 function requiredPermissionFor(toolName, args = {}) {
-  if (toolName === 'traecn_run_command') {
-    if (args && args.command === 'wait_task') {
-      return args.params && args.params.autoApproveDialog ? DELEGATE_PERMISSION : READ_PERMISSION;
-    }
-    return resolveCommandPermission(args && args.command);
-  }
-  if (toolName === 'traecn_wait_task' && args && args.autoApproveDialog) {
-    return DELEGATE_PERMISSION;
-  }
+  void args;
   return TOOL_PERMISSIONS[toolName] || READ_PERMISSION;
 }
 
@@ -158,7 +88,6 @@ module.exports = {
   PERMISSION_LEVELS,
   TOOL_PERMISSIONS,
   requiredPermissionFor,
-  resolveCommandPermission,
   authorizeTool,
   hasPermission,
   assertValidPermission

@@ -41,6 +41,7 @@ const ROUTES = [
   { method: 'DELETE', path: '/api/tasks/history', handler: '_handleTasksHistoryClear', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/tasks/:taskId/replay', handler: '_handleTaskReplay', requiresAuth: true, requiresRateLimit: true, requiresBody: false, pathParams: ['taskId'] },
   { method: 'GET', path: '/api/tasks/:taskId', handler: '_handleGetTask', requiresAuth: true, requiresRateLimit: true, requiresBody: false, pathParams: ['taskId'] },
+  { method: 'POST', path: '/api/tasks/submit', handler: '_handleUnifiedSubmit', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'GET', path: '/api/task/:taskId', handler: '_handleTaskStatus', requiresAuth: true, requiresRateLimit: true, requiresBody: false, pathParams: ['taskId'] },
   { method: 'POST', path: '/api/task/:taskId/review', handler: '_handleTaskReview', requiresAuth: true, requiresRateLimit: true, requiresBody: true, pathParams: ['taskId'] },
   { method: 'POST', path: '/api/task/:taskId/cancel', handler: '_handleTaskCancel', requiresAuth: true, requiresRateLimit: true, requiresBody: false, pathParams: ['taskId'] },
@@ -50,6 +51,11 @@ const ROUTES = [
   { method: 'POST', path: '/api/task/adopt-current', handler: '_handleAdoptCurrentTask', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/task-events', handler: '_handleListTaskEvents', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'POST', path: '/api/task-events/ack', handler: '_handleAckTaskEvent', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
+
+  // Compact Agent surface
+  { method: 'GET', path: '/api/conversations', handler: '_handleListConversations', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
+  { method: 'POST', path: '/api/conversations/manage', handler: '_handleManageConversation', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
+  { method: 'POST', path: '/api/interactions/resolve', handler: '_handleResolveInteraction', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 
   // Batch tasks
   { method: 'POST', path: '/api/tasks/batch', handler: '_handleBatchSubmit', requiresAuth: true, requiresRateLimit: true, requiresBody: true },

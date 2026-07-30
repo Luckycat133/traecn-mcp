@@ -34,6 +34,20 @@ function hasCompletionMarker(text) {
   return markers.some(m => text.includes(m));
 }
 
+function chooseReviewGateAction(state = {}) {
+  if (state.modelError === true) return 'revert_all';
+  const text = String(state.taskText || state.responseText || '').replace(/\s+/g, ' ').trim();
+  const fatalFailure = [
+    /\bfatal(?: error)?\b/i,
+    /repository (?:is |may be )?corrupt(?:ed|ion)/i,
+    /permission denied.{0,120}(?:writ|modif|apply)/i,
+    /(?:could not|unable to) apply (?:the )?changes safely/i,
+    /无法安全(?:应用|写入|保留)(?:这些)?(?:更改|修改)/i,
+    /仓库(?:可能)?(?:已)?损坏/i
+  ].some(pattern => pattern.test(text));
+  return fatalFailure ? 'revert_all' : 'keep_all';
+}
+
 const FINAL_ASSISTANT_RESULT_MARKERS = [
   /TRAECNclaw\s+Code\s+Review\s*[—-]\s*Findings\s+First/i,
   /Code\s+Review\s*[—-]\s*Findings\s+First/i,
@@ -351,7 +365,7 @@ async function collectResponse(driver) {
       }
       const reviewGate = await driver.checkTaskReviewGate();
       if (reviewGate.awaitingReview && reviewGate.taskCompleted) {
-        const gateResolution = await driver.resolveTaskReviewGate('keep_all');
+        const gateResolution = await driver.resolveTaskReviewGate(chooseReviewGateAction(state));
         if (gateResolution.success) {
           await sleep(Math.max(driver.config.postActionDelayMs * 2, 500));
         }
@@ -571,6 +585,7 @@ async function collectResponse(driver) {
 
 module.exports = {
   hasCompletionMarker,
+  chooseReviewGateAction,
   extractFinalAssistantResultText,
   cleanAssistantResultText,
   _pollResponseState,

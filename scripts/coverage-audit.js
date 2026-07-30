@@ -51,11 +51,6 @@ function commandEnumFromOpenClawManifest() {
   return commandTool?.parameters?.properties?.command?.enum || [];
 }
 
-function commandEnumFromMcpTool() {
-  const commandTool = findTool(MCP_TOOLS, 'traecn_run_command');
-  return commandTool?.inputSchema?.properties?.command?.enum || [];
-}
-
 function packedFiles() {
   const output = execFileSync('npm', ['pack', '--dry-run', '--json'], {
     cwd: root,
@@ -74,7 +69,6 @@ assert.deepStrictEqual(
   'Capabilities command catalog must match command-set'
 );
 assert.deepStrictEqual(commandEnumFromOpenClawManifest(), commandNames, 'OpenClaw command enum must match command-set');
-assert.deepStrictEqual(commandEnumFromMcpTool(), commandNames, 'MCP command enum must match command-set');
 
 assert.strictEqual(capabilities.coverage.connection, true);
 assert.strictEqual(capabilities.coverage.taskDelegation, true);
@@ -86,23 +80,17 @@ assert.strictEqual(capabilities.coverage.settingsAutomation, true);
 assert.strictEqual(capabilities.coverage.modelAndModeControl, true);
 assert.strictEqual(capabilities.coverage.projectOpening, true);
 assert.strictEqual(capabilities.coverage.historyReplay, true);
-assertArrayIncludesAll(capabilities.tokenStrategy.prefer, ['traecn_get_capabilities', 'traecn_preflight', 'traecn_queue_task', 'traecn_wait_task'], 'tokenStrategy.prefer');
+assert.deepStrictEqual(capabilities.tokenStrategy.prefer, ['traecn_submit', 'traecn_get_task', 'traecn_list_conversations']);
+assert.strictEqual(capabilities.tokenStrategy.gatewayManaged, true);
 
-assertArrayIncludesAll(MCP_TOOLS.map(tool => tool.name), [
-  'traecn_get_capabilities',
-  'traecn_list_commands',
-  'traecn_run_command',
-  'traecn_preflight',
-  'traecn_plan_operation',
-  'traecn_run_task',
-  'traecn_queue_task',
-  'traecn_poll_task',
-  'traecn_cleanup_queue_probe_chats',
-  'traecn_get_cleanup_watch_status',
-  'traecn_review_code',
-  'traecn_get_queue_status',
-  'traecn_get_dialog_status'
-], 'MCP tools');
+assert.deepStrictEqual(MCP_TOOLS.map(tool => tool.name), [
+  'traecn_submit',
+  'traecn_get_task',
+  'traecn_cancel_task',
+  'traecn_list_conversations',
+  'traecn_manage_conversation',
+  'traecn_resolve_interaction'
+]);
 
 assertArrayIncludesAll(openClawManifest.tools.map(tool => tool.name), [
   'traecn_capabilities',
@@ -162,7 +150,7 @@ const docs = [
   read('docs/MCP-SERVER-GUIDE.md'),
   read('docs/openclaw-command-set.md')
 ].join('\n');
-assertArrayIncludesAll(docs, ['traecn_preflight', 'reviewCode', 'queueTask', 'traecn_plan_operation', 'traecn_run_command'], 'docs');
+assertArrayIncludesAll(docs, ['traecn_submit', 'traecn_get_task', 'traecn_list_conversations', 'gateway'], 'docs');
 assert.ok(commandNames.includes('cleanup_foreign_solo_queue'), 'command-set must include cleanup_foreign_solo_queue');
 assert.ok(commandNames.includes('cleanup_queue_watch_status'), 'command-set must include cleanup_queue_watch_status');
 assert.ok(specPaths.includes('/api/solo/chats/cleanup-foreign-queue'), 'OpenAPI must include Solo cleanup route');

@@ -194,6 +194,22 @@ class TraeCNApiClient {
     return this._request('POST', '/api/solo/chats/submit', body);
   }
 
+  async submitTask(input = {}) {
+    return this._request('POST', '/api/tasks/submit', input);
+  }
+
+  async listConversations() {
+    return this._request('GET', '/api/conversations');
+  }
+
+  async manageConversation(input = {}) {
+    return this._request('POST', '/api/conversations/manage', input);
+  }
+
+  async resolveInteraction(input = {}) {
+    return this._request('POST', '/api/interactions/resolve', input);
+  }
+
   async delegate(task, options = {}) {
     const body = { task };
     if (options.projectPath) body.projectPath = options.projectPath;

@@ -308,8 +308,9 @@ test('buildCapabilities returns compact command and token strategy metadata', ()
   });
   assert.strictEqual(capabilities.name, 'traecnclaw');
   assert.strictEqual(capabilities.coverage.queueManagement, true);
-  assert.ok(capabilities.tokenStrategy.prefer.includes('traecn_preflight'));
-  assert.ok(capabilities.tokenStrategy.prefer.includes('traecn_queue_task'));
+  assert.deepStrictEqual(capabilities.tokenStrategy.prefer, ['traecn_submit', 'traecn_get_task', 'traecn_list_conversations']);
+  assert.strictEqual(capabilities.tokenStrategy.gatewayManaged, true);
+  assert.strictEqual(capabilities.mcp.toolProfile, 'default');
   assert.ok(capabilities.commands.some(command => command.command === 'delegate_async'));
   assert.ok(capabilities.mcp.tools.some(tool => tool.name === 'queue_task'));
   assert.ok(capabilities.http.some(operation => operation.path === '/api/capabilities'));
