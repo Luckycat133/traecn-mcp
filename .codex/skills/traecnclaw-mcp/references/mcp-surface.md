@@ -1,18 +1,15 @@
-# Compact MCP surface
+# Ownership boundary
 
-The Agent-facing tools are:
+The Agent receives focused tools for messages, tasks, workspace, models, mode,
+conversations, questions, and exceptional approvals. Each tool performs one
+operation.
 
-- `traecn_submit`
-- `traecn_get_task`
-- `traecn_cancel_task`
-- `traecn_list_conversations`
-- `traecn_manage_conversation`
-- `traecn_resolve_interaction`
+The gateway owns readiness, queue maintenance, waiting, polling, task
+persistence, recovery, task-event acknowledgement, completion delivery,
+routine questions, safe approvals, and keep/revert gates. These are not MCP
+tools.
 
-The gateway owns connection/readiness checks, workspace opening, mode/model
-selection, queueing, waiting, polling, event acknowledgement, result delivery,
-recovery, safe card approval, review-gate resolution, and workflow follow-ups.
-
-Operator HTTP, CLI, OpenClaw, acceptance, and proof facilities are not MCP
-Agent tools. See `skills/traecnclaw-mcp/references/mcp-tool-contracts.json` for
-the generated schemas.
+`traecn_send_message` accepts only `message` and optional `conversationId`.
+Use the context tools only when the requested workspace, model, mode, or
+conversation must change. New conversations are explicit; otherwise messages
+remain in the selected conversation.

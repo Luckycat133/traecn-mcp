@@ -67,14 +67,21 @@ function readFrames(stream, expectedCount, timeoutMs = 5000) {
     assert.strictEqual(initialize.result.serverInfo.name, 'traecnclaw');
     assert.strictEqual(tools.result.tools.length, getMcpToolsForProfile('public').length);
     assert.deepStrictEqual(tools.result.tools.map(tool => tool.name), [
-      'traecn_submit',
+      'traecn_send_message',
       'traecn_get_task',
       'traecn_cancel_task',
+      'traecn_open_workspace',
+      'traecn_list_models',
+      'traecn_select_model',
+      'traecn_select_mode',
       'traecn_list_conversations',
-      'traecn_manage_conversation',
-      'traecn_resolve_interaction'
+      'traecn_create_conversation',
+      'traecn_select_conversation',
+      'traecn_delete_conversation',
+      'traecn_answer_question',
+      'traecn_decide_approval'
     ]);
-    console.log(`[mcp-stdio-smoke.test.js] PASS (${tools.result.tools.length} compact tools)`);
+    console.log(`[mcp-stdio-smoke.test.js] PASS (${tools.result.tools.length} focused tools)`);
   } finally {
     child.kill('SIGTERM');
   }

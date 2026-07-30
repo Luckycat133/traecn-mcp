@@ -1114,6 +1114,34 @@ test('switchModel busy guard blocks when live stop state is visible', async () =
   assert.strictEqual(result.error, 'generating');
 });
 
+asyncTest('listModels returns the currently offered TraeCN models', async () => {
+  let expression = '';
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      assert.strictEqual(payload.awaitPromise, true);
+      expression = payload.expression || '';
+      return {
+        result: {
+          value: {
+            current: 'GLM-5.2',
+            models: ['GLM-5.2', 'DeepSeek-V3.2']
+          }
+        }
+      };
+    }
+  }, getConfig());
+
+  const result = await driver.listModels();
+
+  assert.deepStrictEqual(result, {
+    current: 'GLM-5.2',
+    models: ['GLM-5.2', 'DeepSeek-V3.2']
+  });
+  assert.ok(expression.includes('.chat-model-label'));
+  assert.ok(expression.includes('modelPicker'));
+});
+
 test('checkReadiness reports login blocker when composer is unavailable', async () => {
   const driver = new DomDriver(null, getConfig());
   driver.findComposer = async () => null;

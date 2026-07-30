@@ -16,12 +16,19 @@ const { ApiKeyManager } = require('./src/shared/api-key-manager');
 process.env.TRAECN_API_KEYS_ENABLED = '1';
 
 const EXPECTED_TOOLS = [
-  'traecn_submit',
+  'traecn_send_message',
   'traecn_get_task',
   'traecn_cancel_task',
+  'traecn_open_workspace',
+  'traecn_list_models',
+  'traecn_select_model',
+  'traecn_select_mode',
   'traecn_list_conversations',
-  'traecn_manage_conversation',
-  'traecn_resolve_interaction'
+  'traecn_create_conversation',
+  'traecn_select_conversation',
+  'traecn_delete_conversation',
+  'traecn_answer_question',
+  'traecn_decide_approval'
 ];
 
 let passed = 0;
@@ -42,7 +49,7 @@ async function test(name, fn) {
 (async () => {
   console.log('\n[mcp-server.test.js] Running tests...\n');
 
-  await test('MCP exposes one compact tool surface', async () => {
+  await test('MCP exposes one focused atomic tool surface', async () => {
     assert.strictEqual(DEFAULT_MCP_TOOL_PROFILE, 'default');
     assert.strictEqual(normalizeMcpToolProfile('full'), 'default');
     assert.deepStrictEqual(MCP_TOOLS.map(tool => tool.name), EXPECTED_TOOLS);
@@ -85,7 +92,7 @@ async function test(name, fn) {
     const manager = new ApiKeyManager({ enabled: true });
     const { keyId } = manager.createKey({ name: 'reader', permissions: ['read'] });
     assert.strictEqual(mcpAuth.authorizeTool({ apiKeyManager: manager, keyId, toolName: 'traecn_get_task', args: {} }).ok, true);
-    const denied = mcpAuth.authorizeTool({ apiKeyManager: manager, keyId, toolName: 'traecn_submit', args: {} });
+    const denied = mcpAuth.authorizeTool({ apiKeyManager: manager, keyId, toolName: 'traecn_send_message', args: {} });
     assert.strictEqual(denied.ok, false);
     assert.strictEqual(denied.required, 'delegate');
   });
@@ -94,6 +101,7 @@ async function test(name, fn) {
     await assert.rejects(() => callTool('traecn_run_command', {}), /Unknown tool/);
     await assert.rejects(() => callTool('traecn_preflight', {}), /Unknown tool/);
     await assert.rejects(() => callTool('traecn_run_unattended_workflow', {}), /Unknown tool/);
+    await assert.rejects(() => callTool('traecn_submit', {}), /Unknown tool/);
   });
 
   console.log(`\n[mcp-server.test.js] Results: ${passed} passed, ${failed} failed\n`);

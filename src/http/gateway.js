@@ -1829,6 +1829,10 @@ class Gateway {
     return unifiedAgentHandlers.handleSubmit(req, res, this);
   }
 
+  _handleListModels(req, res) {
+    return unifiedAgentHandlers.handleListModels(req, res, this);
+  }
+
   _handleListConversations(req, res) {
     return unifiedAgentHandlers.handleListConversations(req, res, this);
   }

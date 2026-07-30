@@ -66,6 +66,7 @@ async function handleOpenProject(req, res, ctx) {
         await ctx._ensureConnection();
         const current = await ctx._assertProjectWorkspace(projectPath);
         if (current) {
+          ctx._selectedWorkspacePath = projectPath;
           ctx._json(req, res, {
             success: true,
             alreadyRunning: true,
@@ -141,6 +142,7 @@ async function handleOpenProject(req, res, ctx) {
         verifiedWorkspace,
         cdp: { host: cdpHost, port: cdpPort }
       };
+      ctx._selectedWorkspacePath = projectPath;
       ctx._json(req, res, result, 200);
       return;
     }
@@ -218,6 +220,7 @@ async function handleOpenProject(req, res, ctx) {
     result = { success: false, projectPath, error: err.message };
   }
 
+  if (result && result.success === true) ctx._selectedWorkspacePath = projectPath;
   ctx._json(req, res, result);
 }
 async function handleUpdateSelf(req, res, ctx) {

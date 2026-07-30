@@ -80,16 +80,23 @@ assert.strictEqual(capabilities.coverage.settingsAutomation, true);
 assert.strictEqual(capabilities.coverage.modelAndModeControl, true);
 assert.strictEqual(capabilities.coverage.projectOpening, true);
 assert.strictEqual(capabilities.coverage.historyReplay, true);
-assert.deepStrictEqual(capabilities.tokenStrategy.prefer, ['traecn_submit', 'traecn_get_task', 'traecn_list_conversations']);
+assert.deepStrictEqual(capabilities.tokenStrategy.prefer, ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task']);
 assert.strictEqual(capabilities.tokenStrategy.gatewayManaged, true);
 
 assert.deepStrictEqual(MCP_TOOLS.map(tool => tool.name), [
-  'traecn_submit',
+  'traecn_send_message',
   'traecn_get_task',
   'traecn_cancel_task',
+  'traecn_open_workspace',
+  'traecn_list_models',
+  'traecn_select_model',
+  'traecn_select_mode',
   'traecn_list_conversations',
-  'traecn_manage_conversation',
-  'traecn_resolve_interaction'
+  'traecn_create_conversation',
+  'traecn_select_conversation',
+  'traecn_delete_conversation',
+  'traecn_answer_question',
+  'traecn_decide_approval'
 ]);
 
 assertArrayIncludesAll(openClawManifest.tools.map(tool => tool.name), [
@@ -150,7 +157,7 @@ const docs = [
   read('docs/MCP-SERVER-GUIDE.md'),
   read('docs/openclaw-command-set.md')
 ].join('\n');
-assertArrayIncludesAll(docs, ['traecn_submit', 'traecn_get_task', 'traecn_list_conversations', 'gateway'], 'docs');
+assertArrayIncludesAll(docs, ['traecn_send_message', 'traecn_get_task', 'traecn_list_conversations', 'gateway'], 'docs');
 assert.ok(commandNames.includes('cleanup_foreign_solo_queue'), 'command-set must include cleanup_foreign_solo_queue');
 assert.ok(commandNames.includes('cleanup_queue_watch_status'), 'command-set must include cleanup_queue_watch_status');
 assert.ok(specPaths.includes('/api/solo/chats/cleanup-foreign-queue'), 'OpenAPI must include Solo cleanup route');

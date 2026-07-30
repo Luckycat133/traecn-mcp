@@ -24,12 +24,19 @@ const PERMISSION_LEVELS = [READ_PERMISSION, WRITE_PERMISSION, DELEGATE_PERMISSIO
 
 // Map of tool name -> minimum permission required.
 const TOOL_PERMISSIONS = Object.freeze({
-  traecn_submit: DELEGATE_PERMISSION,
+  traecn_send_message: DELEGATE_PERMISSION,
   traecn_get_task: READ_PERMISSION,
   traecn_cancel_task: DELEGATE_PERMISSION,
+  traecn_open_workspace: DELEGATE_PERMISSION,
+  traecn_list_models: READ_PERMISSION,
+  traecn_select_model: WRITE_PERMISSION,
+  traecn_select_mode: WRITE_PERMISSION,
   traecn_list_conversations: READ_PERMISSION,
-  traecn_manage_conversation: WRITE_PERMISSION,
-  traecn_resolve_interaction: DELEGATE_PERMISSION
+  traecn_create_conversation: WRITE_PERMISSION,
+  traecn_select_conversation: WRITE_PERMISSION,
+  traecn_delete_conversation: WRITE_PERMISSION,
+  traecn_answer_question: DELEGATE_PERMISSION,
+  traecn_decide_approval: DELEGATE_PERMISSION
 });
 
 function requiredPermissionFor(toolName, args = {}) {

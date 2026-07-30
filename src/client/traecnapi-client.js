@@ -202,6 +202,10 @@ class TraeCNApiClient {
     return this._request('GET', '/api/conversations');
   }
 
+  async listModels() {
+    return this._request('GET', '/api/models');
+  }
+
   async manageConversation(input = {}) {
     return this._request('POST', '/api/conversations/manage', input);
   }

@@ -356,11 +356,6 @@ async function main() {
   const liveUatSource = readFile('scripts/live-uat.js');
   const longQueueProofSource = readFile('scripts/long-queue-proof.js');
   const cliSource = readFile('scripts/traecn-cli.js');
-  const mcpSource = [
-    readFile('mcp-server.js'),
-    readFile('src/mcp/tools.js'),
-    readFile('src/mcp/handler.js')
-  ].join('\n');
   const mcpTestSource = readFile('mcp-server.test.js');
   const skillSource = readFile('src/skill/traecn-skill.js');
   const skillTestSource = readFile('src/skill/skill.test.js');
@@ -370,11 +365,17 @@ async function main() {
     capabilities.commands.some(command => command.command === 'delegate_async')
       && commandNames.includes('cleanup_foreign_solo_queue')
       && commandNames.includes('cleanup_queue_watch_status')
-      && hasAll(mcpToolNames, ['traecn_submit', 'traecn_get_task', 'traecn_cancel_task', 'traecn_list_conversations', 'traecn_manage_conversation', 'traecn_resolve_interaction'])
-      && mcpToolNames.length === 6
+      && hasAll(mcpToolNames, [
+        'traecn_send_message', 'traecn_get_task', 'traecn_cancel_task',
+        'traecn_open_workspace', 'traecn_list_models', 'traecn_select_model', 'traecn_select_mode',
+        'traecn_list_conversations', 'traecn_create_conversation',
+        'traecn_select_conversation', 'traecn_delete_conversation',
+        'traecn_answer_question', 'traecn_decide_approval'
+      ])
+      && mcpToolNames.length === 13
       && openClawTools.includes('traecn_cleanup_queue')
       && openClawTools.includes('traecn_cleanup_watch_status')
-  ) ? 'passed' : 'missing', 'MCP exposes only the compact Agent contract while HTTP, CLI, and OpenClaw retain operator controls.', {
+  ) ? 'passed' : 'missing', 'MCP exposes focused atomic Agent operations while HTTP, CLI, and OpenClaw retain operator controls.', {
     commands: commandNames.length,
     mcpTools: mcpToolNames.length,
     openClawTools: openClawTools.length
@@ -443,8 +444,9 @@ async function main() {
       && hasAll(capabilities.apiFamilies.settings || [], ['/api/settings/read', '/api/settings/read-all', '/api/settings/set', '/api/settings/switch-tab', '/api/settings/back-to-chat'])
       && hasAll(capabilities.apiFamilies.control || [], ['/api/detect-mode', '/api/switch-mode', '/api/switch-model'])
       && hasAll(commandNames, ['settings_read', 'settings_read_all', 'settings_set', 'settings_navigate', 'settings_back', 'switch_mode', 'switch_model', 'confirm_plan'])
-      && MCP_TOOLS.find(tool => tool.name === 'traecn_submit')?.inputSchema?.properties?.model
-      && MCP_TOOLS.find(tool => tool.name === 'traecn_submit')?.inputSchema?.properties?.mode
+      && mcpToolNames.includes('traecn_list_models')
+      && mcpToolNames.includes('traecn_select_model')
+      && mcpToolNames.includes('traecn_select_mode')
       && hasAll(openClawTools, ['traecn_plan_operation', 'traecn_settings_action', 'traecn_settings_read', 'traecn_settings_set', 'traecn_switch_mode', 'traecn_switch_model'])
       && hasAll(openClawCommandEnum, ['settings_read', 'settings_read_all', 'settings_set', 'settings_navigate', 'settings_back', 'switch_mode', 'switch_model'])
       && liveUatSource.includes('settings-read-model')
@@ -452,7 +454,7 @@ async function main() {
       && gatewayTestSource.includes('buildConfirmationPlan marks settings writes as high-risk confirmation operations')
       && gatewayTestSource.includes('Gateway switch-model can return immediately with queue details when waitForQueue is false')
       && hasAll(readFile('src/client/traecnapi-client.test.js'), ['settingsRead sends GET with section param', 'settingsWrite can send confirmation metadata', 'settingsAction maps navigate to implemented settings switch-tab endpoint', 'switchModel sends POST to /api/switch-model'])
-  ) ? 'passed' : 'missing', 'Settings and confirmation controls remain operator APIs; MCP folds model/mode selection into unified submission.', {
+  ) ? 'passed' : 'missing', 'Settings and confirmation controls remain operator APIs; MCP exposes focused model and mode selection.', {
     settingsPaths: ['/api/settings/read', '/api/settings/read-all', '/api/settings/set', '/api/settings/switch-tab', '/api/settings/back-to-chat']
       .filter(apiPath => Boolean(spec.paths[apiPath])),
     controlPaths: ['/api/detect-mode', '/api/switch-mode', '/api/switch-model'].filter(apiPath => Boolean(spec.paths[apiPath])),
@@ -498,20 +500,20 @@ async function main() {
   const asyncDelegateAccepts = capabilities.http.find(operation => operation.path === '/api/delegate-async' && operation.method === 'POST')?.accepts || [];
   add(results, 'unattended_vibe_workflow_contract', (
     commandNames.includes('vibe_workflow')
-      && MCP_TOOLS.find(tool => tool.name === 'traecn_submit')?.inputSchema?.properties?.steps
+      && mcpToolNames.includes('traecn_send_message')
+      && !MCP_TOOLS.find(tool => tool.name === 'traecn_send_message')?.inputSchema?.properties?.steps
       && openClawTools.includes('traecn_vibe_workflow')
       && hasAll(asyncDelegateAccepts, ['autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'forceBackground'])
-      && hasAll(mcpSource, ["name: 'traecn_submit'", 'steps', 'completionChecks'])
       && hasAll(commandSetSource, ['case COMMANDS.VIBE_WORKFLOW', 'const autoContinue = params.autoContinue !== false', 'followupTasks', 'completionChecks', 'autoApproveDialog'])
       && hasAll(skillSource, ['async vibeWorkflow', 'const autoContinue = input.autoContinue !== false', 'autoApproveDialog: input.autoApproveDialog === undefined ? \'auto\'', 'followupTasks'])
       && hasAll(cliSource, ['case \'vibe\'', 'autoContinue: true', 'completionChecks', 'followupTasks'])
-      && mcpTestSource.includes('MCP exposes one compact tool surface')
+      && mcpTestSource.includes('MCP exposes one focused atomic tool surface')
       && skillTestSource.includes('vibeWorkflow queues unattended follow-up workflow')
       && gatewayTestSource.includes('Gateway auto-continues reviewable workflow followups without human review')
       && gatewayTestSource.includes('Gateway resubmits completed-looking task when completion checks fail')
-  ) ? 'passed' : 'missing', 'Unified MCP submission folds in unattended follow-ups while operator surfaces retain their detailed workflow controls.', {
+  ) ? 'passed' : 'missing', 'MCP message sending stays atomic while operator surfaces retain detailed unattended workflow controls.', {
     command: commandNames.includes('vibe_workflow'),
-    mcpTool: mcpToolNames.includes('traecn_submit'),
+    mcpTool: mcpToolNames.includes('traecn_send_message'),
     openClawTool: openClawTools.includes('traecn_vibe_workflow'),
     delegateAsyncAccepts: asyncDelegateAccepts.filter(name => ['autoContinue', 'followupTasks', 'completionChecks', 'autoApproveDialog', 'forceBackground'].includes(name)),
     skillRegression: skillTestSource.includes('vibeWorkflow queues unattended follow-up workflow'),

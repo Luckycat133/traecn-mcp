@@ -308,7 +308,7 @@ test('buildCapabilities returns compact command and token strategy metadata', ()
   });
   assert.strictEqual(capabilities.name, 'traecnclaw');
   assert.strictEqual(capabilities.coverage.queueManagement, true);
-  assert.deepStrictEqual(capabilities.tokenStrategy.prefer, ['traecn_submit', 'traecn_get_task', 'traecn_list_conversations']);
+  assert.deepStrictEqual(capabilities.tokenStrategy.prefer, ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task']);
   assert.strictEqual(capabilities.tokenStrategy.gatewayManaged, true);
   assert.strictEqual(capabilities.mcp.toolProfile, 'default');
   assert.ok(capabilities.commands.some(command => command.command === 'delegate_async'));
@@ -3628,6 +3628,7 @@ asyncTest('Gateway open-project reuses the active TraeCN window when it is alrea
     assert.strictEqual(responseData.success, true);
     assert.strictEqual(responseData.reusedWindow, true);
     assert.strictEqual(responseData.projectPath, '/tmp/some-project');
+    assert.strictEqual(gateway._selectedWorkspacePath, '/tmp/some-project');
     assert.strictEqual(openedWith.projectPath, '/tmp/some-project');
     assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/some-project');
   } finally {
@@ -3675,6 +3676,7 @@ asyncTest('Gateway open-project does not reload an already-open workspace', asyn
     assert.strictEqual(responseData.success, true);
     assert.strictEqual(responseData.alreadyOpen, true);
     assert.strictEqual(responseData.reusedWindow, false);
+    assert.strictEqual(gateway._selectedWorkspacePath, '/tmp/some-project');
     assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/some-project');
   } finally {
     quickstart.isTraeCNRunning = origIsRunning;

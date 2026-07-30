@@ -161,6 +161,46 @@ async function getCurrentModel(driver) {
   return result.result?.value || '';
 }
 
+async function listModels(driver) {
+  const result = await driver.client.send('Runtime.evaluate', {
+    expression: `
+      (async function() {
+        function visible(el) {
+          if (!el || !el.getBoundingClientRect) return false;
+          var rect = el.getBoundingClientRect();
+          return rect.width > 4 && rect.height > 4;
+        }
+        function textOf(el) {
+          return (el && (el.innerText || el.textContent) || '').replace(/\\s+/g, ' ').trim();
+        }
+        var trigger = Array.from(document.querySelectorAll(
+          '.chat-model-label,[role="combobox"],[class*="model-select"],[class*="ai-model-select"]'
+        )).find(visible);
+        var current = textOf(trigger);
+        if (trigger && typeof trigger.click === 'function') trigger.click();
+        await new Promise(function(resolve) { setTimeout(resolve, 120); });
+        var labels = Array.from(document.querySelectorAll(
+          '.chat-modelPicker-item,.icube-model-select-portal-model-item,[role="option"],[class*="modelPicker"],[class*="model-picker"],[class*="model-item"]'
+        ))
+          .filter(visible)
+          .map(function(el) {
+            return textOf(el.querySelector('.chat-model-label,[class*="label"],[class*="name"]') || el);
+          })
+          .filter(function(text) {
+            return text && text.length < 120 && /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
+          });
+        if (trigger && typeof trigger.click === 'function') trigger.click();
+        var models = Array.from(new Set(labels));
+        if (!models.length && current) models.push(current);
+        return { current: current, models: models };
+      })()
+    `,
+    awaitPromise: true,
+    returnByValue: true
+  });
+  return result.result?.value || { current: '', models: [] };
+}
+
 function _normalizeModelName(name) {
   return String(name || '')
     .replace(/\s*Beta\s*/ig, '')
@@ -427,6 +467,7 @@ module.exports = {
   checkQueueStatus,
   _checkQueueStatusRaw,
   getCurrentModel,
+  listModels,
   _normalizeModelName,
   switchModel
 };

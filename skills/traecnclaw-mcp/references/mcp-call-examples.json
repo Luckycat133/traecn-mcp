@@ -1,21 +1,25 @@
 {
   "calls": [
     {
-      "name": "submit_repository_review",
-      "tool": "traecn_submit",
-      "arguments": {
-        "message": "Review the current repository. Report findings first, ordered by severity.",
-        "model": "GLM-5.2",
-        "mode": "solo",
-        "workspace": "/absolute/path/to/repository"
-      }
+      "name": "open_workspace",
+      "tool": "traecn_open_workspace",
+      "arguments": { "path": "/absolute/path/to/repository" }
     },
     {
-      "name": "submit_multi_step_change",
-      "tool": "traecn_submit",
+      "name": "discover_models",
+      "tool": "traecn_list_models",
+      "arguments": {}
+    },
+    {
+      "name": "select_model",
+      "tool": "traecn_select_model",
+      "arguments": { "model": "GLM-5.2" }
+    },
+    {
+      "name": "send_repository_review",
+      "tool": "traecn_send_message",
       "arguments": {
-        "message": "Fix the login-page layout regression.",
-        "steps": ["Run focused snapshot tests", "Update the changelog"]
+        "message": "Review the current repository. Report findings first, ordered by severity."
       }
     },
     {
@@ -25,13 +29,13 @@
     },
     {
       "name": "select_conversation",
-      "tool": "traecn_manage_conversation",
-      "arguments": { "action": "select", "conversationId": "solo:UmV2aWV3IEFQSQ" }
+      "tool": "traecn_select_conversation",
+      "arguments": { "conversationId": "solo:UmV2aWV3IEFQSQ" }
     },
     {
       "name": "answer_exceptional_question",
-      "tool": "traecn_resolve_interaction",
-      "arguments": { "action": "answer", "answer": "Review the current workspace changes" }
+      "tool": "traecn_answer_question",
+      "arguments": { "answer": "Review the current workspace changes" }
     }
   ]
 }

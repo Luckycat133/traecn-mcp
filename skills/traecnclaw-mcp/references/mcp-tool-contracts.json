@@ -3,80 +3,39 @@
   "profiles": {
     "default": {
       "default": true,
-      "count": 6,
-      "description": "Single compact Agent surface. Gateway-owned mechanics are intentionally not exposed as tools.",
+      "count": 13,
+      "description": "Focused Agent operations. Gateway-owned mechanics are intentionally not exposed as tools.",
       "tools": [
-        "traecn_submit",
+        "traecn_send_message",
         "traecn_get_task",
         "traecn_cancel_task",
+        "traecn_open_workspace",
+        "traecn_list_models",
+        "traecn_select_model",
+        "traecn_select_mode",
         "traecn_list_conversations",
-        "traecn_manage_conversation",
-        "traecn_resolve_interaction"
+        "traecn_create_conversation",
+        "traecn_select_conversation",
+        "traecn_delete_conversation",
+        "traecn_answer_question",
+        "traecn_decide_approval"
       ]
     }
   },
   "tools": [
     {
-      "name": "traecn_submit",
-      "description": "Submit work to TraeCN. The gateway prepares the workspace, model, mode and conversation, then owns queueing, recovery and completion delivery.",
+      "name": "traecn_send_message",
+      "description": "Send one message to TraeCN as a persistent background task. Optionally target an existing conversation.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "message": {
             "type": "string",
-            "description": "The exact message to send to TraeCN."
-          },
-          "model": {
-            "type": "string",
-            "description": "Optional preferred model."
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "solo",
-              "ide"
-            ],
-            "description": "Optional preferred TraeCN mode."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Optional local folder to open before submission. It is never added to the message."
+            "description": "The exact message to send."
           },
           "conversationId": {
             "type": "string",
-            "description": "Optional conversation returned by traecn_list_conversations."
-          },
-          "newConversation": {
-            "type": "boolean",
-            "description": "Create a conversation before sending."
-          },
-          "steps": {
-            "type": "array",
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "message"
-                  ],
-                  "properties": {
-                    "message": {
-                      "type": "string"
-                    },
-                    "completionChecks": {
-                      "type": "object"
-                    }
-                  }
-                }
-              ]
-            },
-            "description": "Optional follow-up work automatically continued by the gateway."
-          },
-          "completionChecks": {
-            "type": "object"
+            "description": "Stable identifier returned by traecn_list_conversations."
           }
         },
         "required": [
@@ -90,7 +49,7 @@
     },
     {
       "name": "traecn_get_task",
-      "description": "Read one task only when an explicit progress or final-result check is needed.",
+      "description": "Read one known task when an explicit status or result check is needed.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -109,7 +68,7 @@
     },
     {
       "name": "traecn_cancel_task",
-      "description": "Cancel a task. The gateway removes queued work or stops the active TraeCN generation as appropriate.",
+      "description": "Cancel one task; the gateway chooses queued removal or active generation stop.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -128,8 +87,83 @@
       }
     },
     {
+      "name": "traecn_open_workspace",
+      "description": "Open one local folder in the active TraeCN window and verify it became the workspace.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute local folder path."
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "metadata": {
+        "layer": "context",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_list_models",
+      "description": "List the models currently offered by TraeCN and identify the selected model.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "context",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_select_model",
+      "description": "Select one TraeCN model without waiting or polling for model availability.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "model"
+        ]
+      },
+      "metadata": {
+        "layer": "context",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_select_mode",
+      "description": "Select TraeCN Solo or IDE mode.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "solo",
+              "ide"
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "metadata": {
+        "layer": "context",
+        "risk": "write"
+      }
+    },
+    {
       "name": "traecn_list_conversations",
-      "description": "List TraeCN conversations in the current mode with stable gateway conversation identifiers.",
+      "description": "List conversations in the current TraeCN mode with stable identifiers.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -141,25 +175,51 @@
       }
     },
     {
-      "name": "traecn_manage_conversation",
-      "description": "Create, select or delete a TraeCN conversation.",
+      "name": "traecn_create_conversation",
+      "description": "Create and select a new TraeCN conversation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "metadata": {
+        "layer": "conversation",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_select_conversation",
+      "description": "Select one existing TraeCN conversation.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "action": {
-            "type": "string",
-            "enum": [
-              "create",
-              "select",
-              "delete"
-            ]
-          },
           "conversationId": {
-            "type": "string"
+            "type": "string",
+            "description": "Stable identifier returned by traecn_list_conversations."
           }
         },
         "required": [
-          "action"
+          "conversationId"
+        ]
+      },
+      "metadata": {
+        "layer": "conversation",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_delete_conversation",
+      "description": "Delete one existing TraeCN conversation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "conversationId": {
+            "type": "string",
+            "description": "Stable identifier returned by traecn_list_conversations."
+          }
+        },
+        "required": [
+          "conversationId"
         ]
       },
       "metadata": {
@@ -169,26 +229,40 @@
       }
     },
     {
-      "name": "traecn_resolve_interaction",
-      "description": "Resolve only an exceptional TraeCN question or unsafe approval that the gateway cannot safely handle automatically.",
+      "name": "traecn_answer_question",
+      "description": "Answer an exceptional TraeCN question that the gateway could not resolve mechanically.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "action": {
-            "type": "string",
-            "enum": [
-              "approve",
-              "deny",
-              "answer",
-              "dismiss"
-            ]
-          },
           "answer": {
             "type": "string"
           }
         },
         "required": [
-          "action"
+          "answer"
+        ]
+      },
+      "metadata": {
+        "layer": "interaction",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_decide_approval",
+      "description": "Approve or deny an exceptional unsafe or ambiguous TraeCN approval card.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "deny"
+            ]
+          }
+        },
+        "required": [
+          "decision"
         ]
       },
       "metadata": {

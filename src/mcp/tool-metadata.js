@@ -5,12 +5,19 @@ const { RAW_MCP_TOOLS } = require('./tools');
 const DEFAULT_MCP_TOOL_PROFILE = 'default';
 
 const TOOL_METADATA = Object.freeze({
-  traecn_submit: { layer: 'task', risk: 'delegate' },
+  traecn_send_message: { layer: 'task', risk: 'delegate' },
   traecn_get_task: { layer: 'task', risk: 'read' },
   traecn_cancel_task: { layer: 'task', risk: 'delegate', destructive: true },
+  traecn_open_workspace: { layer: 'context', risk: 'delegate' },
+  traecn_list_models: { layer: 'context', risk: 'read' },
+  traecn_select_model: { layer: 'context', risk: 'write' },
+  traecn_select_mode: { layer: 'context', risk: 'write' },
   traecn_list_conversations: { layer: 'conversation', risk: 'read' },
-  traecn_manage_conversation: { layer: 'conversation', risk: 'write', destructive: true },
-  traecn_resolve_interaction: { layer: 'interaction', risk: 'delegate', destructive: true }
+  traecn_create_conversation: { layer: 'conversation', risk: 'write' },
+  traecn_select_conversation: { layer: 'conversation', risk: 'write' },
+  traecn_delete_conversation: { layer: 'conversation', risk: 'write', destructive: true },
+  traecn_answer_question: { layer: 'interaction', risk: 'delegate' },
+  traecn_decide_approval: { layer: 'interaction', risk: 'delegate', destructive: true }
 });
 
 const TOOL_ANNOTATIONS = Object.freeze({
@@ -43,7 +50,7 @@ function decorateTool(tool) {
 const MCP_TOOLS = Object.freeze(RAW_MCP_TOOLS.map(decorateTool));
 const MCP_TOOL_PROFILES = Object.freeze({ default: Object.freeze(MCP_TOOLS.map(tool => tool.name)) });
 const MCP_TOOL_PROFILE_DESCRIPTIONS = Object.freeze({
-  default: 'Single compact Agent surface. Gateway-owned mechanics are intentionally not exposed as tools.'
+  default: 'Focused Agent operations. Gateway-owned mechanics are intentionally not exposed as tools.'
 });
 
 function normalizeMcpToolProfile() {

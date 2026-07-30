@@ -60,7 +60,7 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
   const client = new TraeCNApiClient(context);
 
   switch (internalName) {
-    case 'submit':
+    case 'send_message':
       if (checkGenericQueueProbe(args && args.message)) {
         return asMcpContent({
           ok: false,
@@ -77,16 +77,44 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       const result = await client.cancelTask(args.taskId);
       return asMcpContent(result.data || result);
     }
+    case 'open_workspace': {
+      const result = await client.openProject(args.path);
+      return asMcpContent(result.data || result);
+    }
+    case 'list_models': {
+      const result = await client.listModels();
+      return asMcpContent(result.data || result);
+    }
+    case 'select_model': {
+      const result = await client.switchModel(args.model, { waitForQueue: false });
+      return asMcpContent(result.data || result);
+    }
+    case 'select_mode': {
+      const result = await client.switchMode(args.mode);
+      return asMcpContent(result.data || result);
+    }
     case 'list_conversations': {
       const result = await client.listConversations();
       return asMcpContent(result.data || result);
     }
-    case 'manage_conversation': {
-      const result = await client.manageConversation(args);
+    case 'create_conversation': {
+      const result = await client.manageConversation({ action: 'create' });
       return asMcpContent(result.data || result);
     }
-    case 'resolve_interaction': {
-      const result = await client.resolveInteraction(args);
+    case 'select_conversation': {
+      const result = await client.manageConversation({ action: 'select', conversationId: args.conversationId });
+      return asMcpContent(result.data || result);
+    }
+    case 'delete_conversation': {
+      const result = await client.manageConversation({ action: 'delete', conversationId: args.conversationId });
+      return asMcpContent(result.data || result);
+    }
+    case 'answer_question': {
+      const result = await client.resolveInteraction({ action: 'answer', answer: args.answer });
+      return asMcpContent(result.data || result);
+    }
+    case 'decide_approval': {
+      const result = await client.resolveInteraction({ action: args.decision });
       return asMcpContent(result.data || result);
     }
     default:

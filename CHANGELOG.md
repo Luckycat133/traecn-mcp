@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-07-30
+
+### Added
+
+- Added focused MCP tools for workspace opening, live model discovery and
+  selection, mode selection, individual conversation operations, question
+  answers, and exceptional approval decisions.
+- Added live TraeCN model-list discovery and stable-title conversation deletion.
+
+### Changed
+
+- Split the overloaded six-tool contract into 13 single-intent tools.
+  `traecn_send_message` now accepts only a message and optional conversation
+  identifier; context changes use their dedicated tools. The capabilities
+  contract version is now 3.
+- Sending without an explicit conversation now stays in the selected
+  conversation. Creating a conversation is always an explicit operation.
+- Kept readiness, queueing, persistence, waiting, recovery, notifications,
+  routine approvals, and keep/revert decisions entirely gateway-managed.
+
 ## [0.4.3] - 2026-07-30
 
 ### Added

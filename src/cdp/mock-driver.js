@@ -99,6 +99,13 @@ class MockDriver extends DomDriver {
     ];
   }
 
+  async listModels() {
+    return {
+      current: this.model,
+      models: Array.from(new Set([this.model, 'mock-model']))
+    };
+  }
+
   async typeMessage(text) {
     this.sentMessages.push(text);
   }

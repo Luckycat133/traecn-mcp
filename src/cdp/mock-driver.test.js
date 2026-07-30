@@ -120,6 +120,14 @@ test('MockDriver constructor accepts custom responses', () => {
     assert.strictEqual(driver.model, 'glm');
   });
 
+  await asyncTest('listModels returns deterministic mock choices', async () => {
+    const driver = new MockDriver({ model: 'GLM-5.2' });
+    assert.deepStrictEqual(await driver.listModels(), {
+      current: 'GLM-5.2',
+      models: ['GLM-5.2', 'mock-model']
+    });
+  });
+
   await asyncTest('settings mock supports read and set', async () => {
     const driver = new MockDriver();
     const tab = await driver.settings.switchTab('general');

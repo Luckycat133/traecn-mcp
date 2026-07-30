@@ -5,6 +5,7 @@ const { isGenericQueueProbeTask } = require('../../shared/utils');
 
 const ROUTES = [
   { method: 'POST', path: '/api/tasks/submit', handler: '_handleUnifiedSubmit', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
+  { method: 'GET', path: '/api/models', handler: '_handleListModels', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/conversations', handler: '_handleListConversations', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'POST', path: '/api/conversations/manage', handler: '_handleManageConversation', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'POST', path: '/api/interactions/resolve', handler: '_handleResolveInteraction', requiresAuth: true, requiresRateLimit: true, requiresBody: true }
@@ -68,13 +69,37 @@ async function handleSubmit(req, res, ctx) {
     }, 400);
   }
 
-  const desiredMode = body.mode === 'solo' || body.mode === 'ide' ? body.mode : null;
-  const desiredModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null;
-  const projectPath = typeof body.workspace === 'string' && body.workspace.trim() ? body.workspace.trim() : null;
-  const soloChat = parseConversationId(body.conversationId);
+  let desiredMode = body.mode === 'solo' || body.mode === 'ide' ? body.mode : null;
+  let desiredModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null;
+  let projectPath = typeof body.workspace === 'string' && body.workspace.trim() ? body.workspace.trim() : null;
+  let soloChat = parseConversationId(body.conversationId);
 
   await ctx._ensureConnection();
   if (projectPath) await ctx._ensureRequestedWorkspace(projectPath);
+  if (!projectPath && ctx._selectedWorkspacePath && typeof ctx._assertProjectWorkspace === 'function') {
+    try {
+      await ctx._assertProjectWorkspace(ctx._selectedWorkspacePath);
+      projectPath = ctx._selectedWorkspacePath;
+    } catch {
+      ctx._selectedWorkspacePath = null;
+    }
+  }
+  if (!desiredMode && typeof ctx.driver.detectMode === 'function') {
+    const detected = await ctx.driver.detectMode();
+    desiredMode = detected?.mode === 'solo' || detected?.mode === 'ide' ? detected.mode : null;
+  }
+  if (!desiredModel && typeof ctx.driver.getCurrentModel === 'function') {
+    const currentModel = await ctx.driver.getCurrentModel();
+    desiredModel = typeof currentModel === 'string' && currentModel.trim() ? currentModel.trim() : null;
+  }
+  if (!soloChat && body.newConversation !== true && desiredMode === 'solo' && typeof ctx.driver.listSoloChats === 'function') {
+    const listed = await ctx.driver.listSoloChats();
+    const active = (listed.chats || []).find(chat => chat.active === true);
+    if (active) {
+      const titleIncludes = stableConversationTitle(active.title || active.text);
+      soloChat = titleIncludes ? { titleIncludes } : { index: active.index };
+    }
+  }
 
   const queuedBody = {
     task: message,
@@ -82,7 +107,7 @@ async function handleSubmit(req, res, ctx) {
     ...(desiredModel ? { desiredModel } : {}),
     ...(desiredMode ? { desiredMode } : {}),
     ...(soloChat ? { soloChat } : {}),
-    newConversation: body.newConversation === true || !soloChat,
+    newConversation: body.newConversation === true,
     followupTasks: normalizeSteps(body.steps),
     ...(body.completionChecks ? { completionChecks: body.completionChecks } : {}),
     autoContinue: true,
@@ -121,6 +146,14 @@ async function handleListConversations(req, res, ctx) {
   return ctx._json(req, res, { mode: 'solo', conversations });
 }
 
+async function handleListModels(req, res, ctx) {
+  await ctx._ensureConnection();
+  if (typeof ctx.driver.listModels !== 'function') {
+    return ctx._json(req, res, { error: 'model listing is not supported by the active TraeCN driver' }, 501);
+  }
+  return ctx._json(req, res, await ctx.driver.listModels());
+}
+
 async function handleManageConversation(req, res, ctx) {
   const body = await parseBody(req);
   const action = String(body.action || '');
@@ -140,7 +173,11 @@ async function handleManageConversation(req, res, ctx) {
       return ctx._json(req, res, { action, conversationId: body.conversationId, ...result }, result.success === false ? 404 : 200);
     }
     const listed = await ctx.driver.listSoloChats();
-    const chat = (listed.chats || []).find(candidate => candidate.index === target.index);
+    const chat = (listed.chats || []).find(candidate => (
+      target.index !== undefined
+        ? candidate.index === target.index
+        : stableConversationTitle(candidate.title || candidate.text).includes(target.titleIncludes)
+    ));
     if (!chat) return ctx._json(req, res, { error: 'conversation not found' }, 404);
     const result = await ctx.driver.deleteSoloChats({ candidates: [{ index: chat.index, title: chat.title || '' }] });
     return ctx._json(req, res, { action, conversationId: body.conversationId, deleted: result.deleted || 0 });
@@ -173,6 +210,7 @@ module.exports = {
   conversationId,
   normalizeSteps,
   handleSubmit,
+  handleListModels,
   handleListConversations,
   handleManageConversation,
   handleResolveInteraction

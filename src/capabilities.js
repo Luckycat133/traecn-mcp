@@ -122,9 +122,9 @@ function buildCapabilities(options = {}, deps = {}) {
   return {
     name: 'traecnclaw',
     version: packageInfo.version,
-    contractVersion: 2,
+    contractVersion: 3,
     tokenStrategy: {
-      prefer: ['traecn_submit', 'traecn_get_task', 'traecn_list_conversations'],
+      prefer: ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task'],
       gatewayManaged: true,
       submission: 'Submit once, release context, and rely on automatic compact completion notifications.',
       avoid: 'Do not preflight, wait, poll, acknowledge events, recover tasks, or fetch /openapi.json unless diagnosing the gateway.',

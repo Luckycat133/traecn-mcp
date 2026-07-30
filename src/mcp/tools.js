@@ -6,81 +6,98 @@ function schema(properties = {}, required = []) {
   return { type: 'object', properties, required };
 }
 
-const WORKFLOW_STEP_SCHEMA = Object.freeze({
-  anyOf: [
-    { type: 'string' },
-    {
-      type: 'object',
-      required: ['message'],
-      properties: {
-        message: { type: 'string' },
-        completionChecks: { type: 'object' }
-      }
-    }
-  ]
-});
+const CONVERSATION_ID = {
+  type: 'string',
+  description: 'Stable identifier returned by traecn_list_conversations.'
+};
 
-/**
- * The MCP surface is deliberately small. Queueing, preflight, recovery,
- * approval-card handling, mode/model switching and event delivery are gateway
- * responsibilities rather than choices every calling agent must repeatedly
- * reason about.
- */
+// Each tool represents one user intent. Queueing, waiting, recovery,
+// notifications and routine approvals remain gateway-owned mechanics.
 const RAW_MCP_TOOLS = Object.freeze([
   {
-    name: 'traecn_submit',
-    description: 'Submit work to TraeCN. The gateway prepares the workspace, model, mode and conversation, then owns queueing, recovery and completion delivery.',
+    name: 'traecn_send_message',
+    description: 'Send one message to TraeCN as a persistent background task. Optionally target an existing conversation.',
     inputSchema: schema({
-      message: { type: 'string', description: 'The exact message to send to TraeCN.' },
-      model: { type: 'string', description: 'Optional preferred model.' },
-      mode: { type: 'string', enum: ['solo', 'ide'], description: 'Optional preferred TraeCN mode.' },
-      workspace: { type: 'string', description: 'Optional local folder to open before submission. It is never added to the message.' },
-      conversationId: { type: 'string', description: 'Optional conversation returned by traecn_list_conversations.' },
-      newConversation: { type: 'boolean', description: 'Create a conversation before sending.' },
-      steps: { type: 'array', items: WORKFLOW_STEP_SCHEMA, description: 'Optional follow-up work automatically continued by the gateway.' },
-      completionChecks: { type: 'object' }
+      message: { type: 'string', description: 'The exact message to send.' },
+      conversationId: CONVERSATION_ID
     }, ['message'])
   },
   {
     name: 'traecn_get_task',
-    description: 'Read one task only when an explicit progress or final-result check is needed.',
+    description: 'Read one known task when an explicit status or result check is needed.',
     inputSchema: schema({ taskId: { type: 'string' } }, ['taskId'])
   },
   {
     name: 'traecn_cancel_task',
-    description: 'Cancel a task. The gateway removes queued work or stops the active TraeCN generation as appropriate.',
+    description: 'Cancel one task; the gateway chooses queued removal or active generation stop.',
     inputSchema: schema({ taskId: { type: 'string' } }, ['taskId'])
   },
   {
-    name: 'traecn_list_conversations',
-    description: 'List TraeCN conversations in the current mode with stable gateway conversation identifiers.',
+    name: 'traecn_open_workspace',
+    description: 'Open one local folder in the active TraeCN window and verify it became the workspace.',
+    inputSchema: schema({ path: { type: 'string', description: 'Absolute local folder path.' } }, ['path'])
+  },
+  {
+    name: 'traecn_list_models',
+    description: 'List the models currently offered by TraeCN and identify the selected model.',
     inputSchema: schema()
   },
   {
-    name: 'traecn_manage_conversation',
-    description: 'Create, select or delete a TraeCN conversation.',
-    inputSchema: schema({
-      action: { type: 'string', enum: ['create', 'select', 'delete'] },
-      conversationId: { type: 'string' }
-    }, ['action'])
+    name: 'traecn_select_model',
+    description: 'Select one TraeCN model without waiting or polling for model availability.',
+    inputSchema: schema({ model: { type: 'string' } }, ['model'])
   },
   {
-    name: 'traecn_resolve_interaction',
-    description: 'Resolve only an exceptional TraeCN question or unsafe approval that the gateway cannot safely handle automatically.',
-    inputSchema: schema({
-      action: { type: 'string', enum: ['approve', 'deny', 'answer', 'dismiss'] },
-      answer: { type: 'string' }
-    }, ['action'])
+    name: 'traecn_select_mode',
+    description: 'Select TraeCN Solo or IDE mode.',
+    inputSchema: schema({ mode: { type: 'string', enum: ['solo', 'ide'] } }, ['mode'])
+  },
+  {
+    name: 'traecn_list_conversations',
+    description: 'List conversations in the current TraeCN mode with stable identifiers.',
+    inputSchema: schema()
+  },
+  {
+    name: 'traecn_create_conversation',
+    description: 'Create and select a new TraeCN conversation.',
+    inputSchema: schema()
+  },
+  {
+    name: 'traecn_select_conversation',
+    description: 'Select one existing TraeCN conversation.',
+    inputSchema: schema({ conversationId: CONVERSATION_ID }, ['conversationId'])
+  },
+  {
+    name: 'traecn_delete_conversation',
+    description: 'Delete one existing TraeCN conversation.',
+    inputSchema: schema({ conversationId: CONVERSATION_ID }, ['conversationId'])
+  },
+  {
+    name: 'traecn_answer_question',
+    description: 'Answer an exceptional TraeCN question that the gateway could not resolve mechanically.',
+    inputSchema: schema({ answer: { type: 'string' } }, ['answer'])
+  },
+  {
+    name: 'traecn_decide_approval',
+    description: 'Approve or deny an exceptional unsafe or ambiguous TraeCN approval card.',
+    inputSchema: schema({ decision: { type: 'string', enum: ['approve', 'deny'] } }, ['decision'])
   }
 ]);
 
 const MCP_TOOL_INTERNAL_NAMES = Object.freeze({
-  traecn_submit: 'submit',
+  traecn_send_message: 'send_message',
   traecn_get_task: 'get_task',
   traecn_cancel_task: 'cancel_task',
+  traecn_open_workspace: 'open_workspace',
+  traecn_list_models: 'list_models',
+  traecn_select_model: 'select_model',
+  traecn_select_mode: 'select_mode',
   traecn_list_conversations: 'list_conversations',
-  traecn_manage_conversation: 'manage_conversation',
-  traecn_resolve_interaction: 'resolve_interaction'
+  traecn_create_conversation: 'create_conversation',
+  traecn_select_conversation: 'select_conversation',
+  traecn_delete_conversation: 'delete_conversation',
+  traecn_answer_question: 'answer_question',
+  traecn_decide_approval: 'decide_approval'
 });
 
 function internalMcpToolName(toolName) {
@@ -88,7 +105,7 @@ function internalMcpToolName(toolName) {
 }
 
 function asMcpContent(value) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
   return { content: [{ type: 'text', text }] };
 }
 

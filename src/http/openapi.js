@@ -368,6 +368,29 @@ function generateOpenAPISpec() {
           responses: { '200': { description: 'Conversation list' } }
         }
       },
+      '/api/models': {
+        get: {
+          summary: 'List currently offered TraeCN models',
+          operationId: 'listModels',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': {
+              description: 'Current and available models',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      current: { type: 'string' },
+                      models: { type: 'array', items: { type: 'string' } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       '/api/conversations/manage': {
         post: {
           summary: 'Create, select, or delete a TraeCN conversation',

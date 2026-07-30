@@ -341,6 +341,10 @@ class DomDriver {
     return modelModule.getCurrentModel(this);
   }
 
+  async listModels() {
+    return modelModule.listModels(this);
+  }
+
   _normalizeModelName(name) {
     return modelModule._normalizeModelName(name);
   }

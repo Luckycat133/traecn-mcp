@@ -53,6 +53,7 @@ const ROUTES = [
   { method: 'POST', path: '/api/task-events/ack', handler: '_handleAckTaskEvent', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 
   // Compact Agent surface
+  { method: 'GET', path: '/api/models', handler: '_handleListModels', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/conversations', handler: '_handleListConversations', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'POST', path: '/api/conversations/manage', handler: '_handleManageConversation', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'POST', path: '/api/interactions/resolve', handler: '_handleResolveInteraction', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
