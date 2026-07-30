@@ -179,20 +179,25 @@ A ready-to-copy single-entry launcher template is at
 `skills/traecnclaw-mcp/assets/mcp-client-config.json`; the direct fallback is
 kept separately at `skills/traecnclaw-mcp/assets/mcp-client-config.direct.json`.
 
-The MCP server exposes one compact six-tool surface:
-`traecn_submit`, `traecn_get_task`, `traecn_cancel_task`,
-`traecn_list_conversations`, `traecn_manage_conversation`, and
-`traecn_resolve_interaction`. Submit accepts optional `model`, `mode`,
-`workspace`, `conversationId`, and follow-up `steps`. The gateway opens and
-verifies the requested folder, selects the requested controls, maintains the
-queue, recovers persisted work, handles safe cards and file-review gates, and
-pushes completion notifications. Agents query a task only when they explicitly
-need its current status or full result.
+The MCP server exposes 13 focused tools grouped by intent:
+
+- Work: `traecn_send_message`, `traecn_get_task`, `traecn_cancel_task`
+- Context: `traecn_open_workspace`, `traecn_list_models`,
+  `traecn_select_model`, `traecn_select_mode`
+- Conversations: `traecn_list_conversations`, `traecn_create_conversation`,
+  `traecn_select_conversation`, `traecn_delete_conversation`
+- Exceptional interactions: `traecn_answer_question`,
+  `traecn_decide_approval`
+
+`traecn_send_message` accepts only the message and an optional stable
+conversation ID. Workspace, model, mode, and conversation changes are explicit
+single-purpose operations. The gateway still owns queues, persistence,
+recovery, routine approvals, file-review gates, and completion notifications.
 
 ### Agent Skill Distribution
 
 The portable cross-agent skill lives at `skills/traecnclaw-mcp`. It
-teaches agents how to use the compact server while leaving execution mechanics
+teaches agents how to use the focused server while leaving execution mechanics
 to the gateway.
 
 Install the skill globally for Codex-compatible clients:
@@ -260,9 +265,10 @@ The OpenAPI schema is served at `/openapi.json` (requires the same auth token as
 - `GET /openapi.json`
 - MCP stdio tools through `mcp-server.js`
 
-MCP agents call `traecn_submit` directly. The gateway performs readiness,
-workspace, queue, model, mode, conversation, and approval preparation
-internally. Operator integrations can still inspect `GET /api/capabilities`,
+MCP agents call focused context tools only when a requested selection must
+change, then use `traecn_send_message`. The gateway performs readiness, queue,
+recovery, waiting, notification, and routine approval work internally.
+Operator integrations can still inspect `GET /api/capabilities`,
 `POST /api/preflight`, or `/openapi.json` when diagnosing the gateway itself.
 
 For unattended local waiting on macOS, start the gateway as a LaunchAgent:
@@ -272,10 +278,9 @@ npm run service:start
 npm run service:status
 ```
 
-Every MCP submission is gateway-managed. The Agent releases its context after
-receiving `taskId`; the gateway persists the task, maintains the queue, applies
-requested model/mode/workspace/conversation controls, and sends completion
-notifications.
+Every MCP message is gateway-managed. The Agent releases its context after
+receiving `taskId`; the gateway persists the task, maintains the queue, restores
+interrupted work, and sends completion notifications.
 The stdio server long-polls a durable, per-client task-event inbox after
 MCP initialization and emits compact standard `notifications/message` events.
 Set a stable, unique `TRAECN_MCP_CLIENT_ID` for each IDE connection when the
@@ -291,8 +296,8 @@ as `任务完成 16%`, remain non-terminal.
 
 Inline safe command cards are approved by a local classifier without model
 tokens. Unsafe or unknown cards and non-mechanical questions surface through
-`traecn_resolve_interaction`. TraeCN file-review gates keep changes by default
-and revert only on clear fatal automation failures.
+`traecn_answer_question` or `traecn_decide_approval`. TraeCN file-review gates
+keep changes by default and revert only on clear fatal automation failures.
 
 The CLI retains detached wait and proof commands for maintainers and acceptance
 testing; these are not MCP Agent tools:
