@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-30
+
 ### Added
 
 - Added a persistent, per-client task-event inbox with long-poll and
