@@ -1,4 +1,4 @@
 interface:
   display_name: "TRAECNclaw MCP"
-  short_description: "Portable TRAECNclaw MCP guidance"
-  default_prompt: "Use $traecnclaw-mcp to connect any MCP-capable agent to TRAECNclaw safely."
+  short_description: "Operate TraeCN through six MCP tools"
+  default_prompt: "Use $traecnclaw-mcp to submit this work to TraeCN and let the gateway manage execution."

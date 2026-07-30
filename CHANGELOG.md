@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-30
+
+### Added
+
+- Added the unified `traecn_submit`, `traecn_get_task`, conversation, cancel,
+  and exceptional-interaction MCP contract, backed by gateway-owned task and
+  conversation endpoints.
+- Added automatic workspace opening and verification, requested model/mode
+  preparation, and conversation targeting to gateway-managed submissions.
+
+### Changed
+
+- Reduced MCP discovery from 39 profile-dependent tools to one six-tool
+  surface. Every accepted submission is persisted and managed in the
+  background, including queue maintenance, recovery, event delivery, safe
+  approval handling, and follow-up continuation.
+- Changed TraeCN file-review handling to keep generated changes automatically
+  by default and revert them only when the collected state contains a clear
+  fatal automation failure.
+- Rewrote the portable Skill and MCP setup documentation around gateway
+  ownership and automatic completion notifications.
+
+### Removed
+
+- Removed Agent-facing command catalogs, preflight/planning, sync-versus-queue
+  choices, wait/poll/event acknowledgement, review shortcuts, workflow
+  shortcuts, recovery/process controls, Solo-specific controls, cleanup/proof
+  tools, settings shortcuts, and `ops`/`full` discovery profiles. Their needed
+  mechanics remain internal or operator-facing rather than MCP tools.
+- Removed the redundant long-form OpenClaw/MCP tool catalog and obsolete
+  profile configuration examples.
+
+### Fixed
+
+- Fixed workspace selection so a requested folder is opened and verified by
+  the gateway instead of being rejected or repeated inside the model message.
+- Fixed task cancellation ownership so the single MCP cancel operation lets
+  the gateway choose between removing queued work and stopping active
+  generation.
+
 ## [0.4.2] - 2026-07-30
 
 ### Changed

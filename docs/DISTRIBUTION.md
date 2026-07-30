@@ -76,8 +76,7 @@ with the absolute path to the skill folder:
       "env": {
         "TRAECN_HOST": "127.0.0.1",
         "TRAECN_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": "",
-        "TRAECN_MCP_TOOL_PROFILE": "public"
+        "TRAECN_GATEWAY_TOKEN": ""
       }
     }
   }
@@ -98,8 +97,7 @@ template. Do not register it alongside Option A.
       "env": {
         "TRAECN_HOST": "127.0.0.1",
         "TRAECN_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": "",
-        "TRAECN_MCP_TOOL_PROFILE": "public"
+        "TRAECN_GATEWAY_TOKEN": ""
       }
     }
   }

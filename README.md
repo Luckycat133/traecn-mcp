@@ -150,8 +150,7 @@ recommended entry point is the skill launcher, which auto-locates
       "env": {
         "TRAECN_HOST": "127.0.0.1",
         "TRAECN_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": "",
-        "TRAECN_MCP_TOOL_PROFILE": "public"
+        "TRAECN_GATEWAY_TOKEN": ""
       }
     }
   }
@@ -169,8 +168,7 @@ Alternatively, point directly at `mcp-server.js`:
       "env": {
         "TRAECN_HOST": "127.0.0.1",
         "TRAECN_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": "",
-        "TRAECN_MCP_TOOL_PROFILE": "public"
+        "TRAECN_GATEWAY_TOKEN": ""
       }
     }
   }
@@ -181,28 +179,21 @@ A ready-to-copy single-entry launcher template is at
 `skills/traecnclaw-mcp/assets/mcp-client-config.json`; the direct fallback is
 kept separately at `skills/traecnclaw-mcp/assets/mcp-client-config.direct.json`.
 
-The MCP server exposes a profile-scoped tool surface. By default,
-`TRAECN_MCP_TOOL_PROFILE=public` lists the 23 common tools:
-`traecn_preflight`, `traecn_run_task`, `traecn_queue_task`,
-`traecn_poll_task`, `traecn_list_task_events`, `traecn_ack_task_event`,
-`traecn_resolve_task_review`, `traecn_review_code`, settings/dialog/model controls,
-`traecn_run_unattended_workflow`, and the generic `traecn_run_command` catalog
-for full command coverage. Use `TRAECN_MCP_TOOL_PROFILE=ops` for recovery,
-cleanup, Solo conversation control, and long-queue proof tools; use `full` for
-compatibility audits and every explicit shortcut.
-
-When TraeCN is already running, `traecn_open_project` reuses the active window
-by default through TraeCN's bundled CLI, reconnects CDP, and verifies the exact
-workspace path before returning success. Pass
-`{"projectPath":"/absolute/project/path","newInstance":true}` only when a
-separate window is wanted. If the requested project is already open, the
-gateway returns immediately without reloading the window.
+The MCP server exposes one compact six-tool surface:
+`traecn_submit`, `traecn_get_task`, `traecn_cancel_task`,
+`traecn_list_conversations`, `traecn_manage_conversation`, and
+`traecn_resolve_interaction`. Submit accepts optional `model`, `mode`,
+`workspace`, `conversationId`, and follow-up `steps`. The gateway opens and
+verifies the requested folder, selects the requested controls, maintains the
+queue, recovers persisted work, handles safe cards and file-review gates, and
+pushes completion notifications. Agents query a task only when they explicitly
+need its current status or full result.
 
 ### Agent Skill Distribution
 
 The portable cross-agent skill lives at `skills/traecnclaw-mcp`. It
-teaches agents how to configure the stdio MCP server, choose the right profile,
-and prefer MCP tools over GUI control.
+teaches agents how to use the compact server while leaving execution mechanics
+to the gateway.
 
 Install the skill globally for Codex-compatible clients:
 
@@ -251,6 +242,10 @@ The OpenAPI schema is served at `/openapi.json` (requires the same auth token as
 - `POST /api/sessions/{sessionId}/delegate`
 - `POST /api/delegate`
 - `POST /api/delegate-async`
+- `POST /api/tasks/submit`
+- `GET /api/conversations`
+- `POST /api/conversations/manage`
+- `POST /api/interactions/resolve`
 - `POST /api/task/{taskId}/review`
 - `POST /api/confirm/plan`
 - `POST /api/new-chat`
@@ -265,7 +260,10 @@ The OpenAPI schema is served at `/openapi.json` (requires the same auth token as
 - `GET /openapi.json`
 - MCP stdio tools through `mcp-server.js`
 
-Agents should call `GET /api/capabilities` or MCP `traecn_get_capabilities` first for a compact command, endpoint, token strategy, model, settings, and confirmation catalog. Before side-effecting operations, call `POST /api/preflight` or MCP `traecn_preflight` once to combine status, current `surface` (`setup` vs `workspace`), readiness, queue, dialog, and optional command-plan state. For a dry confirmation-only check, call `POST /api/confirm/plan` or MCP `traecn_plan_operation`. Fetch `/openapi.json` only when full request/response schemas are needed.
+MCP agents call `traecn_submit` directly. The gateway performs readiness,
+workspace, queue, model, mode, conversation, and approval preparation
+internally. Operator integrations can still inspect `GET /api/capabilities`,
+`POST /api/preflight`, or `/openapi.json` when diagnosing the gateway itself.
 
 For unattended local waiting on macOS, start the gateway as a LaunchAgent:
 
@@ -274,41 +272,30 @@ npm run service:start
 npm run service:status
 ```
 
-With `delegate-async`, use `waitForQueue=true` to keep tasks in the gateway's own
-background queue while TraeCN is visibly queued, and add `reviewRequired=true`
-when you want the result to pause for user review before any follow-up tasks run.
-Add `fallbackModels` or `autoModelFallback=true` when the gateway should actively
-probe alternate models while the task waits. The agent can then release its
-context after receiving `taskId`; the local gateway persists the queue, refreshes
-`modelProbeResults`, and sends webhook/OpenClaw notifications when the task
-reaches review or completion.
-The stdio server also long-polls a durable, per-client task-event inbox after
+Every MCP submission is gateway-managed. The Agent releases its context after
+receiving `taskId`; the gateway persists the task, maintains the queue, applies
+requested model/mode/workspace/conversation controls, and sends completion
+notifications.
+The stdio server long-polls a durable, per-client task-event inbox after
 MCP initialization and emits compact standard `notifications/message` events.
 Set a stable, unique `TRAECN_MCP_CLIENT_ID` for each IDE connection when the
 derived MCP client name is not unique. Events are acknowledged only after the
 stdio write succeeds, survive gateway restarts, and contain only status plus a
-short summary; fetch the full result with `traecn_poll_task`. An IDE that does
-not display MCP logging notifications can call `traecn_list_task_events` and
-`traecn_ack_task_event` explicitly. Injection into a particular chat remains
-an IDE-adapter capability, not something the gateway can guarantee.
+short summary; fetch the full result with `traecn_get_task` only when needed.
+Event cursors and acknowledgements are internal and never consume Agent tool
+calls. Injection into a particular chat remains an IDE-adapter capability.
 Each submitted Solo task is rebound by task-specific visible text rather than
 by its transient sidebar index. If that identity cannot be found, collection
 waits instead of reading another conversation. Progress labels below 100%, such
 as `任务完成 16%`, remain non-terminal.
 
-When TraeCN pauses on an inline command card, call
-`traecn_get_dialog_status` and inspect `type`, `question`, and `buttons`.
-`{"action":"auto"}` uses a local classifier and consumes no model tokens:
-read-only command chains are approved immediately. Write, network, privilege,
-process-control, and unknown commands return `approvalDecision:"agent_review"`
-with `commandRisk`, `riskReasons`, and the command for compact calling-agent
-review; the gateway does not request human confirmation. After approval,
-`traecn_respond_dialog` with `{"action":"approve"}` maps to the visible
-`运行` button.
+Inline safe command cards are approved by a local classifier without model
+tokens. Unsafe or unknown cards and non-mechanical questions surface through
+`traecn_resolve_interaction`. TraeCN file-review gates keep changes by default
+and revert only on clear fatal automation failures.
 
-For a single local process that waits quietly until completion, use MCP
-`traecn_wait_task`, OpenClaw `traecn_delegate`, or the CLI. Add `--detach` when the wait should continue under a
-local `screen` session after the calling agent releases context:
+The CLI retains detached wait and proof commands for maintainers and acceptance
+testing; these are not MCP Agent tools:
 
 ```sh
 traecnclaw wait task_123 --poll-ms 30000 --timeout-ms 0 --log queue-evidence.jsonl --quiet -o json
@@ -319,8 +306,7 @@ By default, external TraeCN model queues do not expire locally; set
 `maxQueueWaitMs` (or `queueMaxWaitMs`) only when a caller explicitly wants a
 queue timeout.
 
-For the guarded GLM-5.2 acceptance proof, agents can use the same control flow
-through MCP/OpenClaw commands or the CLI:
+For the guarded GLM-5.2 acceptance proof, use the CLI:
 
 ```sh
 traecnclaw proof status
@@ -335,21 +321,11 @@ submissions still require `--allow-quota-spend`; use the dry-run first to verify
 cleanup, preflight readiness, evidence paths, and that no local task is active
 before a quota-consuming TraeCN submission.
 
-Use `traecnclaw cleanup-queue --status --json`, MCP
-`traecn_get_cleanup_watch_status`, or OpenClaw `traecn_cleanup_watch_status` to
+Use `traecnclaw cleanup-queue --status --json` or OpenClaw
+`traecn_cleanup_watch_status` to
 inspect the local queue-probe cleanup watcher without touching TraeCN. The
 watcher is singleton-locked, so repeat detached starts return
 `alreadyRunning: true` instead of creating extra background cleanup processes.
-
-```json
-{
-  "task": "审查当前项目并输出 findings-first 结果",
-  "waitForQueue": true,
-  "reviewRequired": true,
-  "autoModelFallback": true,
-  "modelProbeIntervalMs": 60000
-}
-```
 
 ## Testing
 
@@ -379,7 +355,7 @@ requirement-by-requirement status; add `-- --require-complete` before declaring
 the full unattended TraeCN goal complete. Use `npm run test:all` for the
 release-style lint, test, system, UAT, and coverage sequence.
 `test:live` runs safe real Trae CN/CDP smoke checks when a live remote-debugging endpoint is available; otherwise it reports `SKIP` and exits successfully. Use `node scripts/live-uat.js --strict` when a live desktop instance is required, `--require-ready` when the UI must be logged in and automation-ready, and `--cleanup-queue-probes` when accidental `wait for Trae queue` Solo chats should be stopped, deleted, and rechecked to `matched: 0`. `--strict` fails if those queue-probe chats remain. Add `--delegate` only when sending a real test prompt is acceptable. `--delegate` is readiness-gated and fails with diagnostics instead of sending a prompt to an unready UI.
-`npm run proof:long-queue` is the guarded GLM-5.2 proof runner. It defaults to dry-run, verifies preflight readiness, refuses to start when queue-probe Solo chats or local tasks remain, and prints the exact evidence paths. Add `-- --execute --detach --allow-quota-spend` only when a real long-queue TraeCN submission is explicitly approved; execute mode automatically stops/deletes accidental queue-probe Solo chats and requires consecutive clean dry-runs before submitting. Tune that gate with `-- --cleanup-stabilize-checks <n> --cleanup-stabilize-delay-ms <ms> --cleanup-max-attempts <n>`. Re-running with the same marker resumes the existing task from the evidence log instead of submitting again; add `-- --force-new` only when an intentional new submission is acceptable. Use `npm run proof:status`, MCP `traecn_get_long_queue_proof_status`, OpenClaw `traecn_long_queue_proof_status`, CLI `traecnclaw proof status`, or `npm run proof:cancel -- --marker <id>` to inspect or stop detached proof runs without creating another TraeCN conversation.
+`npm run proof:long-queue` is the guarded GLM-5.2 proof runner. It defaults to dry-run, verifies readiness, refuses to start when queue-probe Solo chats or local tasks remain, and prints the exact evidence paths. Add `-- --execute --detach --allow-quota-spend` only when a real long-queue TraeCN submission is explicitly approved. Re-running with the same marker resumes its evidence instead of submitting again. Use `npm run proof:status`, OpenClaw `traecn_long_queue_proof_status`, CLI `traecnclaw proof status`, or `npm run proof:cancel -- --marker <id>` to inspect or stop proof runs. Proof commands remain operator/test facilities, not MCP tools.
 
 ## Security
 

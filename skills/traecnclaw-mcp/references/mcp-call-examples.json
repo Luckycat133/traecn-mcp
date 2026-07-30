@@ -1,64 +1,37 @@
 {
   "calls": [
     {
-      "name": "model_switch",
-      "tool": "traecn_switch_model",
+      "name": "submit_repository_review",
+      "tool": "traecn_submit",
       "arguments": {
-        "name": "GLM-5.2",
-        "waitForQueue": false
+        "message": "Review the current repository. Report findings first, ordered by severity.",
+        "model": "GLM-5.2",
+        "mode": "solo",
+        "workspace": "/absolute/path/to/repository"
       }
     },
     {
-      "name": "security_review",
-      "tool": "traecn_review_code",
+      "name": "submit_multi_step_change",
+      "tool": "traecn_submit",
       "arguments": {
-        "instruction": "Findings first: review this file for security defects.",
-        "files": ["src/shared/mcp-auth.js"],
-        "focus": ["authentication", "authorization", "tests"]
+        "message": "Fix the login-page layout regression.",
+        "steps": ["Run focused snapshot tests", "Update the changelog"]
       }
     },
     {
-      "name": "human_reviewed_workflow",
-      "tool": "traecn_run_unattended_workflow",
-      "arguments": {
-        "task": "修复登录页样式",
-        "steps": ["补充快照测试", "更新 CHANGELOG"],
-        "reviewRequired": true,
-        "autoContinue": false
-      }
+      "name": "explicit_task_check",
+      "tool": "traecn_get_task",
+      "arguments": { "taskId": "TASK_ID" }
     },
     {
-      "name": "wait_for_checkpoint",
-      "tool": "traecn_wait_task",
-      "arguments": {
-        "taskId": "TASK_ID",
-        "pollMs": 5000,
-        "timeoutMs": 600000
-      }
+      "name": "select_conversation",
+      "tool": "traecn_manage_conversation",
+      "arguments": { "action": "select", "conversationId": "solo:UmV2aWV3IEFQSQ" }
     },
     {
-      "name": "approve_gateway_checkpoint",
-      "tool": "traecn_resolve_task_review",
-      "arguments": {
-        "taskId": "TASK_ID",
-        "decision": "approve",
-        "notes": "Reviewed generated changes"
-      }
-    },
-    {
-      "name": "keep_trae_internal_changes",
-      "tool": "traecn_resolve_review_gate",
-      "arguments": {
-        "action": "keep_all"
-      }
-    },
-    {
-      "name": "long_queue_proof_dry_run",
-      "tool": "traecn_start_long_queue_proof",
-      "arguments": {
-        "execute": false,
-        "allowQuotaSpend": false
-      }
+      "name": "answer_exceptional_question",
+      "tool": "traecn_resolve_interaction",
+      "arguments": { "action": "answer", "answer": "Review the current workspace changes" }
     }
   ]
 }

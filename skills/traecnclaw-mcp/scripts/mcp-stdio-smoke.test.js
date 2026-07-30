@@ -45,7 +45,7 @@ function readFrames(stream, expectedCount, timeoutMs = 5000) {
   const launcher = path.join(__dirname, 'start-mcp.js');
   const child = spawn(process.execPath, [launcher], {
     cwd: path.resolve(__dirname, '../../..'),
-    env: { ...process.env, TRAECN_MCP_TOOL_PROFILE: 'public' },
+    env: { ...process.env },
     stdio: ['pipe', 'pipe', 'pipe']
   });
   let stderr = '';
@@ -66,8 +66,15 @@ function readFrames(stream, expectedCount, timeoutMs = 5000) {
     const tools = responses.find(item => item.id === 2);
     assert.strictEqual(initialize.result.serverInfo.name, 'traecnclaw');
     assert.strictEqual(tools.result.tools.length, getMcpToolsForProfile('public').length);
-    assert.ok(tools.result.tools.some(tool => tool.name === 'traecn_preflight'));
-    console.log(`[mcp-stdio-smoke.test.js] PASS (${tools.result.tools.length} public tools)`);
+    assert.deepStrictEqual(tools.result.tools.map(tool => tool.name), [
+      'traecn_submit',
+      'traecn_get_task',
+      'traecn_cancel_task',
+      'traecn_list_conversations',
+      'traecn_manage_conversation',
+      'traecn_resolve_interaction'
+    ]);
+    console.log(`[mcp-stdio-smoke.test.js] PASS (${tools.result.tools.length} compact tools)`);
   } finally {
     child.kill('SIGTERM');
   }
