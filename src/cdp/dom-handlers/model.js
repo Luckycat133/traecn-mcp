@@ -187,7 +187,7 @@ async function listModels(driver) {
             return textOf(el.querySelector('.chat-model-label,[class*="label"],[class*="name"]') || el);
           })
           .filter(function(text) {
-            return text && text.length < 120 && /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
+            return text && text.length < 120;
           });
         if (trigger && typeof trigger.click === 'function') trigger.click();
         var models = Array.from(new Set(labels));
@@ -198,7 +198,12 @@ async function listModels(driver) {
     awaitPromise: true,
     returnByValue: true
   });
-  return result.result?.value || { current: '', models: [] };
+  const value = result.result?.value || { current: '', models: [] };
+  return {
+    current: value.current || '',
+    models: Array.from(new Set((Array.isArray(value.models) ? value.models : [])
+      .filter(model => !/^\d+(?:\.\d+)?x$/i.test(String(model || '').trim()))))
+  };
 }
 
 function _normalizeModelName(name) {
@@ -436,6 +441,40 @@ async function switchModel(driver, modelName) {
 
   await sleep(driver.config.postActionDelayMs);
   const switchResult = result.result?.value || 'unknown';
+  const accessNotice = await driver.client.send('Runtime.evaluate', {
+    expression: `(() => {
+      var selectors = [
+        '[role="alert"]', '[role="dialog"]',
+        '[class*="toast"]', '[class*="notification"]', '[class*="notice"]',
+        '[class*="tooltip"]', '[class*="popover"]', '[class*="modal"]'
+      ];
+      var candidates = Array.from(document.querySelectorAll(selectors.join(',')));
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        var rect = el.getBoundingClientRect();
+        var style = getComputedStyle(el);
+        if (rect.width <= 0 || rect.height <= 0
+          || style.visibility === 'hidden' || style.display === 'none') continue;
+        var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+        var match = text.match(/仅\\s*会员[^。！!]{0,160}(?:可用|使用)/);
+        if (match) return match[0];
+      }
+      return '';
+    })()`,
+    returnByValue: true
+  });
+  const accessError = String(accessNotice.result?.value || '').trim();
+  if (accessError) {
+    return {
+      success: false,
+      code: 'MODEL_ACCESS_DENIED',
+      model: beforeModel,
+      requestedModel,
+      previousModel: beforeModel,
+      switchResult,
+      error: accessError
+    };
+  }
   let currentModel = '';
   for (let attempt = 0; attempt < 20; attempt++) {
     await sleep(150);

@@ -91,7 +91,7 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
       }
       return asMcpContent((await client.submitTask(args)).data);
     case 'get_task': {
-      const result = await client.getTaskStatus(args.taskId);
+      const result = await client.getTaskStatus(args.taskId, { detailLevel: args.detailLevel });
       return asMcpContent(result.data || result);
     }
     case 'cancel_task': {

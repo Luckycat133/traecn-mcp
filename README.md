@@ -315,6 +315,8 @@ restores interrupted work. Legacy initialization-based MCP clients also receive
 compact `notifications/message` completion events. MCP `2026-07-28` removed
 free-floating logging notifications, so modern clients use
 `traecn_get_task` for an intentional status or result read; do not busy-poll.
+Its optional `detailLevel` defaults to `result` (final answer only); use
+`trace` when the visible execution process is needed for diagnosis.
 Set a stable, unique `TRAECN_MCP_CLIENT_ID` for each IDE connection when the
 derived legacy MCP client name is not unique. Events are acknowledged only after the
 stdio write succeeds, survive gateway restarts, and contain only status plus a

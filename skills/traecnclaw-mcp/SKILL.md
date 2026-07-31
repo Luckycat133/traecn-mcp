@@ -68,6 +68,10 @@ conversation. Because visible work may belong to the user or another agent,
 set `acknowledgeUntrackedWork:true` and include a short audit `reason`. Use
 `traecn_cancel_task` instead when the work has a gateway task ID.
 
+For a completed task, omit `detailLevel` or pass `"result"` to retrieve only
+the final answer. Pass `detailLevel: "trace"` only when the detailed visible
+execution process is needed to diagnose or trace an unexpected outcome.
+
 ## Inspect or change Trae settings
 
 Treat settings as a second-level capability. Call

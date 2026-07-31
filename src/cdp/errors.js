@@ -90,6 +90,22 @@ class TraeCNAutomationError extends Error {
     );
   }
 
+  static settingsSectionNotActivated(section, reason) {
+    return new TraeCNAutomationError(
+      `Settings section "${section}" was not activated: ${reason || 'the visible UI did not confirm the selection'}`,
+      'SETTINGS_SECTION_NOT_ACTIVATED',
+      { section, reason: reason || null }
+    );
+  }
+
+  static settingsContentUnavailable(section) {
+    return new TraeCNAutomationError(
+      `Settings section "${section}" did not expose readable content after two activation attempts`,
+      'SETTINGS_CONTENT_UNAVAILABLE',
+      { section }
+    );
+  }
+
   // ── 5xx — something went wrong in the bridge / driver / TraeCN ──────
 
   static connectionFailed(host, port, cause) {

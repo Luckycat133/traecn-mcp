@@ -21,6 +21,10 @@ Use the context tools only when the requested workspace, model, mode, or
 conversation must change. New conversations are explicit; otherwise messages
 remain in the selected conversation.
 
+`traecn_get_task` accepts `taskId` and optional `detailLevel`. Use `result`
+(the default) for the final answer, or `trace` when the visible execution
+process is needed to investigate an unexpected result.
+
 Settings are a second-level capability: list sections, list one section's
 items, list dropdown options when needed, then use the exact toggle, option, or
 text mutation tool. The gateway navigates Trae's UI and returns to chat.

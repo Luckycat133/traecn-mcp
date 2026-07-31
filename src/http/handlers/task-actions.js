@@ -60,11 +60,62 @@ const ROUTES = [
   ];
 
 async function handleTaskStatus(req, res, ctx, taskId) {
+  let detailLevel = 'result';
+  try {
+    const requested = new URL(req?.url || '', 'http://127.0.0.1').searchParams.get('detailLevel');
+    if (requested === 'trace') detailLevel = 'trace';
+  } catch {
+    detailLevel = 'result';
+  }
   const task = ctx.taskQueue.get(taskId);
   if (!task) {
     const historyTask = ctx.taskHistoryStore.getTask(taskId);
     if (historyTask) {
-      return ctx._json(req, res, ctx._historyTaskStatusResponse(historyTask));
+      const responseTask = {
+        ...historyTask,
+        result: historyTask.result ? { ...historyTask.result } : historyTask.result
+      };
+      const snapshot = String(responseTask.result?.text || '');
+      let captured = null;
+      const recoverableResult = /新任务[\s\S]{0,80}资源管理器|一切就绪，只等你动手/.test(snapshot)
+        || /思考过程[\s\S]+完成总结/.test(snapshot)
+        || responseTask.result?.code === 'TASK_RESULT_UNAVAILABLE'
+        || detailLevel === 'trace';
+      if (recoverableResult) {
+        if (typeof ctx.driver?.findTaskResponse !== 'function'
+          && typeof ctx._ensureConnection === 'function') {
+          try {
+            await ctx._ensureConnection();
+          } catch {
+            // The unavailable-result response below is more useful than a connection exception here.
+          }
+        }
+        if (typeof ctx.driver?.findTaskResponse === 'function') {
+          try {
+            captured = await ctx.driver.findTaskResponse({ detailLevel });
+          } catch {
+            captured = null;
+          }
+        }
+        if (captured?.text && captured.hasResponse !== false) {
+          responseTask.result = {
+            text: captured.text,
+            stable: captured.inProgress !== true,
+            ...(responseTask.result?.elapsedMs === undefined ? {} : { elapsedMs: responseTask.result.elapsedMs })
+          };
+        } else if (detailLevel !== 'trace' || !responseTask.result?.text) {
+          responseTask.result = {
+            code: 'TASK_RESULT_UNAVAILABLE',
+            error: 'Agent response is no longer available in the bound TraeCN conversation'
+          };
+        }
+      }
+      const response = ctx._historyTaskStatusResponse(responseTask);
+      response.detailLevel = detailLevel;
+      if (detailLevel === 'trace' && !captured?.text) {
+        response.detailWarning = 'Full execution trace is unavailable; returning the stored final result.';
+      }
+      return ctx._json(req, res, response);
     }
     return ctx._json(req, res, { error: 'Task not found' }, 404);
   }

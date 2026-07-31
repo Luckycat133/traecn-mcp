@@ -20,7 +20,7 @@ Tasks extension is not advertised as a stable capability.
 | Tool | Required input | Gateway route |
 | --- | --- | --- |
 | `traecn_send_message` | `message` | `POST /api/tasks/submit` |
-| `traecn_get_task` | `taskId` | `GET /api/task/{taskId}` |
+| `traecn_get_task` | `taskId`; optional `detailLevel` (`result` or `trace`) | `GET /api/task/{taskId}` |
 | `traecn_cancel_task` | `taskId` | `POST /api/task/{taskId}/cancel` |
 | `traecn_stop_generation` | `conversationId`, `acknowledgeUntrackedWork`, `reason` | `POST /api/trae/stop-generation` |
 | `traecn_open_workspace` | `path` | `POST /api/open-project` |
@@ -48,7 +48,9 @@ After message acceptance the gateway owns persistence, external and local
 queues, recovery, completion checks, notifications, routine questions, safe
 command approvals, and keep/revert gates. Agents do not wait, poll, acknowledge
 events, run preflight, or recover work. `traecn_get_task` is an optional
-explicit read, not a polling instruction.
+explicit read, not a polling instruction. Its default `detailLevel: "result"`
+returns only the final answer; use `detailLevel: "trace"` when a failure or
+unexpected result requires the visible execution process for diagnosis.
 
 Settings tools form a second level: list visible sections, then list only one
 section's items and their `controlType`. List dropdown options before selecting

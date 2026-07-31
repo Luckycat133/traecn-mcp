@@ -260,8 +260,10 @@ class Gateway {
     this.uiActionChain = new Promise(resolve => { release = resolve; });
     await previous.catch(() => {});
     try {
+      this.uiActionInFlight = (this.uiActionInFlight || 0) + 1;
       return await action();
     } finally {
+      this.uiActionInFlight = Math.max(0, (this.uiActionInFlight || 1) - 1);
       release();
     }
   }
@@ -2569,7 +2571,14 @@ class Gateway {
     return this._withUiActionLock(async () => {
       try {
         await this.driver.settings.switchTab(section);
-        const data = await this.driver.settings.getContent();
+        let data = await this.driver.settings.getContent();
+        if (section && (!Array.isArray(data?.items) || data.items.length === 0)) {
+          await this.driver.settings.switchTab(section);
+          data = await this.driver.settings.getContent();
+        }
+        if (section && (!Array.isArray(data?.items) || data.items.length === 0)) {
+          throw TraeCNAutomationError.settingsContentUnavailable(section);
+        }
         return this._json(req, res, { section: section || 'current', ...data });
       } catch(e) {
         return this._json(req, res, { error: safeErrorMessage(e) }, 500);
@@ -2868,6 +2877,7 @@ class Gateway {
     if (record.result) {
       if (record.result.error) {
         response.error = record.result.error;
+        if (record.result.code) response.errorCode = record.result.code;
       } else {
         response.result = record.result;
       }

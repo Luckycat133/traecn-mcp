@@ -9,6 +9,7 @@ const SUPPORTED_PROTOCOL_VERSIONS = Object.freeze([
   ...LEGACY_PROTOCOL_VERSIONS
 ]);
 const PROTOCOL_VERSION_META_KEY = 'io.modelcontextprotocol/protocolVersion';
+const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
 const CLIENT_CAPABILITIES_META_KEY = 'io.modelcontextprotocol/clientCapabilities';
 const SERVER_INFO_META_KEY = 'io.modelcontextprotocol/serverInfo';
 const SERVER_INFO = Object.freeze({ name: 'traecnclaw', version: packageInfo.version });
@@ -81,6 +82,7 @@ function modernResult(result = {}, options = {}) {
 
 module.exports = {
   CLIENT_CAPABILITIES_META_KEY,
+  CLIENT_INFO_META_KEY,
   LEGACY_PROTOCOL_VERSIONS,
   MODERN_PROTOCOL_VERSION,
   McpProtocolError,

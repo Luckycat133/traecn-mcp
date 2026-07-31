@@ -214,6 +214,26 @@ async function sendMessage(driver, text) {
     await driver.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
   }
   await sleep(driver.config.postActionDelayMs);
+
+  const submissionVisible = await driver._waitForExpression(
+    `(function() {
+      var expected = ${jsStringLiteral(normalizedExpected)};
+      var sels = ${composerSels};
+      var composer = null;
+      for (var i = 0; i < sels.length; i++) {
+        composer = document.querySelector(sels[i]);
+        if (composer) break;
+      }
+      var composerText = composer ? (composer.innerText || composer.textContent || '').replace(/\\s+/g, ' ').trim() : '';
+      var bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').replace(/\\s+/g, ' ').trim();
+      return composerText !== expected && bodyText.includes(expected);
+    })()`,
+    5000,
+    200
+  );
+  if (!submissionVisible) {
+    throw TraeCNAutomationError.sendFailed('message did not appear in the active conversation after submission');
+  }
 }
 
 async function stopGeneration(driver) {

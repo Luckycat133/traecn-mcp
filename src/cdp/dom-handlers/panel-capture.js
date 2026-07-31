@@ -282,7 +282,7 @@ async function _queryTaskSidebar(driver, skipText) {
  * Query the IDE chat panel for task state.
  * Used instead of _queryTaskSidebar() in IDE mode.
  */
-async function _queryIdeTaskPanel(driver, skipText) {
+async function _queryIdeTaskPanel(driver, skipText, options = {}) {
   const safePanelSels = driver.config.ideTaskPanelSelectors.map(s => safeJsValue(s));
 
   const result = await driver.client.send('Runtime.evaluate', {
@@ -341,10 +341,10 @@ async function _queryIdeTaskPanel(driver, skipText) {
     returnByValue: true
   });
 
-  return _extractLatestIdeAssistantState(result.result?.value, skipText);
+  return _extractLatestIdeAssistantState(result.result?.value, skipText, options);
 }
 
-function _extractLatestIdeAssistantState(panelState, skipText) {
+function _extractLatestIdeAssistantState(panelState, skipText, options = {}) {
   if (!panelState) return null;
 
   const turns = Array.isArray(panelState.turns) ? panelState.turns : [];
@@ -366,7 +366,8 @@ function _extractLatestIdeAssistantState(panelState, skipText) {
     .map(turn => ({
       className: String(turn.className || ''),
       ariaLabel: String(turn.ariaLabel || ''),
-      text: String(turn.text || '').trim()
+      text: String(turn.text || '').trim(),
+      finalText: String(turn.finalText || '').trim()
     }))
     .filter(turn => turn.text);
 
@@ -398,7 +399,11 @@ function _extractLatestIdeAssistantState(panelState, skipText) {
   }
 
   const latestAssistant = assistantTurns.length ? assistantTurns[assistantTurns.length - 1] : normalizedTurns[normalizedTurns.length - 1];
-  const latestText = String(latestAssistant?.text || '').trim();
+  const latestText = String(
+    options.detailLevel === 'trace'
+      ? latestAssistant?.text
+      : (latestAssistant?.finalText || latestAssistant?.text)
+  ).trim();
   const normalizedLatest = latestText.replace(/\s+/g, ' ').trim();
   if (!latestText || (normalizedSkip && normalizedLatest === normalizedSkip)) {
     return null;
@@ -491,20 +496,58 @@ function _isModelErrorResponseText(text) {
 /**
  * Mode-aware version: tries sidebar in SOLO mode, chat panel in IDE mode.
  */
-async function _queryTaskSource(driver, skipText) {
+async function _queryTaskSource(driver, skipText, options = {}) {
   const modeInfo = await driver.detectMode();
   if (modeInfo.mode === 'solo') {
-    const panelState = await _queryIdeTaskPanel(driver, skipText);
+    const soloMessage = await driver.client.send('Runtime.evaluate', {
+      expression: `(() => {
+        const sidebar = document.querySelector('.soloaisidebar');
+        const composer = document.querySelector('.chat-input-v2-input-box-editable, [class*="input-box"]');
+        const soloTopLevelTurns = Array.from(document.querySelectorAll('.chat-turn'))
+          .filter(el => el.offsetParent !== null && !(sidebar && sidebar.contains(el)) && !(composer && composer.contains(el)))
+          .map(el => {
+            const finalBlocks = Array.from(el.querySelectorAll('.chat-markdown'))
+              .filter(block => block.offsetParent !== null && !block.parentElement?.closest('.chat-markdown'))
+              .map(block => (block.innerText || block.textContent || '').trim())
+              .filter(text => text.length > 20);
+            return {
+              className: [el.className || '', el.getAttribute('data-role') || ''].join(' '),
+              ariaLabel: el.getAttribute('aria-label') || '',
+              text: (el.innerText || el.textContent || '').trim(),
+              finalText: finalBlocks[finalBlocks.length - 1] || ''
+            };
+          })
+          .filter(turn => turn.text);
+        if (!soloTopLevelTurns.length) return null;
+        const fullText = soloTopLevelTurns.map(turn => turn.text).join('\\n');
+        const latestText = soloTopLevelTurns[soloTopLevelTurns.length - 1].text;
+        const runningIndicator = Array.from(document.querySelectorAll('.codicon-stop-circle, [class*="stop-circle"]'))
+          .some(el => el.offsetParent !== null);
+        return {
+          soloTopLevelTurns: true,
+          fullText,
+          turns: soloTopLevelTurns,
+          taskComplete: !runningIndicator && /任务完成|Task completed/i.test(latestText),
+          taskInProgress: runningIndicator
+        };
+      })()`,
+      returnByValue: true
+    });
+    if (soloMessage.result?.value?.soloTopLevelTurns === true) {
+      const soloState = _extractLatestIdeAssistantState(soloMessage.result.value, skipText, options);
+      if (soloState) return soloState;
+    }
+    const panelState = await _queryIdeTaskPanel(driver, skipText, options);
     if (panelState) return panelState;
     return _queryTaskSidebar(driver, skipText);
   }
-  return _queryIdeTaskPanel(driver, skipText);
+  return _queryIdeTaskPanel(driver, skipText, options);
 }
 
-async function findTaskResponse(driver) {
+async function findTaskResponse(driver, options = {}) {
   const skipText = driver._lastTaskText;
 
-  const taskResult = await driver._queryTaskSource(skipText);
+  const taskResult = await driver._queryTaskSource(skipText, options);
   if (taskResult) return taskResult;
 
   // SOLO fallback: sidebar full-text scan for task blocks

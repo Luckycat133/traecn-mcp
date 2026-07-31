@@ -266,8 +266,11 @@ class TraeCNApiClient {
     return this._request('POST', '/api/delegate-async', body);
   }
 
-  async getTaskStatus(taskId) {
-    return this._request('GET', '/api/task/' + encodeURIComponent(taskId));
+  async getTaskStatus(taskId, options = {}) {
+    const path = '/api/task/' + encodeURIComponent(taskId);
+    if (!options.detailLevel || options.detailLevel === 'result') return this._request('GET', path);
+    const params = new URLSearchParams({ detailLevel: options.detailLevel });
+    return this._request('GET', `${path}?${params.toString()}`);
   }
 
   async waitForTask(taskId, options = {}) {

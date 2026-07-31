@@ -131,6 +131,35 @@ async function test(name, fn) {
     );
   });
 
+  await test('modern requests reject malformed client capabilities as invalid params', async () => {
+    const handlers = createMcpHandlers({ test: true });
+    await assert.rejects(
+      () => handlers.handle({
+        method: 'tools/list',
+        params: {
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28'
+          }
+        }
+      }),
+      error => error.code === -32602
+        && /Missing required client capabilities metadata/.test(error.message)
+    );
+    // A non-object required metadata value is malformed for the same reason.
+    await assert.rejects(
+      () => handlers.handle({
+        method: 'tools/list',
+        params: {
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+            'io.modelcontextprotocol/clientCapabilities': 'not-an-object'
+          }
+        }
+      }),
+      error => error.code === -32602
+    );
+  });
+
   await test('modern list results are typed and cacheable', async () => {
     const handlers = createMcpHandlers({ test: true });
     const result = await handlers.handle({
@@ -189,6 +218,27 @@ async function test(name, fn) {
       });
       assert.deepStrictEqual(request, { method: 'GET', url: '/api/task/task-1' });
       assert.strictEqual(JSON.parse(result.content[0].text).status, 'done');
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
+  await test('get_task lets the agent request the full execution trace', async () => {
+    let request = null;
+    const server = http.createServer((req, res) => {
+      request = { method: req.method, url: req.url };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task-1', status: 'done', result: { text: 'trace' } }));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      await callTool('traecn_get_task', { taskId: 'task-1', detailLevel: 'trace' }, {
+        host: '127.0.0.1', port: server.address().port, token: '', timeout: 3000
+      });
+      assert.deepStrictEqual(request, {
+        method: 'GET',
+        url: '/api/task/task-1?detailLevel=trace'
+      });
     } finally {
       await new Promise(resolve => server.close(resolve));
     }

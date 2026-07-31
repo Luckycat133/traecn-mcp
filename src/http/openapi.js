@@ -941,7 +941,14 @@ function generateOpenAPISpec() {
           operationId: 'getTaskStatus',
           security: [{ bearerAuth: [] }],
           parameters: [
-            { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }
+            { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } },
+            {
+              name: 'detailLevel',
+              in: 'query',
+              required: false,
+              description: 'Return only the final result (default) or the full visible execution trace.',
+              schema: { type: 'string', enum: ['result', 'trace'], default: 'result' }
+            }
           ],
           responses: {
             '200': { description: 'Task status' },

@@ -30,12 +30,20 @@
     },
     {
       "name": "traecn_get_task",
-      "description": "Read one known task when an explicit status or result check is needed.",
+      "description": "Read one known task. Defaults to the final result; request trace only when detailed execution history is needed for diagnosis.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "taskId": {
             "type": "string"
+          },
+          "detailLevel": {
+            "type": "string",
+            "enum": [
+              "result",
+              "trace"
+            ],
+            "description": "result returns only the final answer (default); trace includes the full visible Trae execution process."
           }
         },
         "required": [

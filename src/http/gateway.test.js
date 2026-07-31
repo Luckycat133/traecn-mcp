@@ -2681,6 +2681,213 @@ asyncTest('Gateway task status falls back to history for cleaned terminal tasks'
   assert.strictEqual(responseData.lastStep.action, 'error');
 });
 
+asyncTest('Gateway reports an unavailable historical result instead of returning a stale page snapshot', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = {
+    findTaskResponse: async () => ({
+      text: '新任务⌃⌘N任务0和智能体对话，开始你的第一个任务吧',
+      inProgress: false,
+      isComplete: false,
+      hasResponse: false
+    })
+  };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_stale_result',
+      task: 'update MCP support',
+      status: 'completed',
+      createdAt: new Date(Date.now() - 5000).toISOString(),
+      createdAtMs: Date.now() - 5000,
+      completedAt: new Date().toISOString(),
+      elapsedMs: 5000,
+      result: {
+        text: '新任务 任务 3 Agent 一切就绪，只等你动手。资源管理器 文件',
+        stable: true
+      },
+      metadata: {},
+      steps: [{ action: 'done', timestamp: new Date().toISOString(), success: true, details: {} }]
+    })
+  };
+
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({}, {}, 'task_stale_result');
+
+  assert.strictEqual(responseData.status, 'done');
+  assert.strictEqual(responseData.errorCode, 'TASK_RESULT_UNAVAILABLE');
+  assert.match(responseData.error, /Agent response is no longer available/);
+  assert.strictEqual(responseData.result, undefined);
+});
+
+asyncTest('Gateway rejects a stale historical page snapshot when no CDP driver is connected', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = null;
+  gateway._ensureConnection = async () => { throw new Error('Trae unavailable'); };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_stale_without_driver',
+      status: 'completed',
+      createdAtMs: Date.now() - 1000,
+      completedAt: new Date().toISOString(),
+      result: { text: 'Agent 一切就绪，只等你动手。资源管理器 文件', stable: true },
+      metadata: {},
+      steps: []
+    })
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({}, {}, 'task_stale_without_driver');
+
+  assert.strictEqual(responseData.status, 'done');
+  assert.strictEqual(responseData.errorCode, 'TASK_RESULT_UNAVAILABLE');
+  assert.strictEqual(responseData.result, undefined);
+});
+
+asyncTest('Gateway connects to Trae before recovering an unavailable historical result', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = null;
+  gateway._ensureConnection = async () => {
+    gateway.driver = {
+      findTaskResponse: async () => ({
+        text: 'Agent\n完成总结\n直接任务查询已恢复\n任务完成',
+        inProgress: false,
+        isComplete: true,
+        hasResponse: true
+      })
+    };
+  };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_connect_then_recover',
+      status: 'completed',
+      createdAtMs: Date.now() - 1000,
+      completedAt: new Date().toISOString(),
+      result: {
+        code: 'TASK_RESULT_UNAVAILABLE',
+        error: 'Agent response is no longer available in the bound TraeCN conversation'
+      },
+      metadata: {},
+      steps: []
+    })
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({}, {}, 'task_connect_then_recover');
+
+  assert.strictEqual(responseData.errorCode, undefined);
+  assert.ok(responseData.result.text.includes('直接任务查询已恢复'));
+});
+
+asyncTest('Gateway recovers an unavailable historical result after its Trae conversation returns', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = {
+    findTaskResponse: async () => ({
+      text: 'Agent\n完成总结\nMCP 更新完成\n任务完成',
+      inProgress: false,
+      isComplete: true,
+      hasResponse: true
+    })
+  };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_recovered_result',
+      status: 'completed',
+      createdAtMs: Date.now() - 1000,
+      completedAt: new Date().toISOString(),
+      result: {
+        code: 'TASK_RESULT_UNAVAILABLE',
+        error: 'Agent response is no longer available in the bound TraeCN conversation'
+      },
+      metadata: {},
+      steps: []
+    })
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({}, {}, 'task_recovered_result');
+
+  assert.strictEqual(responseData.errorCode, undefined);
+  assert.ok(responseData.result.text.includes('MCP 更新完成'));
+  assert.strictEqual(responseData.result.stable, true);
+});
+
+asyncTest('Gateway compacts a persisted Solo process transcript to its final summary', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = {
+    findTaskResponse: async () => ({
+      text: '完成总结\n最终改动和测试结果',
+      inProgress: false,
+      isComplete: true,
+      hasResponse: true
+    })
+  };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_uncompacted_transcript',
+      status: 'completed',
+      createdAtMs: Date.now() - 1000,
+      completedAt: new Date().toISOString(),
+      result: {
+        text: 'Agent\n思考过程\n大量工具调用和中间步骤\n完成总结\n最终改动和测试结果\n任务完成',
+        stable: true
+      },
+      metadata: {},
+      steps: []
+    })
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({}, {}, 'task_uncompacted_transcript');
+
+  assert.strictEqual(responseData.result.text, '完成总结\n最终改动和测试结果');
+});
+
+asyncTest('Gateway returns the full live trace when task detailLevel is trace', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  let requestedOptions = null;
+  gateway.driver = {
+    findTaskResponse: async options => {
+      requestedOptions = options;
+      return {
+        text: 'Agent\n思考过程\n工具调用\n完成总结\n最终结果\n任务完成',
+        inProgress: false,
+        isComplete: true,
+        hasResponse: true
+      };
+    }
+  };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_trace_result',
+      status: 'completed',
+      createdAtMs: Date.now() - 1000,
+      completedAt: new Date().toISOString(),
+      result: { text: '完成总结\n最终结果', stable: true },
+      metadata: {},
+      steps: []
+    })
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({ url: '/api/task/task_trace_result?detailLevel=trace' }, {}, 'task_trace_result');
+
+  assert.deepStrictEqual(requestedOptions, { detailLevel: 'trace' });
+  assert.ok(responseData.result.text.includes('思考过程'));
+  assert.strictEqual(responseData.detailLevel, 'trace');
+});
+
 asyncTest('Gateway recovers review-gate persistence into awaiting_review result', async () => {
   const gateway = new Gateway();
   gateway.driver = {
@@ -3951,6 +4158,59 @@ asyncTest('Gateway reads one settings section from Trae UI and restores chat', a
   assert.strictEqual(responseData.section, '通用');
   assert.strictEqual(responseData.items[0].label, 'Auto Save');
   assert.deepStrictEqual(calls, ['section:通用', 'back-to-chat']);
+});
+
+asyncTest('Gateway retries one lazy settings page when its first read is empty', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  let readCount = 0;
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      switchTab: async section => calls.push(`section:${section}`),
+      getContent: async () => {
+        calls.push('read');
+        readCount++;
+        return readCount === 1
+          ? { sections: [], items: [] }
+          : { sections: [], items: [{ label: 'Tab-Cue', controlType: 'toggle' }] };
+      },
+      backToChat: async () => calls.push('back-to-chat')
+    }
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; return data; };
+  const { req } = makeReqRes({}, '/api/settings/read?section=CUE&restoreChat=true');
+
+  await gateway._handleSettingsRead(req, {});
+
+  assert.deepStrictEqual(responseData.items.map(item => item.label), ['Tab-Cue']);
+  assert.deepStrictEqual(calls, ['section:CUE', 'read', 'section:CUE', 'read', 'back-to-chat']);
+});
+
+asyncTest('Gateway reports an error when an activated settings page stays unreadable', async () => {
+  const gateway = new Gateway();
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      switchTab: async () => {},
+      getContent: async () => ({ sections: [], items: [] }),
+      backToChat: async () => {}
+    }
+  };
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+  const { req } = makeReqRes({}, '/api/settings/read?section=CUE&restoreChat=true');
+
+  await gateway._handleSettingsRead(req, {});
+
+  assert.strictEqual(responseStatus, 500);
+  assert.match(responseData.error, /Settings section "CUE" did not expose readable content/);
 });
 
 asyncTest('Gateway lists one setting dropdown options from Trae UI and restores chat', async () => {

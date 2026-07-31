@@ -28,6 +28,11 @@
       "arguments": { "taskId": "TASK_ID" }
     },
     {
+      "name": "diagnostic_task_trace",
+      "tool": "traecn_get_task",
+      "arguments": { "taskId": "TASK_ID", "detailLevel": "trace" }
+    },
+    {
       "name": "list_general_settings",
       "tool": "traecn_list_settings",
       "arguments": { "section": "通用" }

@@ -24,8 +24,15 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_get_task',
-    description: 'Read one known task when an explicit status or result check is needed.',
-    inputSchema: schema({ taskId: { type: 'string' } }, ['taskId'])
+    description: 'Read one known task. Defaults to the final result; request trace only when detailed execution history is needed for diagnosis.',
+    inputSchema: schema({
+      taskId: { type: 'string' },
+      detailLevel: {
+        type: 'string',
+        enum: ['result', 'trace'],
+        description: 'result returns only the final answer (default); trace includes the full visible Trae execution process.'
+      }
+    }, ['taskId'])
   },
   {
     name: 'traecn_cancel_task',

@@ -131,8 +131,8 @@ class DomDriver {
     return panelModule._queryIdeTaskPanel(this, skipText);
   }
 
-  _extractLatestIdeAssistantState(panelState, skipText) {
-    return panelModule._extractLatestIdeAssistantState(panelState, skipText);
+  _extractLatestIdeAssistantState(panelState, skipText, options) {
+    return panelModule._extractLatestIdeAssistantState(panelState, skipText, options);
   }
 
   _isIncompleteResponseText(text) {
@@ -146,12 +146,12 @@ class DomDriver {
   /**
    * Mode-aware version: tries sidebar in SOLO mode, chat panel in IDE mode.
    */
-  async _queryTaskSource(skipText) {
-    return panelModule._queryTaskSource(this, skipText);
+  async _queryTaskSource(skipText, options) {
+    return panelModule._queryTaskSource(this, skipText, options);
   }
 
-  async findTaskResponse() {
-    return panelModule.findTaskResponse(this);
+  async findTaskResponse(options) {
+    return panelModule.findTaskResponse(this, options);
   }
 
   // ── Element finders ────────────────────────────────────────────────────

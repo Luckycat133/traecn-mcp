@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const vm = require('vm');
 const { DomDriver, getConfig, sanitizeActivityText, isTruncationSignal, DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS, DEFAULT_RESPONSE_SELECTORS } = require('./dom-driver');
 const { cleanAssistantResultText } = require('./dom-handlers/response-collection');
 const { createRunner } = require('../shared/test-runner');
@@ -173,6 +174,36 @@ asyncTest('sendMessage verifies debug prompts containing angle brackets and arro
   assert.ok(verification.includes('\\u003C'));
   assert.ok(!verification.includes('normalized === ,'));
   assert.deepStrictEqual(insertTexts, [text]);
+});
+
+asyncTest('sendMessage rejects a click that does not create a visible user message', async () => {
+  const text = 'Verify that this request is visible in the Solo conversation';
+  const fakeClient = {
+    async send(method, payload = {}) {
+      if (method === 'Runtime.evaluate') {
+        const expression = payload.expression || '';
+        if (expression.includes('el.focus()')) return { result: { value: { ok: true } } };
+        if (expression.includes('normalized ===')) {
+          return { result: { value: { ok: true, text, normalized: text } } };
+        }
+        if (expression.includes('button.chat-input-v2-send-button')) {
+          return { result: { value: 'send via mouse events' } };
+        }
+        return { result: { value: {} } };
+      }
+      if (method === 'Input.insertText' || method === 'Input.dispatchKeyEvent') return {};
+      throw new Error(`unexpected CDP method ${method}`);
+    }
+  };
+  const driver = new DomDriver(fakeClient, { ...getConfig(), postActionDelayMs: 0, sendTrigger: 'button' });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, reviewCount: 0 });
+  driver.findSendButton = async () => ({ nodeId: 1 });
+  driver._waitForExpression = async () => false;
+
+  await assert.rejects(
+    () => driver.sendMessage(text),
+    error => error && error.code === 'SEND_FAILED' && /did not appear/.test(error.message)
+  );
 });
 
 test('checkQueueStatus ignores historical queue text without visible queue notice', async () => {
@@ -983,6 +1014,26 @@ test('extractLatestIdeAssistantState trusts the visible completed status over co
   assert.strictEqual(state.hasResponse, true);
 });
 
+test('extractLatestIdeAssistantState can return the full trace on explicit request', () => {
+  const driver = new DomDriver(null, getConfig());
+  const state = driver._extractLatestIdeAssistantState({
+    fullText: '用户问题 Agent 思考过程 工具调用 完成总结 最终结果 任务完成',
+    taskComplete: true,
+    taskInProgress: false,
+    turns: [
+      { className: 'chat-turn user', text: '用户问题' },
+      {
+        className: 'chat-turn assistant task',
+        text: 'Agent\n思考过程\n工具调用\n完成总结\n最终结果\n任务完成',
+        finalText: '完成总结\n最终结果'
+      }
+    ]
+  }, '', { detailLevel: 'trace' });
+
+  assert.ok(state.text.includes('思考过程'));
+  assert.ok(state.text.includes('工具调用'));
+});
+
 asyncTest('queryTaskSource reads the current Solo assistant turn instead of an older sidebar row', async () => {
   const driver = new DomDriver({
     async send(method, payload) {
@@ -1019,6 +1070,72 @@ asyncTest('queryTaskSource reads the current Solo assistant turn instead of an o
   const state = await driver._queryTaskSource('');
 
   assert.ok(state.text.includes('LIVE-UAT-READONLY-PASS'));
+});
+
+asyncTest('queryTaskSource reads top-level Solo chat turns before panel fallbacks', async () => {
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (payload.expression.includes('soloTopLevelTurns')) {
+        return {
+          result: {
+            value: {
+              soloTopLevelTurns: true,
+              fullText: '当前用户请求 Agent MCP 更新完成 测试结果 任务完成',
+              taskComplete: true,
+              taskInProgress: false,
+              turns: [
+                { className: 'chat-turn user', text: '当前用户请求' },
+                { className: 'chat-turn assistant', text: 'Agent\nMCP 更新完成\n测试结果\n任务完成' }
+              ]
+            }
+          }
+        };
+      }
+      return { result: { value: null } };
+    }
+  }, getConfig());
+  driver.detectMode = async () => ({ mode: 'solo' });
+
+  const state = await driver._queryTaskSource('');
+
+  assert.ok(state.text.includes('MCP 更新完成'));
+  assert.strictEqual(state.hasResponse, true);
+  assert.strictEqual(state.isComplete, true);
+});
+
+asyncTest('queryTaskSource returns the final Solo markdown instead of the folded process transcript', async () => {
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (!payload.expression.includes('soloTopLevelTurns')) return { result: { value: null } };
+      assert.doesNotThrow(() => new Function(`return ${payload.expression}`));
+      return {
+        result: {
+          value: {
+            soloTopLevelTurns: true,
+            fullText: '当前请求 Agent 思考过程 大量工具调用 完成总结 最终结果 任务完成',
+            taskComplete: true,
+            taskInProgress: false,
+            turns: [
+              { className: 'chat-turn user', text: '当前请求' },
+              {
+                className: 'chat-turn assistant',
+                text: 'Agent\n思考过程\n大量工具调用\n完成总结\n最终结果\n任务完成',
+                finalText: '完成总结\n这是只包含最终结论、改动文件和测试结果的完整回复。'
+              }
+            ]
+          }
+        }
+      };
+    }
+  }, getConfig());
+  driver.detectMode = async () => ({ mode: 'solo' });
+
+  const state = await driver._queryTaskSource('');
+
+  assert.strictEqual(state.text, '完成总结\n这是只包含最终结论、改动文件和测试结果的完整回复。');
+  assert.strictEqual(state.hasResponse, true);
 });
 
 test('isIncompleteResponseText treats skill invocation preamble as incomplete', () => {
@@ -1246,6 +1363,9 @@ test('switchModel busy guard ignores stale body-only generating text', async () 
       if (params.expression.includes('targetName')) {
         return { result: { value: 'clicked: GLM-5.2 at index 0' } };
       }
+      if (params.expression.includes('[role="alert"]')) {
+        return { result: { value: '' } };
+      }
       throw new Error('Unexpected Runtime.evaluate expression');
     }
   }, { ...getConfig(), postActionDelayMs: 0 });
@@ -1276,6 +1396,71 @@ test('switchModel busy guard blocks when live stop state is visible', async () =
   assert.strictEqual(result.error, 'generating');
 });
 
+test('switchModel ignores unrelated upgrade prompts elsewhere on the page', async () => {
+  let currentModelCalls = 0;
+  const driver = new DomDriver({
+    send: async (method, params) => {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (params.expression.includes('stopIcon')) return { result: { value: { busy: false } } };
+      if (params.expression.includes('var all = Array.from')) return { result: { value: 1 } };
+      if (params.expression.includes('modeItem')) return { result: { value: 'auto mode already off' } };
+      if (params.expression.includes('targetName')) return { result: { value: 'clicked: GLM-5.2 at index 0' } };
+      if (params.expression.includes('[role="alert"]')) {
+        return {
+          result: {
+            value: vm.runInNewContext(params.expression, {
+              document: {
+                body: { innerText: '排队提醒 当前模型请求量较高 升级权益' },
+                querySelectorAll: () => []
+              },
+              getComputedStyle: () => ({ visibility: 'visible', display: 'block' })
+            })
+          }
+        };
+      }
+      throw new Error('Unexpected Runtime.evaluate expression');
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+  driver.getCurrentModel = async () => (++currentModelCalls === 1 ? 'Doubao-1.5' : 'GLM-5.2');
+
+  const result = await driver.switchModel('GLM-5.2');
+
+  assert.strictEqual(result.success, true);
+});
+
+test('switchModel surfaces a membership notice containing whitespace', async () => {
+  const driver = new DomDriver({
+    send: async (method, params) => {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (params.expression.includes('stopIcon')) return { result: { value: { busy: false } } };
+      if (params.expression.includes('var all = Array.from')) return { result: { value: 1 } };
+      if (params.expression.includes('modeItem')) return { result: { value: 'auto mode already off' } };
+      if (params.expression.includes('targetName')) return { result: { value: 'clicked: Kimi-K3 at index 0' } };
+      if (params.expression.includes('[role="alert"]')) {
+        const notice = {
+          innerText: '仅   会员 Pro 用户可用',
+          getBoundingClientRect: () => ({ width: 240, height: 80 })
+        };
+        return {
+          result: {
+            value: vm.runInNewContext(params.expression, {
+              document: { querySelectorAll: () => [notice] },
+              getComputedStyle: () => ({ visibility: 'visible', display: 'block' })
+            })
+          }
+        };
+      }
+      throw new Error('Unexpected Runtime.evaluate expression');
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+  driver.getCurrentModel = async () => 'GLM-5.2';
+
+  const result = await driver.switchModel('Kimi-K3');
+
+  assert.strictEqual(result.code, 'MODEL_ACCESS_DENIED');
+  assert.match(result.error, /仅\s+会员/);
+});
+
 asyncTest('listModels returns the currently offered TraeCN models', async () => {
   let expression = '';
   const driver = new DomDriver({
@@ -1287,7 +1472,7 @@ asyncTest('listModels returns the currently offered TraeCN models', async () => 
         result: {
           value: {
             current: 'GLM-5.2',
-            models: ['GLM-5.2', 'DeepSeek-V3.2']
+            models: ['GLM-5.2', '0.40x', 'DeepSeek-V3.2']
           }
         }
       };
