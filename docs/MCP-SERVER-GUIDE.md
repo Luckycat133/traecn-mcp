@@ -6,7 +6,7 @@ maintenance operations remain gateway or operator facilities.
 
 ## Protocol compatibility
 
-Version 0.5.0 is a dual-era stdio server:
+Version 0.5.1 is a dual-era stdio server:
 
 | MCP revision | Lifecycle | TRAECNclaw behavior |
 | --- | --- | --- |
@@ -95,11 +95,28 @@ Legacy initialization-based clients receive compact MCP logging notifications.
 The `2026-07-28` protocol does not allow those free-floating notifications;
 modern clients make an intentional `traecn_get_task` read when they need status
 or the final result. Do not use a tight polling loop. The experimental MCP Tasks
-extension is intentionally not advertised as a stable 0.5.0 capability.
+extension is intentionally not advertised as a stable 0.5.1 capability.
 
 `traecn_get_task` exists for explicit progress/result reads and modern clients
 that cannot receive legacy logging notifications. It is not a required
-immediate post-send step.
+immediate post-send step. The optional `detailLevel` is `result` by default,
+which returns only the final answer. Set it to `trace` when detailed visible
+execution steps are needed to investigate an unexpected result.
+
+## Modern-era error codes
+
+The `2026-07-28` revision partitions the JSON-RPC server-error range: `-32000`
+to `-32019` remains implementation-defined, and `-32020` to `-32099` is reserved
+for specification-defined errors (SEP-2575). TRAECNclaw applies these errors as
+follows:
+
+| Code | Spec name | When TRAECNclaw returns it |
+| --- | --- | --- |
+| `-32602` | `Invalid Params` | A modern request omits required per-request metadata, sends a malformed value, or calls an unknown tool. |
+| `-32021` | `MissingRequiredClientCapability` | Processing requires an optional client capability that the request did not declare; `error.data.requiredCapabilities` identifies the missing capability. TRAECNclaw currently has no operation with such a requirement. |
+| `-32022` | `UnsupportedProtocolVersion` | A modern request declares a protocol version the server does not support; `error.data.supported` lists the supported versions and `error.data.requested` echoes the requested one. |
+
+Unspecified server errors keep implementation-defined `-32000`.
 
 ## Validation
 

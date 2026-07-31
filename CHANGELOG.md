@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-31
+
+### Added
+
+- Added `detailLevel` to `traecn_get_task`: `result` (the default) returns the
+  final Trae answer, while `trace` returns the visible execution process for
+  diagnosis and audit tracing when it is still available.
+
+### Changed
+
+- Clarified modern request errors for MCP `2026-07-28`: malformed required
+  per-request metadata uses JSON-RPC `-32602` Invalid Params, while `-32021`
+  `MissingRequiredClientCapability` is reserved for operations that require an
+  undeclared optional client capability and must identify it in
+  `requiredCapabilities`. `UnsupportedProtocolVersion` remains `-32022`.
+
+### Fixed
+
+- Made settings navigation reliable in Solo and IDE layouts, including narrow
+  panes with a collapsed sidebar and editor-tab variants. Native CDP mouse
+  input is now used for controls that ignore synthetic DOM clicks.
+- Restricted settings extraction to visible rows and settings-owned tables,
+  added support for usage, agent, and index/document card layouts, refreshed
+  the 16-section fallback, and retries lazy pages once before returning an
+  explicit `SETTINGS_CONTENT_UNAVAILABLE` error.
+
 ## [0.5.0] - 2026-07-31
 
 ### Added

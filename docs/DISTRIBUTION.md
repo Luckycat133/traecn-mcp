@@ -107,7 +107,7 @@ template. Do not register it alongside Option A.
 
 For package installs, use `command: "traecnclaw-mcp"` only after that exact
 version is verified on npm. Source and release-archive instructions are the
-authoritative 0.5.0 path until publication completes.
+authoritative 0.5.1 path until publication completes.
 
 ## Public mirror synchronization
 
@@ -121,17 +121,17 @@ node scripts/public-mirror.js --check --mirror /path/to/traecnclaw-mcp-skill --r
 The command copies `skills/traecnclaw-mcp` byte-for-byte, writes the exact
 canonical commit to `SOURCE_REVISION`, refreshes version/contract metadata,
 keeps `glama.json`, and removes the obsolete legacy `smithery.yaml`. The
-canonical commit must be the commit tagged `v0.5.0`; a dirty working tree is
+canonical commit must be the commit tagged `v0.5.1`; a dirty working tree is
 not a release source.
 
 The bundled MCP server supports the stable `2026-07-28` protocol over standard
 newline-delimited stdio and legacy `initialize` clients. Catalog descriptions
-should call it a local stdio server; Streamable HTTP is not exposed by 0.5.0.
+should call it a local stdio server; Streamable HTTP is not exposed by 0.5.1.
 
 Smithery now distributes local stdio servers as MCPB bundles, so no replacement
 legacy YAML is generated. The official MCP Registry metadata template lives at
 `distribution/public-mirror/server.json.template`, but it must not be copied to
-the public mirror or published until npm contains the matching 0.5.0 package.
+the public mirror or published until npm contains the matching 0.5.1 package.
 The Registry validates that package version and the `mcpName` field before it
 accepts `server.json`.
 

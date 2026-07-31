@@ -1,6 +1,6 @@
 {
   "name": "traecnclaw",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "mcpName": "io.github.luckycat133/traecnclaw",
   "private": true,
   "description": "Local HTTP bridge and OpenClaw tool integration for TraeCN powered by CDP and DOM automation.",
