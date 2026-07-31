@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- Added dual-era MCP support for the stable `2026-07-28` stateless protocol,
+  including `server/discover`, per-request version metadata, typed results,
+  cache hints, and server identity metadata while retaining legacy
+  `2025-11-25` and `2024-11-05` initialization.
+- Added structured tool results and permissive JSON output schemas alongside
+  text content for old clients.
 - Added a single checksummed TaskStore schema with durable temporary writes,
   atomic replacement, last-known-good backups, corrupt-file quarantine, legacy
   snapshot migration, and forced-process-kill recovery tests.
@@ -36,6 +42,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
+- Replaced the non-standard default `Content-Length` stdio framing with MCP's
+  newline-delimited JSON-RPC framing while preserving bidirectional
+  compatibility for existing TRAECNclaw clients using the former format.
+- Stopped echoing arbitrary client protocol versions during legacy
+  initialization and return the standard unsupported-version error for modern
+  requests.
 - Corrected Monaco MarkerSeverity values `1`, `2`, `4`, and `8` to map to
   hint, info, warning, and error.
 - Replaced first-token Git branch guessing with explicit parsing backed by

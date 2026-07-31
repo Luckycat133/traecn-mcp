@@ -162,6 +162,12 @@ Any MCP-capable agent can connect through the bundled stdio server. The
 recommended entry point is the skill launcher, which auto-locates
 `mcp-server.js` from the repo root:
 
+The server implements the stable MCP `2026-07-28` stateless protocol with
+per-request metadata and `server/discover`. It also operates as a dual-era
+server for `2025-11-25` and `2024-11-05` clients that use `initialize`.
+Standard stdio uses one JSON-RPC message per line; the former `Content-Length`
+framing remains compatible for existing TRAECNclaw clients.
+
 ```json
 {
   "mcpServers": {
@@ -216,7 +222,7 @@ The MCP server exposes 20 focused tools grouped by intent:
 `traecn_send_message` accepts only the message and an optional stable
 conversation ID. Workspace, model, mode, and conversation changes are explicit
 single-purpose operations. The gateway still owns queues, persistence,
-recovery, routine approvals, file-review gates, and completion notifications.
+recovery, routine approvals, file-review gates, and completion signaling.
 Settings commands operate Trae's visible UI and return to chat automatically.
 
 ### Agent Skill Distribution
@@ -304,16 +310,19 @@ npm run service:status
 ```
 
 Every MCP message is gateway-managed. The Agent releases its context after
-receiving `taskId`; the gateway persists the task, maintains the queue, restores
-interrupted work, and sends completion notifications.
-The stdio server long-polls a durable, per-client task-event inbox after
-MCP initialization and emits compact standard `notifications/message` events.
+receiving `taskId`; the gateway persists the task, maintains the queue, and
+restores interrupted work. Legacy initialization-based MCP clients also receive
+compact `notifications/message` completion events. MCP `2026-07-28` removed
+free-floating logging notifications, so modern clients use
+`traecn_get_task` for an intentional status or result read; do not busy-poll.
 Set a stable, unique `TRAECN_MCP_CLIENT_ID` for each IDE connection when the
-derived MCP client name is not unique. Events are acknowledged only after the
+derived legacy MCP client name is not unique. Events are acknowledged only after the
 stdio write succeeds, survive gateway restarts, and contain only status plus a
 short summary; fetch the full result with `traecn_get_task` only when needed.
 Event cursors and acknowledgements are internal and never consume Agent tool
-calls. Injection into a particular chat remains an IDE-adapter capability.
+calls. Modern task-extension support is not advertised while the MCP Tasks
+extension remains experimental. Injection into a particular chat remains an
+IDE-adapter capability.
 Each submitted Solo task is rebound by task-specific visible text rather than
 by its transient sidebar index. If that identity cannot be found, collection
 waits instead of reading another conversation. Progress labels below 100%, such

@@ -20,7 +20,8 @@
         },
         "required": [
           "message"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "task",
@@ -39,7 +40,8 @@
         },
         "required": [
           "taskId"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "task",
@@ -58,7 +60,8 @@
         },
         "required": [
           "taskId"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "task",
@@ -91,7 +94,8 @@
           "conversationId",
           "acknowledgeUntrackedWork",
           "reason"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "task",
@@ -112,7 +116,8 @@
         },
         "required": [
           "path"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "context",
@@ -125,7 +130,8 @@
       "inputSchema": {
         "type": "object",
         "properties": {},
-        "required": []
+        "required": [],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "context",
@@ -144,7 +150,8 @@
         },
         "required": [
           "model"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "context",
@@ -167,7 +174,8 @@
         },
         "required": [
           "mode"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "context",
@@ -180,7 +188,8 @@
       "inputSchema": {
         "type": "object",
         "properties": {},
-        "required": []
+        "required": [],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "settings",
@@ -199,7 +208,8 @@
         },
         "required": [
           "section"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "settings",
@@ -222,7 +232,8 @@
         "required": [
           "section",
           "label"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "settings",
@@ -249,7 +260,8 @@
           "section",
           "label",
           "enabled"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "settings",
@@ -276,7 +288,8 @@
           "section",
           "label",
           "value"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "settings",
@@ -303,7 +316,8 @@
           "section",
           "label",
           "text"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "settings",
@@ -316,7 +330,8 @@
       "inputSchema": {
         "type": "object",
         "properties": {},
-        "required": []
+        "required": [],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "conversation",
@@ -329,7 +344,8 @@
       "inputSchema": {
         "type": "object",
         "properties": {},
-        "required": []
+        "required": [],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "conversation",
@@ -349,7 +365,8 @@
         },
         "required": [
           "conversationId"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "conversation",
@@ -380,7 +397,8 @@
           "conversationId",
           "expectedTitle",
           "acknowledgePermanentDeletion"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "conversation",
@@ -400,7 +418,8 @@
         },
         "required": [
           "answer"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "interaction",
@@ -437,7 +456,8 @@
         },
         "required": [
           "decision"
-        ]
+        ],
+        "additionalProperties": false
       },
       "metadata": {
         "layer": "interaction",

@@ -27,6 +27,25 @@ selection. There is one ordered 20-tool Agent surface:
 Removed low-level command, preflight, wait, recovery, event-acknowledgement,
 and proof tools are operator/maintainer functions, not Agent MCP tools.
 
+## MCP protocol revision
+
+TRAECNclaw 0.5.0 supports the stable MCP `2026-07-28` revision and remains
+compatible with initialization-based `2025-11-25` and `2024-11-05` clients.
+These date-based revisions are distinct from TRAECNclaw MCP contract version 5.
+
+Modern clients should probe with `server/discover` and include
+`io.modelcontextprotocol/protocolVersion` plus client capabilities in each
+request's `_meta`. Results include `resultType`, structured tool content,
+server identity metadata, and cache hints where required. Legacy clients keep
+using `initialize`; unsupported legacy versions negotiate to `2025-11-25`
+instead of being echoed back unchecked.
+
+Replace custom `Content-Length` stdio framing with one compact JSON-RPC object
+per line. The server still accepts the old framing during migration. Legacy
+clients retain logging notifications; modern clients intentionally read a
+known task with `traecn_get_task` when they need its state because
+`2026-07-28` removed free-floating logging notifications.
+
 ## Canonical environment names and defaults
 
 Use `TRAECN_GATEWAY_HOST` and `TRAECN_GATEWAY_PORT` instead of `TRAECN_HOST`,
@@ -71,3 +90,5 @@ when other local processes are not trusted.
    MCP client.
 6. Confirm `tools/list` returns exactly 20 tools and `/api/capabilities`
    reports contract version 5.
+7. For a modern client, confirm `server/discover` includes `2026-07-28` and a
+   newline-framed `tools/list` result contains `resultType: "complete"`.

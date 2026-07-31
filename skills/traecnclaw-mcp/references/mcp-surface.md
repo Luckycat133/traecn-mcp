@@ -2,6 +2,21 @@
 
 TRAECNclaw exposes one focused Agent surface. There are no tool profiles.
 
+## Protocol and transport
+
+- MCP `2026-07-28`: stateless per-request `_meta`, `server/discover`, typed
+  results, structured tool content, server identity metadata, and cache hints.
+- MCP `2025-11-25` and `2024-11-05`: legacy `initialize` compatibility.
+- stdio: one compact JSON-RPC object per line. `Content-Length` framing is
+  accepted only as a migration compatibility path.
+
+MCP contract version 5 below identifies this Skill's frozen 20-tool surface;
+it is not an MCP protocol revision. Legacy clients receive compact
+`notifications/message` task events. MCP `2026-07-28` removed free-floating
+logging notifications, so modern clients intentionally call
+`traecn_get_task` when they need a known task's state. The experimental MCP
+Tasks extension is not advertised as a stable capability.
+
 | Tool | Required input | Gateway route |
 | --- | --- | --- |
 | `traecn_send_message` | `message` | `POST /api/tasks/submit` |

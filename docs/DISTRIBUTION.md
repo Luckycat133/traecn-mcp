@@ -124,6 +124,10 @@ keeps `glama.json`, and removes the obsolete legacy `smithery.yaml`. The
 canonical commit must be the commit tagged `v0.5.0`; a dirty working tree is
 not a release source.
 
+The bundled MCP server supports the stable `2026-07-28` protocol over standard
+newline-delimited stdio and legacy `initialize` clients. Catalog descriptions
+should call it a local stdio server; Streamable HTTP is not exposed by 0.5.0.
+
 Smithery now distributes local stdio servers as MCPB bundles, so no replacement
 legacy YAML is generated. The official MCP Registry metadata template lives at
 `distribution/public-mirror/server.json.template`, but it must not be copied to

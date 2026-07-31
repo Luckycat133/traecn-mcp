@@ -55,8 +55,11 @@ Send example after any required context-selection calls:
 ```
 
 The gateway returns `taskId`, maintains any queue, and pushes completion through
-MCP logging notifications. The caller does not need wait, polling, recovery,
-preflight, proof, cleanup, or review-gate tools.
+MCP logging notifications for legacy initialization-based clients. Modern MCP
+`2026-07-28` clients use `traecn_get_task` for an intentional later read because
+the current protocol removed free-floating logging notifications. The caller
+does not need gateway wait, recovery, preflight, proof, cleanup, or review-gate
+tools, and should not busy-poll.
 
 ## OpenClaw plugin
 
@@ -89,7 +92,8 @@ append-only audit log instead of adding a separate confirmation tool.
 | HTTP 401 | Client and gateway token values |
 | CDP unavailable | TraeCN remote-debugging process and configured port |
 | Workspace cannot switch | Requested absolute path and TraeCN binary discovery |
-| Completion notification missing | MCP logging support and `TRAECN_MCP_CLIENT_ID` uniqueness |
+| Legacy completion notification missing | MCP logging support and `TRAECN_MCP_CLIENT_ID` uniqueness |
+| Modern client shows no pushed completion | Expected on `2026-07-28`; read the known task once with `traecn_get_task` when needed |
 
 Run `npm run test:mcp-stdio-smoke` for protocol discovery and
 `npm run check:skill-contracts` for schema/example consistency.

@@ -24,7 +24,7 @@ metadata:
         description: Optional gateway secret; never print or persist it.
       - name: TRAECN_MCP_CLIENT_ID
         required: false
-        description: Stable client identifier for automatic compact task notifications.
+        description: Stable client identifier for legacy MCP task notifications.
 ---
 
 # TRAECNclaw MCP
@@ -57,9 +57,10 @@ Call `traecn_send_message` with the exact message and, when concurrency makes
 the target ambiguous, an explicit `conversationId`. It returns only the
 accepted `taskId` and status.
 
-Do not wait or poll after sending. The stdio server delivers compact task
-notifications and acknowledges them internally. Call `traecn_get_task` only
-for an intentional status/result read. Use `traecn_cancel_task` for one known
+Do not wait or busy-poll after sending. Legacy initialization-based clients
+receive compact task notifications that the stdio server acknowledges
+internally. MCP `2026-07-28` clients call `traecn_get_task` only for an
+intentional later status/result read. Use `traecn_cancel_task` for one known
 gateway task. Use `traecn_stop_generation` only when the user wants the
 generation currently visible in TraeCN stopped. First list conversations and
 pass the active `conversationId`; the gateway rejects a stale or different
@@ -115,4 +116,5 @@ confirmation round trip.
 - Do not recreate removed low-level tools through shell, generic commands, or GUI control.
 
 Read [references/mcp-surface.md](references/mcp-surface.md) only for exact
-schemas, notification behavior, and gateway ownership boundaries.
+schemas, protocol compatibility, notification behavior, and gateway ownership
+boundaries.

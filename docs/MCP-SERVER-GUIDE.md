@@ -4,6 +4,22 @@ TRAECNclaw exposes a local stdio MCP server for operating TraeCN. The Agent
 contract contains 20 focused tools; lower-level HTTP, CLI, proof, waiting, and
 maintenance operations remain gateway or operator facilities.
 
+## Protocol compatibility
+
+Version 0.5.0 is a dual-era stdio server:
+
+| MCP revision | Lifecycle | TRAECNclaw behavior |
+| --- | --- | --- |
+| `2026-07-28` | Stateless requests with `_meta` | `server/discover`, strict per-request version checks, `resultType`, cache hints, and server identity metadata |
+| `2025-11-25` | `initialize` handshake | Focused tools plus legacy logging notifications |
+| `2024-11-05` | `initialize` handshake | Compatibility mode for existing clients |
+
+Standard stdio framing is newline-delimited JSON-RPC. The server can still
+decode and answer the `Content-Length` framing used by older TRAECNclaw
+clients, but new integrations should send one compact JSON object per line.
+MCP contract version 5 names the frozen TRAECNclaw tool surface; it is separate
+from the date-based MCP protocol revision.
+
 ## Configure
 
 ```json
@@ -72,11 +88,18 @@ and are recorded in the local append-only security audit log.
 The Agent does not preflight, choose sync versus background execution, wait,
 poll, acknowledge events, recover tasks, clean queues, or operate keep/revert
 controls. The gateway persists accepted tasks, maintains queues, resumes work,
-auto-approves a strict read-only command allowlist, resolves file-review gates, and emits compact
-MCP completion notifications.
+auto-approves a strict read-only command allowlist, and resolves file-review
+gates.
 
-`traecn_get_task` exists for explicit progress/result reads or clients that do
-not display MCP logging notifications. It is not a required post-send step.
+Legacy initialization-based clients receive compact MCP logging notifications.
+The `2026-07-28` protocol does not allow those free-floating notifications;
+modern clients make an intentional `traecn_get_task` read when they need status
+or the final result. Do not use a tight polling loop. The experimental MCP Tasks
+extension is intentionally not advertised as a stable 0.5.0 capability.
+
+`traecn_get_task` exists for explicit progress/result reads and modern clients
+that cannot receive legacy logging notifications. It is not a required
+immediate post-send step.
 
 ## Validation
 
