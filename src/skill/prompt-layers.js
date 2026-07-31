@@ -375,13 +375,14 @@ function readMcpResource(uri) {
   throw new Error(`Unknown MCP resource: ${uri}`);
 }
 
-function getMcpCapabilities() {
-  return {
-    logging: {},
-    prompts: { listChanged: true },
-    resources: { listChanged: true },
-    tools: { listChanged: true }
+function getMcpCapabilities(options = {}) {
+  const capabilities = {
+    prompts: { listChanged: false },
+    resources: { listChanged: false },
+    tools: { listChanged: false }
   };
+  if (options.modern !== true) capabilities.logging = {};
+  return capabilities;
 }
 
 module.exports = {

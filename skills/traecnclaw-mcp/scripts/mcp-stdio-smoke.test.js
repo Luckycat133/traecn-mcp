@@ -7,29 +7,24 @@ const { spawn } = require('child_process');
 const { MCP_CONTRACT_VERSION, MCP_TOOLS } = require('../../../mcp-server');
 
 function frame(message) {
-  const payload = JSON.stringify(message);
-  return `Content-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`;
+  return `${JSON.stringify(message)}\n`;
 }
 
 function readFrames(stream, expectedCount, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
-    let buffer = Buffer.alloc(0);
+    let buffer = '';
     const messages = [];
     const timeout = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
 
     stream.on('data', chunk => {
-      buffer = Buffer.concat([buffer, chunk]);
+      buffer += chunk.toString('utf8');
       while (true) {
-        const headerEnd = buffer.indexOf('\r\n\r\n');
-        if (headerEnd === -1) break;
-        const header = buffer.slice(0, headerEnd).toString('utf8');
-        const match = header.match(/Content-Length:\s*(\d+)/i);
-        if (!match) return reject(new Error(`Missing Content-Length header: ${header}`));
-        const bodyStart = headerEnd + 4;
-        const bodyEnd = bodyStart + Number(match[1]);
-        if (buffer.length < bodyEnd) break;
-        messages.push(JSON.parse(buffer.slice(bodyStart, bodyEnd).toString('utf8')));
-        buffer = buffer.slice(bodyEnd);
+        const lineEnd = buffer.indexOf('\n');
+        if (lineEnd === -1) break;
+        const line = buffer.slice(0, lineEnd).trim();
+        buffer = buffer.slice(lineEnd + 1);
+        if (!line) continue;
+        messages.push(JSON.parse(line));
         if (messages.length === expectedCount) {
           clearTimeout(timeout);
           resolve(messages);
@@ -56,15 +51,33 @@ function readFrames(stream, expectedCount, timeoutMs = 5000) {
     child.stdin.write(frame({
       jsonrpc: '2.0',
       id: 1,
-      method: 'initialize',
-      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'skill-smoke', version: '1' } }
+      method: 'server/discover',
+      params: {
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientCapabilities': {},
+          'io.modelcontextprotocol/clientInfo': { name: 'skill-smoke', version: '1' }
+        }
+      }
     }));
-    child.stdin.write(frame({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }));
+    child.stdin.write(frame({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientCapabilities': {}
+        }
+      }
+    }));
 
     const responses = await responsesPromise;
-    const initialize = responses.find(item => item.id === 1);
+    const discover = responses.find(item => item.id === 1);
     const tools = responses.find(item => item.id === 2);
-    assert.strictEqual(initialize.result.serverInfo.name, 'traecnclaw');
+    assert.ok(discover.result.supportedVersions.includes('2026-07-28'));
+    assert.strictEqual(discover.result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
+    assert.strictEqual(tools.result.resultType, 'complete');
     assert.strictEqual(MCP_CONTRACT_VERSION, 5);
     assert.strictEqual(tools.result.tools.length, MCP_TOOLS.length);
     assert.deepStrictEqual(tools.result.tools.map(tool => tool.name), [

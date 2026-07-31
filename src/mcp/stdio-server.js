@@ -7,6 +7,7 @@
 
 const { createMcpHandlers, envContext } = require('./handler');
 const { TraeCNApiClient } = require('../client/traecnapi-client');
+const { McpProtocolError, isModernRequest } = require('./protocol');
 
 const TASK_EVENT_FIELDS = Object.freeze([
   'eventId',
@@ -21,15 +22,77 @@ const TASK_EVENT_FIELDS = Object.freeze([
   'summary'
 ]);
 
-function writeMessage(message) {
+function encodeMessage(message, framing = 'newline') {
   const payload = JSON.stringify(message);
-  const frame = `Content-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`;
+  if (framing === 'content-length') {
+    return `Content-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`;
+  }
+  return `${payload}\n`;
+}
+
+function writeMessage(message, framing = 'newline') {
+  const frame = encodeMessage(message, framing);
   return new Promise((resolve, reject) => {
     process.stdout.write(frame, error => {
       if (error) reject(error);
       else resolve();
     });
   });
+}
+
+class McpStdioDecoder {
+  constructor() {
+    this.buffer = Buffer.alloc(0);
+  }
+
+  push(chunk) {
+    this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
+    const decoded = [];
+    while (this.buffer.length > 0) {
+      if (/^Content-Length:/i.test(this.buffer.toString('utf8', 0, Math.min(this.buffer.length, 15)))) {
+        const headerEnd = this.buffer.indexOf('\r\n\r\n');
+        if (headerEnd === -1) break;
+        const header = this.buffer.slice(0, headerEnd).toString('utf8');
+        const match = header.match(/Content-Length:\s*(\d+)/i);
+        if (!match) throw new Error('Invalid Content-Length frame');
+        const bodyStart = headerEnd + 4;
+        const bodyEnd = bodyStart + Number(match[1]);
+        if (this.buffer.length < bodyEnd) break;
+        decoded.push({
+          framing: 'content-length',
+          message: JSON.parse(this.buffer.slice(bodyStart, bodyEnd).toString('utf8'))
+        });
+        this.buffer = this.buffer.slice(bodyEnd);
+        continue;
+      }
+      const lineEnd = this.buffer.indexOf('\n');
+      if (lineEnd === -1) break;
+      const line = this.buffer.slice(0, lineEnd).toString('utf8').replace(/\r$/, '');
+      this.buffer = this.buffer.slice(lineEnd + 1);
+      if (!line.trim()) continue;
+      decoded.push({ framing: 'newline', message: JSON.parse(line) });
+    }
+    return decoded;
+  }
+}
+
+function nextProtocolEra(currentEra, request = {}) {
+  const requestedEra = request.method === 'initialize'
+    ? 'legacy'
+    : (isModernRequest(request) ? 'modern' : null);
+  if (!currentEra && !requestedEra) {
+    throw new McpProtocolError(
+      -32600,
+      'Start with initialize or modern metadata'
+    );
+  }
+  if (currentEra === 'modern' && !requestedEra) {
+    throw new McpProtocolError(-32602, 'Modern MCP requests require per-request metadata');
+  }
+  if (currentEra && requestedEra && currentEra !== requestedEra) {
+    throw new McpProtocolError(-32600, 'This stdio process cannot switch protocol era');
+  }
+  return currentEra || requestedEra;
 }
 
 function stableMcpClientId(clientInfo = {}, env = process.env) {
@@ -121,58 +184,58 @@ function startStdioServer(options = {}) {
   const write = options.write || writeMessage;
   const clientFactory = options.clientFactory || (context => new TraeCNApiClient(context));
   let taskEventPump = null;
+  let protocolEra = null;
   let initializedClientId = null;
-  let buffer = Buffer.alloc(0);
+  const decoder = new McpStdioDecoder();
+  let legacyFraming = 'newline';
   const startTaskEventPump = () => {
     if (taskEventPump || !initializedClientId) return;
     taskEventPump = new TaskEventPump({
       client: clientFactory(envContext()),
       clientId: initializedClientId,
-      write
+      write: message => write(message, legacyFraming)
     });
     taskEventPump.start();
   };
 
   const input = options.input || process.stdin;
   input.on('data', chunk => {
-    buffer = Buffer.concat([buffer, chunk]);
-    while (true) {
-      const headerEnd = buffer.indexOf('\r\n\r\n');
-      if (headerEnd === -1) return;
-      const header = buffer.slice(0, headerEnd).toString('utf8');
-      const match = header.match(/Content-Length:\s*(\d+)/i);
-      if (!match) {
-        buffer = buffer.slice(headerEnd + 4);
-        continue;
-      }
-      const length = Number(match[1]);
-      const messageStart = headerEnd + 4;
-      const messageEnd = messageStart + length;
-      if (buffer.length < messageEnd) return;
-      const raw = buffer.slice(messageStart, messageEnd).toString('utf8');
-      buffer = buffer.slice(messageEnd);
-
+    let decoded;
+    try {
+      decoded = decoder.push(chunk);
+    } catch (error) {
+      Promise.resolve(write({ jsonrpc: '2.0', id: null, error: { code: -32700, message: error.message } }));
+      return;
+    }
+    for (const frame of decoded) {
+      const request = frame.message;
       Promise.resolve()
-        .then(() => JSON.parse(raw))
-        .then(async request => {
+        .then(async () => {
+          protocolEra = nextProtocolEra(protocolEra, request);
           const result = await handlers.handle(request);
           if (request.method === 'initialize') {
+            legacyFraming = frame.framing;
             initializedClientId = stableMcpClientId(request.params && request.params.clientInfo);
           }
           if (request.id !== undefined && result !== undefined) {
-            await Promise.resolve(write({ jsonrpc: '2.0', id: request.id, result }));
+            await Promise.resolve(write(
+              { jsonrpc: '2.0', id: request.id, result },
+              frame.framing
+            ));
           }
           if (request.method === 'notifications/initialized') startTaskEventPump();
         })
         .catch(async error => {
-          let id = null;
           try {
-            id = JSON.parse(raw).id ?? null;
-          } catch {
-            // Keep id=null when the request body itself is invalid JSON.
-          }
-          try {
-            await Promise.resolve(write({ jsonrpc: '2.0', id, error: { code: -32000, message: error.message } }));
+            await Promise.resolve(write({
+              jsonrpc: '2.0',
+              id: request.id ?? null,
+              error: {
+                code: Number.isInteger(error.code) ? error.code : -32000,
+                message: error.message,
+                ...(error.data === undefined ? {} : { data: error.data })
+              }
+            }, frame.framing));
           } catch {
             // The transport is already closed; no further response is possible.
           }
@@ -188,7 +251,10 @@ function startStdioServer(options = {}) {
 }
 
 module.exports = {
+  McpStdioDecoder,
   TaskEventPump,
+  encodeMessage,
+  nextProtocolEra,
   stableMcpClientId,
   taskEventNotification,
   writeMessage,

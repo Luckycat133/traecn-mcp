@@ -13,11 +13,20 @@ const mcpAuth = require('../shared/mcp-auth');
 const {
   internalMcpToolName,
   asMcpContent,
+  asMcpError,
+  validateMcpToolArguments,
   checkGenericQueueProbe
 } = require('./tools');
 const { MCP_TOOLS } = require('./tool-metadata');
-
-const SERVER_INFO = Object.freeze({ name: 'traecnclaw', version: require('../../package.json').version });
+const {
+  SERVER_INFO,
+  SUPPORTED_PROTOCOL_VERSIONS,
+  McpProtocolError,
+  assertModernRequest,
+  isModernRequest,
+  modernResult,
+  negotiateLegacyProtocolVersion
+} = require('./protocol');
 
 function settingsWriteOptions(section, label, value) {
   const plan = buildConfirmationPlan({
@@ -40,7 +49,9 @@ function envContext() {
 
 async function callTool(name, args = {}, context = envContext(), authContext = {}) {
   const internalName = internalMcpToolName(name);
-  if (!internalName) throw new Error(`Unknown tool: ${name}`);
+  if (!internalName) throw new McpProtocolError(-32602, `Unknown tool: ${name}`);
+  const tool = MCP_TOOLS.find(candidate => candidate.name === name);
+  args = validateMcpToolArguments(tool, args);
 
   const decision = mcpAuth.authorizeTool({
     apiKeyManager: authContext.apiKeyManager,
@@ -58,6 +69,11 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
           required: decision.required
         }, null, 2)
       }],
+      structuredContent: {
+        error: decision.message,
+        code: decision.code,
+        required: decision.required
+      },
       isError: true
     };
   }
@@ -187,24 +203,48 @@ function createMcpHandlers(context = envContext(), authContext = {}) {
       const { method, params = {} } = message;
       if (method === 'initialize') {
         return {
-          protocolVersion: params.protocolVersion || '2024-11-05',
-          capabilities: promptLayers.getMcpCapabilities(),
+          protocolVersion: negotiateLegacyProtocolVersion(params.protocolVersion),
+          capabilities: promptLayers.getMcpCapabilities({ modern: false }),
           serverInfo: SERVER_INFO
         };
       }
-      if (method === 'tools/list') return { tools: MCP_TOOLS };
-      if (method === 'tools/call') {
-        return callTool(params.name, params.arguments || {}, context, authContext);
+      const modern = isModernRequest(message);
+      if (modern) assertModernRequest(message);
+      if (method === 'server/discover') {
+        if (!modern) assertModernRequest(message);
+        return modernResult({
+          supportedVersions: [...SUPPORTED_PROTOCOL_VERSIONS],
+          capabilities: promptLayers.getMcpCapabilities({ modern: true }),
+          instructions: 'Use focused TraeCN tools; the gateway owns queueing, recovery, and safety controls.'
+        }, { cacheable: true });
       }
-      if (method === 'prompts/list') return { prompts: promptLayers.listMcpPrompts() };
-      if (method === 'prompts/get') return promptLayers.getMcpPrompt(params.name, params.arguments || {});
-      if (method === 'resources/list') return { resources: promptLayers.listMcpResources() };
+      const finish = (result, options) => modern ? modernResult(result, options) : result;
+      if (method === 'tools/list') return finish({ tools: MCP_TOOLS }, { cacheable: true });
+      if (method === 'tools/call') {
+        try {
+          return finish(await callTool(params.name, params.arguments || {}, context, authContext));
+        } catch (error) {
+          if (error instanceof McpProtocolError) throw error;
+          return finish(asMcpError(error));
+        }
+      }
+      if (method === 'prompts/list') {
+        return finish({ prompts: promptLayers.listMcpPrompts() }, { cacheable: true });
+      }
+      if (method === 'prompts/get') {
+        return finish(promptLayers.getMcpPrompt(params.name, params.arguments || {}));
+      }
+      if (method === 'resources/list') {
+        return finish({ resources: promptLayers.listMcpResources() }, { cacheable: true });
+      }
       if (method === 'resources/read') {
         const resource = promptLayers.readMcpResource(params.uri);
-        return { contents: [{ uri: resource.uri, mimeType: resource.mimeType, text: resource.text }] };
+        return finish({
+          contents: [{ uri: resource.uri, mimeType: resource.mimeType, text: resource.text }]
+        }, { cacheable: true });
       }
       if (method && method.startsWith('notifications/')) return undefined;
-      throw new Error(`Unknown MCP method: ${method}`);
+      throw new McpProtocolError(-32601, `Unknown MCP method: ${method}`);
     }
   };
 }

@@ -46,6 +46,7 @@ function decorateTool(tool) {
   const metadata = getMcpToolMetadata(tool.name);
   return Object.freeze({
     ...tool,
+    outputSchema: {},
     annotations: {
       ...(TOOL_ANNOTATIONS[metadata.risk] || TOOL_ANNOTATIONS.delegate),
       destructiveHint: DESTRUCTIVE_MCP_TOOLS.has(tool.name)

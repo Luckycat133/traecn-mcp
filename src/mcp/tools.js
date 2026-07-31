@@ -3,7 +3,7 @@
 const { isGenericQueueProbeTask } = require('../shared/utils');
 
 function schema(properties = {}, required = []) {
-  return { type: 'object', properties, required };
+  return { type: 'object', properties, required, additionalProperties: false };
 }
 
 const CONVERSATION_ID = {
@@ -202,7 +202,49 @@ function internalMcpToolName(toolName) {
 
 function asMcpContent(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
-  return { content: [{ type: 'text', text }] };
+  return {
+    content: [{ type: 'text', text }],
+    structuredContent: value,
+    isError: false
+  };
+}
+
+function asMcpError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+    structuredContent: { error: message },
+    isError: true
+  };
+}
+
+function validateMcpToolArguments(tool, value) {
+  const args = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const schema = tool && tool.inputSchema ? tool.inputSchema : {};
+  const properties = schema.properties || {};
+  for (const name of schema.required || []) {
+    if (args[name] === undefined) throw new Error(`Missing required argument: ${name}`);
+  }
+  if (schema.additionalProperties === false) {
+    const unexpected = Object.keys(args).find(name => !Object.hasOwn(properties, name));
+    if (unexpected) throw new Error(`Unexpected argument: ${unexpected}`);
+  }
+  for (const [name, property] of Object.entries(properties)) {
+    if (args[name] === undefined) continue;
+    if (property.type && typeof args[name] !== property.type) {
+      throw new Error(`Argument ${name} must be ${property.type}`);
+    }
+    if (property.enum && !property.enum.includes(args[name])) {
+      throw new Error(`Argument ${name} must be one of: ${property.enum.join(', ')}`);
+    }
+    if (property.minLength && args[name].length < property.minLength) {
+      throw new Error(`Argument ${name} must contain at least ${property.minLength} character(s)`);
+    }
+    if (property.maxLength && args[name].length > property.maxLength) {
+      throw new Error(`Argument ${name} must contain at most ${property.maxLength} character(s)`);
+    }
+  }
+  return args;
 }
 
 function checkGenericQueueProbe(task) {
@@ -214,5 +256,7 @@ module.exports = {
   MCP_TOOL_INTERNAL_NAMES,
   internalMcpToolName,
   asMcpContent,
+  asMcpError,
+  validateMcpToolArguments,
   checkGenericQueueProbe
 };

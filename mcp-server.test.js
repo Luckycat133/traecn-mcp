@@ -82,12 +82,97 @@ async function test(name, fn) {
 
   await test('initialize advertises tools, prompts, resources and logging', async () => {
     const handlers = createMcpHandlers({ test: true });
-    const result = await handlers.handle({ method: 'initialize', params: { protocolVersion: '2024-11-05' } });
+    const result = await handlers.handle({ method: 'initialize', params: { protocolVersion: '2025-11-25' } });
+    assert.strictEqual(result.protocolVersion, '2025-11-25');
     assert.strictEqual(result.serverInfo.name, 'traecnclaw');
     assert.ok(result.capabilities.tools);
     assert.ok(result.capabilities.prompts);
     assert.ok(result.capabilities.resources);
     assert.ok(result.capabilities.logging);
+    const fallback = await handlers.handle({ method: 'initialize', params: { protocolVersion: '2099-01-01' } });
+    assert.strictEqual(fallback.protocolVersion, '2025-11-25');
+  });
+
+  await test('modern discovery advertises MCP 2026-07-28 without deprecated logging', async () => {
+    const handlers = createMcpHandlers({ test: true });
+    const result = await handlers.handle({
+      method: 'server/discover',
+      params: {
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientCapabilities': {}
+        }
+      }
+    });
+    assert.strictEqual(result.resultType, 'complete');
+    assert.deepStrictEqual(result.supportedVersions, ['2026-07-28', '2025-11-25', '2024-11-05']);
+    assert.strictEqual(result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
+    assert.strictEqual(result.capabilities.logging, undefined);
+    assert.ok(result.capabilities.tools);
+    assert.strictEqual(result.cacheScope, 'private');
+    assert.ok(result.ttlMs > 0);
+  });
+
+  await test('modern requests require a supported per-request protocol version', async () => {
+    const handlers = createMcpHandlers({ test: true });
+    await assert.rejects(
+      () => handlers.handle({
+        method: 'tools/list',
+        params: {
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2099-01-01',
+            'io.modelcontextprotocol/clientCapabilities': {}
+          }
+        }
+      }),
+      error => error.code === -32022
+        && error.data.requested === '2099-01-01'
+        && error.data.supported.includes('2026-07-28')
+    );
+  });
+
+  await test('modern list results are typed and cacheable', async () => {
+    const handlers = createMcpHandlers({ test: true });
+    const result = await handlers.handle({
+      method: 'tools/list',
+      params: {
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientCapabilities': {}
+        }
+      }
+    });
+    assert.strictEqual(result.resultType, 'complete');
+    assert.strictEqual(result.cacheScope, 'private');
+    assert.ok(result.ttlMs > 0);
+    assert.strictEqual(result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
+  });
+
+  await test('tool metadata and results expose structured JSON', async () => {
+    assert.ok(MCP_TOOLS.every(tool => tool.outputSchema));
+    const synthetic = require('./src/mcp/tools').asMcpContent({ ok: true, count: 1 });
+    assert.deepStrictEqual(synthetic.structuredContent, { ok: true, count: 1 });
+    assert.strictEqual(synthetic.isError, false);
+  });
+
+  await test('MCP separates protocol errors from actionable tool errors', async () => {
+    const handlers = createMcpHandlers({
+      host: '127.0.0.1', port: 1, token: '', timeout: 10
+    });
+    await assert.rejects(
+      () => handlers.handle({ method: 'unknown/method' }),
+      error => error.code === -32601
+    );
+    await assert.rejects(
+      () => handlers.handle({ method: 'tools/call', params: { name: 'traecn_missing', arguments: {} } }),
+      error => error.code === -32602
+    );
+    const invalid = await handlers.handle({
+      method: 'tools/call',
+      params: { name: 'traecn_get_task', arguments: {} }
+    });
+    assert.strictEqual(invalid.isError, true);
+    assert.match(invalid.structuredContent.error, /taskId/);
   });
 
   await test('get_task forwards one explicit status lookup', async () => {

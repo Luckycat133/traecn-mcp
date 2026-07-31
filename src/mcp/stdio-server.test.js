@@ -1,7 +1,14 @@
 'use strict';
 
 const assert = require('assert');
-const { TaskEventPump, taskEventNotification, stableMcpClientId } = require('./stdio-server');
+const {
+  McpStdioDecoder,
+  TaskEventPump,
+  encodeMessage,
+  nextProtocolEra,
+  taskEventNotification,
+  stableMcpClientId
+} = require('./stdio-server');
 const { createRunner } = require('../shared/test-runner');
 
 const runner = createRunner('stdio-server.test.js');
@@ -11,6 +18,47 @@ test('stableMcpClientId prefers the configured IDE identity', () => {
   assert.strictEqual(stableMcpClientId({ name: 'Codex Desktop' }, { TRAECN_MCP_CLIENT_ID: 'codex-main' }), 'codex-main');
   assert.strictEqual(stableMcpClientId({ name: 'Codex Desktop' }, {}), 'codex-desktop');
   assert.strictEqual(stableMcpClientId({}, {}), 'traecn-mcp-client');
+});
+
+test('stdio uses newline-delimited JSON by default', () => {
+  const encoded = encodeMessage({ jsonrpc: '2.0', id: 1, result: {} });
+  assert.strictEqual(encoded, '{"jsonrpc":"2.0","id":1,"result":{}}\n');
+});
+
+test('stdio decoder accepts chunked newline-delimited MCP messages', () => {
+  const decoder = new McpStdioDecoder();
+  assert.deepStrictEqual(decoder.push('{"jsonrpc":"2.0","id":1,'), []);
+  assert.deepStrictEqual(decoder.push('"method":"tools/list"}\n'), [{
+    framing: 'newline',
+    message: { jsonrpc: '2.0', id: 1, method: 'tools/list' }
+  }]);
+});
+
+test('stdio decoder preserves compatibility with legacy Content-Length framing', () => {
+  const decoder = new McpStdioDecoder();
+  const payload = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'initialize' });
+  assert.deepStrictEqual(decoder.push(`Content-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`), [{
+    framing: 'content-length',
+    message: { jsonrpc: '2.0', id: 2, method: 'initialize' }
+  }]);
+  assert.ok(encodeMessage({ jsonrpc: '2.0', id: 2, result: {} }, 'content-length').startsWith('Content-Length: '));
+});
+
+test('stdio selects one protocol era and rejects missing modern metadata', () => {
+  const modern = {
+    method: 'server/discover',
+    params: {
+      _meta: {
+        'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+        'io.modelcontextprotocol/clientCapabilities': {}
+      }
+    }
+  };
+  assert.strictEqual(nextProtocolEra(null, modern), 'modern');
+  assert.strictEqual(nextProtocolEra(null, { method: 'initialize', params: {} }), 'legacy');
+  assert.throws(() => nextProtocolEra(null, { method: 'tools/list', params: {} }), /initialize or modern metadata/);
+  assert.throws(() => nextProtocolEra('modern', { method: 'tools/list', params: {} }), /Modern MCP requests require/);
+  assert.throws(() => nextProtocolEra('legacy', modern), /cannot switch protocol era/);
 });
 
 test('taskEventNotification emits a compact standard MCP logging notification', () => {

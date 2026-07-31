@@ -189,9 +189,9 @@ test('prompt layers expose MCP-compatible prompts and resources', () => {
   } = require('./prompt-layers');
 
   const capabilities = getMcpCapabilities();
-  expect(capabilities.prompts.listChanged).toBe(true);
-  expect(capabilities.resources.listChanged).toBe(true);
-  expect(capabilities.tools.listChanged).toBe(true);
+  expect(capabilities.prompts.listChanged).toBe(false);
+  expect(capabilities.resources.listChanged).toBe(false);
+  expect(capabilities.tools.listChanged).toBe(false);
 
   const prompts = listMcpPrompts();
   expect(prompts.map(prompt => prompt.name)).toContain('traecn_layered_command');
