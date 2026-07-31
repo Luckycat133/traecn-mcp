@@ -15,20 +15,14 @@ const {
 } = require('./tools');
 
 const {
-  DEFAULT_MCP_TOOL_PROFILE,
-  MCP_TOOL_PROFILES,
-  MCP_TOOL_PROFILE_DESCRIPTIONS,
   MCP_TOOLS,
   TOOL_METADATA,
   TOOL_ANNOTATIONS,
   DESTRUCTIVE_MCP_TOOLS,
   decorateTool,
-  normalizeMcpToolProfile,
-  getMcpToolsForProfile,
-  getMcpToolMetadata,
-  getMcpToolProfileSummary,
-  envToolProfile
+  getMcpToolMetadata
 } = require('./tool-metadata');
+const { MCP_CONTRACT_VERSION, MCP_TOOL_NAMES } = require('./contract');
 
 const {
   SERVER_INFO,
@@ -49,6 +43,8 @@ module.exports = {
   // Tools
   RAW_MCP_TOOLS,
   MCP_TOOLS,
+  MCP_CONTRACT_VERSION,
+  MCP_TOOL_NAMES,
   MCP_TOOL_INTERNAL_NAMES,
   COMPLETION_CHECKS_SCHEMA,
   WORKFLOW_STEP_SCHEMA,
@@ -57,18 +53,11 @@ module.exports = {
   schema,
 
   // Metadata
-  DEFAULT_MCP_TOOL_PROFILE,
-  MCP_TOOL_PROFILES,
-  MCP_TOOL_PROFILE_DESCRIPTIONS,
   TOOL_METADATA,
   TOOL_ANNOTATIONS,
   DESTRUCTIVE_MCP_TOOLS,
   decorateTool,
-  normalizeMcpToolProfile,
-  getMcpToolsForProfile,
   getMcpToolMetadata,
-  getMcpToolProfileSummary,
-  envToolProfile,
 
   // Handler
   SERVER_INFO,

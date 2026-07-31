@@ -242,11 +242,25 @@ test('ConfigManager validates timeout ranges', () => {
   });
 });
 
+test('ConfigManager accepts its canonical 30-minute response timeout default', () => {
+  const manager = new ConfigManager();
+  manager.validate(DEFAULT_CONFIG);
+});
+
 test('ConfigManager rejects timeout below minimum', () => {
   const manager = new ConfigManager();
   assert.throws(() => {
     manager.validate({
       timeout: { request: 1000, response: 30000 }
+    });
+  }, ConfigValidationError);
+});
+
+test('ConfigManager rejects response timeout above the schema maximum', () => {
+  const manager = new ConfigManager();
+  assert.throws(() => {
+    manager.validate({
+      timeout: { response: CONFIG_SCHEMA.timeout.response.max + 1 }
     });
   }, ConfigValidationError);
 });
@@ -264,7 +278,7 @@ test('ConfigManager handles nested timeout updates', () => {
   manager.update({ timeout: { request: 60000 } });
   const config = manager.getConfig();
   assert.strictEqual(config.timeout.request, 60000);
-  assert.strictEqual(config.timeout.response, 30000);
+  assert.strictEqual(config.timeout.response, 1800000);
 });
 
 test('ConfigManager handles nested cors updates', () => {
@@ -361,6 +375,7 @@ test('DEFAULT_CONFIG matches schema defaults', () => {
   assert.strictEqual(DEFAULT_CONFIG.rateLimit.maxRequests, CONFIG_SCHEMA.rateLimit.maxRequests.default);
   assert.strictEqual(DEFAULT_CONFIG.traeControl.autoStart, CONFIG_SCHEMA.traeControl.autoStart.default);
   assert.strictEqual(DEFAULT_CONFIG.traeControl.autoStart, false);
+  assert.strictEqual(DEFAULT_CONFIG.timeout.response, 1800000);
 });
 
 test('LOG_LEVELS contains expected values', () => {

@@ -8,16 +8,18 @@ const net = require('net');
 const path = require('path');
 
 const { parseEnv } = require('../src/config/env');
+const { readRuntimeEnv, runtimeDefault } = require('../src/config/runtime-schema');
+const { isLoopbackHost } = require('../src/shared/utils');
 
 const root = path.resolve(__dirname, '..');
 const envPath = path.join(root, '.env');
 const packageJson = require('../package.json');
 
 const MIN_NODE_MAJOR = parseMinimumNodeMajor(packageJson.engines && packageJson.engines.node) || 22;
-const DEFAULT_GATEWAY_HOST = '127.0.0.1';
-const DEFAULT_GATEWAY_PORT = '8788';
-const DEFAULT_CDP_HOST = '127.0.0.1';
-const DEFAULT_CDP_PORT = '9222';
+const DEFAULT_GATEWAY_HOST = runtimeDefault('TRAECN_GATEWAY_HOST');
+const DEFAULT_GATEWAY_PORT = runtimeDefault('TRAECN_GATEWAY_PORT');
+const DEFAULT_CDP_HOST = runtimeDefault('TRAECN_CDP_HOST');
+const DEFAULT_CDP_PORT = runtimeDefault('TRAECN_REMOTE_DEBUGGING_PORT');
 const TRAECN_APP_PATH = '/Applications/Trae CN.app';
 const REQUEST_TIMEOUT_MS = 1200;
 
@@ -105,8 +107,9 @@ function checkEnvFile(checks, exists) {
 }
 
 function checkGatewayConfig(checks, env) {
-  const host = pickEnv(env, ['TRAECN_HOST', 'HOST', 'TRAE_HOST'], DEFAULT_GATEWAY_HOST);
-  const portRaw = pickEnv(env, ['TRAECN_PORT', 'PORT', 'TRAE_PORT'], DEFAULT_GATEWAY_PORT);
+  const host = readRuntimeEnv('TRAECN_GATEWAY_HOST', env);
+  const portRaw = readRuntimeEnv('TRAECN_GATEWAY_PORT', env);
+  const token = readRuntimeEnv('TRAECN_GATEWAY_TOKEN', env);
   const parsed = parsePort(portRaw);
 
   if (!host) {
@@ -121,6 +124,23 @@ function checkGatewayConfig(checks, env) {
     add(checks, 'PASS', 'Gateway PORT', `Using ${parsed.value}.`);
   }
 
+  if (!token && !isLoopbackHost(host)) {
+    add(
+      checks,
+      'FAIL',
+      'Gateway authentication',
+      `Non-loopback bind ${host} requires TRAECN_GATEWAY_TOKEN.`,
+      true
+    );
+  } else {
+    add(
+      checks,
+      'PASS',
+      'Gateway authentication',
+      token ? 'Authentication token is configured.' : 'Tokenless access is restricted to loopback.'
+    );
+  }
+
   return {
     ...normalizeTarget(host || DEFAULT_GATEWAY_HOST, parsed.valid ? parsed.value : Number(DEFAULT_GATEWAY_PORT)),
     valid: Boolean(host) && parsed.valid
@@ -128,7 +148,7 @@ function checkGatewayConfig(checks, env) {
 }
 
 function checkMockBridge(checks, env) {
-  const raw = pickEnv(env, ['TRAECN_ENABLE_MOCK_BRIDGE', 'TRAE_ENABLE_MOCK_BRIDGE'], '0');
+  const raw = readRuntimeEnv('TRAECN_ENABLE_MOCK_BRIDGE', env);
   const enabled = raw === '1' || String(raw).toLowerCase() === 'true';
   const label = enabled ? 'enabled' : 'disabled';
   add(checks, 'PASS', 'TRAECN_ENABLE_MOCK_BRIDGE', `${label} (${raw}).`);
@@ -136,8 +156,8 @@ function checkMockBridge(checks, env) {
 }
 
 function checkCdpConfig(checks, env) {
-  const host = pickEnv(env, ['TRAECN_CDP_HOST', 'TRAE_CDP_HOST'], DEFAULT_CDP_HOST);
-  const portRaw = pickEnv(env, ['TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT'], DEFAULT_CDP_PORT);
+  const host = readRuntimeEnv('TRAECN_CDP_HOST', env);
+  const portRaw = readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT', env);
   const parsed = parsePort(portRaw);
 
   if (!host) {
@@ -303,15 +323,6 @@ function buildUrl(target, pathname) {
   }
 
   return new URL(`${target.protocol}//${target.connectHost}:${target.port}${pathname}`);
-}
-
-function pickEnv(env, keys, fallback) {
-  for (const key of keys) {
-    if (env[key] !== undefined && env[key] !== '') {
-      return env[key];
-    }
-  }
-  return fallback;
 }
 
 function parsePort(raw) {

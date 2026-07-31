@@ -2,15 +2,15 @@
 
 const assert = require('assert');
 const http = require('http');
+const mcpServer = require('./mcp-server');
 const {
-  DEFAULT_MCP_TOOL_PROFILE,
+  MCP_CONTRACT_VERSION,
+  MCP_TOOL_NAMES,
   MCP_TOOLS,
   createMcpHandlers,
   callTool,
-  getMcpToolsForProfile,
-  normalizeMcpToolProfile,
   mcpAuth
-} = require('./mcp-server');
+} = mcpServer;
 const { ApiKeyManager } = require('./src/shared/api-key-manager');
 
 process.env.TRAECN_API_KEYS_ENABLED = '1';
@@ -56,14 +56,28 @@ async function test(name, fn) {
 (async () => {
   console.log('\n[mcp-server.test.js] Running tests...\n');
 
-  await test('MCP exposes one focused atomic tool surface', async () => {
-    assert.strictEqual(DEFAULT_MCP_TOOL_PROFILE, 'default');
-    assert.strictEqual(normalizeMcpToolProfile('full'), 'default');
+  await test('MCP contract v5 exposes exactly one 20-tool surface', async () => {
+    assert.strictEqual(MCP_CONTRACT_VERSION, 5);
+    assert.deepStrictEqual(MCP_TOOL_NAMES, EXPECTED_TOOLS);
+    assert.strictEqual(MCP_TOOLS.length, 20);
     assert.deepStrictEqual(MCP_TOOLS.map(tool => tool.name), EXPECTED_TOOLS);
-    assert.deepStrictEqual(getMcpToolsForProfile('anything').map(tool => tool.name), EXPECTED_TOOLS);
     const handlers = createMcpHandlers({ test: true });
     const result = await handlers.handle({ method: 'tools/list' });
     assert.deepStrictEqual(result.tools.map(tool => tool.name), EXPECTED_TOOLS);
+  });
+
+  await test('MCP no longer exports profile compatibility APIs', () => {
+    for (const name of [
+      'DEFAULT_MCP_TOOL_PROFILE',
+      'MCP_TOOL_PROFILES',
+      'MCP_TOOL_PROFILE_DESCRIPTIONS',
+      'normalizeMcpToolProfile',
+      'getMcpToolsForProfile',
+      'getMcpToolProfileSummary',
+      'envToolProfile'
+    ]) {
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(mcpServer, name), false, name);
+    }
   });
 
   await test('initialize advertises tools, prompts, resources and logging', async () => {

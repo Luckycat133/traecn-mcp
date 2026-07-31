@@ -1,6 +1,7 @@
 'use strict';
 
 const packageInfo = require('../package.json');
+const { MCP_CONTRACT_VERSION } = require('./mcp/contract');
 
 // Keep capability data sources injectable so callers can avoid eager dependency
 // cycles and tests can provide focused implementations.
@@ -100,7 +101,6 @@ function compactTools(tools = [], metadata = {}) {
     description: tool.description,
     required: tool.inputSchema?.required || [],
     layer: metadata[tool.name]?.layer,
-    profile: metadata[tool.name]?.profile,
     risk: metadata[tool.name]?.risk,
     alternative: metadata[tool.name]?.alternative,
     annotations: tool.annotations
@@ -113,16 +113,15 @@ function buildCapabilities(options = {}, deps = {}) {
   const traecnSkill = (deps && deps.traecnSkill) || loadTraecnSkill();
   const { KNOWN_MODELS, SETTINGS_SECTIONS } = traecnSkill;
   const commands = options.commands || [];
-  const mcpTools = options.mcpTools || [];
-  const mcpToolProfile = options.mcpToolProfile || 'default';
-  const mcpToolProfiles = options.mcpToolProfiles || {};
-  const mcpToolMetadata = options.mcpToolMetadata || {};
+  const mcpMetadata = require('./mcp/tool-metadata');
+  const mcpTools = options.mcpTools || mcpMetadata.MCP_TOOLS;
+  const mcpToolMetadata = options.mcpToolMetadata || mcpMetadata.TOOL_METADATA;
   const operations = options.includeHttpOperations === false ? undefined : buildHttpOperations({ generateOpenAPISpec });
 
   return {
     name: 'traecnclaw',
     version: packageInfo.version,
-    contractVersion: 5,
+    contractVersion: MCP_CONTRACT_VERSION,
     tokenStrategy: {
       prefer: ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task'],
       gatewayManaged: true,
@@ -154,8 +153,8 @@ function buildCapabilities(options = {}, deps = {}) {
     http: operations,
     commands: compactCommands(commands),
     mcp: {
-      toolProfile: mcpToolProfile,
-      toolProfiles: mcpToolProfiles,
+      contractVersion: MCP_CONTRACT_VERSION,
+      toolCount: mcpTools.length,
       tools: compactTools(mcpTools, mcpToolMetadata),
       prompts: promptLayers.listMcpPrompts().map(prompt => ({ name: prompt.name, description: prompt.description })),
       resources: promptLayers.listMcpResources().map(resource => ({ uri: resource.uri, description: resource.description }))

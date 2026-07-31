@@ -4,7 +4,7 @@ description: Operate TraeCN through TRAECNclaw's focused stdio MCP tools. Use wh
 license: MIT-0
 metadata:
   author: TRAECNclaw
-  version: "0.4.7"
+  version: "0.5.0"
   openclaw:
     requires:
       bins:
@@ -13,10 +13,10 @@ metadata:
       - name: TRAECN_MCP_SERVER_PATH
         required: false
         description: Optional absolute path to the trusted TRAECNclaw mcp-server.js entry point.
-      - name: TRAECN_HOST
+      - name: TRAECN_GATEWAY_HOST
         required: false
         description: Optional gateway host override; keep loopback unless remote access is secured.
-      - name: TRAECN_PORT
+      - name: TRAECN_GATEWAY_PORT
         required: false
         description: Optional gateway port override.
       - name: TRAECN_GATEWAY_TOKEN

@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
@@ -52,12 +53,17 @@ function commandEnumFromOpenClawManifest() {
 }
 
 function packedFiles() {
-  const output = execFileSync('npm', ['pack', '--dry-run', '--json'], {
-    cwd: root,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  return JSON.parse(output)[0].files.map(file => file.path);
+  const cachePath = fs.mkdtempSync(path.join(os.tmpdir(), 'traecnclaw-npm-cache-'));
+  try {
+    const output = execFileSync('npm', ['pack', '--dry-run', '--json', '--cache', cachePath], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    return JSON.parse(output)[0].files.map(file => file.path);
+  } finally {
+    fs.rmSync(cachePath, { recursive: true, force: true });
+  }
 }
 
 assert.strictEqual(spec.info.version, packageJson.version, 'OpenAPI version must match package version');
@@ -155,7 +161,12 @@ assertArrayIncludesAll(cliSource, [
 
 assert.ok(packageJson.scripts.test.includes('scripts/traecn-cli.test.js'), 'npm test must include CLI tests');
 assert.ok(packageJson.scripts['test:uat'].includes('coverage-audit'), 'test:uat must include coverage audit');
-assert.ok(packageJson.scripts['test:uat'].includes('acceptance-audit'), 'test:uat must include acceptance audit');
+assert.ok(packageJson.scripts['test:uat'].includes('contract:audit'), 'test:uat must include contract audit');
+assert.strictEqual(
+  packageJson.scripts['acceptance:audit'],
+  packageJson.scripts['contract:audit'],
+  'acceptance:audit must remain a compatibility alias for contract:audit'
+);
 assert.ok(packageJson.scripts['test:all'].includes('test:uat'), 'test:all must include UAT gate');
 assert.ok(packageJson.scripts['audit:prod'], 'production audit script is required');
 

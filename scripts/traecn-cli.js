@@ -73,8 +73,16 @@ function loadConfig() {
     config = defaults;
   }
 
-  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_HOST')) config.host = process.env.TRAECN_HOST;
-  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_PORT')) config.port = parseInt(process.env.TRAECN_PORT, 10);
+  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_GATEWAY_HOST')) {
+    config.host = process.env.TRAECN_GATEWAY_HOST;
+  } else if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_HOST')) {
+    config.host = process.env.TRAECN_HOST;
+  }
+  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_GATEWAY_PORT')) {
+    config.port = parseInt(process.env.TRAECN_GATEWAY_PORT, 10);
+  } else if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_PORT')) {
+    config.port = parseInt(process.env.TRAECN_PORT, 10);
+  }
   if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_GATEWAY_TOKEN')) config.token = process.env.TRAECN_GATEWAY_TOKEN;
 
   return config;
@@ -197,7 +205,7 @@ ${color('bold', 'CONFIG FILE:')}
   Supported keys: host, port, token
 
 ${color('bold', 'ENVIRONMENT:')}
-  TRAECN_HOST, TRAECN_PORT, TRAECN_GATEWAY_TOKEN
+  TRAECN_GATEWAY_HOST, TRAECN_GATEWAY_PORT, TRAECN_GATEWAY_TOKEN
 `);
 }
 

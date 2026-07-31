@@ -25,7 +25,7 @@ Local HTTP bridge, OpenClaw tool integration, and AI Skill module for TraeCN des
 
 - Node.js 22 or newer
 - TraeCN desktop application
-- TraeCN started with a remote debugging port, usually `--remote-debugging-port=9222` or a quickstart port such as `9334`
+- TraeCN started with remote debugging on the canonical port `9222`
 - OpenClaw when using the plugin in `integrations/openclaw-traecn-plugin`
 
 ## Installation
@@ -37,28 +37,49 @@ cp .env.example .env
 
 Edit `.env` for your TraeCN installation path, CDP port, gateway token, and selectors if TraeCN DOM discovery reports custom values.
 
+Upgrading from 0.3.x: read [the 0.5.0 migration guide](docs/MIGRATING-TO-0.5.md)
+before replacing MCP configuration.
+
 ## Configuration
 
-Important environment variables:
+These defaults are generated from `src/config/runtime-schema.js`; `.env.example`,
+the configuration API, doctor, and runtime consumers use the same source.
 
-- `HOST` and `PORT`: local gateway bind address. Use `127.0.0.1` for local-only operation.
-- `TRAECN_GATEWAY_TOKEN`: optional bearer token required by protected endpoints.
-- `TRAECN_ALLOWED_ORIGINS`: comma-separated browser origins allowed by CORS.
-- `TRAECN_REMOTE_DEBUGGING_PORT`: TraeCN CDP port.
-- `TRAECN_QUICKSTART_PROFILE_MODE`: `existing` by default so live automation reuses your logged-in Trae CN profile instead of a fresh isolated one. Set `isolated` only for disposable test profiles.
-- `TRAECN_TRAE_RECOVERY_NEW_INSTANCE`: defaults to `0`; keep it disabled to avoid opening a new unauthenticated Trae window during gateway recovery.
-- `TRAECN_AUTO_START_TRAE`: defaults to `0`; set it to `1` only when the gateway should relaunch Trae CN after CDP disappears.
-- `TRAECN_QUEUE_MAX_WAIT_MS`: optional. Leave unset to let external TraeCN model queues wait indefinitely in the local gateway; set it only when you want a local queue timeout.
-- `TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH`: optional path for persisted async queue state. By default macOS uses `~/Library/Application Support/TRAECNclaw/active-queue.json`.
-- `TRAECN_ENABLE_MOCK_BRIDGE`: set to `1` for local system tests without TraeCN.
-- `TRAECN_*_SELECTORS`: optional DOM selector overrides discovered with `npm run inspect:traecn`.
+<!-- BEGIN GENERATED: runtime defaults -->
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `TRAECN_GATEWAY_HOST` | `127.0.0.1` | Gateway bind host. A non-loopback value requires TRAECN_GATEWAY_TOKEN. |
+| `TRAECN_GATEWAY_PORT` | `8788` | Gateway HTTP port. |
+| `TRAECN_GATEWAY_TOKEN` | empty (loopback only) | Bearer token. Optional only while the gateway binds to loopback. |
+| `TRAECN_GATEWAY_TIMEOUT_MS` | `30000` | Timeout used by MCP and CLI gateway clients. |
+| `TRAECN_CDP_HOST` | `127.0.0.1` | Host exposing the TraeCN Chrome DevTools Protocol endpoint. |
+| `TRAECN_REMOTE_DEBUGGING_PORT` | `9222` | Single CDP port used by launch, discovery, quickstart, doctor, and services. |
+| `TRAECN_QUICKSTART_PROFILE_MODE` | `existing` | Reuse the logged-in profile by default; isolated is for disposable testing. |
+| `TRAECN_AUTO_START_TRAE` | `0` | Opt in to automatic TraeCN launch/recovery. quickstart also accepts --launch-trae. |
+| `TRAECN_RESPONSE_TIMEOUT_MS` | `1800000` | Maximum response-collection window (30 minutes). |
+| `TRAECN_QUEUE_WAIT_TIMEOUT_MS` | `60000` | Timeout for one low-level queue wait operation; it is not the total task lifetime. |
+| `TRAECN_QUEUE_PER_TASK_TIMEOUT_MS` | `600000` | Deadline-extension window while a task remains in an external model queue. |
+| `TRAECN_QUEUE_MAX_WAIT_MS` | empty (unlimited) | Optional total local queue cap. Empty means external queues may wait indefinitely. |
+| `TRAECN_ENABLE_MOCK_BRIDGE` | `0` | Use the mock bridge for tests that do not require a live TraeCN instance. |
+<!-- END GENERATED: runtime defaults -->
+
+`TRAECN_ALLOWED_ORIGINS`, `TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH`, and
+`TRAECN_*_SELECTORS` remain optional advanced settings; see `.env.example`.
 
 ## Usage
 
-Start TraeCN and the gateway:
+Check the existing TraeCN/CDP session, then start the gateway:
 
 ```sh
 npm run quickstart
+```
+
+`quickstart` does not launch TraeCN by default. Launch it explicitly first, or
+opt in for this invocation:
+
+```sh
+npm run start:traecn
+npm run quickstart -- --launch-trae
 ```
 
 If CDP is unavailable because Trae CN is already running without a debug port,
@@ -87,7 +108,7 @@ npm run start:gateway
 For unattended queue waiting on macOS, prefer the LaunchAgent wrapper. It persists background queued tasks and reloads them after the gateway restarts:
 
 ```sh
-TRAECN_ENABLE_MOCK_BRIDGE=0 TRAECN_REMOTE_DEBUGGING_PORT=9334 TRAECN_QUICKSTART_PROFILE_MODE=existing npm run service:start
+TRAECN_ENABLE_MOCK_BRIDGE=0 TRAECN_REMOTE_DEBUGGING_PORT=9222 TRAECN_QUICKSTART_PROFILE_MODE=existing npm run service:start
 npm run service:status
 ```
 
@@ -148,8 +169,8 @@ recommended entry point is the skill launcher, which auto-locates
       "command": "node",
       "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"],
       "env": {
-        "TRAECN_HOST": "127.0.0.1",
-        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_HOST": "127.0.0.1",
+        "TRAECN_GATEWAY_PORT": "8788",
         "TRAECN_GATEWAY_TOKEN": ""
       }
     }
@@ -166,8 +187,8 @@ Alternatively, point directly at `mcp-server.js`:
       "command": "node",
       "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
       "env": {
-        "TRAECN_HOST": "127.0.0.1",
-        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_HOST": "127.0.0.1",
+        "TRAECN_GATEWAY_PORT": "8788",
         "TRAECN_GATEWAY_TOKEN": ""
       }
     }
@@ -350,30 +371,24 @@ watcher is singleton-locked, so repeat detached starts return
 ## Testing
 
 ```sh
-npm run lint
-npm run check:skill-contracts
-npm run test:mcp-stdio-smoke
-npm test
-npm run test:system
-npm run test:uat
+npm run verify
+npm run contract:audit -- --no-live
 npm run test:live
-npm run test:all
 npm run audit:prod
 ```
 
-`npm run check:skill-contracts` verifies that generated MCP schemas, validated
-examples, and single-entry client templates match the live server.
-`npm run test:mcp-stdio-smoke` runs the standalone Content-Length
-`initialize`/`tools/list` protocol check without requiring the gateway.
-`npm test` runs unit and integration tests, including that smoke test and the
-skill launcher checks. Default CI uses mock and local test
-surfaces and never spends TraeCN quota. `test:system` starts the gateway in mock
-mode and verifies the HTTP flow. `test:uat` verifies documentation, OpenAPI
-coverage, and the machine-readable acceptance audit required for release
-acceptance. `npm run acceptance:audit` prints the current
-requirement-by-requirement status; add `-- --require-complete` before declaring
-the full unattended TraeCN goal complete. Use `npm run test:all` for the
-release-style lint, test, system, UAT, and coverage sequence.
+`npm run verify` is the default CI and local release gate. It checks versions,
+generated configuration and Skill contracts, the public-release scan, syntax,
+ESLint, unit/integration behavior, mock HTTP system behavior, UAT inventories,
+and coverage. It never spends TraeCN quota.
+
+`npm run contract:audit` inventories contract declarations and already-recorded
+evidence. It does not execute the behaviors it lists, so a passing contract
+audit is not a substitute for `npm test`, `test:system`, or Live UAT.
+`acceptance:audit` remains a compatibility alias. Use `--require-complete` only
+to require every existing evidence item; it still does not create Live
+evidence.
+
 `test:live` runs safe real Trae CN/CDP smoke checks when a live remote-debugging endpoint is available; otherwise it reports `SKIP` and exits successfully. Use `node scripts/live-uat.js --strict` when a live desktop instance is required, `--require-ready` when the UI must be logged in and automation-ready, and `--cleanup-queue-probes` when accidental `wait for Trae queue` Solo chats should be stopped, deleted, and rechecked to `matched: 0`. `--strict` fails if those queue-probe chats remain. Add `--delegate` only when sending a real test prompt is acceptable. `--delegate` is readiness-gated and fails with diagnostics instead of sending a prompt to an unready UI.
 `npm run proof:long-queue` is the guarded GLM-5.2 proof runner. It defaults to dry-run, verifies readiness, refuses to start when queue-probe Solo chats or local tasks remain, and prints the exact evidence paths. Add `-- --execute --detach --allow-quota-spend` only when a real long-queue TraeCN submission is explicitly approved. Re-running with the same marker resumes its evidence instead of submitting again. Use `npm run proof:status`, OpenClaw `traecn_long_queue_proof_status`, CLI `traecnclaw proof status`, or `npm run proof:cancel -- --marker <id>` to inspect or stop proof runs. Proof commands remain operator/test facilities, not MCP tools.
 
@@ -387,24 +402,26 @@ All release surfaces share the version in `package.json`. Run
 `npm run version:patch` for the default compatible release, or deliberately
 choose `version:minor`/`version:major`; these commands update `package.json`
 without creating a tag and synchronize every distribution surface. Run
-`npm run check:versions` before release. While the project is below `1.0.0`, use patch increments
+`npm run verify` before release. While the project is below `1.0.0`, use patch increments
 (`0.4.0` → `0.4.1`) for compatible fixes and additive automation, minor
 increments only for a deliberately larger compatibility milestone, and major
-increments only for an explicitly documented breaking contract. Pushing a
-matching `v*` tag runs
-lint, unit/integration tests, the mock system test, packages the Skill and npm
-tarball, generates `SHA256SUMS`, and creates a GitHub Release. Quota-consuming
-live acceptance is intentionally excluded.
+increments only for an explicitly documented breaking contract. The checked-in
+Verify workflow runs the same non-quota gate on pushes and pull requests.
+Tagging, artifact upload, npm publication, marketplace submission, and GitHub
+Release creation remain explicit maintainer actions; the repository does not
+claim they happened merely because a version was changed.
 
 Before public distribution, make the repository or release artifact public,
-verify the skill with `quick_validate.py`, run the maintained test suite, and
-scan the current tree and git history for secrets. Public catalog submissions
+run `npm run verify`, synchronize the public mirror to the exact tagged commit,
+and scan git history for secrets. Public catalog submissions
 should point to `skills/traecnclaw-mcp` for the skill and `mcp-server.js`
 or `traecnclaw-mcp` for the server entrypoint.
 
 ## Documentation
 
 - [Compatibility Matrix](docs/COMPATIBILITY.md)
+- [0.5.0 Migration Guide](docs/MIGRATING-TO-0.5.md)
+- [Runtime Configuration](docs/configuration.md)
 - [Development Guide](docs/development.md)
 - [Deployment Guide](docs/deployment.md)
 - [Distribution Guide](docs/DISTRIBUTION.md)

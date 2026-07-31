@@ -4,9 +4,9 @@
 const fs = require('fs');
 const path = require('path');
 const {
+  MCP_CONTRACT_VERSION,
   MCP_TOOLS,
-  getMcpToolMetadata,
-  getMcpToolProfileSummary
+  getMcpToolMetadata
 } = require('../../../mcp-server');
 
 const outputPath = path.resolve(__dirname, '../references/mcp-tool-contracts.json');
@@ -14,7 +14,8 @@ const outputPath = path.resolve(__dirname, '../references/mcp-tool-contracts.jso
 function buildContract() {
   return {
     source: 'mcp-server.js',
-    profiles: getMcpToolProfileSummary(),
+    contractVersion: MCP_CONTRACT_VERSION,
+    toolCount: MCP_TOOLS.length,
     tools: MCP_TOOLS.map(tool => ({
       name: tool.name,
       description: tool.description,

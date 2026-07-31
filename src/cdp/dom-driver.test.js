@@ -72,6 +72,33 @@ asyncTest('getWorkspaceContext reports the open Trae folder from the workspace s
   });
 });
 
+asyncTest('getWorkspaceContext uses the workspace title when Solo hides the explorer', async () => {
+  const fakeClient = {
+    async send() {
+      return {
+        result: {
+          value: {
+            title: 'TRAECNclaw',
+            folderName: null,
+            rootPath: null,
+            hasExplorer: false
+          }
+        }
+      };
+    }
+  };
+  const driver = new DomDriver(fakeClient, getConfig());
+
+  const workspace = await driver.getWorkspaceContext();
+
+  assert.deepStrictEqual(workspace, {
+    title: 'TRAECNclaw',
+    folderName: 'TRAECNclaw',
+    rootPath: null,
+    hasExplorer: false
+  });
+});
+
 test('getConfig leaves queueMaxWaitMs unset by default', () => {
   delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
   delete process.env.TRAE_QUEUE_MAX_WAIT_MS;
@@ -303,6 +330,41 @@ test('approveDialog approve labels include inline command run button', () => {
   assert.ok(labels.includes('运行'));
 });
 
+test('approveDialog deny labels include the Trae v2 command-card skip button', () => {
+  const driver = new DomDriver(null, getConfig());
+  const labels = driver._getButtonLabelsForAction('deny');
+  assert.ok(labels.includes('跳过'));
+});
+
+asyncTest('approveDialog searches every button inside the active Trae v2 command card', async () => {
+  let calls = 0;
+  const driver = new DomDriver({
+    send: async (_method, params) => {
+      calls++;
+      if (calls === 1) {
+        return {
+          result: {
+            value: {
+              found: true,
+              title: '检测到高风险命令',
+              buttons: ['跳过', '运行'],
+              type: 'command_execution',
+              isCommandExec: true,
+              canAutoApprove: false,
+              command: 'find /tmp/test -delete'
+            }
+          }
+        };
+      }
+      assert.ok(params.expression.includes('inlineCard.querySelectorAll'));
+      return { result: { value: { clicked: false, searchedLabels: ['跳过'] } } };
+    }
+  }, getConfig());
+
+  await driver.approveDialog('deny');
+  assert.strictEqual(calls, 2);
+});
+
 test('command approval assessment auto-approves an entirely read-only command chain', () => {
   const driver = new DomDriver(null, getConfig());
   const assessment = driver._assessCommandApproval(
@@ -395,6 +457,36 @@ asyncTest('checkForApprovalDialog detects inline command approval cards', async 
   assert.strictEqual(dialog.canAutoApprove, true);
   assert.strictEqual(dialog.approvalDecision, 'auto_approve');
   assert.deepStrictEqual(dialog.riskReasons, ['strict_read_only_allowlist']);
+});
+
+asyncTest('checkForApprovalDialog detects Trae v2 high-risk command cards', async () => {
+  const driver = new DomDriver({
+    send: async (_method, params) => {
+      const supportsHighRiskV2 = params.expression.includes('\\u68c0\\u6d4b\\u5230\\u9ad8\\u98ce\\u9669\\u547d\\u4ee4');
+      return {
+        result: {
+          value: supportsHighRiskV2
+            ? {
+                found: true,
+                title: '检测到高风险命令，运行命令可能会带来严重后果，是否仍要在沙箱中运行？',
+                buttons: ['跳过', "添加 'find' 到白名单", '运行'],
+                type: 'command_execution',
+                isCommandExec: true,
+                canAutoApprove: false,
+                command: 'find /Users/jack/traecn-live-uat-safe -delete'
+              }
+            : { found: false }
+        }
+      };
+    }
+  }, getConfig());
+
+  const dialog = await driver.checkForApprovalDialog();
+
+  assert.strictEqual(dialog.needsApproval, true);
+  assert.strictEqual(dialog.canAutoApprove, false);
+  assert.strictEqual(dialog.approvalDecision, 'agent_review');
+  assert.deepStrictEqual(dialog.riskReasons, ['filesystem_write_via_find']);
 });
 
 test('restricted mode summary treats trusted workspace page as not restricted', () => {
@@ -874,6 +966,61 @@ test('extractLatestIdeAssistantState does not mark percentage progress as comple
   assert.strictEqual(state.hasResponse, false);
 });
 
+test('extractLatestIdeAssistantState trusts the visible completed status over context usage percent', () => {
+  const driver = new DomDriver(null, getConfig());
+  const state = driver._extractLatestIdeAssistantState({
+    fullText: '用户问题 Agent 思考过程 LIVE-UAT-READONLY-PASS 任务完成 9%',
+    taskComplete: true,
+    taskInProgress: false,
+    turns: [
+      { className: 'chat-turn user', text: '用户问题' },
+      { className: 'chat-turn assistant task', text: 'Agent\n思考过程\nLIVE-UAT-READONLY-PASS\n任务完成\n9%' }
+    ]
+  }, '');
+
+  assert.strictEqual(state.inProgress, false);
+  assert.strictEqual(state.isComplete, true);
+  assert.strictEqual(state.hasResponse, true);
+});
+
+asyncTest('queryTaskSource reads the current Solo assistant turn instead of an older sidebar row', async () => {
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (payload.expression.includes('var sels =')) {
+        return {
+          result: {
+            value: {
+              fullText: '当前验收 LIVE-UAT-READONLY-PASS 任务完成',
+              taskComplete: true,
+              taskInProgress: false,
+              turns: [
+                { className: 'chat-turn user', text: '当前验收' },
+                { className: 'chat-turn assistant task', text: 'LIVE-UAT-READONLY-PASS\n任务完成' }
+              ]
+            }
+          }
+        };
+      }
+      return {
+        result: {
+          value: {
+            text: '昨天的任务 任务完成',
+            inProgress: false,
+            isComplete: true,
+            hasResponse: true
+          }
+        }
+      };
+    }
+  }, getConfig());
+  driver.detectMode = async () => ({ mode: 'solo' });
+
+  const state = await driver._queryTaskSource('');
+
+  assert.ok(state.text.includes('LIVE-UAT-READONLY-PASS'));
+});
+
 test('isIncompleteResponseText treats skill invocation preamble as incomplete', () => {
   const driver = new DomDriver(null, getConfig());
   assert.strictEqual(driver._isIncompleteResponseText('Agent'), true);
@@ -1301,11 +1448,12 @@ function createDeleteHappyPathDriver() {
       assert.strictEqual(method, 'Runtime.evaluate');
       const expression = payload.expression || '';
       runtimeExpressions.push(expression);
-      if (expression.includes("MouseEvent('contextmenu'") || expression.includes('MouseEvent("contextmenu"')) {
+      if (expression.includes('openRowActionMenu')) {
         return {
           result: {
             value: {
               success: true,
+              domClicked: true,
               x: 169,
               y: 150,
               title: 'Wait for Trae Queue 进行中 14:07'
@@ -1391,14 +1539,13 @@ test('deleteSoloChats reports successful deletion with correct delete and confir
   assert.strictEqual(result.attempts[0].confirmPoint.nodeText, '删除');
 });
 
-test('deleteSoloChats opens row context menu via contextmenu event instead of left-click', async () => {
+test('deleteSoloChats opens the Trae v2 row action menu through its dedicated DOM control', async () => {
   const { driver, runtimeExpressions } = createDeleteHappyPathDriver();
   await driver.deleteSoloChats({ candidates: [DELETE_CANDIDATE] });
   assert.ok(
-    runtimeExpressions.some(expression =>
-      expression.includes("MouseEvent('contextmenu'") || expression.includes('MouseEvent("contextmenu"')
-    ),
-    'should open row context menu via contextmenu event, not left-click'
+    runtimeExpressions.some(expression => expression.includes('task-item-action___')
+      && expression.includes('actionButton.click()')),
+    'should click the dedicated row action control'
   );
 });
 
@@ -1421,10 +1568,10 @@ test('deleteSoloChats does not treat menu text insertion as deletion success', a
       if (method === 'Input.dispatchMouseEvent') return {};
       assert.strictEqual(method, 'Runtime.evaluate');
       const expression = payload.expression || '';
-      if (expression.includes("MouseEvent('contextmenu'") || expression.includes('MouseEvent("contextmenu"')) {
+      if (expression.includes('openRowActionMenu')) {
         return {
           result: {
-            value: { success: true, x: 169, y: 150, title: 'Wait for Trae Queue 进行中 14:11' }
+            value: { success: true, domClicked: true, x: 169, y: 150, title: 'Wait for Trae Queue 进行中 14:11' }
           }
         };
       }

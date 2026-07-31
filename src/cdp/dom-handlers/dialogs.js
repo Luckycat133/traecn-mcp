@@ -281,7 +281,7 @@ async function checkForApprovalDialog(driver) {
               commandText = (commandCard.innerText || commandCard.textContent || '').replace(/\\s+/g, ' ').trim();
               var isActiveCommandCard = commandCard.matches('.icd-run-command-card-v2.icd-card-container-active, [class*="run-command-card"][class*="active"]');
               if (isActiveCommandCard
-                && /\\u547d\\u4ee4\\u5728\\u6c99\\u7bb1\\u4e2d\\u8fd0\\u884c\\u4e0d\\u901a\\u8fc7|outside (?:the )?sandbox|run .*outside/i.test(commandText)) {
+                && /\\u547d\\u4ee4\\u5728\\u6c99\\u7bb1\\u4e2d\\u8fd0\\u884c\\u4e0d\\u901a\\u8fc7|\\u68c0\\u6d4b\\u5230\\u9ad8\\u98ce\\u9669\\u547d\\u4ee4|outside (?:the )?sandbox|run .*outside/i.test(commandText)) {
                 var commandButtons = [];
                 var commandInput = commandCard.querySelector('textarea, input[type="text"], [contenteditable="true"]');
                 var commandValue = commandInput
@@ -432,8 +432,16 @@ async function approveDialog(driver, action) {
               var inlineCardText = (inlineCard.innerText || inlineCard.textContent || '').replace(/\\s+/g, ' ').trim();
               var isActiveInlineCard = inlineCard.matches('.icd-run-command-card-v2.icd-card-container-active, [class*="run-command-card"][class*="active"]');
               if (isActiveInlineCard
-                && /\\u547d\\u4ee4\\u5728\\u6c99\\u7bb1\\u4e2d\\u8fd0\\u884c\\u4e0d\\u901a\\u8fc7|outside (?:the )?sandbox|run .*outside/i.test(inlineCardText)) {
-                if (!buttonsToSearch.includes(inlineButton)) buttonsToSearch.push(inlineButton);
+                && /\\u547d\\u4ee4\\u5728\\u6c99\\u7bb1\\u4e2d\\u8fd0\\u884c\\u4e0d\\u901a\\u8fc7|\\u68c0\\u6d4b\\u5230\\u9ad8\\u98ce\\u9669\\u547d\\u4ee4|outside (?:the )?sandbox|run .*outside/i.test(inlineCardText)) {
+                var inlineCardButtons = inlineCard.querySelectorAll(${safeJsValue(DIALOG_BUTTON_SELECTOR)});
+                for (var ib = 0; ib < inlineCardButtons.length; ib++) {
+                  var inlineCardButton = inlineCardButtons[ib];
+                  if (!inlineCardButton || inlineCardButton.offsetParent === null) continue;
+                  var inlineCardButtonText = (inlineCardButton.innerText || inlineCardButton.textContent || '').trim();
+                  var inlineCardButtonRect = inlineCardButton.getBoundingClientRect();
+                  if (!inlineCardButtonText || inlineCardButtonRect.width < 12 || inlineCardButtonRect.height < 12) continue;
+                  if (!buttonsToSearch.includes(inlineCardButton)) buttonsToSearch.push(inlineCardButton);
+                }
                 break;
               }
               inlineCard = inlineCard.parentElement;
@@ -549,7 +557,7 @@ function _getButtonLabelsForAction(action) {
     case 'approve':
       return ['是，我信任此作者', '批准', 'Approve', '允许', 'Allow', '确认', 'Confirm', '信任', 'Trust', '运行', 'Run'];
     case 'deny':
-      return ['拒绝', 'Deny', '不允许', '禁止', '拒绝此操作'];
+      return ['跳过', 'Skip', '拒绝', 'Deny', '不允许', '禁止', '拒绝此操作'];
     case 'cancel':
       return ['取消', 'Cancel', '关闭', 'Close', 'Dismiss'];
     case 'dismiss':

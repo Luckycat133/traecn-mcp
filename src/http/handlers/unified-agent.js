@@ -248,6 +248,9 @@ async function handleResolveInteraction(req, res, ctx) {
       return ctx._json(req, res, { error: 'answer is required for question interactions' }, 400);
     }
     result = await ctx.driver.answerQuestionDialog(body.answer);
+    if (result.success === true && typeof ctx._resumeApprovalRequiredTasksAfterDialogAnswer === 'function') {
+      result.resumedTaskIds = ctx._resumeApprovalRequiredTasksAfterDialogAnswer(body.answer, result);
+    }
   } else {
     let dialog = null;
     if (typeof ctx.driver.checkForApprovalDialog === 'function') {
@@ -282,6 +285,9 @@ async function handleResolveInteraction(req, res, ctx) {
       }
     }
     result = await ctx.driver.approveDialog(action);
+    if (result.success === true && typeof ctx._resumeApprovalRequiredTasksAfterInteraction === 'function') {
+      result.resumedTaskIds = ctx._resumeApprovalRequiredTasksAfterInteraction(action, dialog, result);
+    }
     auditSecurityAction(ctx, req, 'interaction.approval_decision', 'trae:current-dialog', {
       decision: action,
       reason: typeof body.reason === 'string' ? body.reason.trim() : null,

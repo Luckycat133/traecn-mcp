@@ -33,8 +33,8 @@ Use the skill launcher:
       "command": "node",
       "args": ["/absolute/path/to/TRAECNclaw/skills/traecnclaw-mcp/scripts/start-mcp.js"],
       "env": {
-        "TRAECN_HOST": "127.0.0.1",
-        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_HOST": "127.0.0.1",
+        "TRAECN_GATEWAY_PORT": "8788",
         "TRAECN_GATEWAY_TOKEN": ""
       }
     }

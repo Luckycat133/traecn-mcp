@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const secretVault = require('./secret-vault');
 const { sanitizeLog } = require('./utils');
+const { runtimeDefault } = require('../config/runtime-schema');
 
 const LOG_LEVELS = ['error', 'warn', 'info', 'debug', 'trace'];
 
@@ -43,8 +44,8 @@ const CONFIG_SCHEMA = {
     response: {
       type: 'number',
       min: 1000,
-      max: 600000,
-      default: 30000,
+      max: 3600000,
+      default: Number(runtimeDefault('TRAECN_RESPONSE_TIMEOUT_MS')),
       description: 'Response collection timeout in milliseconds'
     }
   },
@@ -63,19 +64,19 @@ const CONFIG_SCHEMA = {
   server: {
     host: {
       type: 'string',
-      default: '127.0.0.1',
+      default: runtimeDefault('TRAECN_GATEWAY_HOST'),
       description: 'Gateway server listen host'
     },
     port: {
       type: 'number',
       min: 1024,
       max: 65535,
-      default: 8788,
+      default: Number(runtimeDefault('TRAECN_GATEWAY_PORT')),
       description: 'Gateway server listen port'
     },
     token: {
       type: 'string',
-      default: '',
+      default: runtimeDefault('TRAECN_GATEWAY_TOKEN'),
       description: 'API authentication token'
     },
     authHeader: {
@@ -87,7 +88,7 @@ const CONFIG_SCHEMA = {
   traeControl: {
     autoStart: {
       type: 'boolean',
-      default: false,
+      default: runtimeDefault('TRAECN_AUTO_START_TRAE') === '1',
       description: 'Whether to auto-start the Trae process'
     },
     recoveryCooldownMs: {
@@ -256,14 +257,15 @@ class ConfigManager extends EventEmitter {
   _applyEnvOverrides() {
     const mappings = [
       // Server
-      { path: 'server.host', env: ['TRAECN_HOST', 'HOST', 'TRAE_HOST'] },
-      { path: 'server.port', env: ['TRAECN_PORT', 'PORT', 'TRAE_PORT'], transform: (v) => parseInt(v, 10) },
+      { path: 'server.host', env: ['TRAECN_GATEWAY_HOST', 'TRAECN_HOST', 'HOST', 'TRAE_GATEWAY_HOST', 'TRAE_HOST'] },
+      { path: 'server.port', env: ['TRAECN_GATEWAY_PORT', 'TRAECN_PORT', 'PORT', 'TRAE_GATEWAY_PORT', 'TRAE_PORT'], transform: (v) => parseInt(v, 10) },
       { path: 'server.token', env: ['TRAECN_GATEWAY_TOKEN', 'TRAE_GATEWAY_TOKEN'] },
       { path: 'server.authHeader', env: ['TRAECN_AUTH_HEADER', 'TRAE_AUTH_HEADER'] },
+      { path: 'timeout.response', env: ['TRAECN_RESPONSE_TIMEOUT_MS', 'TRAE_RESPONSE_TIMEOUT_MS'], transform: (v) => parseInt(v, 10) },
       // CORS
       { path: 'cors.allowedOrigins', env: ['TRAECN_ALLOWED_ORIGINS', 'TRAE_ALLOWED_ORIGINS'] },
       // Trae control
-      { path: 'traeControl.autoStart', env: ['TRAECN_AUTO_START_TRAE', 'TRAE_AUTO_START_TRAE'], transform: (v) => v !== '0' },
+      { path: 'traeControl.autoStart', env: ['TRAECN_AUTO_START_TRAE', 'TRAE_AUTO_START_TRAE', 'TRAECN_AUTOSTART'], transform: (v) => v !== '0' },
       { path: 'traeControl.recoveryCooldownMs', env: ['TRAECN_TRAE_RECOVERY_COOLDOWN_MS', 'TRAE_TRAE_RECOVERY_COOLDOWN_MS'], transform: (v) => parseInt(v, 10) },
       { path: 'traeControl.recoveryWaitMs', env: ['TRAECN_TRAE_RECOVERY_WAIT_MS', 'TRAE_TRAE_RECOVERY_WAIT_MS'], transform: (v) => parseInt(v, 10) },
       // Auto recover
@@ -470,8 +472,13 @@ class ConfigManager extends EventEmitter {
           errors.push({ path: 'timeout.response', message: 'Value must be a number', current: typeof config.timeout.response });
         } else if (config.timeout.response < 1000) {
           errors.push({ path: 'timeout.response', message: 'Value must be >= 1000', current: config.timeout.response, min: 1000 });
-        } else if (config.timeout.response > 600000) {
-          errors.push({ path: 'timeout.response', message: 'Value must be <= 600000', current: config.timeout.response, max: 600000 });
+        } else if (config.timeout.response > CONFIG_SCHEMA.timeout.response.max) {
+          errors.push({
+            path: 'timeout.response',
+            message: `Value must be <= ${CONFIG_SCHEMA.timeout.response.max}`,
+            current: config.timeout.response,
+            max: CONFIG_SCHEMA.timeout.response.max
+          });
         }
       }
     }

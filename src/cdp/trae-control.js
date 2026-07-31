@@ -15,6 +15,7 @@
 const { findTraeCNBinary, isTraeCNRunning, restartTraeCNWithDebug, startTraeCN, getQuickstartConfig } = require('../config/quickstart');
 const { discoverTarget } = require('./discovery');
 const { getEnvWithFallback } = require('../shared/utils');
+const { runtimeDefault } = require('../config/runtime-schema');
 
 class TraeControl {
   constructor({
@@ -84,7 +85,7 @@ class TraeControl {
     const requestedPort = getEnvWithFallback(
       'TRAECN_REMOTE_DEBUGGING_PORT',
       'TRAE_REMOTE_DEBUGGING_PORT',
-      quickstart.remoteDebuggingPort || '9334'
+      quickstart.remoteDebuggingPort || runtimeDefault('TRAECN_REMOTE_DEBUGGING_PORT')
     );
     process.env.TRAECN_REMOTE_DEBUGGING_PORT = requestedPort;
 

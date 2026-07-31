@@ -5,10 +5,8 @@
  * delegated task queue.
  *
  * Responsibilities:
- *   - Resolve the persistence path from env / OS defaults.
- *   - Serialize the active queue to disk via a promise chain so concurrent
- *     writes don't race (last writer wins, but the order is preserved).
- *   - Hydrate `taskQueue` from disk on startup, skipping when the mock
+ *   - Persist and hydrate the active queue through the shared TaskStore.
+ *   - Hydrate `taskQueue` on startup, skipping when the mock
  *     bridge is enabled and rewriting any non-submitted `executing` tasks
  *     back to `queued`.
  *   - Push per-task state into the global history store (syncHistoryMirror).
@@ -16,14 +14,11 @@
  *     probe-loop body lives on Gateway and is supplied as a callback.
  *   - Resume any approval-required tasks after a dialog answer.
  *
- * The class is stateful in the sense that it holds the `_persistChain`
- * promise and the `_pollingTimer` handle, but exposes only methods.
+ * The class owns the `_pollingTimer` handle, but exposes only methods.
  */
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { getEnvWithFallback, isGenericQueueProbeTask } = require('../shared/utils');
+const { isGenericQueueProbeTask } = require('../shared/utils');
+const { TaskStore } = require('./task-store');
 
 class RecoveryHelper {
   constructor({
@@ -32,19 +27,18 @@ class RecoveryHelper {
     taskHistoryStore = null,
     isMockBridge = () => false,
     isTerminalStatus = () => false,
+    taskStore = null,
   } = {}) {
     this.logger = logger;
     this.taskHistoryStore = taskHistoryStore;
     this.isMockBridge = typeof isMockBridge === 'function' ? isMockBridge : () => Boolean(isMockBridge);
     this.isTerminalStatus = typeof isTerminalStatus === 'function' ? isTerminalStatus : () => Boolean(isTerminalStatus);
-    this._persistChain = Promise.resolve();
     this._pollingTimer = null;
-
-    if (persistencePath) {
-      this.persistencePath = persistencePath;
-    } else {
-      this.persistencePath = this.resolvePersistencePath();
-    }
+    this.taskStore = taskStore || new TaskStore({
+      logger,
+      persistencePath,
+      isTerminalStatus,
+    });
   }
 
   // ── persistence ────────────────────────────────────────────────────────
@@ -54,56 +48,26 @@ class RecoveryHelper {
    * TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH env var, falling back to the
    * per-OS application-data dir. Returns null when persistence is disabled.
    */
-  resolvePersistencePath() {
-    const configured = getEnvWithFallback(
-      'TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH',
-      'TRAE_ACTIVE_QUEUE_PERSISTENCE_PATH',
-      ''
-    );
-    if (configured) return path.resolve(configured);
+  resolvePersistencePath(configuredPath = '') {
+    return this.taskStore.resolvePersistencePath(configuredPath);
+  }
 
-    if (process.platform === 'darwin') {
-      return path.join(os.homedir(), 'Library', 'Application Support', 'TRAECNclaw', 'active-queue.json');
-    }
-    return path.join(os.homedir(), '.traecnclaw', 'active-queue.json');
+  get persistencePath() {
+    return this.taskStore.persistencePath;
+  }
+
+  set persistencePath(value) {
+    this.taskStore.setPersistencePath(value);
   }
 
   /**
-   * Serialize every non-terminal task from `taskQueue` to disk. The write
-   * is serialized via `this._persistChain` so concurrent callers don't race
-   * the file (last writer wins, but we guarantee the write completes in
-   * call order).
+   * Serialize every non-terminal task from `taskQueue` to disk.
    *
    * `taskQueue` is the gateway-owned Map; we accept it as an argument so
    * the service stays decoupled from any specific Gateway instance.
    */
   persist(taskQueue) {
-    if (!this.persistencePath || !taskQueue) return;
-    // Capture the snapshot eagerly so later mutations don't appear in this
-    // write. The chain still guarantees serial ordering.
-    const snapshot = Array.from(taskQueue.entries())
-      .filter(([, task]) => !this.isTerminalStatus(task.status))
-      .filter(([, task]) => !isGenericQueueProbeTask(task && task.task))
-      .map(([taskId, task]) => ({ taskId, ...task }));
-
-    this._persistChain = this._persistChain.then(() => this._writeToDisk(snapshot)).catch(err => {
-      this.logger.error('[QueuePersistence] Failed to persist active queue:', err.message);
-    });
-    return this._persistChain;
-  }
-
-  _writeSnapshot(snapshot) {
-    const dirPath = path.dirname(this.persistencePath);
-    fs.mkdirSync(dirPath, { recursive: true });
-    fs.writeFileSync(this.persistencePath, JSON.stringify({
-      version: 1,
-      savedAt: new Date().toISOString(),
-      tasks: snapshot
-    }, null, 2), 'utf8');
-  }
-
-  async _writeToDisk(snapshot) {
-    this._writeSnapshot(snapshot);
+    return this.taskStore.persist(taskQueue);
   }
 
   /**
@@ -164,21 +128,23 @@ class RecoveryHelper {
    */
   restore(taskQueue) {
     if (!this.persistencePath || !taskQueue) return 0;
-    if (!fs.existsSync(this.persistencePath)) return 0;
     if (this.isMockBridge()) {
       this.logger.warn('[QueuePersistence] Skipping active queue restore while mock bridge is enabled');
       return 0;
     }
     try {
-      const raw = fs.readFileSync(this.persistencePath, 'utf8');
-      const parsed = JSON.parse(raw);
-      const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+      const snapshot = this.taskStore.load();
+      if (!snapshot) return 0;
+      const tasks = snapshot.tasks;
       const now = Date.now();
       let restored = 0;
       let skippedQueueProbes = 0;
-      const sanitizedTasks = [];
+      let skippedInvalidTasks = 0;
       for (const item of tasks) {
-        if (!item || !item.taskId || this.isTerminalStatus(item.status)) continue;
+        if (!item || !item.taskId || this.isTerminalStatus(item.status)) {
+          skippedInvalidTasks++;
+          continue;
+        }
         if (isGenericQueueProbeTask(item.task)) {
           skippedQueueProbes++;
           continue;
@@ -206,12 +172,13 @@ class RecoveryHelper {
         task.result = task.result || null;
         taskQueue.set(task.taskId, task);
         this.syncHistoryMirror(task);
-        sanitizedTasks.push({ taskId: task.taskId, ...task });
         restored++;
       }
       if (skippedQueueProbes > 0) {
         this.logger.warn(`[QueuePersistence] Dropped ${skippedQueueProbes} generic queue-probe task(s) from active queue restore`);
-        this._writeSnapshot(sanitizedTasks);
+      }
+      if (snapshot.needsRewrite || skippedQueueProbes > 0 || skippedInvalidTasks > 0) {
+        this.taskStore.persist(taskQueue);
       }
       return restored;
     } catch (err) {

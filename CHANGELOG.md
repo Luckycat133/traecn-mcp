@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-31
+
+### Added
+
+- Added a single checksummed TaskStore schema with durable temporary writes,
+  atomic replacement, last-known-good backups, corrupt-file quarantine, legacy
+  snapshot migration, and forced-process-kill recovery tests.
+- Added a generated core runtime configuration schema shared by code,
+  `.env.example`, README defaults, doctor, and `/api/config/schema`.
+- Added release-surface scanning for local user paths, removed MCP profile
+  configuration, and stale 0.3.x install instructions.
+- Added an explicit 0.3.x to 0.5.0 migration guide and executable release
+  verification inputs.
+
+### Changed
+
+- Froze MCP contract version 5 at exactly 20 ordered, single-intent tools and
+  made contract drift fail during module loading and generated Skill checks.
+- Made `quickstart` describe its real behavior: it checks an existing TraeCN
+  CDP session and starts the gateway, while TraeCN launch remains explicit or
+  opt-in. `start:traecn` now performs the explicit launch its name promises.
+- Standardized the gateway at `127.0.0.1:8788`, CDP at `127.0.0.1:9222`, the
+  existing TraeCN profile, a 30-minute response window, and unlimited external
+  queue waiting unless a local maximum is configured.
+- Made the capabilities endpoint report MCP contract version and tool count
+  without profile metadata.
+
+### Fixed
+
+- Corrected Monaco MarkerSeverity values `1`, `2`, `4`, and `8` to map to
+  hint, info, warning, and error.
+- Replaced first-token Git branch guessing with explicit parsing backed by
+  realistic TraeCN status-bar fixtures.
+- Routed every active-queue persistence and restore call through TaskStore,
+  removing the competing Gateway file writer.
+- Aligned ConfigManager response-timeout validation with the canonical
+  30-minute default and one-hour schema maximum.
+
+### Removed
+
+- Removed the obsolete MCP profile exports, environment selection path, and
+  generated profile documentation.
+- Removed the public `createQueuedTask` service placeholder that always threw
+  at runtime.
+
+### Security
+
+- Gateway startup and doctor now fail closed when a non-loopback bind has no
+  authentication token.
+- Corrupt or checksum-mismatched queue snapshots are retained in quarantine
+  and recovered from a validated backup rather than silently restoring zero
+  tasks.
+
 ## [0.4.7] - 2026-07-30
 
 ### Security

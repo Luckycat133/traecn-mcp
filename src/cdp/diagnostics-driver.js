@@ -3,6 +3,20 @@
 const { TraeCNAutomationError } = require('./errors');
 const { evaluateJSON } = require('./browser-dom');
 
+const MARKER_SEVERITY_NAMES = Object.freeze({
+  1: 'hint',
+  2: 'info',
+  4: 'warning',
+  8: 'error'
+});
+
+function markerSeverityName(severity) {
+  if (typeof severity === 'string' && ['hint', 'info', 'warning', 'error'].includes(severity)) {
+    return severity;
+  }
+  return MARKER_SEVERITY_NAMES[severity] || 'unknown';
+}
+
 /**
  * DiagnosticsDriver — read problems, errors, warnings from the workspace.
  *
@@ -73,13 +87,13 @@ class DiagnosticsDriver {
    */
   async readModelMarkers(max = 500) {
     try {
-      return await evaluateJSON(
+      const result = await evaluateJSON(
         this.client,
         `(max) => {
           if (!window.monaco?.editor) return { ok: false, error: 'monaco not present' };
           const markers = window.monaco.editor.getModelMarkers({});
           const out = markers.slice(0, max).map(m => ({
-            severity: ['hint','info','warning','error'][m.severity || 0],
+            severity: m.severity,
             message: (m.message || '').slice(0, 300),
             source: m.source || '',
             code: m.code ? String(m.code) : '',
@@ -93,6 +107,14 @@ class DiagnosticsDriver {
         }`,
         [max]
       );
+      if (!result || !Array.isArray(result.items)) return result;
+      return {
+        ...result,
+        items: result.items.map(item => ({
+          ...item,
+          severity: markerSeverityName(item.severity)
+        }))
+      };
     } catch (err) {
       return { ok: false, error: err.message };
     }

@@ -1,34 +1,7 @@
 {
   "source": "mcp-server.js",
-  "profiles": {
-    "default": {
-      "default": true,
-      "count": 20,
-      "description": "Focused Agent operations. Gateway-owned mechanics are intentionally not exposed as tools.",
-      "tools": [
-        "traecn_send_message",
-        "traecn_get_task",
-        "traecn_cancel_task",
-        "traecn_stop_generation",
-        "traecn_open_workspace",
-        "traecn_list_models",
-        "traecn_select_model",
-        "traecn_select_mode",
-        "traecn_list_setting_sections",
-        "traecn_list_settings",
-        "traecn_list_setting_options",
-        "traecn_set_setting_toggle",
-        "traecn_select_setting_option",
-        "traecn_set_setting_text",
-        "traecn_list_conversations",
-        "traecn_create_conversation",
-        "traecn_select_conversation",
-        "traecn_delete_conversation",
-        "traecn_answer_question",
-        "traecn_decide_approval"
-      ]
-    }
-  },
+  "contractVersion": 5,
+  "toolCount": 20,
   "tools": [
     {
       "name": "traecn_send_message",

@@ -9,6 +9,7 @@ const dom = require('../src/cdp/browser-dom');
 const { loadEnv } = require('../src/config/env');
 const { getEnvWithFallback } = require('../src/shared/utils');
 const { getConfig } = require('../src/cdp/driver-config');
+const { runtimeDefault } = require('../src/config/runtime-schema');
 
 loadEnv(path.resolve(__dirname, '..', '.env'));
 
@@ -25,8 +26,8 @@ function argValue(name, fallback) {
   return fallback;
 }
 
-let CDP_HOST = argValue('--host', getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1'));
-let CDP_PORT = argValue('--port', getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222'));
+let CDP_HOST = argValue('--host', getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', runtimeDefault('TRAECN_CDP_HOST')));
+let CDP_PORT = argValue('--port', getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', runtimeDefault('TRAECN_REMOTE_DEBUGGING_PORT')));
 
 async function fetchJSON(url) {
   return new Promise((resolve, reject) => {

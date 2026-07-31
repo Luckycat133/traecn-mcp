@@ -516,7 +516,7 @@ async function main() {
       && hasAll(commandSetSource, ['case COMMANDS.VIBE_WORKFLOW', 'const autoContinue = params.autoContinue !== false', 'followupTasks', 'completionChecks', 'autoApproveDialog'])
       && hasAll(skillSource, ['async vibeWorkflow', 'const autoContinue = input.autoContinue !== false', 'autoApproveDialog: input.autoApproveDialog === undefined ? \'auto\'', 'followupTasks'])
       && hasAll(cliSource, ['case \'vibe\'', 'autoContinue: true', 'completionChecks', 'followupTasks'])
-      && mcpTestSource.includes('MCP exposes one focused atomic tool surface')
+      && mcpTestSource.includes('MCP contract v5 exposes exactly one 20-tool surface')
       && skillTestSource.includes('vibeWorkflow queues unattended follow-up workflow')
       && gatewayTestSource.includes('Gateway auto-continues reviewable workflow followups without human review')
       && gatewayTestSource.includes('Gateway resubmits completed-looking task when completion checks fail')
@@ -623,6 +623,9 @@ async function main() {
   }, {});
   const overall = counts.missing ? 'missing' : (counts.partial ? 'partial' : 'passed');
   const report = {
+    auditType: 'contract-and-evidence-inventory',
+    behaviorExecuted: false,
+    limitation: 'This audit checks contracts, source declarations, and existing evidence. It does not execute the claimed behaviors; use npm test, test:system, and live UAT for behavior.',
     status: overall,
     generatedAt: new Date().toISOString(),
     requireComplete,

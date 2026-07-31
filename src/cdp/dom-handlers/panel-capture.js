@@ -48,7 +48,12 @@ async function getWorkspaceContext(driver) {
     })()`,
     returnByValue: true
   });
-  return result.result?.value || { title: '', folderName: null, rootPath: null, hasExplorer: false };
+  const value = result.result?.value || { title: '', folderName: null, rootPath: null, hasExplorer: false };
+  const title = String(value.title || '').trim();
+  if (!value.folderName && title && !/^Trae\s*CN$/i.test(title)) {
+    return { ...value, folderName: title };
+  }
+  return value;
 }
 
 async function _captureSidebarText(driver) {
@@ -309,9 +314,27 @@ async function _queryIdeTaskPanel(driver, skipText) {
           return !!turn.text;
         });
 
+        var completeIndicator = Array.from(panel.querySelectorAll(
+          '.latest-assistant-bar .status-text, [class*="latest-assistant-bar"] [class*="status-text"]'
+        )).some(function(el) {
+          return /\u4efb\u52a1\u5b8c\u6210|Task completed/i.test((el.innerText || el.textContent || '').trim());
+        });
+        var runningIndicator = Array.from(panel.querySelectorAll(
+          '.codicon-stop-circle, [class*="stop-circle"], .run-command-inline-header__status-label, [class*="status-label"]'
+        )).some(function(el) {
+          if (!el || !el.getBoundingClientRect) return false;
+          var rect = el.getBoundingClientRect();
+          if (rect.width <= 4 || rect.height <= 4) return false;
+          var text = (el.innerText || el.textContent || '').trim();
+          var cls = String(el.className || '');
+          return /stop-circle/i.test(cls) || /\u547d\u4ee4(?:\u8fd0\u884c|\u6267\u884c)\u4e2d|\u6b63\u5728\u6267\u884c|running/i.test(text);
+        });
+
         return {
           fullText: fullText,
-          turns: turns
+          turns: turns,
+          taskComplete: completeIndicator && !runningIndicator,
+          taskInProgress: runningIndicator
         };
       })()
     `,
@@ -382,30 +405,35 @@ function _extractLatestIdeAssistantState(panelState, skipText) {
   }
 
   const latestLower = normalizedLatest.toLowerCase();
+  const structurallyComplete = panelState.taskComplete === true;
+  const structurallyInProgress = panelState.taskInProgress === true;
   const percentageProgress = `${fullText} ${latestText}`.match(/(?:\u4efb\u52a1\u5b8c\u6210|completed?)\s*[:：]?\s*(\d{1,3})\s*%/i);
-  const hasIncompletePercentage = Boolean(percentageProgress && Number(percentageProgress[1]) < 100);
+  const hasIncompletePercentage = Boolean(!structurallyComplete && percentageProgress && Number(percentageProgress[1]) < 100);
   const inProgress = (
-    hasIncompletePercentage ||
-    fullText.includes('进行中') ||
-    fullText.includes('正在思考') ||
-    fullText.includes('正在分析') ||
-    latestText.includes('正在分析') ||
-    latestText.includes('等待中') ||
-    latestText.includes('排队') ||
-    latestText.includes('思考过程') ||
-    latestText.includes('...') ||
-    latestText.includes('…') ||
-    latestLower.includes('analy') ||
-    latestLower.includes('processing') ||
-    latestLower.includes('waiting') ||
-    latestLower.includes('queue')
+    structurallyInProgress ||
+    (!structurallyComplete && (
+      hasIncompletePercentage ||
+      fullText.includes('进行中') ||
+      fullText.includes('正在思考') ||
+      fullText.includes('正在分析') ||
+      latestText.includes('正在分析') ||
+      latestText.includes('等待中') ||
+      latestText.includes('排队') ||
+      latestText.includes('思考过程') ||
+      latestText.includes('...') ||
+      latestText.includes('…') ||
+      latestLower.includes('analy') ||
+      latestLower.includes('processing') ||
+      latestLower.includes('waiting') ||
+      latestLower.includes('queue')
+    ))
   );
   const isComplete = (
-    !hasIncompletePercentage && (
+    structurallyComplete || (!hasIncompletePercentage && (
       latestText.includes('任务完成') ||
       latestText.includes('已完成') ||
       fullText.includes('任务完成')
-    )
+    ))
   );
 
   return {
@@ -466,6 +494,8 @@ function _isModelErrorResponseText(text) {
 async function _queryTaskSource(driver, skipText) {
   const modeInfo = await driver.detectMode();
   if (modeInfo.mode === 'solo') {
+    const panelState = await _queryIdeTaskPanel(driver, skipText);
+    if (panelState) return panelState;
     return _queryTaskSidebar(driver, skipText);
   }
   return _queryIdeTaskPanel(driver, skipText);

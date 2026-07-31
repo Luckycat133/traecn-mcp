@@ -267,6 +267,7 @@ async function _clickAt(driver, x, y, button = 'left') {
 async function _openRowContextMenu(driver, candidate) {
   const expression = `
     (function() {
+      var openRowActionMenu = true;
       var candidate = ${safeJsValue(candidate)};
       var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
       if (!sidebar) return { success: false, reason: 'sidebar_not_visible' };
@@ -284,23 +285,22 @@ async function _openRowContextMenu(driver, candidate) {
       if (!target && candidate && Number.isInteger(candidate.index) && items[candidate.index]) target = items[candidate.index];
       if (!target) return { success: false, reason: 'row_not_found', count: items.length };
 
+      var actionButton = target.querySelector('[class*="task-item-action___"], [class*="task-item-actions-wrap___"], [class*="conversation-item-action"], [class*="chat-item-action"]');
+      if (actionButton) {
+        var actionRect = actionButton.getBoundingClientRect();
+        actionButton.click();
+        return {
+          success: true,
+          domClicked: true,
+          x: actionRect.x + actionRect.width / 2,
+          y: actionRect.y + actionRect.height / 2,
+          title: (target.innerText || '').slice(0, 80)
+        };
+      }
+
       var targetRect = target.getBoundingClientRect();
       var x = Math.round(targetRect.left + targetRect.width - 24);
       var y = Math.round(targetRect.top + targetRect.height / 2);
-      try {
-        var ev = new MouseEvent('contextmenu', {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          button: 2,
-          buttons: 2,
-          clientX: x,
-          clientY: y
-        });
-        target.dispatchEvent(ev);
-      } catch (e) {
-        return { success: false, reason: 'dispatch_failed', error: e && e.message };
-      }
       return { success: true, x: x, y: y, title: (target.innerText || '').slice(0, 80) };
     })()
   `;
@@ -310,13 +310,15 @@ async function _openRowContextMenu(driver, candidate) {
     awaitPromise: true
   }).then(r => r.result?.value || { success: false, reason: 'evaluate_failed' });
 
-  if (openRes && openRes.success && openRes.x && openRes.y) {
-    // Perform a real CDP right-click (contextmenu) at the action-button coordinates so the native menu opens reliably
+  if (openRes && openRes.success && !openRes.domClicked && openRes.x && openRes.y) {
+    // Trae v2 exposes a visible row action button at this point. A left click
+    // opens its DOM menu; a context-menu/right click is ignored by this build.
     try {
       await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: openRes.x, y: openRes.y });
-      await driver.client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: openRes.x, y: openRes.y, button: 'right', clickCount: 1 });
-      await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: openRes.x, y: openRes.y, button: 'right', clickCount: 1 });
-    } catch { /* best-effort right-click; fall back to UI click */ }
+      await sleep(120);
+      await driver.client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: openRes.x, y: openRes.y, button: 'left', clickCount: 1 });
+      await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: openRes.x, y: openRes.y, button: 'left', clickCount: 1 });
+    } catch { /* best-effort UI click */ }
   }
   return openRes;
 }
@@ -482,7 +484,7 @@ async function _locateCandidateRow(driver, candidate) {
  * "删除" so we don't break when the menu renames an item.
  */
 async function _locateDeleteMenuPoint(driver) {
-  await new Promise(r => setTimeout(r, 350));
+  await new Promise(r => setTimeout(r, 800));
   const expression = `
     (function() {
       var containers = Array.from(document.querySelectorAll('.context-menu-container, [class*="context-menu"]'));
@@ -614,11 +616,19 @@ async function deleteSoloChats(driver, options = {}) {
       }
       attempt.actionPoint = located.actionPoint || null;
 
-      // 1. Open the row's context menu by dispatching a native contextmenu
-      //    event. Using a left-click would activate the chat and (for some
-      //    Trae builds) auto-resubmit the cached prompt, which is exactly
-      //    what we are trying to stop.
+      if (attempt.actionPoint) {
+        await driver.client.send('Input.dispatchMouseEvent', {
+          type: 'mouseMoved',
+          x: attempt.actionPoint.x,
+          y: attempt.actionPoint.y
+        });
+        await sleep(120);
+      }
+
+      // 1. Open the row menu through its dedicated action control. Clicking
+      //    the row itself would activate the chat and can resubmit cached work.
       const open = await _openRowContextMenu(driver, candidate);
+      attempt.openResult = open || null;
       attempt.contextMenuOpened = open && open.success === true;
       if (!open || open.success !== true) {
         attempt.reason = (open && open.reason) || 'context_menu_open_failed';
@@ -628,7 +638,15 @@ async function deleteSoloChats(driver, options = {}) {
       await sleep(driver.config.postActionDelayMs || 200);
 
       // 2. Find and click the "删除任务" menu item.
-      const deletePoint = await _locateDeleteMenuPoint(driver);
+      let deletePoint = await _locateDeleteMenuPoint(driver);
+      if (!deletePoint && open?.domClicked && Number.isFinite(open.x) && Number.isFinite(open.y)) {
+        attempt.menuOpenRetry = { method: 'native_action_click', x: open.x, y: open.y };
+        await _clickAt(driver, open.x, open.y, 'left');
+        if (open.success === true) {
+          await sleep(driver.config.postActionDelayMs || 200);
+          deletePoint = await _locateDeleteMenuPoint(driver);
+        }
+      }
       attempt.deletePoint = deletePoint;
       if (!deletePoint) {
         attempt.reason = 'delete_menu_not_found';

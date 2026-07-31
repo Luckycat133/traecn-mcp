@@ -12,9 +12,10 @@ const { MockDriver } = require('../cdp/mock-driver');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
-const { getEnvWithFallback, parsePositiveInt, sanitizeLog, isGenericQueueProbeTask } = require('../shared/utils');
+const { parsePositiveInt, sanitizeLog, isGenericQueueProbeTask, isLoopbackHost } = require('../shared/utils');
 const { errorToHttpStatus, errorToBody, safeErrorMessage } = require('./error-mapping');
-const { ConfigManager } = require('../shared/config-manager');
+const { ConfigManager, DEFAULT_CONFIG } = require('../shared/config-manager');
+const { RUNTIME_ENV_SCHEMA } = require('../config/runtime-schema');
 const { getGlobalStore } = require('../shared/task-history');
 const { TaskEventStore } = require('../shared/task-event-store');
 const { buildCapabilities } = require('../capabilities');
@@ -34,6 +35,7 @@ const { AuditLogger } = require('../shared/audit-logger');
 const { redactUrl: _redactUrl } = require('./request-gate');
 const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, RateLimiter } = require('./request-gate');
 const { TaskQueueService } = require('./task-queue-service');
+const { resolveTaskStorePath } = require('./task-store');
 const { TraeControl } = require('../cdp/trae-control');
 const { matchRoute, resolveHandler } = require('./route-table');
 const statusHandlers = require('./handlers/status');
@@ -100,11 +102,10 @@ class Gateway {
     this.port = options.port !== undefined ? options.port : config.server.port;
     this.token = config.server.token;
     this.authHeader = config.server.authHeader;
-    if (!this.token && this.host !== '127.0.0.1' && this.host !== 'localhost') {
-      console.warn(
-        `[Gateway] WARNING: TRAECN_GATEWAY_TOKEN is not set and gateway is bound to ` +
-        `'${this.host}' (non-loopback). All authenticated endpoints will be open ` +
-        `to anyone who can reach this host. Set TRAECN_GATEWAY_TOKEN or bind to 127.0.0.1.`
+    if (!this.token && !isLoopbackHost(this.host)) {
+      throw new Error(
+        `Refusing non-loopback gateway bind '${this.host}' without authentication. ` +
+        'Set TRAECN_GATEWAY_TOKEN or bind to a loopback address.'
       );
     }
     this.allowedOrigins = config.cors.allowedOrigins;
@@ -234,10 +235,7 @@ class Gateway {
       if (nextPath !== this.activeQueuePersistencePath) {
         this._persistActiveQueue();
         this.activeQueuePersistencePath = nextPath;
-        this.taskQueueService.persistencePath = nextPath;
-        if (this.taskQueueService.recoveryHelper) {
-          this.taskQueueService.recoveryHelper.persistencePath = nextPath;
-        }
+        this.taskQueueService.setPersistencePath(nextPath);
       }
     }
   }
@@ -275,39 +273,11 @@ class Gateway {
   }
 
   _resolveActiveQueuePersistencePath(configuredPath) {
-    // Prefer the path from config (already resolved by ConfigManager from
-    // env vars or config file). Fall back to the OS-specific default.
-    const configured = configuredPath || getEnvWithFallback(
-      'TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH',
-      'TRAE_ACTIVE_QUEUE_PERSISTENCE_PATH',
-      ''
-    );
-    if (configured) return path.resolve(configured);
-
-    if (process.platform === 'darwin') {
-      return path.join(os.homedir(), 'Library', 'Application Support', 'TRAECNclaw', 'active-queue.json');
-    }
-    return path.join(os.homedir(), '.traecnclaw', 'active-queue.json');
+    return resolveTaskStorePath(configuredPath);
   }
 
   _persistActiveQueue() {
-    if (!this.activeQueuePersistencePath) return;
-    const activeTasks = Array.from(this.taskQueue.entries())
-      .filter(([, task]) => !this._isTerminalTaskStatus(task.status))
-      .filter(([, task]) => !isGenericQueueProbeTask(task && task.task))
-      .map(([taskId, task]) => ({ taskId, ...task }));
-
-    try {
-      const dirPath = path.dirname(this.activeQueuePersistencePath);
-      fs.mkdirSync(dirPath, { recursive: true });
-      fs.writeFileSync(this.activeQueuePersistencePath, JSON.stringify({
-        version: 1,
-        savedAt: new Date().toISOString(),
-        tasks: activeTasks
-      }, null, 2), 'utf8');
-    } catch (err) {
-      console.error('[QueuePersistence] Failed to persist active queue:', err.message);
-    }
+    return this.taskQueueService.persist(this.taskQueue);
   }
 
   _syncTaskHistoryMirror(task) {
@@ -356,54 +326,7 @@ class Gateway {
   }
 
   _restoreActiveQueue() {
-    if (!this.activeQueuePersistencePath || !fs.existsSync(this.activeQueuePersistencePath)) return;
-    if (this.mockBridge) {
-      console.warn('[QueuePersistence] Skipping active queue restore while mock bridge is enabled');
-      return;
-    }
-    try {
-      const raw = fs.readFileSync(this.activeQueuePersistencePath, 'utf8');
-      const parsed = JSON.parse(raw);
-      const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
-      const now = Date.now();
-      let skippedQueueProbes = 0;
-      for (const item of tasks) {
-        if (!item || !item.taskId || this._isTerminalTaskStatus(item.status)) continue;
-        if (isGenericQueueProbeTask(item.task)) {
-          skippedQueueProbes++;
-          continue;
-        }
-        const restored = { ...item };
-        if (restored.status === 'executing' && restored.submittedToTrae !== true) {
-          restored.status = 'queued';
-        }
-        if (restored.status === 'executing') {
-          restored.submittedToTrae = true;
-        }
-        if (!restored.createdAt || Number.isNaN(restored.createdAt)) {
-          restored.createdAt = now;
-        }
-        const perTaskTimeoutMs = restored.deadline && restored.createdAt
-          ? Math.max(1000, restored.deadline - restored.createdAt)
-          : null;
-        if (!restored.deadline) {
-          restored.deadline = null;
-          restored.maxDeadline = null;
-        } else if (!restored.maxDeadline) {
-          restored.maxDeadline = now + (perTaskTimeoutMs || 600000);
-        }
-        restored.error = restored.error || null;
-        restored.result = restored.result || null;
-        this.taskQueue.set(restored.taskId, restored);
-        this._syncTaskHistoryMirror(restored);
-      }
-      if (skippedQueueProbes > 0) {
-        console.warn(`[QueuePersistence] Dropped ${skippedQueueProbes} generic queue-probe task(s) from active queue restore`);
-        this._persistActiveQueue();
-      }
-    } catch (err) {
-      console.error('[QueuePersistence] Failed to restore active queue:', err.message);
-    }
+    return this.taskQueueService.restore(this.taskQueue);
   }
 
   async _attemptTraeRecovery(reason) {
@@ -2165,22 +2088,8 @@ class Gateway {
     const schema = this.configManager.getSchema();
     this._json(req, res, {
       schema,
-      defaults: {
-        logLevel: schema.logLevel.default,
-        rateLimit: {
-          windowMs: schema.rateLimit.windowMs.default,
-          maxRequests: schema.rateLimit.maxRequests.default
-        },
-        timeout: {
-          request: schema.timeout.request.default,
-          response: schema.timeout.response.default
-        },
-        cors: {
-          allowedOrigins: schema.cors.allowedOrigins.default,
-          enabled: schema.cors.enabled.default
-        },
-        plugins: schema.plugins.default
-      }
+      defaults: DEFAULT_CONFIG,
+      environment: RUNTIME_ENV_SCHEMA
     });
   }
 
@@ -2341,6 +2250,10 @@ class Gateway {
         .replace(/\s+/g, ' ')
         .trim();
       addCandidate(withoutState);
+      const leadPhrase = withoutState.split(/[。！？!?;；\n]/)[0].trim();
+      if (leadPhrase.length >= 3 && leadPhrase.length <= 80) {
+        addCandidate(leadPhrase);
+      }
       for (const signal of text.match(/(?:src\/[A-Za-z0-9_./-]+|[A-Za-z0-9_.-]+\.js|settings\/read-all|readAll|read-all|TRAECN[A-Za-z0-9_:-]{6,})/g) || []) {
         addCandidate(signal);
       }
@@ -2465,6 +2378,27 @@ class Gateway {
       criteria = item;
       result = await this.driver.switchSoloChat(item);
       if (result.success !== false) break;
+    }
+    if (result?.success === false
+      && Number.isInteger(task.soloChat.index)
+      && typeof this.driver.getActiveSoloChat === 'function') {
+      const submittedTasks = Array.from(this.taskQueue.entries()).filter(([, queuedTask]) => (
+        queuedTask?.submittedToTrae === true && queuedTask.status === 'executing'
+      ));
+      if (submittedTasks.length === 1 && submittedTasks[0][0] === task.taskId) {
+        const snapshot = await this.driver.getActiveSoloChat();
+        const active = snapshot?.active || null;
+        if (active?.active === true && active.index === task.soloChat.index) {
+          criteria = { activeIndex: task.soloChat.index };
+          result = {
+            success: true,
+            reason: 'sole_submitted_task_active_index',
+            index: active.index,
+            title: active.title || active.text || '',
+            text: active.text || active.title || ''
+          };
+        }
+      }
     }
     this.taskHistoryStore.recordStep(task.taskId, 'solo_chat_switch', {
       success: result.success !== false,
@@ -3180,9 +3114,28 @@ class Gateway {
     } else if (!this._resultBelongsToSubmittedTask(result, task)) {
       this._keepSubmittedTaskWaitingForOwnedResult(taskId, task, result, 'collected result did not include a task ownership token');
     } else if (result.needsApproval) {
+      const currentDialog = typeof this.driver?.checkForApprovalDialog === 'function'
+        ? await this.driver.checkForApprovalDialog()
+        : { needsApproval: true };
+      if (!currentDialog.needsApproval) {
+        this._keepSubmittedTaskWaitingForOwnedResult(
+          taskId,
+          task,
+          result,
+          'ignored stale approval result because the visible interaction was already resolved'
+        );
+        return;
+      }
       if (await this._tryAutoApproveTaskDialog(taskId, task, result)) return;
       await this._finalizeBackgroundTask(taskId, task, 'approval_required', {
         result
+      });
+    } else if (task.answeredDialog?.action === 'deny'
+      && result.stable === true
+      && /\u547d\u4ee4\u5df2(?:\u53d6\u6d88|\u8df3\u8fc7)(?:\u6267\u884c)?|command[^\n]{0,300}(?:skipped|cancelled)/i.test(String(result.text || ''))) {
+      await this._finalizeBackgroundTask(taskId, task, 'cancelled', {
+        result,
+        error: null
       });
     } else if (task.reviewRequired || (task.followupTasks && task.followupTasks.length > 0)) {
       if (this._isReviewableTaskResult(result, task)) {
@@ -3423,6 +3376,50 @@ class Gateway {
     }
 
     return resumedTaskIds;
+  }
+
+  _resumeApprovalRequiredTasksAfterInteraction(action, dialog = {}, result = {}) {
+    const normalizedCommand = String(dialog.command || '').replace(/\s+/g, ' ').trim();
+    const candidates = Array.from(this.taskQueue.entries())
+      .filter(([, task]) => task.status === 'approval_required')
+      .filter(([, task]) => {
+        if (!normalizedCommand) return true;
+        const taskInteractionText = String(task.result?.question || task.result?.text || '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        return taskInteractionText.includes(normalizedCommand);
+      })
+      .sort((left, right) => (right[1].createdAt || 0) - (left[1].createdAt || 0));
+
+    const selected = candidates[0];
+    if (!selected) return [];
+
+    const [taskId, task] = selected;
+    const resumedAt = Date.now();
+    task.status = 'executing';
+    task.submittedToTrae = true;
+    task.submittedAt = task.submittedAt || resumedAt;
+    task.queueState = 'running';
+    task.queueMessage = `interaction ${action} resolved; waiting for Trae result`;
+    task.error = null;
+    task.answeredDialog = {
+      action,
+      command: normalizedCommand || null,
+      buttonClicked: result.buttonClicked || null,
+      answeredAt: resumedAt
+    };
+
+    this.taskHistoryStore.recordStep(taskId, 'dialog_resolved', {
+      success: true,
+      details: task.answeredDialog
+    });
+    this._syncTaskHistoryMirror(task);
+    this._persistActiveQueue();
+    if (this.wsHandler) {
+      this.wsHandler.notifyTaskStatusChange(taskId, task);
+    }
+    this._ensureBackgroundPolling();
+    return [taskId];
   }
 
   async _handleAdoptCurrentTask(req, res) {

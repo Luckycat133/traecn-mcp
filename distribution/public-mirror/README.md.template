@@ -1,0 +1,35 @@
+# TRAECNclaw MCP Skill
+
+> Generated from canonical TRAECNclaw {{VERSION}} at commit `{{SOURCE_REVISION}}`.
+
+This repository mirrors the portable TRAECNclaw Agent Skill byte-for-byte.
+TRAECNclaw exposes MCP contract version 5 with exactly 20 stable, single-intent
+tools. The normal Agent flow is:
+
+1. Open a workspace only when needed.
+2. Select model or mode only when needed.
+3. Send one message and release the caller context.
+4. Receive the durable notification, then read the task only when the result is needed.
+
+Queueing, waiting, recovery, routine approvals, task ownership, and durable
+notifications remain gateway-managed.
+
+## Install
+
+Use the canonical [TRAECNclaw release](https://github.com/Luckycat133/TRAECNclaw/releases)
+or a source checkout. Copy `.codex/skills/traecnclaw-mcp` into the client's
+Skill directory and use its `assets/mcp-client-config.json` launcher template.
+
+The mirror does not advertise an npm or official MCP Registry version until
+that exact artifact has been published and verified. Smithery's retired
+`smithery.yaml` format is intentionally absent; a future Smithery listing must
+use a published MCPB bundle. `glama.json` remains the current Glama metadata.
+
+## Configuration
+
+The canonical gateway defaults are `TRAECN_GATEWAY_HOST=127.0.0.1` and
+`TRAECN_GATEWAY_PORT=8788`. Non-loopback binds require
+`TRAECN_GATEWAY_TOKEN`. There is no MCP tool-profile setting.
+
+See `SOURCE_REVISION` and `release-manifest.json` for provenance and
+marketplace readiness.

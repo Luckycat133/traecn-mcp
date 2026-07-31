@@ -3,6 +3,7 @@
 const packageInfo = require('../../../package.json');
 const { parseBody } = require('../request-gate');
 const { rejectBadRequest } = require('./helpers');
+const { readRuntimeEnv } = require('../../config/runtime-schema');
 
 /**
  * project handlers.
@@ -56,8 +57,8 @@ async function handleOpenProject(req, res, ctx) {
       startTraeCN
     } = require('../../config/quickstart');
 
-    const cdpHost = process.env.TRAECN_CDP_HOST || process.env.TRAE_CDP_HOST || '127.0.0.1';
-    const cdpPort = process.env.TRAECN_REMOTE_DEBUGGING_PORT || process.env.TRAE_REMOTE_DEBUGGING_PORT || '9222';
+    const cdpHost = readRuntimeEnv('TRAECN_CDP_HOST');
+    const cdpPort = readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT');
 
     const alreadyRunning = isTraeCNRunning();
 

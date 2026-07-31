@@ -1,7 +1,7 @@
 # TraeCN 真实 DOM 发现（v0.4.0 起点）
 
 > 来自 `npm run start:traecn` + CDP probe 抓的**真实** TraeCN 1.107.1 DOM
-> 实际工作目录：`/Volumes/My Shared Files/共享/projects/TRAECNclaw`
+> 采集时的工作目录已脱敏为：`<workspace>/TRAECNclaw`
 > CDP: 9222 · `~/Library/Application Support/Trae CN`（macOS 默认 user-data-dir，已登录态持久化）
 
 ---
@@ -12,7 +12,7 @@
 |---|---|---|
 | 启动 | ✅ | `node scripts/start-traecn.js` → Electron `--remote-debugging-port=9222` |
 | CDP | ✅ | `curl http://127.0.0.1:9222/json/version` 返回 TraeCN 1.107.1 / Chrome 142 / Electron 39 |
-| user-data-dir | ✅ | `/Users/lobster/Library/Application Support/Trae CN`（cookie 持久化） |
+| user-data-dir | ✅ | `~/Library/Application Support/Trae CN`（cookie 持久化） |
 | 登录态 | ⚠️ | **首次 cookie 过期时**会进入未登录态（`ai-ng-welcome-nologin`），需人类登录一次 |
 | 模式 | SOLO/IDE 切换可见 | `.icube-mode-tab-item-solo` / `.icube-mode-tab-item-ide` |
 

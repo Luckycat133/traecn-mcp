@@ -3,18 +3,18 @@
 const path = require('path');
 const { findTraeCNBinary, isTraeCNRunning, startTraeCN } = require('../src/config/quickstart');
 const { loadEnv } = require('../src/config/env');
-const { getEnvWithFallback } = require('../src/shared/utils');
+const { readRuntimeEnv } = require('../src/config/runtime-schema');
 
 loadEnv(path.resolve(__dirname, '..', '.env'));
 
 async function main() {
   const args = process.argv.slice(2);
   // Default: do NOT auto-launch Trae CN. If the user has quit it, they
-  // probably want it to stay quit. Set TRAECN_AUTOSTART=1 (or pass
-  // --launch-trae) to restore the old auto-start behavior. This prevents
+  // probably want it to stay quit. Set TRAECN_AUTO_START_TRAE=1 (or pass
+  // --launch-trae) to opt in. This prevents
   // the "I quit Trae and it came back" footgun that bites every developer
   // the first time they run `npm run quickstart` after closing the IDE.
-  const autoLaunch = process.env.TRAECN_AUTOSTART === '1' || args.includes('--launch-trae');
+  const autoLaunch = readRuntimeEnv('TRAECN_AUTO_START_TRAE') === '1' || args.includes('--launch-trae');
 
   console.log('[TRAECNclaw] Checking TraeCN status...');
 
@@ -44,8 +44,8 @@ async function main() {
     }
   }
 
-  const host = getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
-  const port = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const host = readRuntimeEnv('TRAECN_CDP_HOST');
+  const port = readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT');
 
   console.log(`[TRAECNclaw] Checking CDP at ${host}:${port}...`);
 

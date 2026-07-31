@@ -8,6 +8,7 @@ const WebSocket = require('ws');
 const { TraeCNAutomationError } = require('./errors');
 const { CDPClient } = require('./client');
 const { getEnvWithFallback, safeClose } = require('../shared/utils');
+const { runtimeDefault } = require('../config/runtime-schema');
 
 const DEFAULT_DISCOVERY_PORTS = ['9222', '9223', '9224', '9225', '9226', '9230', '9333', '9334'];
 
@@ -271,8 +272,16 @@ function uniquePorts(...groups) {
 }
 
 async function resolveCDPEndpoint(options = {}) {
-  const host = options.host || getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
-  const configuredPort = options.port || getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const host = options.host || getEnvWithFallback(
+    'TRAECN_CDP_HOST',
+    'TRAE_CDP_HOST',
+    runtimeDefault('TRAECN_CDP_HOST')
+  );
+  const configuredPort = options.port || getEnvWithFallback(
+    'TRAECN_REMOTE_DEBUGGING_PORT',
+    'TRAE_REMOTE_DEBUGGING_PORT',
+    runtimeDefault('TRAECN_REMOTE_DEBUGGING_PORT')
+  );
   const quickstartPort = getEnvWithFallback('TRAECN_QUICKSTART_REMOTE_DEBUGGING_PORT', 'TRAE_QUICKSTART_REMOTE_DEBUGGING_PORT', '');
   const extraPorts = String(getEnvWithFallback('TRAECN_DISCOVERY_PORTS', 'TRAE_DISCOVERY_PORTS', '') || '')
     .split(',')
@@ -363,8 +372,12 @@ function scoreTarget(target, titleKeywords) {
 }
 
 async function discoverTarget(options = {}) {
-  const host = getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
-  const port = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const host = getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', runtimeDefault('TRAECN_CDP_HOST'));
+  const port = getEnvWithFallback(
+    'TRAECN_REMOTE_DEBUGGING_PORT',
+    'TRAE_REMOTE_DEBUGGING_PORT',
+    runtimeDefault('TRAECN_REMOTE_DEBUGGING_PORT')
+  );
   const titleContains = getEnvWithFallback('TRAECN_CDP_TARGET_TITLE_CONTAINS', 'TRAE_CDP_TARGET_TITLE_CONTAINS', 'Trae');
   const urlContains = getEnvWithFallback('TRAECN_CDP_TARGET_URL_CONTAINS', 'TRAE_CDP_TARGET_URL_CONTAINS', '');
 

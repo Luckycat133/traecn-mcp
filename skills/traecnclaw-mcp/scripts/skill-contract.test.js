@@ -10,9 +10,9 @@ const repoRoot = path.resolve(__dirname, '../../..');
 const skillRoot = path.resolve(__dirname, '..');
 const packageJson = require(path.join(repoRoot, 'package.json'));
 const {
+  MCP_CONTRACT_VERSION,
   MCP_TOOLS,
-  getMcpToolMetadata,
-  getMcpToolProfileSummary
+  getMcpToolMetadata
 } = require(path.join(repoRoot, 'mcp-server'));
 
 function readJson(relativePath) {
@@ -48,7 +48,8 @@ function assertArgumentsMatchSchema(tool, args) {
 function expectedContract() {
   return {
     source: 'mcp-server.js',
-    profiles: getMcpToolProfileSummary(),
+    contractVersion: MCP_CONTRACT_VERSION,
+    toolCount: MCP_TOOLS.length,
     tools: MCP_TOOLS.map(tool => ({
       name: tool.name,
       description: tool.description,

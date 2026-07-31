@@ -4,7 +4,7 @@
 const assert = require('assert');
 const path = require('path');
 const { spawn } = require('child_process');
-const { getMcpToolsForProfile } = require('../../../mcp-server');
+const { MCP_CONTRACT_VERSION, MCP_TOOLS } = require('../../../mcp-server');
 
 function frame(message) {
   const payload = JSON.stringify(message);
@@ -65,7 +65,8 @@ function readFrames(stream, expectedCount, timeoutMs = 5000) {
     const initialize = responses.find(item => item.id === 1);
     const tools = responses.find(item => item.id === 2);
     assert.strictEqual(initialize.result.serverInfo.name, 'traecnclaw');
-    assert.strictEqual(tools.result.tools.length, getMcpToolsForProfile('public').length);
+    assert.strictEqual(MCP_CONTRACT_VERSION, 5);
+    assert.strictEqual(tools.result.tools.length, MCP_TOOLS.length);
     assert.deepStrictEqual(tools.result.tools.map(tool => tool.name), [
       'traecn_send_message',
       'traecn_get_task',

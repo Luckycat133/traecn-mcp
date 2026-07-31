@@ -70,6 +70,47 @@ test('Gateway owns a security audit logger and accepts an injected logger', () =
   assert.strictEqual(gateway.auditLogger, auditLogger);
 });
 
+test('Gateway refuses a non-loopback bind without an authentication token', () => {
+  const previousToken = process.env.TRAECN_GATEWAY_TOKEN;
+  const previousLegacyToken = process.env.TRAE_GATEWAY_TOKEN;
+  delete process.env.TRAECN_GATEWAY_TOKEN;
+  delete process.env.TRAE_GATEWAY_TOKEN;
+  try {
+    assert.throws(
+      () => new Gateway({ host: '0.0.0.0' }),
+      /non-loopback.*TRAECN_GATEWAY_TOKEN/i
+    );
+  } finally {
+    restoreEnv('TRAECN_GATEWAY_TOKEN', previousToken);
+    restoreEnv('TRAE_GATEWAY_TOKEN', previousLegacyToken);
+  }
+});
+
+test('Gateway permits loopback binds without a token', () => {
+  const previousToken = process.env.TRAECN_GATEWAY_TOKEN;
+  const previousLegacyToken = process.env.TRAE_GATEWAY_TOKEN;
+  delete process.env.TRAECN_GATEWAY_TOKEN;
+  delete process.env.TRAE_GATEWAY_TOKEN;
+  try {
+    for (const host of ['localhost', '127.0.0.1', '127.0.0.2', '::1', '[::1]']) {
+      assert.strictEqual(new Gateway({ host }).host, host);
+    }
+  } finally {
+    restoreEnv('TRAECN_GATEWAY_TOKEN', previousToken);
+    restoreEnv('TRAE_GATEWAY_TOKEN', previousLegacyToken);
+  }
+});
+
+test('Gateway permits a non-loopback bind when a token is configured', () => {
+  const previousToken = process.env.TRAECN_GATEWAY_TOKEN;
+  process.env.TRAECN_GATEWAY_TOKEN = 'test-non-loopback-token';
+  try {
+    assert.strictEqual(new Gateway({ host: '0.0.0.0' }).host, '0.0.0.0');
+  } finally {
+    restoreEnv('TRAECN_GATEWAY_TOKEN', previousToken);
+  }
+});
+
 test('RateLimiter blocks requests over limit', () => {
   const limiter = new RateLimiter(60000, 3);
   limiter.check('key1');
@@ -307,6 +348,19 @@ test('Gateway honors documented HOST and PORT fallbacks', () => {
   }
 });
 
+test('Gateway config schema exposes complete defaults and generated runtime environment schema', () => {
+  const gateway = new Gateway();
+  const { req, res } = makeReqRes({}, '/api/config/schema', 'GET');
+  gateway._handleGetConfigSchema(req, res);
+  const payload = JSON.parse(res._body);
+  assert.strictEqual(payload.defaults.server.host, '127.0.0.1');
+  assert.strictEqual(payload.defaults.server.port, 8788);
+  assert.strictEqual(payload.defaults.timeout.response, 1800000);
+  assert.strictEqual(payload.defaults.traeControl.autoStart, false);
+  assert.strictEqual(payload.environment.TRAECN_REMOTE_DEBUGGING_PORT.default, '9222');
+  assert.strictEqual(payload.environment.TRAECN_QUEUE_MAX_WAIT_MS.default, '');
+});
+
 test('buildCapabilities returns compact command and token strategy metadata', () => {
   const capabilities = buildCapabilities({
     commands: [{ command: 'delegate_async', summary: 'Async delegate', required: ['task'], optional: ['waitForQueue'] }],
@@ -316,7 +370,10 @@ test('buildCapabilities returns compact command and token strategy metadata', ()
   assert.strictEqual(capabilities.coverage.queueManagement, true);
   assert.deepStrictEqual(capabilities.tokenStrategy.prefer, ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task']);
   assert.strictEqual(capabilities.tokenStrategy.gatewayManaged, true);
-  assert.strictEqual(capabilities.mcp.toolProfile, 'default');
+  assert.strictEqual(capabilities.mcp.contractVersion, 5);
+  assert.strictEqual(capabilities.mcp.toolCount, 1);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(capabilities.mcp, 'toolProfile'), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(capabilities.mcp, 'toolProfiles'), false);
   assert.ok(capabilities.commands.some(command => command.command === 'delegate_async'));
   assert.ok(capabilities.mcp.tools.some(tool => tool.name === 'queue_task'));
   assert.ok(capabilities.http.some(operation => operation.path === '/api/capabilities'));
@@ -1273,6 +1330,16 @@ asyncTest('Gateway captures task-specific Solo chat candidates before generic pr
   assert.strictEqual(soloChat.textIncludes, 'settings/read-all');
 });
 
+test('Gateway keeps the prompt lead phrase as a Solo chat rename candidate', () => {
+  const gateway = new Gateway();
+
+  const candidates = gateway._soloChatCandidateTexts(
+    '实机回归验收。请只运行只读命令 pwd，然后回复 LIVE-UAT-COMPLETION-PASS。'
+  );
+
+  assert.ok(candidates.includes('实机回归验收'));
+});
+
 asyncTest('Gateway never falls back to a stale Solo chat index when textual identity exists', async () => {
   const gateway = new Gateway();
   const attempts = [];
@@ -1305,6 +1372,39 @@ asyncTest('Gateway never falls back to a stale Solo chat index when textual iden
   );
   assert.ok(attempts.length > 0);
   assert.ok(!attempts.some(criteria => Number.isInteger(criteria.index)));
+});
+
+asyncTest('Gateway accepts the unchanged active index for the sole submitted task after a total title rename', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  const task = {
+    taskId: 'task_auto_renamed_solo',
+    task: '实机拒绝终态验收',
+    status: 'executing',
+    submittedToTrae: true,
+    soloChat: {
+      index: 0,
+      titleIncludes: '实机拒绝终态验收',
+      textIncludes: '实机拒绝终态验收',
+      candidates: ['实机拒绝终态验收']
+    }
+  };
+  gateway.taskQueue.set(task.taskId, task);
+  gateway._persistActiveQueue = () => {};
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.taskHistoryStore = { recordStep: () => {}, ensureTask: () => {} };
+  gateway.driver = {
+    switchSoloChat: async () => ({ success: false, reason: 'chat_not_found' }),
+    getActiveSoloChat: async () => ({
+      active: { index: 0, title: '执行删除文件命令 任务完成', active: true }
+    })
+  };
+
+  const result = await gateway._switchToTaskSoloChat(task, 'collect_result');
+
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.reason, 'sole_submitted_task_active_index');
+  assert.strictEqual(result.title, '执行删除文件命令 任务完成');
 });
 
 asyncTest('Gateway skips collectResponse while submitted Solo chat is still queued', async () => {
@@ -3925,6 +4025,100 @@ asyncTest('Gateway rejects a settings value that does not match its UI control k
 
   assert.strictEqual(responseStatus, 400);
   assert.match(responseData.error, /boolean/);
+});
+
+test('Gateway resumes only the approval-required task matching the visible command', () => {
+  const gateway = new Gateway();
+  const steps = [];
+  gateway._persistActiveQueue = () => {};
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway._ensureBackgroundPolling = () => {};
+  gateway.taskHistoryStore = {
+    recordStep: (taskId, step) => steps.push([taskId, step]),
+    ensureTask: () => {}
+  };
+  gateway.taskQueue = new Map([
+    ['older', {
+      status: 'approval_required',
+      createdAt: 1,
+      result: { question: '运行 git push origin main？' }
+    }],
+    ['matching', {
+      status: 'approval_required',
+      createdAt: 2,
+      result: { question: '运行 find /tmp/live-uat -delete？' }
+    }]
+  ]);
+
+  const resumed = gateway._resumeApprovalRequiredTasksAfterInteraction(
+    'deny',
+    { command: 'find /tmp/live-uat -delete' },
+    { success: true, buttonClicked: '跳过' }
+  );
+
+  assert.deepStrictEqual(resumed, ['matching']);
+  assert.strictEqual(gateway.taskQueue.get('matching').status, 'executing');
+  assert.strictEqual(gateway.taskQueue.get('older').status, 'approval_required');
+  assert.deepStrictEqual(steps, [['matching', 'dialog_resolved']]);
+});
+
+asyncTest('Gateway ignores a stale approval result after the visible card was resolved', async () => {
+  const gateway = new Gateway();
+  const steps = [];
+  gateway._persistActiveQueue = () => {};
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway._isQueuedTaskResult = () => false;
+  gateway._resultBelongsToSubmittedTask = () => true;
+  gateway.taskHistoryStore = {
+    recordStep: (taskId, step) => steps.push([taskId, step]),
+    ensureTask: () => {}
+  };
+  gateway.driver = {
+    checkForApprovalDialog: async () => ({ needsApproval: false })
+  };
+  const task = {
+    taskId: 'stale-card',
+    task: 'run a command',
+    status: 'executing',
+    submittedToTrae: true,
+    queueState: 'running'
+  };
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    needsApproval: true,
+    question: 'stale card text'
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.ok(steps.some(([, step]) => step === 'submitted_task_result_not_owned'));
+});
+
+asyncTest('Gateway terminalizes a task when Trae confirms its command was denied', async () => {
+  const gateway = new Gateway();
+  gateway._isQueuedTaskResult = () => false;
+  gateway._resultBelongsToSubmittedTask = () => true;
+  gateway._finalizeBackgroundTask = async (_taskId, task, status, payload) => {
+    task.status = status;
+    task.result = payload.result;
+    task.error = payload.error;
+  };
+  const task = {
+    taskId: 'denied-command',
+    task: 'run a destructive command',
+    status: 'executing',
+    submittedToTrae: true,
+    answeredDialog: { action: 'deny', buttonClicked: '跳过' }
+  };
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '命令已取消 find /tmp/live-uat -delete Thought 命令已跳过执行。还有其他需要协助的吗？',
+    stable: true,
+    elapsedMs: 100
+  });
+
+  assert.strictEqual(task.status, 'cancelled');
+  assert.strictEqual(task.error, null);
+  assert.ok(task.result.text.includes('命令已跳过执行'));
 });
 
 (async () => {

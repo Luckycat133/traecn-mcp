@@ -5,8 +5,8 @@
       "command": "node",
       "args": ["SKILL_DIR/scripts/start-mcp.js"],
       "env": {
-        "TRAECN_HOST": "127.0.0.1",
-        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_HOST": "127.0.0.1",
+        "TRAECN_GATEWAY_PORT": "8788",
         "TRAECN_GATEWAY_TOKEN": ""
       }
     }

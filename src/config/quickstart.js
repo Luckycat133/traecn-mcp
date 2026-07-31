@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { getEnvWithFallback, sleep } = require('../shared/utils');
+const { readRuntimeEnv } = require('./runtime-schema');
 
 function findTraeCNBinary() {
   const envBin = getEnvWithFallback('TRAECN_BIN', 'TRAE_BIN', '');
@@ -182,7 +183,7 @@ async function startTraeCN(options = {}) {
   }
 
   const args = [];
-  const remotePort = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const remotePort = readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT');
   args.push(`--remote-debugging-port=${remotePort}`);
 
   const extraArgs = getEnvWithFallback('TRAECN_ARGS', 'TRAE_ARGS', '');
@@ -268,7 +269,7 @@ async function restartTraeCNWithDebug(options = {}) {
 }
 
 function getQuickstartConfig() {
-  const profileModeRaw = getEnvWithFallback('TRAECN_QUICKSTART_PROFILE_MODE', 'TRAE_QUICKSTART_PROFILE_MODE', 'existing');
+  const profileModeRaw = readRuntimeEnv('TRAECN_QUICKSTART_PROFILE_MODE');
   const profileMode = String(profileModeRaw || '').trim().toLowerCase();
   const isolatedProfilePreferred = profileMode === 'isolated';
   const existingProfilePreferred = !isolatedProfilePreferred;
@@ -277,9 +278,9 @@ function getQuickstartConfig() {
       ? false
       : getEnvWithFallback('TRAECN_QUICKSTART_USE_ISOLATED_PROFILE', 'TRAE_QUICKSTART_USE_ISOLATED_PROFILE', '1') === '1',
     profileMode: existingProfilePreferred ? 'existing' : 'isolated',
-    remoteDebuggingPort: getEnvWithFallback('TRAECN_QUICKSTART_REMOTE_DEBUGGING_PORT', 'TRAE_QUICKSTART_REMOTE_DEBUGGING_PORT', '9334'),
-    gatewayPort: getEnvWithFallback('PORT', 'PORT', '8788'),
-    gatewayHost: getEnvWithFallback('HOST', 'HOST', '127.0.0.1')
+    remoteDebuggingPort: readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT'),
+    gatewayPort: readRuntimeEnv('TRAECN_GATEWAY_PORT'),
+    gatewayHost: readRuntimeEnv('TRAECN_GATEWAY_HOST')
   };
 }
 

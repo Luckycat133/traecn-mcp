@@ -15,17 +15,14 @@ if (require.main === module) {
 
 // 向后兼容的导出 — 所有消费者从 mcp-server.js 导入的符号
 module.exports = {
-  DEFAULT_MCP_TOOL_PROFILE: mcp.DEFAULT_MCP_TOOL_PROFILE,
-  MCP_TOOL_PROFILES: mcp.MCP_TOOL_PROFILES,
+  MCP_CONTRACT_VERSION: mcp.MCP_CONTRACT_VERSION,
+  MCP_TOOL_NAMES: mcp.MCP_TOOL_NAMES,
   MCP_TOOLS: mcp.MCP_TOOLS,
   SERVER_INFO: mcp.SERVER_INFO,
   callTool: mcp.callTool,
   createMcpHandlers: mcp.createMcpHandlers,
   envContext: mcp.envContext,
   getMcpToolMetadata: mcp.getMcpToolMetadata,
-  getMcpToolProfileSummary: mcp.getMcpToolProfileSummary,
-  getMcpToolsForProfile: mcp.getMcpToolsForProfile,
-  normalizeMcpToolProfile: mcp.normalizeMcpToolProfile,
   startStdioServer: mcp.startStdioServer,
   mcpAuth: require('./src/shared/mcp-auth')
 };

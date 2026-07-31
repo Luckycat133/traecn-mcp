@@ -37,6 +37,10 @@ function request(body) {
       return task;
     },
     _ensureBackgroundPolling: () => calls.push('poll'),
+    _resumeApprovalRequiredTasksAfterInteraction: (action, dialog, result) => {
+      calls.push(['resume-interaction', action, dialog.command, result.success]);
+      return ['task_gateway_1'];
+    },
     _syncTaskHistoryMirror: () => {},
     _persistActiveQueue: () => {},
     driver: {
@@ -208,6 +212,13 @@ function request(body) {
   }), approvalRes, ctx);
   assert.strictEqual(approvalRes.status, 200);
   assert.strictEqual(approvalRes.body.success, true);
+  assert.deepStrictEqual(approvalRes.body.resumedTaskIds, ['task_gateway_1']);
+  assert.deepStrictEqual(calls.at(-1), [
+    'resume-interaction',
+    'approve',
+    'git push origin main',
+    true
+  ]);
   assert.strictEqual(auditEntries.at(-1).action, 'interaction.approval_decision');
 
   const spec = generateOpenAPISpec();

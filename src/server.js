@@ -3,6 +3,7 @@
 const path = require('path');
 const { loadEnv } = require('./config/env');
 const { parsePositiveInt } = require('./shared/utils');
+const { readRuntimeEnv, runtimeDefault } = require('./config/runtime-schema');
 
 const envPath = path.resolve(__dirname, '..', '.env');
 loadEnv(envPath);
@@ -17,9 +18,12 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[TRAECNclaw] Unhandled rejection at:', promise, 'reason:', reason);
 });
 
-const host = process.env.HOST || '127.0.0.1';
-const port = parsePositiveInt(process.env.PORT || '8788', 8788);
-const mockBridge = process.env.TRAECN_ENABLE_MOCK_BRIDGE === '1';
+const host = readRuntimeEnv('TRAECN_GATEWAY_HOST');
+const port = parsePositiveInt(
+  readRuntimeEnv('TRAECN_GATEWAY_PORT'),
+  Number(runtimeDefault('TRAECN_GATEWAY_PORT'))
+);
+const mockBridge = readRuntimeEnv('TRAECN_ENABLE_MOCK_BRIDGE') === '1';
 
 let gatewayInstance = null;
 

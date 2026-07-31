@@ -50,6 +50,34 @@ function artifact(filePath) {
   };
 }
 
+function treeSha256(rootPath) {
+  const hash = crypto.createHash('sha256');
+  const visit = (currentPath, relativePath = '') => {
+    const entries = fs.readdirSync(currentPath, { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const childRelative = path.join(relativePath, entry.name);
+      const childPath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        visit(childPath, childRelative);
+      } else if (entry.isFile()) {
+        hash.update(childRelative.split(path.sep).join('/'));
+        hash.update('\0');
+        hash.update(fs.readFileSync(childPath));
+        hash.update('\0');
+      }
+    }
+  };
+  visit(rootPath);
+  return hash.digest('hex');
+}
+
+function gitOutput(args) {
+  const result = spawnSync('git', args, { cwd: repoRoot, encoding: 'utf8' });
+  if (result.status !== 0) fail(`git ${args.join(' ')} failed\n${result.stderr || result.stdout}`);
+  return result.stdout.trim();
+}
+
 if (!fs.existsSync(path.join(skillDir, 'SKILL.md'))) {
   fail(`missing ${path.relative(repoRoot, path.join(skillDir, 'SKILL.md'))}`);
 }
@@ -69,8 +97,12 @@ if (zipResult.available && fs.existsSync(zipPath)) {
 
 const manifest = {
   name: skillName,
+  version: require('../package.json').version,
   generatedAt: new Date().toISOString(),
+  sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+  sourceDirty: Boolean(gitOutput(['status', '--porcelain'])),
   skillPath: path.relative(repoRoot, skillDir),
+  skillTreeSha256: treeSha256(skillDir),
   artifacts,
   install: {
     codexGlobal: `mkdir -p "\${CODEX_HOME:-$HOME/.codex}/skills" && tar -xzf ${path.relative(repoRoot, tgzPath)} -C "\${CODEX_HOME:-$HOME/.codex}/skills"`,

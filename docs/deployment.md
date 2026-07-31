@@ -9,8 +9,8 @@ TRAECNclaw is designed as a local desktop companion service. It should run on th
 Use these settings for a local production profile:
 
 ```env
-HOST=127.0.0.1
-PORT=8788
+TRAECN_GATEWAY_HOST=127.0.0.1
+TRAECN_GATEWAY_PORT=8788
 TRAECN_GATEWAY_TOKEN=<generate-a-random-token>
 TRAECN_ALLOWED_ORIGINS=http://127.0.0.1:8788
 TRAECN_ENABLE_DEBUG_ENDPOINTS=0
@@ -159,9 +159,10 @@ TRAECNclaw can be deployed to cloud platforms like **Render** or **Railway**. Si
 3. Connect your GitHub repository.
 4. Set the build command to `npm ci --omit=dev` and the start command to `npm start`.
 5. Set the following environment variables in Render Dashboard:
+   - `TRAECN_GATEWAY_HOST`: `0.0.0.0`
    - `TRAECN_CDP_HOST`: Your tunnel URL (e.g., `https://abc123.loca.lt`)
    - `TRAECN_REMOTE_DEBUGGING_PORT`: `80` or `443` (depending on tunnel)
-   - `TRAECN_GATEWAY_TOKEN`: A secure random token (auto-generated if not set)
+   - `TRAECN_GATEWAY_TOKEN`: A secure random token (required for a non-loopback bind)
 6. Deploy and verify with `GET https://<your-service>.onrender.com/api/status`.
 
 ### Railway Deployment
@@ -170,6 +171,7 @@ TRAECNclaw can be deployed to cloud platforms like **Render** or **Railway**. Si
 2. In Railway Dashboard, click **New Project** → **Deploy from GitHub repo**.
 3. Select your repository.
 4. Set environment variables in Railway Dashboard → Variables:
+   - `TRAECN_GATEWAY_HOST`: `0.0.0.0`
    - `TRAECN_CDP_HOST`: Your tunnel URL
    - `TRAECN_REMOTE_DEBUGGING_PORT`: Tunnel port
    - `TRAECN_GATEWAY_TOKEN`: Secure random token
@@ -179,9 +181,9 @@ TRAECNclaw can be deployed to cloud platforms like **Render** or **Railway**. Si
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `HOST` | Yes | Set to `0.0.0.0` to accept external connections |
-| `PORT` | Yes | Render/Railway provide this dynamically |
-| `TRAECN_GATEWAY_TOKEN` | Recommended | Authentication token. Leave empty to disable auth (not recommended for production) |
+| `TRAECN_GATEWAY_HOST` | Yes | Set to `0.0.0.0` to accept external connections |
+| `TRAECN_GATEWAY_PORT` / platform `PORT` | Yes | Gateway port; Render/Railway may inject the compatibility alias `PORT` |
+| `TRAECN_GATEWAY_TOKEN` | Yes | Authentication token; startup fails closed without one on a non-loopback bind |
 | `TRAECN_ALLOWED_ORIGINS` | No | CORS origins. Use `*` for development only |
 | `TRAECN_CDP_HOST` | Yes (cloud) | Tunnel URL pointing to your local Trae CDP port |
 | `TRAECN_REMOTE_DEBUGGING_PORT` | Yes (cloud) | Port of the tunnel (usually 80 or 443) |

@@ -74,6 +74,25 @@ test('loadConfig uses environment variable for port when set', () => {
   delete process.env.TRAECN_PORT;
 });
 
+test('loadConfig prefers canonical gateway variables over legacy aliases', () => {
+  process.env.TRAECN_GATEWAY_HOST = '127.0.0.9';
+  process.env.TRAECN_GATEWAY_PORT = '8899';
+  process.env.TRAECN_HOST = '127.0.0.8';
+  process.env.TRAECN_PORT = '8888';
+  try {
+    clearModuleCache();
+    const { loadConfig } = require('./traecn-cli');
+    const cfg = loadConfig();
+    assert.strictEqual(cfg.host, '127.0.0.9');
+    assert.strictEqual(cfg.port, 8899);
+  } finally {
+    delete process.env.TRAECN_GATEWAY_HOST;
+    delete process.env.TRAECN_GATEWAY_PORT;
+    delete process.env.TRAECN_HOST;
+    delete process.env.TRAECN_PORT;
+  }
+});
+
 test('loadConfig uses environment variable for token when set', () => {
   process.env.TRAECN_GATEWAY_TOKEN = 'test-token-456';
   clearModuleCache();

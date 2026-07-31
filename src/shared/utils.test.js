@@ -212,15 +212,15 @@ test('getGatewayContext falls back to TRAE_* when TRAECN_* missing', () => {
   assert.strictEqual(ctx.token, 'xyz');
 });
 
-test('getGatewayContext uses safe defaults (127.0.0.1:8787, 30s timeout)', () => {
+test('getGatewayContext uses canonical defaults (127.0.0.1:8788, 30s timeout)', () => {
   const ctx = getGatewayContext({});
   assert.strictEqual(ctx.host, '127.0.0.1');
-  assert.strictEqual(ctx.port, 8787);
+  assert.strictEqual(ctx.port, 8788);
   assert.strictEqual(ctx.token, '');
   assert.strictEqual(ctx.timeout, 30000);
 });
 
 test('getGatewayContext clamps invalid numeric values to defaults', () => {
   const ctx = getGatewayContext({ TRAECN_GATEWAY_PORT: 'not-a-number' });
-  assert.strictEqual(ctx.port, 8787);
+  assert.strictEqual(ctx.port, 8788);
 });

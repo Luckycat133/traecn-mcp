@@ -66,7 +66,7 @@ TRAECN_QUICKSTART_PROFILE_MODE=isolated npm run start:traecn -- --force-new --us
 For unattended queue verification, keep the gateway under `launchd` so queued tasks survive terminal exits and gateway restarts:
 
 ```sh
-TRAECN_ENABLE_MOCK_BRIDGE=0 TRAECN_REMOTE_DEBUGGING_PORT=9334 TRAECN_QUICKSTART_PROFILE_MODE=existing npm run service:start
+TRAECN_ENABLE_MOCK_BRIDGE=0 TRAECN_REMOTE_DEBUGGING_PORT=9222 TRAECN_QUICKSTART_PROFILE_MODE=existing npm run service:start
 ```
 
 With the current defaults the gateway will also:
@@ -85,16 +85,21 @@ With the current defaults the gateway will also:
 - Unit tests cover small utilities, environment parsing, error classes, CDP client behavior, and mock driver behavior.
 - Integration tests cover CDP discovery scoring, DOM driver configuration, gateway utility behavior, and plugin client requests.
 - System tests start a real local gateway in mock mode and verify authentication, session creation, delegation, response headers, and route compatibility.
-- UAT checks verify release documentation, OpenAPI endpoint coverage, and the machine-readable acceptance audit.
-- `npm run acceptance:audit` reports current completion evidence as JSON. It exits successfully for `passed`, `partial`, or `missing` status so it can run in normal UAT; add `-- --require-complete` to make partial/missing requirements fail before claiming the full unattended TraeCN goal is complete.
+- Contract audit checks verify release documentation, OpenAPI declarations,
+  source-level requirements, and already-recorded evidence. They do not execute
+  the claimed behavior.
+- `npm run contract:audit` reports that inventory as JSON. The old
+  `acceptance:audit` name remains an alias. Add `-- --require-complete` to fail
+  on missing evidence, but use unit/integration/system or Live tests to prove
+  behavior.
 - Live UAT checks a real Trae CN CDP endpoint with safe read-only gateway calls when available. It reports `SKIP` by default if CDP is not reachable; use `node scripts/live-uat.js --strict` when a real desktop instance is required. Add `--require-ready` to fail unless the logged-in Trae CN UI is automation-ready. Add `--cleanup-queue-probes` to stop/delete accidental `wait for Trae queue` Solo chats and verify `matched: 0`; strict runs fail if those chats remain. Add `--delegate` only when sending a real prompt is acceptable. Use `traecnclaw cleanup-queue --status --json` to inspect the singleton cleanup watcher without contacting TraeCN.
 - `npm run proof:long-queue` prepares the remaining GLM-5.2 queue-drain proof without sending a prompt. It writes the marker, evidence log path, final JSON path, and readiness summary. Add `-- --execute --detach --allow-quota-spend` only for an explicitly approved quota-consuming proof run; the runner switches to GLM-5.2, submits an owned marker task, waits unattended, keeps queue-probe cleanup in the wait loop, and automatically stop/deletes accidental queue-probe Solo chats before submission. Execute mode requires consecutive clean dry-runs before submitting; tune it with `-- --cleanup-stabilize-checks <n> --cleanup-stabilize-delay-ms <ms> --cleanup-max-attempts <n>`. Re-running with the same marker resumes the existing task from the evidence log instead of submitting again; add `-- --force-new` only for an intentional new submission. Use `npm run proof:status`, CLI `traecnclaw proof status`, MCP `traecn_get_long_queue_proof_status`, or OpenClaw `traecn_long_queue_proof_status` for detached proof inspection; use `npm run proof:cancel -- --marker <id>`, CLI `traecnclaw proof cancel`, MCP `traecn_cancel_long_queue_proof`, or OpenClaw `traecn_long_queue_proof_cancel` for cancellation.
 
-Recommended release gate:
+Executable non-quota release gate:
 
 ```sh
-npm run test:all
-npm run acceptance:audit
+npm run verify
+npm run contract:audit -- --no-live
 npm run proof:long-queue
 npm run test:live
 node scripts/live-uat.js --strict --require-ready --cleanup-queue-probes

@@ -12,8 +12,6 @@
  *   - Per-result helpers (_isReviewableTaskResult, _isSuccessfulTaskResult,
  *     _isEchoedTaskResult, _hasStrongCompletionEvidence) used by the
  *     retry-mode decision.
- *   - createQueuedTask — a no-op factory hook (the full body still lives
- *     on Gateway, but tests / callers can stub it cleanly).
  *
  * The class is stateless; it exists as a composition point so the
  * orchestrator can wire dependencies in one place. It delegates
@@ -139,16 +137,6 @@ class BatchExecutor {
     ].some(pattern => pattern.test(value));
   }
 
-  // ── task creation (placeholder for the bigger migration in A4) ─────────
-  //
-  // The full `_createQueuedTask` body still lives on Gateway because it
-  // touches many Gateway-only helpers (driver, history, persist, etc.).
-  // We expose a no-op factory hook here so callers can stub it cleanly
-  // in tests without hitting Gateway internals.
-
-  createQueuedTask(_body, _queueStatus) {
-    throw new Error('createQueuedTask must be supplied via the owning gateway; this is a marker for A2 only');
-  }
 }
 
 module.exports = { BatchExecutor };

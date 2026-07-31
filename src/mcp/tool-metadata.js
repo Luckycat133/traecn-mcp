@@ -1,8 +1,7 @@
 'use strict';
 
 const { RAW_MCP_TOOLS } = require('./tools');
-
-const DEFAULT_MCP_TOOL_PROFILE = 'default';
+const { assertMcpContract } = require('./contract');
 
 const TOOL_METADATA = Object.freeze({
   traecn_send_message: { layer: 'task', risk: 'delegate' },
@@ -54,47 +53,13 @@ function decorateTool(tool) {
   });
 }
 
-const MCP_TOOLS = Object.freeze(RAW_MCP_TOOLS.map(decorateTool));
-const MCP_TOOL_PROFILES = Object.freeze({ default: Object.freeze(MCP_TOOLS.map(tool => tool.name)) });
-const MCP_TOOL_PROFILE_DESCRIPTIONS = Object.freeze({
-  default: 'Focused Agent operations. Gateway-owned mechanics are intentionally not exposed as tools.'
-});
-
-function normalizeMcpToolProfile() {
-  return DEFAULT_MCP_TOOL_PROFILE;
-}
-
-function getMcpToolsForProfile() {
-  return MCP_TOOLS;
-}
-
-function getMcpToolProfileSummary() {
-  return {
-    default: {
-      default: true,
-      count: MCP_TOOLS.length,
-      description: MCP_TOOL_PROFILE_DESCRIPTIONS.default,
-      tools: MCP_TOOLS.map(tool => tool.name)
-    }
-  };
-}
-
-function envToolProfile() {
-  return DEFAULT_MCP_TOOL_PROFILE;
-}
+const MCP_TOOLS = Object.freeze(assertMcpContract(RAW_MCP_TOOLS.map(decorateTool)));
 
 module.exports = {
-  DEFAULT_MCP_TOOL_PROFILE,
-  MCP_TOOL_PROFILES,
-  MCP_TOOL_PROFILE_DESCRIPTIONS,
   MCP_TOOLS,
   TOOL_METADATA,
   TOOL_ANNOTATIONS,
   DESTRUCTIVE_MCP_TOOLS,
   decorateTool,
-  normalizeMcpToolProfile,
-  getMcpToolsForProfile,
-  getMcpToolMetadata,
-  getMcpToolProfileSummary,
-  envToolProfile
+  getMcpToolMetadata
 };

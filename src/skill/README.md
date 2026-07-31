@@ -1,6 +1,6 @@
 # TraeCN Skill — Programmatic JS API
 
-A token-efficient JavaScript wrapper around the TRAECNclaw HTTP gateway, designed for embedding in Node scripts, plugins, and test runners. For the agent-facing Trae skill (MCP server usage, tool profiles, safety rules), see [`skills/traecnclaw-mcp/SKILL.md`](../../skills/traecnclaw-mcp/SKILL.md).
+A token-efficient JavaScript wrapper around the TRAECNclaw HTTP gateway, designed for embedding in Node scripts, plugins, and test runners. For the agent-facing Trae skill (MCP server usage, the frozen 20-tool contract, and safety rules), see [`skills/traecnclaw-mcp/SKILL.md`](../../skills/traecnclaw-mcp/SKILL.md).
 
 Full TypeScript surface lives in [`simple-api.d.ts`](./simple-api.d.ts) and [`traecn-skill.d.ts`](./traecn-skill.d.ts). This README only shows usage patterns and layering.
 

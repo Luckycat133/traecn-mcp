@@ -13,8 +13,8 @@ maintenance operations remain gateway or operator facilities.
       "command": "node",
       "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
       "env": {
-        "TRAECN_HOST": "127.0.0.1",
-        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_HOST": "127.0.0.1",
+        "TRAECN_GATEWAY_PORT": "8788",
         "TRAECN_GATEWAY_TOKEN": ""
       }
     }

@@ -2,6 +2,7 @@
 
 const path = require('path');
 const { getEnvWithFallback, parseSelectors, parsePositiveInt } = require('../shared/utils');
+const { runtimeDefault } = require('../config/runtime-schema');
 
 function parseOptionalPositiveInt(value) {
   if (value === undefined || value === null || value === '') return null;
@@ -241,12 +242,21 @@ function getConfig() {
     sendTrigger: getEnvWithFallback('TRAECN_SEND_TRIGGER', 'TRAE_SEND_TRIGGER', 'button'),
     pollIntervalMs: parsePositiveInt(getEnvWithFallback('TRAECN_RESPONSE_POLL_INTERVAL_MS', 'TRAE_RESPONSE_POLL_INTERVAL_MS', '350'), 350),
     idleMs: parsePositiveInt(getEnvWithFallback('TRAECN_RESPONSE_IDLE_MS', 'TRAE_RESPONSE_IDLE_MS', '1200'), 1200),
-    timeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_RESPONSE_TIMEOUT_MS', 'TRAE_RESPONSE_TIMEOUT_MS', '1800000'), 1800000),
+    timeoutMs: parsePositiveInt(
+      getEnvWithFallback('TRAECN_RESPONSE_TIMEOUT_MS', 'TRAE_RESPONSE_TIMEOUT_MS', runtimeDefault('TRAECN_RESPONSE_TIMEOUT_MS')),
+      Number(runtimeDefault('TRAECN_RESPONSE_TIMEOUT_MS'))
+    ),
     postActionDelayMs: parsePositiveInt(getEnvWithFallback('TRAECN_POST_ACTION_DELAY_MS', 'TRAE_POST_ACTION_DELAY_MS', '350'), 350),
     sessionPrepareTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_SESSION_PREPARE_TIMEOUT_MS', 'TRAE_SESSION_PREPARE_TIMEOUT_MS', '5000'), 5000),
     queuePollIntervalMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_POLL_INTERVAL_MS', 'TRAE_QUEUE_POLL_INTERVAL_MS', '15000'), 15000),
-    queueWaitTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_WAIT_TIMEOUT_MS', 'TRAE_QUEUE_WAIT_TIMEOUT_MS', '60000'), 60000),
-    queuePerTaskTimeoutMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_PER_TASK_TIMEOUT_MS', 'TRAE_QUEUE_PER_TASK_TIMEOUT_MS', '600000'), 600000),
+    queueWaitTimeoutMs: parsePositiveInt(
+      getEnvWithFallback('TRAECN_QUEUE_WAIT_TIMEOUT_MS', 'TRAE_QUEUE_WAIT_TIMEOUT_MS', runtimeDefault('TRAECN_QUEUE_WAIT_TIMEOUT_MS')),
+      Number(runtimeDefault('TRAECN_QUEUE_WAIT_TIMEOUT_MS'))
+    ),
+    queuePerTaskTimeoutMs: parsePositiveInt(
+      getEnvWithFallback('TRAECN_QUEUE_PER_TASK_TIMEOUT_MS', 'TRAE_QUEUE_PER_TASK_TIMEOUT_MS', runtimeDefault('TRAECN_QUEUE_PER_TASK_TIMEOUT_MS')),
+      Number(runtimeDefault('TRAECN_QUEUE_PER_TASK_TIMEOUT_MS'))
+    ),
     queueTimeoutExtensionMs: parsePositiveInt(getEnvWithFallback('TRAECN_QUEUE_TIMEOUT_EXTENSION_MS', 'TRAE_QUEUE_TIMEOUT_EXTENSION_MS', '600000'), 600000),
     queueMaxWaitMs: parseOptionalPositiveInt(getEnvWithFallback('TRAECN_QUEUE_MAX_WAIT_MS', 'TRAE_QUEUE_MAX_WAIT_MS')),
     fileAllowedRoots,

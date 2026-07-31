@@ -15,11 +15,7 @@ const {
   asMcpContent,
   checkGenericQueueProbe
 } = require('./tools');
-const {
-  getMcpToolsForProfile,
-  normalizeMcpToolProfile,
-  envToolProfile
-} = require('./tool-metadata');
+const { MCP_TOOLS } = require('./tool-metadata');
 
 const SERVER_INFO = Object.freeze({ name: 'traecnclaw', version: require('../../package.json').version });
 
@@ -35,14 +31,14 @@ function envContext() {
   const ctx = getGatewayContext();
   const env = process.env;
   return {
-    host: env.TRAECN_HOST || ctx.host,
-    port: parsePositiveInt(env.TRAECN_PORT || env.PORT, 8788),
+    host: ctx.host,
+    port: ctx.port,
     token: env.TRAECN_GATEWAY_TOKEN || env.TRAECN_API_KEY || ctx.token,
-    timeout: parsePositiveInt(env.TRAECN_TIMEOUT, 120000)
+    timeout: parsePositiveInt(env.TRAECN_TIMEOUT, ctx.timeout)
   };
 }
 
-async function callTool(name, args = {}, context = envContext(), authContext = {}, _options = {}) {
+async function callTool(name, args = {}, context = envContext(), authContext = {}) {
   const internalName = internalMcpToolName(name);
   if (!internalName) throw new Error(`Unknown tool: ${name}`);
 
@@ -185,8 +181,7 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
   }
 }
 
-function createMcpHandlers(context = envContext(), authContext = {}, options = {}) {
-  const toolProfile = normalizeMcpToolProfile(options.toolProfile || envToolProfile());
+function createMcpHandlers(context = envContext(), authContext = {}) {
   return {
     async handle(message) {
       const { method, params = {} } = message;
@@ -197,9 +192,9 @@ function createMcpHandlers(context = envContext(), authContext = {}, options = {
           serverInfo: SERVER_INFO
         };
       }
-      if (method === 'tools/list') return { tools: getMcpToolsForProfile(toolProfile) };
+      if (method === 'tools/list') return { tools: MCP_TOOLS };
       if (method === 'tools/call') {
-        return callTool(params.name, params.arguments || {}, context, authContext, { toolProfile });
+        return callTool(params.name, params.arguments || {}, context, authContext);
       }
       if (method === 'prompts/list') return { prompts: promptLayers.listMcpPrompts() };
       if (method === 'prompts/get') return promptLayers.getMcpPrompt(params.name, params.arguments || {});

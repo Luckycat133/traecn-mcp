@@ -3,6 +3,7 @@
 const assert = require('assert');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { generateOpenAPISpec } = require('../src/http/openapi');
 const packageJson = require('../package.json');
@@ -51,12 +52,14 @@ assert.ok(cliSource.includes("case 'preflight'"), 'CLI must expose preflight com
 assert.ok(cliSource.includes("case 'plan'"), 'CLI must expose operation plan command');
 assert.strictEqual(packageJson.scripts.doctor, 'node scripts/doctor.js');
 assert.strictEqual(packageJson.scripts['acceptance:audit'], 'node scripts/acceptance-audit.js');
+assert.strictEqual(packageJson.scripts['contract:audit'], 'node scripts/acceptance-audit.js');
 assert.strictEqual(packageJson.scripts['proof:long-queue'], 'node scripts/long-queue-proof.js');
 assert.strictEqual(packageJson.scripts['proof:status'], 'node scripts/long-queue-proof.js --status');
 assert.strictEqual(packageJson.scripts['proof:cancel'], 'node scripts/long-queue-proof.js --cancel');
 assert.strictEqual(packageJson.scripts['test:coverage:audit'], 'node scripts/coverage-audit.js');
 assert.ok(packageJson.scripts['test:uat'].includes('coverage-audit'), 'test:uat must include coverage audit');
-assert.ok(packageJson.scripts['test:uat'].includes('acceptance-audit'), 'test:uat must include acceptance audit');
+assert.ok(packageJson.scripts['test:uat'].includes('contract:audit'), 'test:uat must include contract audit');
+assert.ok(packageJson.scripts.verify.includes('test:all'), 'verify must execute the behavior test gate');
 assert.strictEqual(packageJson.scripts['inspect:verify'], 'node scripts/inspect-traecn.js --verify');
 assert.strictEqual(packageJson.scripts['test:live'], 'node scripts/live-uat.js');
 assert.strictEqual(packageJson.bin['traecnclaw-mcp'], './mcp-server.js');
@@ -159,7 +162,7 @@ assert.ok(acceptanceAuditSource.includes('multi_session_result_isolation'), 'acc
 assert.ok(gatewayTestSource.includes('keeps parallel queued session Solo results isolated when completion is out of order'), 'gateway tests must prove out-of-order queued session result isolation');
 assert.ok(gatewayTestSource.includes('TRAECN_SESSION_A_001') && gatewayTestSource.includes('TRAECN_SESSION_B_001'), 'gateway multi-session isolation test must use distinct ownership tokens');
 assert.ok(acceptanceAuditSource.includes('unattended_vibe_workflow_contract'), 'acceptance audit must track the unattended vibe workflow contract');
-assert.ok(mcpTestSource.includes('MCP exposes one focused atomic tool surface'), 'MCP tests must lock the focused Agent tool surface');
+assert.ok(mcpTestSource.includes('MCP contract v5 exposes exactly one 20-tool surface'), 'MCP tests must lock contract v5 and the focused Agent tool surface');
 assert.ok(skillTestSource.includes('vibeWorkflow queues unattended follow-up workflow'), 'Skill tests must prove vibe workflow queues follow-up steps');
 assert.ok(gatewayTestSource.includes('Gateway auto-continues reviewable workflow followups without human review'), 'Gateway tests must prove auto-continued workflow followups');
 assert.ok(acceptanceAuditSource.includes('proofLockEvidence'), 'acceptance audit must track proof lock acquisition evidence');
@@ -191,13 +194,19 @@ assert.ok(longQueueProofSource.includes('gateway_transient_retry'), 'long-queue 
 assert.ok(longQueueProofSource.includes('--gateway-retry-attempts'), 'long-queue proof must expose retry-attempt tuning for gateway restarts');
 assert.ok(longQueueProofSource.includes('--gateway-retry-delay-ms'), 'long-queue proof must expose retry-delay tuning for gateway restarts');
 
-const packOutput = execFileSync('npm', ['pack', '--dry-run', '--json'], {
-  cwd: root,
-  encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'pipe']
-});
-const packInfo = JSON.parse(packOutput)[0];
-const packedFiles = packInfo.files.map(file => file.path);
+const npmCachePath = fs.mkdtempSync(path.join(os.tmpdir(), 'traecnclaw-npm-cache-'));
+let packedFiles;
+try {
+  const packOutput = execFileSync('npm', ['pack', '--dry-run', '--json', '--cache', npmCachePath], {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  const packInfo = JSON.parse(packOutput)[0];
+  packedFiles = packInfo.files.map(file => file.path);
+} finally {
+  fs.rmSync(npmCachePath, { recursive: true, force: true });
+}
 for (const requiredFile of [
   'mcp-server.js',
   'scripts/acceptance-audit.js',

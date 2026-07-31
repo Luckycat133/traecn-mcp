@@ -7,6 +7,7 @@ const { discoverTarget, describeCDPSurface } = require('../../cdp/discovery');
 const { getQuickstartConfig, restartTraeCNWithDebug } = require('../../config/quickstart');
 const { rejectBadRequest, hasDriverCapability } = require('./helpers');
 const { conversationId } = require('./unified-agent');
+const { runtimeDefault } = require('../../config/runtime-schema');
 
 const defaultRestartDebugDeps = {
   getEnvWithFallback,
@@ -195,7 +196,7 @@ async function handleRestartTraeDebug(req, res, ctx) {
   const requestedPort = restartDebugDeps.getEnvWithFallback(
     'TRAECN_REMOTE_DEBUGGING_PORT',
     'TRAE_REMOTE_DEBUGGING_PORT',
-    quickstart.remoteDebuggingPort || '9334'
+    quickstart.remoteDebuggingPort || runtimeDefault('TRAECN_REMOTE_DEBUGGING_PORT')
   );
   process.env.TRAECN_REMOTE_DEBUGGING_PORT = requestedPort;
 
