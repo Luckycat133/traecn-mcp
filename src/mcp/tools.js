@@ -12,7 +12,7 @@ const CONVERSATION_ID = {
 };
 
 // Each tool represents one user intent. Queueing, waiting, recovery,
-// notifications and routine approvals remain gateway-owned mechanics.
+// notifications and routine non-command interactions remain gateway-owned mechanics.
 const RAW_MCP_TOOLS = Object.freeze([
   {
     name: 'traecn_send_message',

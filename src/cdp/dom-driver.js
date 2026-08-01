@@ -24,15 +24,20 @@ const soloChatModule = require('./dom-handlers/solo-chat');
 const modelModule = require('./dom-handlers/model');
 
 class DomDriver {
-  constructor(client, config) {
+  constructor(client, config, options = {}) {
     this.client = client;
     this.config = config || getConfig();
+    this.traeAdapter = options.traeAdapter || null;
     this._lastTaskText = '';
     this._pendingUserTask = '';
     this._preSendSnapshot = ''; // body text snapshot before sending task
     this._cachedMode = null;    // cached mode detection result
     this._cachedModeTs = 0;
     this._modeCacheTtl = 5000;  // re-detect after 5s
+  }
+
+  getTraeAdapterCapabilities() {
+    return this.traeAdapter ? { ...this.traeAdapter.capabilities } : null;
   }
 
   // ── Mode detection ─────────────────────────────────────────────────────

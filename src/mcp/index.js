@@ -33,11 +33,22 @@ const {
 
 const {
   TaskEventPump,
+  TaskSubscriptionPump,
   stableMcpClientId,
+  subscriptionAcknowledgedNotification,
   taskEventNotification,
   writeMessage,
   startStdioServer
 } = require('./stdio-server');
+const {
+  TASKS_EXTENSION_ID,
+  McpTaskAdapter,
+  assertTaskExtension,
+  clientSupportsTaskExtension,
+  detailedTaskFromGateway,
+  taskIdempotencyKey,
+  taskSubscriptionNotification
+} = require('./task-extension');
 
 module.exports = {
   // Tools
@@ -67,8 +78,19 @@ module.exports = {
 
   // Stdio
   TaskEventPump,
+  TaskSubscriptionPump,
   stableMcpClientId,
+  subscriptionAcknowledgedNotification,
   taskEventNotification,
   writeMessage,
-  startStdioServer
+  startStdioServer,
+
+  // Modern task extension
+  TASKS_EXTENSION_ID,
+  McpTaskAdapter,
+  assertTaskExtension,
+  clientSupportsTaskExtension,
+  detailedTaskFromGateway,
+  taskIdempotencyKey,
+  taskSubscriptionNotification
 };

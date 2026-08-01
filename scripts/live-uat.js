@@ -16,6 +16,7 @@ loadEnv(path.resolve(__dirname, '..', '.env'));
 
 const strict = process.argv.includes('--strict');
 const requireReady = process.argv.includes('--require-ready');
+const requireVerifiedAdapter = process.argv.includes('--require-verified-adapter');
 const allowDelegate = process.argv.includes('--delegate');
 const cleanupQueueProbes = process.argv.includes('--cleanup-queue-probes') || process.env.TRAECN_LIVE_UAT_CLEANUP_QUEUE_PROBES === '1';
 const exerciseBackgroundWorkflow = process.argv.includes('--exercise-background-workflow');
@@ -102,7 +103,8 @@ function buildDiagnostics(endpoint, statusData, readinessData) {
     },
     gateway: {
       connected: statusData?.status || 'unknown',
-      mockBridge: statusData?.mockBridge === true
+      mockBridge: statusData?.mockBridge === true,
+      traeAdapter: statusData?.traeAdapter || null
     },
     surface,
     readiness,
@@ -231,6 +233,21 @@ async function main() {
     assert.strictEqual(connectedStatus.status, 200, 'post-readiness status endpoint should return 200');
     lastStatusData = connectedStatus.data;
     checks.push({ name: 'post-readiness-status', ok: true, connected: connectedStatus.data.status });
+    assert.ok(connectedStatus.data.traeAdapter, 'connected status must include a Trae adapter handshake');
+    checks.push({
+      name: 'trae-adapter',
+      ok: connectedStatus.data.traeAdapter.verified === true,
+      adapter: connectedStatus.data.traeAdapter.adapter,
+      traeVersion: connectedStatus.data.traeAdapter.traeVersion,
+      compatibility: connectedStatus.data.traeAdapter.compatibility
+    });
+    if (requireVerifiedAdapter) {
+      assert.strictEqual(
+        connectedStatus.data.traeAdapter.verified,
+        true,
+        `--require-verified-adapter rejected ${connectedStatus.data.traeAdapter.adapter}`
+      );
+    }
 
     const queue = await request(port, 'GET', '/api/queue-status', null, token);
     assert.strictEqual(queue.status, 200, 'queue-status endpoint should return 200');

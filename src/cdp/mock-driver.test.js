@@ -112,6 +112,15 @@ test('MockDriver constructor accepts custom responses', () => {
     assert.strictEqual(result.confidence, 1);
   });
 
+  await asyncTest('listSoloChats stays inside the mock driver without a CDP client', async () => {
+    const driver = new MockDriver();
+    assert.deepStrictEqual(await driver.listSoloChats(), {
+      mode: 'solo',
+      chats: [],
+      count: 0
+    });
+  });
+
   await asyncTest('switchModel updates current model', async () => {
     const driver = new MockDriver();
     const result = await driver.switchModel('glm');
@@ -126,6 +135,11 @@ test('MockDriver constructor accepts custom responses', () => {
       current: 'GLM-5.2',
       models: ['GLM-5.2', 'mock-model']
     });
+  });
+
+  await asyncTest('getCurrentModel stays inside the mock driver without a CDP client', async () => {
+    const driver = new MockDriver({ model: 'GLM-5.2' });
+    assert.strictEqual(await driver.getCurrentModel(), 'GLM-5.2');
   });
 
   await asyncTest('settings mock supports read and set', async () => {

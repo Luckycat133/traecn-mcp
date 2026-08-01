@@ -284,7 +284,11 @@ async function collectResponse(driver) {
       question: dialog.question,
       dialogType: dialog.dialogType,
       buttons: dialog.buttons || [],
-      options: dialog.options || []
+      options: dialog.options || [],
+      approvalDecision: dialog.approvalDecision || null,
+      commandRisk: dialog.commandRisk || null,
+      riskReasons: dialog.riskReasons || [],
+      command: dialog.command || null
     };
   }
 
@@ -385,18 +389,6 @@ async function collectResponse(driver) {
           continue;
         }
         if (approvalDialog.needsApproval) {
-          // Auto-approve command execution dialogs (e.g., "批准执行命令")
-          // Questions (dialog without command keywords) still get forwarded to the caller.
-          if (approvalDialog.isCommandExec && approvalDialog.canAutoApprove) {
-            driver._approvalDialogFirstSeenAt = undefined;
-            driver._lastApprovalCheckAt = undefined;
-            const approveResult = await driver.approveDialog('approve');
-            if (approveResult.success) {
-              await sleep(500);
-              continue;
-            }
-          }
-
           const approvalDuration = Date.now() - (driver._approvalDialogFirstSeenAt || Date.now());
           if (driver._approvalDialogFirstSeenAt === undefined) {
             driver._approvalDialogFirstSeenAt = Date.now();

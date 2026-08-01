@@ -4,6 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { URL } = require('url');
 const packageInfo = require('../../package.json');
 const { discoverTarget, connectToTarget, resolveCDPEndpoint, fetchCDPTargets, describeCDPSurface } = require('../cdp/discovery');
@@ -28,6 +29,13 @@ const { isTraeCNRunning } = require('../config/quickstart');
 const { CDPHealthWatcher } = require('../cdp/health-watcher');
 const { DEFAULT_FALLBACK_MODELS } = require('../shared/models');
 const { AuditLogger } = require('../shared/audit-logger');
+const {
+  adapterHandshake,
+  detectTraeEnvironment,
+  mergeAdapterConfig,
+  parseTraeVersion,
+  selectTraeAdapter
+} = require('../trae-adapters');
 
 // Local alias so the existing call site (`_redactUrl(req.url)`) keeps working
 // after the helpers moved to ./request-gate. The real implementation lives
@@ -51,41 +59,13 @@ const batchHandlers = require('./handlers/batch');
 const projectHandlers = require('./handlers/project');
 const driverDispatchHandlers = require('./handlers/driver-dispatch');
 const unifiedAgentHandlers = require('./handlers/unified-agent');
+const { CompletionSignal } = require('./completion-signal');
 
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
 
 const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
-
-const { notifyOpenClaw, formatResult } = require('./notifications');
-
-function formatReviewRequiredMessage(taskId, result, remainingFollowups = 0) {
-  const preview = String(result?.text || '').trim().replace(/\s+/g, ' ').slice(0, 200);
-  const suffix = remainingFollowups > 0 ? `\n后续待续任务: ${remainingFollowups}` : '';
-  return `📝 Trae 已完成并等待审查:\nTask ID: ${taskId}\n预览: ${preview || '（无文本预览）'}${suffix}\n\n审查通过后再继续后续排队任务。`;
-}
-
-async function sendTaskWebhook(url, payload) {
-  if (!url) return;
-  const body = JSON.stringify({
-    timestamp: new Date().toISOString(),
-    ...payload
-  });
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': 'TraeCNclaw-TaskWebhook/1.0'
-    },
-    body,
-    signal: AbortSignal.timeout(5000)
-  });
-  if (!response.ok) {
-    throw TraeCNAutomationError.webhookFailed(url, response.status, response.statusText);
-  }
-  await response.text().catch(() => {});
-}
 
 class Gateway {
   constructor(options = {}) {
@@ -118,9 +98,18 @@ class Gateway {
     this.taskHistoryStore = getGlobalStore();
     this.taskEventStore = options.taskEventStore || new TaskEventStore();
     this.auditLogger = options.auditLogger || new AuditLogger();
+    this.completionSignal = options.completionSignal || new CompletionSignal({
+      getTaskEventStore: () => this.taskEventStore,
+      getWebSocketHandler: () => this.wsHandler,
+      logger: console
+    });
 
     this.client = null;
     this.driver = null;
+    this.traeEnvironment = null;
+    this.traeAdapter = null;
+    this.detectTraeEnvironment = options.detectTraeEnvironment || detectTraeEnvironment;
+    this.selectTraeAdapter = options.selectTraeAdapter || selectTraeAdapter;
     this.server = null;
     this.wsHandler = null;
     this.sessions = new Map();
@@ -521,6 +510,9 @@ class Gateway {
     const task = {
       taskId: historyTaskId,
       sessionId: typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : null,
+      idempotencyKey: typeof body.idempotencyKey === 'string' && body.idempotencyKey.trim()
+        ? body.idempotencyKey.trim()
+        : null,
       chatId: body.chatId || null,
       soloChat: this._normalizeSoloChatTarget(body.soloChat || body.soloChatTarget || {
         index: body.soloChatIndex,
@@ -577,8 +569,16 @@ class Gateway {
       }
     });
     this.taskQueue.set(historyTaskId, task);
+    if (!this._persistActiveQueue()) {
+      this.taskQueue.delete(historyTaskId);
+      const health = this.taskQueueService.getPersistenceHealth();
+      const error = TraeCNAutomationError.taskStoreUnavailable(health);
+      if (this.taskHistoryStore && typeof this.taskHistoryStore.failTask === 'function') {
+        this.taskHistoryStore.failTask(historyTaskId, error);
+      }
+      throw error;
+    }
     this._syncTaskHistoryMirror(task);
-    this._persistActiveQueue();
     return task;
   }
 
@@ -805,73 +805,7 @@ class Gateway {
   }
 
   async _emitTaskNotification(taskId, task, eventType, extra = {}) {
-    if (this.taskEventStore && typeof this.taskEventStore.append === 'function') {
-      const summary = String(
-        task.result?.text
-        || task.result?.question
-        || task.error
-        || extra.message
-        || ''
-      ).replace(/\s+/g, ' ').trim().slice(0, 240);
-      this.taskEventStore.append({
-        type: eventType,
-        taskId,
-        status: task.status,
-        terminal: ['task.completed', 'task.error', 'task.queue_timeout', 'task.review_rejected'].includes(eventType),
-        attentionRequired: ['task.review_required', 'task.approval_required'].includes(eventType),
-        resultAvailable: !!task.result,
-        sessionId: task.sessionId || null,
-        summary
-      });
-    }
-
-    if (this.wsHandler) {
-      this.wsHandler.broadcastEvent(eventType, { taskId, status: task.status, ...extra });
-    }
-
-    if (task.chatId) {
-      if (eventType === 'task.review_required') {
-        await notifyOpenClaw(task.chatId, formatReviewRequiredMessage(taskId, task.result, task.followupTasks?.length || 0));
-      } else if (eventType === 'task.approval_required') {
-        await notifyOpenClaw(task.chatId, `🤖 Trae 需要处理受限模式或确认弹窗:\nTask ID: ${taskId}\n${task.result?.question || ''}`);
-      } else if (eventType === 'task.completed') {
-        await notifyOpenClaw(task.chatId, formatResult(task.result));
-      } else if (eventType === 'task.error') {
-        await notifyOpenClaw(task.chatId, '❌ Trae 出错: ' + (task.error || 'unknown error'));
-      } else if (eventType === 'task.queue_timeout') {
-        await notifyOpenClaw(task.chatId, '❌ Trae 排队超时（超过限制），请稍后重试或切换模型');
-      }
-    }
-
-    if (task.notifyUrl) {
-      try {
-        await sendTaskWebhook(task.notifyUrl, {
-          event: eventType,
-          data: {
-            taskId,
-            status: task.status,
-            reviewDecision: task.reviewDecision || null,
-            nextTaskId: task.nextTaskId || null,
-            result: task.result ? {
-              text: task.result.text || '',
-              stable: task.result.stable || false,
-              elapsedMs: task.result.elapsedMs || 0,
-              timedOut: task.result.timedOut || false,
-              needsApproval: task.result.needsApproval || false,
-              question: task.result.question || '',
-              dialogType: task.result.dialogType || null,
-              buttons: task.result.buttons || [],
-              options: task.result.options || []
-            } : null,
-            error: task.error || null,
-            followupCount: task.followupTasks?.length || 0,
-            ...extra
-          }
-        });
-      } catch (err) {
-        console.error('[TaskNotify] webhook failed:', err.message);
-      }
-    }
+    return this.completionSignal.emit(taskId, task, eventType, extra);
   }
 
   async _recoverAwaitingReviewFromGate(task) {
@@ -1043,6 +977,7 @@ class Gateway {
     const text = typeof result.text === 'string' ? result.text : '';
     const queuePosition = result.queuePosition || this._parseQueuePositionFromText(text);
     task.status = 'executing';
+    delete task.interactionRequestId;
     task.submittedToTrae = true;
     task.queueState = 'queued';
     task.queuePosition = queuePosition || task.queuePosition || null;
@@ -1091,7 +1026,6 @@ class Gateway {
 
     let approvalResult;
     let selectedAction;
-    let dialogEvidence = null;
     try {
       const isQuestion = result.dialogType === 'review_scope_question'
         || /review scope|what would you like me to review/i.test(result.question || '');
@@ -1101,13 +1035,12 @@ class Gateway {
         approvalResult = await this.driver.answerQuestionDialog(answer);
       } else {
         const dialog = await this.driver.checkForApprovalDialog();
-        dialogEvidence = dialog;
         if (!dialog.needsApproval) return false;
-        if (action === 'auto' && dialog.isCommandExec && dialog.approvalDecision !== 'auto_approve') {
+        if (dialog.isCommandExec) {
           return false;
         }
         selectedAction = action === 'auto'
-          ? (dialog.isCommandExec ? 'approve' : (dialog.canAutoApprove ? 'trust' : 'allow'))
+          ? (dialog.canAutoApprove ? 'trust' : 'allow')
           : action;
         approvalResult = await this.driver.approveDialog(selectedAction);
       }
@@ -1142,6 +1075,7 @@ class Gateway {
     }
 
     task.status = 'executing';
+    delete task.interactionRequestId;
     task.submittedToTrae = true;
     task.submittedAt = task.submittedAt || Date.now();
     task.queueState = 'running';
@@ -1161,17 +1095,6 @@ class Gateway {
       success: true,
       details: task.answeredDialog
     });
-    if (dialogEvidence?.isCommandExec) {
-      this.auditLogger.log({
-        action: 'dialog.auto_approved',
-        resource: `task:${taskId}`,
-        params: {
-          policy: 'strict_read_only_allowlist',
-          risk: dialogEvidence.commandRisk || 'low',
-          reasonCodes: dialogEvidence.riskReasons || []
-        }
-      });
-    }
     if (this.wsHandler) {
       this.wsHandler.notifyTaskStatusChange(taskId, task);
     }
@@ -1198,7 +1121,15 @@ class Gateway {
   }
 
   async _finalizeBackgroundTask(taskId, task, status, payload = {}) {
+    const previousStatus = task.status;
     task.status = status;
+    if (['approval_required', 'awaiting_review'].includes(status)) {
+      if (previousStatus !== status || !task.interactionRequestId) {
+        task.interactionRequestId = `interaction-${crypto.randomUUID()}`;
+      }
+    } else {
+      delete task.interactionRequestId;
+    }
     if (payload.result !== undefined) task.result = payload.result;
     if (payload.error !== undefined) task.error = payload.error;
     if (payload.reviewDecision !== undefined) task.reviewDecision = payload.reviewDecision;
@@ -1422,6 +1353,17 @@ class Gateway {
     if (this.idempotencyKeys.has(key)) {
       return this.idempotencyKeys.get(key);
     }
+    const ownedTask = Array.from(this.taskQueue.values())
+      .find(task => task?.idempotencyKey === key);
+    if (ownedTask) {
+      return {
+        data: {
+          taskId: ownedTask.taskId,
+          status: this._isTerminalTaskStatus(ownedTask.status) ? ownedTask.status : 'accepted'
+        },
+        statusCode: 202
+      };
+    }
     return null;
   }
 
@@ -1442,14 +1384,31 @@ class Gateway {
       }
       this.client = null;
       this.driver = null;
+      this.traeEnvironment = null;
+      this.traeAdapter = null;
       if (this.healthWatcher) this.healthWatcher.stop();
+    };
+
+    const attachDriver = async (discovered) => {
+      this.traeEnvironment = await this.detectTraeEnvironment({
+        client: this.client,
+        cdpVersion: discovered.cdpVersion || {},
+        target: discovered,
+        platform: process.platform
+      });
+      this.traeAdapter = this.selectTraeAdapter(this.traeEnvironment);
+      this.driver = new DomDriver(
+        this.client,
+        mergeAdapterConfig(getConfig(), this.traeAdapter),
+        { traeAdapter: this.traeAdapter }
+      );
     };
 
     const connectFresh = async () => {
       try {
         const discovered = await discoverTarget();
         this.client = await connectToTarget(discovered, discovered.client);
-        this.driver = new DomDriver(this.client);
+        await attachDriver(discovered);
         if (this.healthWatcher) this.healthWatcher.start(this.client);
         return discovered;
       } catch (err) {
@@ -1458,7 +1417,7 @@ class Gateway {
         if (!recovered) throw err;
         const discovered = await discoverTarget();
         this.client = await connectToTarget(discovered, discovered.client);
-        this.driver = new DomDriver(this.client);
+        await attachDriver(discovered);
         if (this.healthWatcher) this.healthWatcher.start(this.client);
         return discovered;
       }
@@ -1826,6 +1785,17 @@ class Gateway {
       }
     }
 
+    let activeAdapter = this.traeAdapter;
+    if (!activeAdapter && cdpVersion) {
+      activeAdapter = this.selectTraeAdapter({
+        product: 'Trae CN',
+        traeVersion: parseTraeVersion(cdpVersion),
+        platform: process.platform,
+        mode: null,
+        versionSource: parseTraeVersion(cdpVersion) ? 'cdp' : 'unknown'
+      });
+    }
+
     return {
       status: (this.mockBridge || (this.client && this.client.isConnected)) ? 'connected' : 'disconnected',
       service: 'traecn-cdp-http-bridge',
@@ -1833,8 +1803,10 @@ class Gateway {
       mockBridge: this.mockBridge,
       cdpReachable,
       cdp: cdpVersion ? { browser: cdpVersion.Browser, protocolVersion: cdpVersion['Protocol-Version'] } : null,
+      traeAdapter: activeAdapter ? adapterHandshake(activeAdapter) : null,
       traeRunning: this.mockBridge ? null : isTraeCNRunning(),
       surface,
+      durability: this.taskQueueService.getPersistenceHealth(),
       uptime: process.uptime()
     };
   }
@@ -2688,7 +2660,7 @@ class Gateway {
         }
         return this._json(req, res, { success: false, error: 'No dialog found to approve' });
       }
-      if (dialog.isCommandExec && dialog.approvalDecision !== 'auto_approve') {
+      if (dialog.isCommandExec) {
         return this._json(req, res, {
           success: false,
           action: 'agent_review',
@@ -2699,9 +2671,7 @@ class Gateway {
           reasonCodes: dialog.riskReasons || []
         });
       }
-      const autoAction = dialog.isCommandExec
-        ? 'approve'
-        : (dialog.canAutoApprove ? 'trust' : 'allow');
+      const autoAction = dialog.canAutoApprove ? 'trust' : 'allow';
       const result = await this.driver.approveDialog(autoAction);
       return this._json(req, res, {
         success: result.success,
@@ -3360,6 +3330,7 @@ class Gateway {
       if (!isReviewScopeQuestion) continue;
 
       task.status = 'executing';
+      delete task.interactionRequestId;
       task.submittedToTrae = true;
       task.submittedAt = task.submittedAt || answeredAt;
       task.queueState = 'running';
@@ -3407,6 +3378,7 @@ class Gateway {
     const [taskId, task] = selected;
     const resumedAt = Date.now();
     task.status = 'executing';
+    delete task.interactionRequestId;
     task.submittedToTrae = true;
     task.submittedAt = task.submittedAt || resumedAt;
     task.queueState = 'running';
@@ -3648,6 +3620,7 @@ class Gateway {
       this._stopBackgroundPolling();
       this._clearAllTimers();
       this._persistActiveQueue();
+      this.taskQueueService.close();
 
       const taskCount = this.taskQueue.size;
       this.taskQueue.clear();

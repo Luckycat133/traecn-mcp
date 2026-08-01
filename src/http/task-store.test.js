@@ -21,17 +21,21 @@ function createService(persistencePath, options = {}) {
 
 async function writeTwoSnapshots(persistencePath) {
   const service = createService(persistencePath);
-  const queue = new Map([
-    ['task-stable', {
-      taskId: 'task-stable',
-      status: 'queued',
-      task: 'first durable snapshot',
-      createdAt: 1000
-    }]
-  ]);
-  await service.persist(queue);
-  queue.get('task-stable').task = 'second durable snapshot';
-  await service.persist(queue);
+  try {
+    const queue = new Map([
+      ['task-stable', {
+        taskId: 'task-stable',
+        status: 'queued',
+        task: 'first durable snapshot',
+        createdAt: 1000
+      }]
+    ]);
+    await service.persist(queue);
+    queue.get('task-stable').task = 'second durable snapshot';
+    await service.persist(queue);
+  } finally {
+    service.close();
+  }
 }
 
 function readJson(filePath) {
@@ -94,6 +98,138 @@ asyncTest('TaskQueueService rejects a checksum-mismatched primary', async () => 
     assert.strictEqual(restored, 1);
     assert.strictEqual(restoredQueue.get('task-stable').task, 'first durable snapshot');
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+asyncTest('TaskQueueService reports degraded durability after a snapshot write fails', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-task-store-health-'));
+  const blockingFile = path.join(dir, 'not-a-directory');
+  const persistencePath = path.join(blockingFile, 'active-queue.json');
+  fs.writeFileSync(blockingFile, 'blocks mkdir', 'utf8');
+  try {
+    const service = createService(persistencePath, {
+      logger: { error() {}, warn() {} }
+    });
+    const queue = new Map([['task-write-failure', {
+      taskId: 'task-write-failure',
+      status: 'queued',
+      task: 'must be durable before acceptance',
+      createdAt: Date.now()
+    }]]);
+
+    assert.strictEqual(service.persist(queue), false);
+    const health = typeof service.getPersistenceHealth === 'function'
+      ? service.getPersistenceHealth()
+      : null;
+    assert.ok(health, 'persistence health must be available to the gateway');
+    assert.strictEqual(health.taskStoreWritable, false);
+    assert.strictEqual(health.durabilityDegraded, true);
+    assert.strictEqual(health.lastSuccessfulPersistAt, null);
+    assert.ok(health.lastPersistError);
+    assert.match(health.lastPersistError.code, /^(?:EEXIST|ENOTDIR|WRITE_FAILED)$/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+asyncTest('TaskQueueService reports each expected filesystem durability failure', async () => {
+  for (const code of ['ENOSPC', 'EACCES', 'EROFS']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `traecn-task-store-${code.toLowerCase()}-`));
+    const persistencePath = path.join(dir, 'active-queue.json');
+    const service = createService(persistencePath, {
+      logger: { error() {}, warn() {} },
+      onWritePhase(phase) {
+        if (phase !== 'temp_opened') return;
+        const error = new Error(`injected ${code}`);
+        error.code = code;
+        throw error;
+      }
+    });
+    try {
+      const queue = new Map([[`task-${code.toLowerCase()}`, {
+        taskId: `task-${code.toLowerCase()}`,
+        status: 'queued',
+        task: `must not be accepted after ${code}`,
+        createdAt: Date.now()
+      }]]);
+
+      assert.strictEqual(service.persist(queue), false, code);
+      assert.deepStrictEqual(service.getPersistenceHealth().lastPersistError.code, code);
+      assert.strictEqual(fs.existsSync(persistencePath), false, `${code}: primary snapshot exists`);
+    } finally {
+      service.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+asyncTest('TaskQueueService prevents a second process from owning the same active store', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-task-store-lock-'));
+  const persistencePath = path.join(dir, 'active-queue.json');
+  const service = createService(persistencePath);
+  const queue = new Map([['task-owner', {
+    taskId: 'task-owner',
+    status: 'queued',
+    task: 'owned by the first gateway',
+    createdAt: Date.now()
+  }]]);
+  const servicePath = require.resolve('./task-queue-service');
+  const childSource = `
+    'use strict';
+    const { TaskQueueService } = require(${JSON.stringify(servicePath)});
+    const service = new TaskQueueService({
+      persistencePath: process.argv[1],
+      isTerminalStatus: () => false,
+      logger: { error() {}, warn() {}, log() {} }
+    });
+    const queue = new Map([['task-contender', {
+      taskId: 'task-contender',
+      status: 'queued',
+      task: 'must not replace the owner snapshot',
+      createdAt: Date.now()
+    }]]);
+    const persisted = service.persist(queue);
+    process.stdout.write(JSON.stringify({ persisted, health: service.getPersistenceHealth() }));
+  `;
+
+  try {
+    assert.strictEqual(service.persist(queue), true);
+    const contender = spawnSync(process.execPath, ['-e', childSource, persistencePath], {
+      encoding: 'utf8'
+    });
+    assert.strictEqual(contender.status, 0, contender.stderr);
+    const result = JSON.parse(contender.stdout);
+    assert.strictEqual(result.persisted, false);
+    assert.strictEqual(result.health.taskStoreWritable, false);
+    assert.strictEqual(result.health.lastPersistError.code, 'TASK_STORE_LOCKED');
+    assert.strictEqual(readJson(persistencePath).tasks[0].taskId, 'task-owner');
+  } finally {
+    if (typeof service.close === 'function') service.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+asyncTest('TaskQueueService reclaims a single-writer lock left by a dead process', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-task-store-stale-lock-'));
+  const persistencePath = path.join(dir, 'active-queue.json');
+  fs.writeFileSync(`${persistencePath}.lock`, `${JSON.stringify({
+    pid: 2147483647,
+    ownerId: 'dead-process-owner',
+    acquiredAt: '2026-01-01T00:00:00.000Z'
+  })}\n`, 'utf8');
+  const service = createService(persistencePath);
+  try {
+    const queue = new Map([['task-after-crash', {
+      taskId: 'task-after-crash',
+      status: 'queued',
+      task: 'recover ownership after a gateway crash',
+      createdAt: Date.now()
+    }]]);
+    assert.strictEqual(service.persist(queue), true);
+    assert.strictEqual(readJson(persistencePath).tasks[0].taskId, 'task-after-crash');
+  } finally {
+    service.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

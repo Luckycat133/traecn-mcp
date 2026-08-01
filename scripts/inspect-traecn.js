@@ -10,6 +10,12 @@ const { loadEnv } = require('../src/config/env');
 const { getEnvWithFallback } = require('../src/shared/utils');
 const { getConfig } = require('../src/cdp/driver-config');
 const { runtimeDefault } = require('../src/config/runtime-schema');
+const {
+  adapterHandshake,
+  detectTraeEnvironment,
+  parseTraeVersion,
+  selectTraeAdapter
+} = require('../src/trae-adapters');
 
 loadEnv(path.resolve(__dirname, '..', '.env'));
 
@@ -48,7 +54,7 @@ function looksLikeTraeTarget(target) {
   return title.includes('trae') || url.includes('vscode-app') || url.includes('vscode-file');
 }
 
-function verifyResults(target, version, results) {
+function verifyResults(target, version, results, adapterInfo) {
   const checks = [
     {
       name: 'CDP endpoint belongs to TraeCN',
@@ -59,6 +65,13 @@ function verifyResults(target, version, results) {
       name: 'Selected target looks like TraeCN',
       ok: looksLikeTraeTarget(target),
       detail: `${target.title || 'No title'} (${target.url || 'no url'})`
+    },
+    {
+      name: 'Versioned Trae adapter',
+      ok: adapterInfo?.verified === true,
+      detail: adapterInfo
+        ? `${adapterInfo.adapter} (${adapterInfo.traeVersion || 'unknown'}, ${adapterInfo.compatibility})`
+        : 'not detected'
     },
     {
       name: 'Composer selector',
@@ -216,6 +229,7 @@ async function main() {
     console.log('[inspect-traecn] CDP Version:');
     console.log(`  Browser: ${version.Browser || 'Unknown'}`);
     console.log(`  Protocol: ${version['Protocol-Version'] || 'Unknown'}`);
+    console.log(`  TraeCN version: ${parseTraeVersion(version) || 'not present in CDP metadata'}`);
     console.log(`  Owner: ${isTraeCNVersion(version) ? 'TraeCN' : 'not TraeCN'}`);
     console.log('');
     if (VERIFY_MODE && !isTraeCNVersion(version)) {
@@ -275,6 +289,22 @@ async function main() {
       await client.send('DOM.enable');
 
       const results = await scanDOM(client);
+      const environment = await detectTraeEnvironment({
+        client,
+        cdpVersion: version,
+        target,
+        platform: process.platform
+      });
+      const adapterInfo = adapterHandshake(selectTraeAdapter(environment));
+
+      console.log('');
+      console.log('  === Trae Adapter ===');
+      console.log(`  Adapter: ${adapterInfo.adapter}`);
+      console.log(`  Version: ${adapterInfo.traeVersion || 'unknown'}`);
+      console.log(`  Compatibility: ${adapterInfo.compatibility}`);
+      if (adapterInfo.warnings.length > 0) {
+        for (const warning of adapterInfo.warnings) console.log(`  WARN: ${warning}`);
+      }
 
       console.log('');
       console.log('  === Composer (Input) Elements ===');
@@ -368,12 +398,13 @@ async function main() {
 
       const report = {
         target: { id: target.id, title: target.title, url: target.url },
+        traeAdapter: adapterInfo,
         scanResults: results,
         recommendedEnv: envLines
       };
 
       if (VERIFY_MODE) {
-        const passed = verifyResults(target, version, results);
+        const passed = verifyResults(target, version, results, adapterInfo);
         if (!passed) {
           process.exitCode = 1;
         }

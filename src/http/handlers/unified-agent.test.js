@@ -11,12 +11,16 @@ const {
 } = require('./unified-agent');
 const { generateOpenAPISpec } = require('../openapi');
 
-function request(body) {
-  return Readable.from([Buffer.from(JSON.stringify(body))]);
+function request(body, headers = {}) {
+  const stream = Readable.from([Buffer.from(JSON.stringify(body))]);
+  stream.headers = headers;
+  return stream;
 }
 
 (async () => {
   const calls = [];
+  let duplicatePersistCalls = 0;
+  const idempotencyWrites = [];
   const auditEntries = [];
   const task = {
     taskId: 'task_gateway_1',
@@ -37,12 +41,13 @@ function request(body) {
       return task;
     },
     _ensureBackgroundPolling: () => calls.push('poll'),
+    _storeIdempotency: (key, response) => idempotencyWrites.push([key, response]),
     _resumeApprovalRequiredTasksAfterInteraction: (action, dialog, result) => {
       calls.push(['resume-interaction', action, dialog.command, result.success]);
       return ['task_gateway_1'];
     },
     _syncTaskHistoryMirror: () => {},
-    _persistActiveQueue: () => {},
+    _persistActiveQueue: () => { duplicatePersistCalls++; },
     driver: {
       detectMode: async () => ({ mode: 'solo' }),
       listModels: async () => ({ current: 'GLM-5.2', models: ['GLM-5.2', 'DeepSeek-V3.2'] }),
@@ -81,10 +86,11 @@ function request(body) {
     workspace: '/tmp/repo',
     conversationId: 'solo:UmV2aWV3IEFQSQ',
     steps: ['Run tests']
-  }), res, ctx);
+  }, { 'idempotency-key': 'submit-review-1' }), res, ctx);
 
   assert.strictEqual(res.status, 202);
   assert.deepStrictEqual(res.body, { taskId: 'task_gateway_1', status: 'accepted' });
+  assert.strictEqual(duplicatePersistCalls, 0, 'atomic task creation must own the first snapshot write');
   assert.deepStrictEqual(calls[0], 'connect');
   assert.deepStrictEqual(calls[1], ['workspace', '/tmp/repo']);
   assert.deepStrictEqual(calls[2], ['queue', {
@@ -93,6 +99,7 @@ function request(body) {
     desiredModel: 'GLM-5.2',
     desiredMode: 'solo',
     soloChat: { titleIncludes: 'Review API' },
+    idempotencyKey: 'submit-review-1',
     newConversation: false,
     followupTasks: [{ task: 'Run tests', autoContinue: true, reviewRequired: false }],
     autoContinue: true,
@@ -100,6 +107,10 @@ function request(body) {
     autoApproveDialog: 'auto'
   }]);
   assert.strictEqual(calls[3], 'poll');
+  assert.deepStrictEqual(idempotencyWrites, [[
+    'submit-review-1',
+    { data: { taskId: 'task_gateway_1', status: 'accepted' }, statusCode: 202 }
+  ]]);
 
   calls.length = 0;
   const continueRes = {};
@@ -203,6 +214,14 @@ function request(body) {
   assert.strictEqual(staleApprovalRes.status, 409);
   assert.strictEqual(staleApprovalRes.body.error, 'approval_command_mismatch');
 
+  ctx.driver.checkForApprovalDialog = async () => ({
+    needsApproval: true,
+    isCommandExec: true,
+    approvalDecision: 'auto_approve',
+    command: 'git push origin main',
+    commandRisk: 'high',
+    riskReasons: ['legacy_adapter_metadata']
+  });
   const approvalRes = {};
   await handleResolveInteraction(request({
     action: 'approve',
@@ -223,6 +242,9 @@ function request(body) {
 
   const spec = generateOpenAPISpec();
   assert.ok(spec.paths['/api/tasks/submit']?.post);
+  assert.ok(spec.paths['/api/tasks/submit'].post.responses['503']);
+  assert.ok(spec.paths['/api/status'].get.responses['200']
+    .content['application/json'].schema.properties.durability);
   assert.ok(spec.paths['/api/models']?.get);
   assert.ok(spec.paths['/api/conversations']?.get);
   assert.ok(spec.paths['/api/conversations/manage']?.post);

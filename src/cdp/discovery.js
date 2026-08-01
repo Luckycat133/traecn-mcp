@@ -493,7 +493,10 @@ async function discoverTarget(options = {}) {
   function buildTarget(p) {
     return {
       id: p.candidate.id, title: p.candidate.title, url: p.candidate.url,
-      webSocketDebuggerUrl: p.candidate.webSocketDebuggerUrl, score: p.candidate.score
+      webSocketDebuggerUrl: p.candidate.webSocketDebuggerUrl, score: p.candidate.score,
+      cdpVersion: endpoint.version,
+      cdpHost: endpoint.host,
+      cdpPort: endpoint.port
     };
   }
 

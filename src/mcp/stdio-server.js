@@ -7,7 +7,12 @@
 
 const { createMcpHandlers, envContext } = require('./handler');
 const { TraeCNApiClient } = require('../client/traecnapi-client');
-const { McpProtocolError, isModernRequest } = require('./protocol');
+const { McpProtocolError, isModernRequest, modernResult, requestMeta } = require('./protocol');
+const {
+  SUBSCRIPTION_ID_META_KEY,
+  McpTaskAdapter,
+  taskSubscriptionNotification
+} = require('./task-extension');
 
 const TASK_EVENT_FIELDS = Object.freeze([
   'eventId',
@@ -95,6 +100,32 @@ function nextProtocolEra(currentEra, request = {}) {
   return currentEra || requestedEra;
 }
 
+function assertJsonRpcRequest(message) {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    throw new McpProtocolError(-32600, 'Invalid JSON-RPC request');
+  }
+  if (message.jsonrpc !== '2.0' || typeof message.method !== 'string' || !message.method) {
+    throw new McpProtocolError(-32600, 'Invalid JSON-RPC request');
+  }
+  if (message.params !== undefined
+      && (!message.params || typeof message.params !== 'object' || Array.isArray(message.params))) {
+    throw new McpProtocolError(-32600, 'Invalid JSON-RPC params');
+  }
+  return message;
+}
+
+function isJsonRpcNotification(message) {
+  return Boolean(
+    message
+    && typeof message === 'object'
+    && !Array.isArray(message)
+    && message.jsonrpc === '2.0'
+    && typeof message.method === 'string'
+    && message.method
+    && message.id === undefined
+  );
+}
+
 function stableMcpClientId(clientInfo = {}, env = process.env) {
   const configured = String(env.TRAECN_MCP_CLIENT_ID || '').trim();
   if (configured) return configured;
@@ -118,6 +149,27 @@ function taskEventNotification(event = {}) {
       logger: 'traecnclaw.tasks',
       data
     }
+  };
+}
+
+function subscriptionAcknowledgedNotification(taskIds, subscriptionId) {
+  return {
+    jsonrpc: '2.0',
+    method: 'notifications/subscriptions/acknowledged',
+    params: {
+      notifications: { taskIds: [...taskIds] },
+      _meta: { [SUBSCRIPTION_ID_META_KEY]: subscriptionId }
+    }
+  };
+}
+
+function subscriptionClosedResult(subscriptionId) {
+  return {
+    jsonrpc: '2.0',
+    id: subscriptionId,
+    result: modernResult({
+      _meta: { [SUBSCRIPTION_ID_META_KEY]: subscriptionId }
+    })
   };
 }
 
@@ -179,11 +231,80 @@ class TaskEventPump {
   }
 }
 
+class TaskSubscriptionPump extends TaskEventPump {
+  constructor(options = {}) {
+    super(options);
+    this.taskAdapter = options.taskAdapter;
+    this.subscriptionId = options.subscriptionId;
+    this.taskIds = new Set((options.taskIds || []).map(value => String(value)));
+    this.initialSnapshotsDelivered = false;
+  }
+
+  async deliverInitialSnapshots() {
+    if (this.initialSnapshotsDelivered) return 0;
+    let delivered = 0;
+    for (const taskId of this.taskIds) {
+      const task = await this.taskAdapter.get(taskId);
+      await Promise.resolve(this.write(taskSubscriptionNotification(task, this.subscriptionId)));
+      delivered += 1;
+    }
+    this.initialSnapshotsDelivered = true;
+    return delivered;
+  }
+
+  async pollOnce() {
+    const request = { limit: this.limit, waitMs: this.waitMs };
+    if (this.cursor) request.after = this.cursor;
+    const response = await this.client.listTaskEvents(this.clientId, request);
+    if (response && Number(response.status) >= 400) {
+      throw new Error(`Task event request failed with HTTP ${response.status}`);
+    }
+    const payload = response && response.data !== undefined ? response.data : response;
+    const events = payload && Array.isArray(payload.events) ? payload.events : [];
+    let delivered = 0;
+    for (const event of events) {
+      if (!event.eventId) throw new Error('Task event is missing eventId');
+      if (this.taskIds.has(String(event.taskId))) {
+        const task = await this.taskAdapter.get(event.taskId);
+        await Promise.resolve(this.write(taskSubscriptionNotification(task, this.subscriptionId)));
+        delivered += 1;
+      }
+      const ack = await this.client.ackTaskEvent(this.clientId, event.eventId);
+      if (ack && Number(ack.status) >= 400) {
+        throw new Error(`Task event acknowledgement failed with HTTP ${ack.status}`);
+      }
+      this.cursor = event.eventId;
+    }
+    return delivered;
+  }
+
+  start() {
+    if (this.running) return this.loopPromise;
+    this.running = true;
+    this.loopPromise = (async () => {
+      while (this.running) {
+        try {
+          await this.deliverInitialSnapshots();
+          await this.pollOnce();
+        } catch {
+          if (this.running) await sleep(this.retryMs);
+        }
+      }
+    })();
+    return this.loopPromise;
+  }
+}
+
 function startStdioServer(options = {}) {
   const handlers = options.handlers || createMcpHandlers();
   const write = options.write || writeMessage;
   const clientFactory = options.clientFactory || (context => new TraeCNApiClient(context));
+  const taskAdapterFactory = options.taskAdapterFactory || (client => new McpTaskAdapter({ client }));
+  const taskSubscriptionPumpFactory = options.taskSubscriptionPumpFactory
+    || (pumpOptions => new TaskSubscriptionPump(pumpOptions));
   let taskEventPump = null;
+  const taskSubscriptions = new Map();
+  let stopPromise = null;
   let protocolEra = null;
   let initializedClientId = null;
   const decoder = new McpStdioDecoder();
@@ -211,7 +332,49 @@ function startStdioServer(options = {}) {
       const request = frame.message;
       Promise.resolve()
         .then(async () => {
+          assertJsonRpcRequest(request);
           protocolEra = nextProtocolEra(protocolEra, request);
+          if (request.method === 'subscriptions/listen') {
+            if (typeof handlers.subscribe !== 'function') {
+              throw new McpProtocolError(-32601, 'Task subscriptions are unavailable');
+            }
+            const { taskIds } = handlers.subscribe(request);
+            const subscriptionId = request.id;
+            await Promise.resolve(write(
+              subscriptionAcknowledgedNotification(taskIds, subscriptionId),
+              frame.framing
+            ));
+            const gatewayClient = clientFactory(envContext());
+            const clientInfo = requestMeta(request)?.['io.modelcontextprotocol/clientInfo'] || {};
+            const clientId = `${stableMcpClientId(clientInfo)}:task-sub:${String(subscriptionId)}`.slice(0, 200);
+            const pump = taskSubscriptionPumpFactory({
+              client: gatewayClient,
+              taskAdapter: taskAdapterFactory(gatewayClient),
+              clientId,
+              subscriptionId,
+              taskIds,
+              write: message => write(message, frame.framing)
+            });
+            const key = String(subscriptionId);
+            const previous = taskSubscriptions.get(key);
+            if (previous) previous.pump.stop();
+            taskSubscriptions.set(key, {
+              pump,
+              framing: frame.framing,
+              subscriptionId
+            });
+            pump.start();
+            return;
+          }
+          if (request.method === 'notifications/cancelled' && request.params?.requestId !== undefined) {
+            const key = String(request.params.requestId);
+            const subscription = taskSubscriptions.get(key);
+            if (subscription) {
+              subscription.pump.stop();
+              taskSubscriptions.delete(key);
+              return;
+            }
+          }
           const result = await handlers.handle(request);
           if (request.method === 'initialize') {
             legacyFraming = frame.framing;
@@ -226,6 +389,7 @@ function startStdioServer(options = {}) {
           if (request.method === 'notifications/initialized') startTaskEventPump();
         })
         .catch(async error => {
+          if (isJsonRpcNotification(request)) return;
           try {
             await Promise.resolve(write({
               jsonrpc: '2.0',
@@ -243,19 +407,46 @@ function startStdioServer(options = {}) {
     }
   });
   const stop = () => {
-    if (taskEventPump) taskEventPump.stop();
+    if (stopPromise) return stopPromise;
+    stopPromise = (async () => {
+      if (taskEventPump) taskEventPump.stop();
+      const subscriptions = [...taskSubscriptions.values()];
+      taskSubscriptions.clear();
+      for (const subscription of subscriptions) {
+        subscription.pump.stop();
+        try {
+          await Promise.resolve(write(
+            subscriptionClosedResult(subscription.subscriptionId),
+            subscription.framing
+          ));
+        } catch {
+          // The transport may already be gone during process teardown.
+        }
+      }
+    })();
+    return stopPromise;
   };
-  input.on('end', stop);
-  input.on('close', stop);
-  return { stop, getTaskEventPump: () => taskEventPump };
+  input.on('end', () => { void stop(); });
+  input.on('close', () => { void stop(); });
+  return {
+    stop,
+    getTaskEventPump: () => taskEventPump,
+    getTaskSubscriptions: () => new Map(
+      [...taskSubscriptions].map(([key, subscription]) => [key, subscription.pump])
+    )
+  };
 }
 
 module.exports = {
   McpStdioDecoder,
   TaskEventPump,
+  TaskSubscriptionPump,
+  assertJsonRpcRequest,
   encodeMessage,
   nextProtocolEra,
   stableMcpClientId,
+  subscriptionAcknowledgedNotification,
+  subscriptionClosedResult,
   taskEventNotification,
   writeMessage,
   startStdioServer

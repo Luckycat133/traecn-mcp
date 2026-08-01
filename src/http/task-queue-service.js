@@ -71,6 +71,8 @@ class TaskQueueService {
   setPersistencePath(value) { return this.taskStore.setPersistencePath(value); }
   resolvePersistencePath(configuredPath = '') { return this.taskStore.resolvePersistencePath(configuredPath); }
   persist(taskQueue) { return this.recoveryHelper.persist(taskQueue); }
+  getPersistenceHealth() { return this.taskStore.getHealth(); }
+  close() { return this.taskStore.close(); }
   syncHistoryMirror(task) { return this.recoveryHelper.syncHistoryMirror(task); }
   restore(taskQueue) { return this.recoveryHelper.restore(taskQueue); }
 

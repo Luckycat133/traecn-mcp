@@ -54,7 +54,32 @@ function generateOpenAPISpec() {
                       version: { type: 'string' },
                       mockBridge: { type: 'boolean' },
                       cdp: { type: 'object' },
+                      traeAdapter: {
+                        type: 'object',
+                        nullable: true,
+                        properties: {
+                          traeVersion: { type: 'string', nullable: true },
+                          platform: { type: 'string' },
+                          adapter: { type: 'string' },
+                          mode: { type: 'string', nullable: true },
+                          compatibility: { type: 'string', enum: ['verified', 'degraded'] },
+                          verified: { type: 'boolean' },
+                          capabilities: { type: 'object' },
+                          warnings: { type: 'array', items: { type: 'string' } },
+                          evidence: { type: 'string', nullable: true },
+                          versionSource: { type: 'string' }
+                        }
+                      },
                       surface: { type: 'object' },
+                      durability: {
+                        type: 'object',
+                        properties: {
+                          taskStoreWritable: { type: 'boolean', nullable: true },
+                          lastSuccessfulPersistAt: { type: 'string', nullable: true },
+                          lastPersistError: { type: 'object', nullable: true },
+                          durabilityDegraded: { type: 'boolean' }
+                        }
+                      },
                       uptime: { type: 'number' }
                     }
                   }
@@ -334,6 +359,13 @@ function generateOpenAPISpec() {
           summary: 'Submit gateway-managed work for TraeCN',
           operationId: 'submitManagedTask',
           security: [{ bearerAuth: [] }],
+          parameters: [{
+            in: 'header',
+            name: 'Idempotency-Key',
+            required: false,
+            schema: { type: 'string', maxLength: 256 },
+            description: 'Stable retry key retained with the durable active task across gateway restarts.'
+          }],
           requestBody: {
             required: true,
             content: {
@@ -356,7 +388,8 @@ function generateOpenAPISpec() {
             }
           },
           responses: {
-            '202': { description: 'Task accepted', content: { 'application/json': { schema: { type: 'object', properties: { taskId: { type: 'string' }, status: { type: 'string', enum: ['accepted'] } } } } } }
+            '202': { description: 'Task accepted after its active-queue snapshot is durable', content: { 'application/json': { schema: { type: 'object', properties: { taskId: { type: 'string' }, status: { type: 'string', enum: ['accepted'] } } } } } },
+            '503': { description: 'TaskStore is unwritable or owned by another gateway; no task was accepted' }
           }
         }
       },
@@ -1702,7 +1735,7 @@ function generateOpenAPISpec() {
                       question: { type: 'string', nullable: true },
                       buttons: { type: 'array', items: { type: 'string' } },
                       canAutoApprove: { type: 'boolean' },
-                      approvalDecision: { type: 'string', enum: ['auto_approve', 'agent_review'], nullable: true },
+                      approvalDecision: { type: 'string', enum: ['agent_review'], nullable: true },
                       commandRisk: { type: 'string', enum: ['low', 'high', 'unknown'], nullable: true },
                       riskReasons: { type: 'array', items: { type: 'string' } },
                       command: { type: 'string', nullable: true }

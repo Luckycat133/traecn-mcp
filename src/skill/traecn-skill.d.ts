@@ -188,7 +188,7 @@ export interface DialogStatus {
   question: string | null;
   buttons: string[];
   canAutoApprove?: boolean;
-  approvalDecision?: 'auto_approve' | 'agent_review' | null;
+  approvalDecision?: 'agent_review' | null;
   risk?: 'low' | 'high' | 'unknown' | null;
   reasonCodes?: string[];
   command?: string | null;

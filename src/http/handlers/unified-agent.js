@@ -68,6 +68,7 @@ function normalizeSteps(steps) {
 
 async function handleSubmit(req, res, ctx) {
   const body = await parseBody(req);
+  const idempotencyKey = String(req.headers?.['idempotency-key'] || '').trim();
   const message = typeof body.message === 'string' ? body.message.trim() : '';
   if (!message) return ctx._json(req, res, { error: 'message is required' }, 400);
   if (message.length > 100000) return ctx._json(req, res, { error: 'message exceeds 100000 characters' }, 400);
@@ -116,6 +117,7 @@ async function handleSubmit(req, res, ctx) {
     ...(desiredModel ? { desiredModel } : {}),
     ...(desiredMode ? { desiredMode } : {}),
     ...(soloChat ? { soloChat } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     newConversation: body.newConversation === true,
     followupTasks: normalizeSteps(body.steps),
     ...(body.completionChecks ? { completionChecks: body.completionChecks } : {}),
@@ -131,10 +133,12 @@ async function handleSubmit(req, res, ctx) {
   task.desiredModel = desiredModel;
   task.desiredMode = desiredMode;
   task.newConversation = queuedBody.newConversation;
-  ctx._syncTaskHistoryMirror(task);
-  ctx._persistActiveQueue();
   ctx._ensureBackgroundPolling();
-  return ctx._json(req, res, { taskId: task.taskId, status: 'accepted' }, 202);
+  const response = { taskId: task.taskId, status: 'accepted' };
+  if (idempotencyKey) {
+    ctx._storeIdempotency(idempotencyKey, { data: response, statusCode: 202 });
+  }
+  return ctx._json(req, res, response, 202);
 }
 
 async function handleListConversations(req, res, ctx) {
@@ -265,10 +269,10 @@ async function handleResolveInteraction(req, res, ctx) {
           message: 'Approval requires expectedCommand, acknowledgeRisk=true, and an audit reason of 1-500 characters.'
         }, 400);
       }
-      if (!dialog?.needsApproval || !dialog.isCommandExec || dialog.approvalDecision === 'auto_approve') {
+      if (!dialog?.needsApproval || !dialog.isCommandExec) {
         return ctx._json(req, res, {
           error: 'exceptional_command_approval_not_found',
-          message: 'No unsafe or ambiguous command approval is currently pending.'
+          message: 'No command approval is currently pending.'
         }, 409);
       }
       const actualCommand = normalizeCommand(dialog.command);

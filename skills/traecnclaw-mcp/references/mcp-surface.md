@@ -12,10 +12,14 @@ TRAECNclaw exposes one focused Agent surface. There are no tool profiles.
 
 MCP contract version 5 below identifies this Skill's frozen 20-tool surface;
 it is not an MCP protocol revision. Legacy clients receive compact
-`notifications/message` task events. MCP `2026-07-28` removed free-floating
-logging notifications, so modern clients intentionally call
-`traecn_get_task` when they need a known task's state. The experimental MCP
-Tasks extension is not advertised as a stable capability.
+`notifications/message` task events. For MCP `2026-07-28`, the server advertises
+the separately negotiated `io.modelcontextprotocol/tasks` extension. An
+opted-in `traecn_send_message` returns the durable gateway ID as a Task;
+`tasks/get`, `tasks/update`, and `tasks/cancel` operate that same identity, and
+`subscriptions/listen` can stream exact-ID `notifications/tasks` snapshots.
+Clients that do not opt in retain the ordinary complete result and use
+`traecn_get_task` only for an intentional read. The extension is upstream-draft
+and does not change the 20-tool contract.
 
 | Tool | Required input | Gateway route |
 | --- | --- | --- |
@@ -45,10 +49,11 @@ Set workspace, model, mode, and conversation through their focused tools. New
 conversations are explicit and messages otherwise stay in the selected chat.
 
 After message acceptance the gateway owns persistence, external and local
-queues, recovery, completion checks, notifications, routine questions, safe
-command approvals, and keep/revert gates. Agents do not wait, poll, acknowledge
-events, run preflight, or recover work. `traecn_get_task` is an optional
-explicit read, not a polling instruction. Its default `detailLevel: "result"`
+queues, recovery, completion checks, notifications, routine non-command
+questions, and keep/revert gates. Agents do not wait, poll, acknowledge
+events, run preflight, or recover work. A supporting host owns the Tasks
+subscription; `traecn_get_task` is an optional explicit fallback read, not a
+polling instruction. Its default `detailLevel: "result"`
 returns only the final answer; use `detailLevel: "trace"` when a failure or
 unexpected result requires the visible execution process for diagnosis.
 
@@ -57,14 +62,13 @@ section's items and their `controlType`. List dropdown options before selecting
 one. Each write tool maps to one exact UI control operation, while the gateway
 opens settings and restores chat automatically.
 
-Only strict read-only command chains are approved automatically: `cd`; basic
-inspection with `pwd`, `ls`, `rg`, `grep`, `cat`, `head`, `tail`, `wc`, or
-`stat`; read-only Git status/diff/log/show/branch/rev-parse/ls-files; and
-unredirected `echo`. Shell redirection/substitution, network, package, process,
-privilege, project-script, mutating find/sed, ripgrep preprocessor, and Git
-external-diff/textconv forms never auto-approve. Unknown commands go to Agent
-review. Automatic approvals and every high-impact Agent decision are written
-to the local append-only security audit log.
+No shell command is approved automatically, including commands classified as
+read-only. Command text alone cannot establish workspace scope, exclude
+sensitive-file reads, or account for Git configuration and external hooks.
+Every command goes to Agent review. Approval requires the exact visible
+command, `acknowledgeRisk:true`, and a short audit reason; the gateway rejects
+stale command cards. Every high-impact Agent decision is written to the local
+append-only security audit log.
 
 The direct stop action works only in Solo mode and only when its supplied ID
 still matches the active conversation. It requires an acknowledgement that the

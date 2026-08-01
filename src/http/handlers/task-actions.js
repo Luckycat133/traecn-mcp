@@ -169,6 +169,7 @@ async function handleTaskStatus(req, res, ctx, taskId) {
       break;
     case 'approval_required':
       response.message = 'Trae 需要先处理确认弹窗';
+      response.interactionRequestId = task.interactionRequestId || null;
       response.result = {
         text: task.result?.text || '',
         needsApproval: true,
@@ -176,6 +177,10 @@ async function handleTaskStatus(req, res, ctx, taskId) {
         dialogType: task.result?.dialogType || null,
         buttons: task.result?.buttons || [],
         options: task.result?.options || [],
+        command: task.result?.command || null,
+        approvalDecision: task.result?.approvalDecision || null,
+        commandRisk: task.result?.commandRisk || null,
+        riskReasons: task.result?.riskReasons || [],
         answerAction: task.result?.dialogType === 'review_scope_question'
           ? { endpoint: '/api/dialog/approve', method: 'POST', body: { action: 'answer', answer: '<option label>' } }
           : null
@@ -183,6 +188,7 @@ async function handleTaskStatus(req, res, ctx, taskId) {
       break;
     case 'awaiting_review':
       response.message = '等待人工审查';
+      response.interactionRequestId = task.interactionRequestId || null;
       response.reviewRequired = true;
       response.followupCount = task.followupTasks?.length || 0;
       response.result = {

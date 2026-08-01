@@ -172,7 +172,7 @@ ${color('bold', 'OPTIONS:')}
   --detach                Wait: run locally in a detached screen session
   --session <name>        Wait: screen session name for --detach
   --quiet                 Wait: only print final result
-  --auto-approve-dialog [action] Wait: approve task dialog if one appears
+  --auto-approve-dialog [action] Wait: handle an eligible non-command dialog
 
 ${color('bold', 'EXAMPLES:')}
   traecn delegate "Write a hello world program"

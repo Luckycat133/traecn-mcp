@@ -25,7 +25,7 @@ const ROUTES = [
   { method: 'POST', path: '/api/delegate-async', handler: '_handleDelegateAsync', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
 ];
 
-const { notifyOpenClaw, formatResult } = require('../notifications');
+const { notifyOpenClaw, formatResult } = require('../task-notify');
 
 async function handleDelegateAsync(req, res, ctx) {
   const body = await parseBody(req);

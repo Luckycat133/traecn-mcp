@@ -19,6 +19,13 @@ const {
 } = require('./tools');
 const { MCP_TOOLS } = require('./tool-metadata');
 const {
+  TASKS_EXTENSION_ID,
+  McpTaskAdapter,
+  assertTaskExtension,
+  clientSupportsTaskExtension,
+  taskIdempotencyKey
+} = require('./task-extension');
+const {
   SERVER_INFO,
   SUPPORTED_PROTOCOL_VERSIONS,
   McpProtocolError,
@@ -89,7 +96,9 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
           message: 'The gateway already tracks queued work. Query the existing task instead of sending a queue-probe message.'
         });
       }
-      return asMcpContent((await client.submitTask(args)).data);
+      return asMcpContent((await client.submitTask(args, {
+        idempotencyKey: authContext.idempotencyKey
+      })).data);
     case 'get_task': {
       const result = await client.getTaskStatus(args.taskId, { detailLevel: args.detailLevel });
       return asMcpContent(result.data || result);
@@ -198,7 +207,19 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
 }
 
 function createMcpHandlers(context = envContext(), authContext = {}) {
+  const gatewayClient = authContext.gatewayClient || new TraeCNApiClient(context);
+  const taskAdapter = authContext.taskAdapter || new McpTaskAdapter({ client: gatewayClient });
   return {
+    subscribe(message) {
+      assertModernRequest(message);
+      assertTaskExtension(message);
+      const requested = message.params?.notifications?.taskIds;
+      if (requested !== undefined && !Array.isArray(requested)) {
+        throw new McpProtocolError(-32602, 'notifications.taskIds must be an array');
+      }
+      const taskIds = [...new Set((requested || []).map(value => String(value || '').trim()).filter(Boolean))];
+      return { taskIds };
+    },
     async handle(message) {
       const { method, params = {} } = message;
       if (method === 'initialize') {
@@ -214,15 +235,56 @@ function createMcpHandlers(context = envContext(), authContext = {}) {
         if (!modern) assertModernRequest(message);
         return modernResult({
           supportedVersions: [...SUPPORTED_PROTOCOL_VERSIONS],
-          capabilities: promptLayers.getMcpCapabilities({ modern: true }),
+          capabilities: {
+            ...promptLayers.getMcpCapabilities({ modern: true }),
+            extensions: { [TASKS_EXTENSION_ID]: {} }
+          },
           instructions: 'Use focused TraeCN tools; the gateway owns queueing, recovery, and safety controls.'
         }, { cacheable: true });
       }
       const finish = (result, options) => modern ? modernResult(result, options) : result;
+      if (method === 'ping') return finish({});
+      if (method === 'logging/setLevel') {
+        if (modern) throw new McpProtocolError(-32601, 'logging/setLevel is unavailable in MCP 2026-07-28');
+        const levels = ['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency'];
+        if (!levels.includes(params.level)) {
+          throw new McpProtocolError(-32602, 'Invalid logging level');
+        }
+        return {};
+      }
+      if (method === 'tasks/get') {
+        assertTaskExtension(message);
+        return finish(await taskAdapter.get(params.taskId));
+      }
+      if (method === 'tasks/update') {
+        assertTaskExtension(message);
+        if (!params.inputResponses || typeof params.inputResponses !== 'object' || Array.isArray(params.inputResponses)) {
+          throw new McpProtocolError(-32602, 'inputResponses must be an object');
+        }
+        return finish(await taskAdapter.update(params.taskId, params.inputResponses));
+      }
+      if (method === 'tasks/cancel') {
+        assertTaskExtension(message);
+        return finish(await taskAdapter.cancel(params.taskId));
+      }
       if (method === 'tools/list') return finish({ tools: MCP_TOOLS }, { cacheable: true });
       if (method === 'tools/call') {
         try {
-          return finish(await callTool(params.name, params.arguments || {}, context, authContext));
+          const taskAugmented = modern
+            && params.name === 'traecn_send_message'
+            && clientSupportsTaskExtension(message);
+          const toolResult = await callTool(
+            params.name,
+            params.arguments || {},
+            context,
+            taskAugmented
+              ? { ...authContext, idempotencyKey: taskIdempotencyKey(message) }
+              : authContext
+          );
+          if (taskAugmented && toolResult.isError !== true && toolResult.structuredContent?.taskId) {
+            return finish(await taskAdapter.create(toolResult.structuredContent));
+          }
+          return finish(toolResult);
         } catch (error) {
           if (error instanceof McpProtocolError) throw error;
           return finish(asMcpError(error));

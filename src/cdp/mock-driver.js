@@ -130,6 +130,10 @@ class MockDriver extends DomDriver {
     };
   }
 
+  async getCurrentModel() {
+    return this.model;
+  }
+
   async typeMessage(text) {
     this.sentMessages.push(text);
   }
@@ -170,6 +174,14 @@ class MockDriver extends DomDriver {
       mode: this.mode,
       confidence: 1,
       indicators: ['mock-driver']
+    };
+  }
+
+  async listSoloChats() {
+    return {
+      mode: this.mode === 'solo' ? 'solo' : 'not_solo',
+      chats: [],
+      count: 0
     };
   }
 

@@ -105,7 +105,7 @@ test('resolveServerPath falls back to in-repo path when env var is not set', () 
   fs.writeFileSync(expectedServer, 'module.exports = {};\n');
   try {
     const env = {};
-    const result = require('./start-mcp').resolveServerPath(env, scriptDir);
+    const result = require('./start-mcp').resolveServerPath(env, scriptDir, { cwd: repoDir });
     expect(result).toBe(path.resolve(expectedServer));
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -117,7 +117,7 @@ test('resolveServerPath returns null when no candidate exists', () => {
   const scriptDir = makeFakeScriptDir(repoDir);
   try {
     const env = { TRAECN_MCP_SERVER_PATH: '/nonexistent/path/server.js' };
-    const result = require('./start-mcp').resolveServerPath(env, scriptDir);
+    const result = require('./start-mcp').resolveServerPath(env, scriptDir, { cwd: repoDir });
     expect(result).toBeNull();
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -130,7 +130,7 @@ test('resolveServerPath rejects directories even if they exist', () => {
   try {
     // TRAECN_MCP_SERVER_PATH points at a directory, not a file
     const env = { TRAECN_MCP_SERVER_PATH: repoDir };
-    const result = require('./start-mcp').resolveServerPath(env, scriptDir);
+    const result = require('./start-mcp').resolveServerPath(env, scriptDir, { cwd: repoDir });
     expect(result).toBeNull();
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -177,6 +177,46 @@ test('resolveServerPath returns absolute path even for relative input', () => {
     expect(path.isAbsolute(result)).toBe(true);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveServerPath finds the installed traecnclaw package from the launch directory', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'start-mcp-package-'));
+  const scriptDir = makeFakeScriptDir(path.join(root, 'skill-root'));
+  const packageDir = path.join(root, 'runtime', 'node_modules', 'traecnclaw');
+  const serverFile = path.join(packageDir, 'mcp-server.js');
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({
+    name: 'traecnclaw',
+    exports: { './mcp': './mcp-server.js' }
+  }));
+  fs.writeFileSync(serverFile, 'module.exports = { startStdioServer() {} };\n');
+  try {
+    const result = require('./start-mcp').resolveServerPath({}, scriptDir, {
+      cwd: path.join(root, 'runtime')
+    });
+    expect(result).toBe(fs.realpathSync(serverFile));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('resolveServerPath falls back to a traecnclaw-mcp executable on PATH', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'start-mcp-path-'));
+  const scriptDir = makeFakeScriptDir(path.join(root, 'skill-root'));
+  const binDir = path.join(root, 'bin');
+  const serverFile = path.join(binDir, 'traecnclaw-mcp');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(serverFile, '#!/usr/bin/env node\nmodule.exports = { startStdioServer() {} };\n');
+  fs.chmodSync(serverFile, 0o755);
+  try {
+    const result = require('./start-mcp').resolveServerPath({ PATH: binDir }, scriptDir, {
+      cwd: root,
+      platform: 'darwin'
+    });
+    expect(result).toBe(path.resolve(serverFile));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

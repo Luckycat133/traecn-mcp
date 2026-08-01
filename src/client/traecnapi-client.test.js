@@ -129,6 +129,22 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('submitTask forwards a stable idempotency key as an HTTP header', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task-idempotent-1', status: 'accepted' }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+
+    await client.submitTask(
+      { message: 'durable work' },
+      { idempotencyKey: 'mcp-task-stable-key' }
+    );
+
+    assert.strictEqual(lastRequest.headers['idempotency-key'], 'mcp-task-stable-key');
+    server.close();
+  });
+
   await asyncTest('listTaskEvents sends a client-scoped long-poll request', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });

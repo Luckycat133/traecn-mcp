@@ -7,15 +7,15 @@
  *
  * Extracted verbatim from gateway.js so that both gateway.js and
  * handlers/delegate.js can share a single implementation. Behavior is
- * preserved 1:1; `notifyOpenClaw` accepts an optional `logPrefix` so
- * callers keep their original error-log text.
+ * `notifyOpenClaw` accepts an optional `logPrefix` so callers can keep
+ * subsystem-specific error-log text.
  */
 
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { getEnvWithFallback } = require('../shared/utils');
 
 // Notify OpenClaw (Telegram gateway) when async task completes
-async function notifyOpenClaw(chatId, message, logPrefix = '[Queue] notify failed:') {
+async function notifyOpenClaw(chatId, message, logPrefix = '[OpenClaw] notify failed:') {
   try {
     const openclawUrl = getEnvWithFallback('TRAECN_OPENCLAW_URL', 'TRAE_OPENCLAW_URL', 'http://127.0.0.1:18789/api/message/send');
     const body = JSON.stringify({ chatId, text: message });

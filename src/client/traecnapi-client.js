@@ -43,7 +43,7 @@ class TraeCNApiClient {
     this.timeout = options.timeout || DEFAULT_TIMEOUT;
   }
 
-  _request(method, path, body = null) {
+  _request(method, path, body = null, options = {}) {
     return new Promise((resolve, reject) => {
       const data = body ? JSON.stringify(body) : null;
       const headers = {
@@ -55,6 +55,9 @@ class TraeCNApiClient {
       }
       if (data) {
         headers['Content-Length'] = Buffer.byteLength(data);
+      }
+      if (typeof options.idempotencyKey === 'string' && options.idempotencyKey.trim()) {
+        headers['Idempotency-Key'] = options.idempotencyKey.trim();
       }
 
       const req = http.request({
@@ -194,8 +197,8 @@ class TraeCNApiClient {
     return this._request('POST', '/api/solo/chats/submit', body);
   }
 
-  async submitTask(input = {}) {
-    return this._request('POST', '/api/tasks/submit', input);
+  async submitTask(input = {}, options = {}) {
+    return this._request('POST', '/api/tasks/submit', input, options);
   }
 
   async listConversations() {

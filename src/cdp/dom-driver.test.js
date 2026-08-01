@@ -396,17 +396,31 @@ asyncTest('approveDialog searches every button inside the active Trae v2 command
   assert.strictEqual(calls, 2);
 });
 
-test('command approval assessment auto-approves an entirely read-only command chain', () => {
+test('command approval assessment requires explicit review for an entirely read-only command chain', () => {
   const driver = new DomDriver(null, getConfig());
   const assessment = driver._assessCommandApproval(
     'git status && git diff --stat HEAD'
   );
 
   assert.deepStrictEqual(assessment, {
-    decision: 'auto_approve',
+    decision: 'agent_review',
     risk: 'low',
-    reasonCodes: ['strict_read_only_allowlist']
+    reasonCodes: ['explicit_command_review_required']
   });
+});
+
+test('command approval assessment never auto-approves sensitive or cross-workspace reads', () => {
+  const driver = new DomDriver(null, getConfig());
+
+  for (const command of [
+    'cat .env',
+    'cat /etc/passwd',
+    'git -C /tmp/other-repository status',
+    'cd /tmp && git status'
+  ]) {
+    const assessment = driver._assessCommandApproval(command);
+    assert.notStrictEqual(assessment.decision, 'auto_approve', command);
+  }
 });
 
 test('command approval assessment sends write or network commands to the calling agent', () => {
@@ -470,7 +484,7 @@ asyncTest('checkForApprovalDialog detects inline command approval cards', async 
                 buttons: ['跳过', '添加 3 个命令到白名单', '运行'],
                 type: 'command_execution',
                 isCommandExec: true,
-                canAutoApprove: false,
+                canAutoApprove: true,
                 command: 'git status && git diff --stat HEAD'
               }
             : { found: false }
@@ -485,9 +499,9 @@ asyncTest('checkForApprovalDialog detects inline command approval cards', async 
   assert.strictEqual(dialog.dialogType, 'command_execution');
   assert.strictEqual(dialog.isCommandExec, true);
   assert.ok(dialog.buttons.includes('运行'));
-  assert.strictEqual(dialog.canAutoApprove, true);
-  assert.strictEqual(dialog.approvalDecision, 'auto_approve');
-  assert.deepStrictEqual(dialog.riskReasons, ['strict_read_only_allowlist']);
+  assert.strictEqual(dialog.canAutoApprove, false);
+  assert.strictEqual(dialog.approvalDecision, 'agent_review');
+  assert.deepStrictEqual(dialog.riskReasons, ['explicit_command_review_required']);
 });
 
 asyncTest('checkForApprovalDialog detects Trae v2 high-risk command cards', async () => {
@@ -1222,6 +1236,77 @@ test('collectResponse returns mid-stream approval without currentText initializa
   assert.deepStrictEqual(result.riskReasons, ['git_write_or_remote']);
   assert.strictEqual(result.command, 'git push origin main');
   assert.ok(typeof result.text === 'string');
+});
+
+test('collectResponse exposes command metadata when approval is already pending', async () => {
+  const driver = new DomDriver(null, getConfig());
+  driver.checkForApprovalDialog = async () => ({
+    needsApproval: true,
+    question: '批准执行命令?',
+    dialogType: 'command_execution',
+    buttons: ['运行'],
+    isCommandExec: true,
+    canAutoApprove: false,
+    approvalDecision: 'agent_review',
+    commandRisk: 'low',
+    riskReasons: ['explicit_command_review_required'],
+    command: 'git status'
+  });
+
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.approvalDecision, 'agent_review');
+  assert.strictEqual(result.commandRisk, 'low');
+  assert.deepStrictEqual(result.riskReasons, ['explicit_command_review_required']);
+  assert.strictEqual(result.command, 'git status');
+});
+
+test('collectResponse never auto-approves a command card from legacy adapter metadata', async () => {
+  const config = getConfig();
+  config.timeoutMs = 200;
+  config.pollIntervalMs = 10;
+  config.approvalPollIntervalMs = 1;
+  config.approvalTimeoutMs = 1;
+  const driver = new DomDriver({
+    send: async () => {},
+    on: () => {},
+    off: () => {}
+  }, config);
+  let approveCalls = 0;
+  let approvalChecks = 0;
+  driver.detectMode = async () => ({ mode: 'solo', confidence: 0.9, indicators: [] });
+  driver._pollResponseState = async () => ({
+    taskComplete: false,
+    taskText: '等待命令审批',
+    taskInProgress: false,
+    responseText: ''
+  });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, taskCompleted: false });
+  driver.checkForApprovalDialog = async () => {
+    approvalChecks++;
+    return approvalChecks === 1
+      ? { needsApproval: false }
+      : {
+          needsApproval: true,
+          question: '批准执行命令?',
+          dialogType: 'command_execution',
+          buttons: ['运行'],
+          isCommandExec: true,
+          canAutoApprove: true,
+          approvalDecision: 'auto_approve',
+          commandRisk: 'low',
+          riskReasons: ['legacy_read_only_allowlist'],
+          command: 'cat .env'
+        };
+  };
+  driver.approveDialog = async () => {
+    approveCalls++;
+    return { success: false };
+  };
+
+  const result = await driver.collectResponse();
+  assert.strictEqual(approveCalls, 0);
+  assert.strictEqual(result.needsApproval, true);
+  assert.strictEqual(result.command, 'cat .env');
 });
 
 test('collectResponse strips IDE role and completion wrappers', async () => {

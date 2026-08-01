@@ -95,6 +95,18 @@ if (zipResult.available && fs.existsSync(zipPath)) {
   artifacts.push(artifact(zipPath));
 }
 
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const serverPackResult = run(npmCommand, ['pack', '--pack-destination', distDir, '--json']);
+let serverPackInfo;
+try {
+  [serverPackInfo] = JSON.parse(serverPackResult.stdout);
+} catch {
+  fail(`could not parse npm pack output\n${serverPackResult.stdout}`);
+}
+if (!serverPackInfo?.filename) fail('npm pack did not report an artifact filename');
+const serverArchivePath = path.join(distDir, serverPackInfo.filename);
+const serverPackageArtifact = artifact(serverArchivePath);
+
 const manifest = {
   name: skillName,
   version: require('../package.json').version,
@@ -104,8 +116,14 @@ const manifest = {
   skillPath: path.relative(repoRoot, skillDir),
   skillTreeSha256: treeSha256(skillDir),
   artifacts,
+  serverPackage: {
+    name: require('../package.json').name,
+    version: require('../package.json').version,
+    artifact: serverPackageArtifact
+  },
   install: {
     codexGlobal: `mkdir -p "\${CODEX_HOME:-$HOME/.codex}/skills" && tar -xzf ${path.relative(repoRoot, tgzPath)} -C "\${CODEX_HOME:-$HOME/.codex}/skills"`,
+    serverPackage: `npm install ${serverPackageArtifact.path}`,
     sourceCheckout: 'Use the MCP config examples in README.md or docs/DISTRIBUTION.md with an absolute path to mcp-server.js.'
   }
 };
@@ -120,3 +138,4 @@ if (artifacts.some(item => item.path.endsWith('.zip'))) {
   console.log('[package-skill] zip command not available; skipped zip artifact');
 }
 console.log(`[package-skill] wrote ${path.relative(repoRoot, manifestPath)}`);
+console.log(`[package-skill] wrote ${serverPackageArtifact.path}`);

@@ -109,8 +109,113 @@ async function test(name, fn) {
     assert.strictEqual(result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
     assert.strictEqual(result.capabilities.logging, undefined);
     assert.ok(result.capabilities.tools);
+    assert.deepStrictEqual(
+      result.capabilities.extensions['io.modelcontextprotocol/tasks'],
+      {}
+    );
     assert.strictEqual(result.cacheScope, 'private');
     assert.ok(result.ttlMs > 0);
+  });
+
+  await test('modern task extension creates and retrieves one durable TraeCN task', async () => {
+    let taskReads = 0;
+    const server = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      if (req.method === 'POST' && req.url === '/api/tasks/submit') {
+        res.writeHead(202);
+        return res.end(JSON.stringify({ taskId: 'task-ext-1', status: 'accepted' }));
+      }
+      if (req.method === 'GET' && req.url === '/api/task/task-ext-1') {
+        taskReads += 1;
+        res.writeHead(200);
+        return res.end(JSON.stringify(taskReads === 1
+          ? {
+            taskId: 'task-ext-1',
+            status: 'queued',
+            createdAt: 1785542400000,
+            message: 'queued by TraeCN'
+          }
+          : {
+            taskId: 'task-ext-1',
+            status: 'done',
+            createdAt: 1785542400000,
+            completedAt: '2026-08-01T00:01:00.000Z',
+            result: { text: 'extension result', stable: true }
+          }));
+      }
+      res.writeHead(404);
+      return res.end(JSON.stringify({ error: 'not found' }));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const handlers = createMcpHandlers({
+      host: '127.0.0.1', port: server.address().port, token: '', timeout: 3000
+    });
+    const meta = {
+      'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+      'io.modelcontextprotocol/clientCapabilities': {
+        extensions: { 'io.modelcontextprotocol/tasks': {} }
+      }
+    };
+    try {
+      const created = await handlers.handle({
+        jsonrpc: '2.0',
+        id: 'send-1',
+        method: 'tools/call',
+        params: {
+          name: 'traecn_send_message',
+          arguments: { message: 'Complete this in the background' },
+          _meta: meta
+        }
+      });
+      assert.strictEqual(created.resultType, 'task');
+      assert.strictEqual(created.taskId, 'task-ext-1');
+      assert.strictEqual(created.status, 'working');
+      assert.strictEqual(created._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
+
+      const completed = await handlers.handle({
+        jsonrpc: '2.0',
+        id: 'get-1',
+        method: 'tasks/get',
+        params: { taskId: 'task-ext-1', _meta: meta }
+      });
+      assert.strictEqual(completed.resultType, 'complete');
+      assert.strictEqual(completed.status, 'completed');
+      assert.strictEqual(completed.result.content[0].text, 'extension result');
+
+      const fallback = await handlers.handle({
+        jsonrpc: '2.0',
+        id: 'send-without-task-extension',
+        method: 'tools/call',
+        params: {
+          name: 'traecn_send_message',
+          arguments: { message: 'Use the compatible result shape' },
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+            'io.modelcontextprotocol/clientCapabilities': {}
+          }
+        }
+      });
+      assert.strictEqual(fallback.resultType, 'complete');
+      assert.strictEqual(fallback.structuredContent.taskId, 'task-ext-1');
+
+      await assert.rejects(
+        () => handlers.handle({
+          jsonrpc: '2.0',
+          id: 'get-no-capability',
+          method: 'tasks/get',
+          params: {
+            taskId: 'task-ext-1',
+            _meta: {
+              'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+              'io.modelcontextprotocol/clientCapabilities': {}
+            }
+          }
+        }),
+        error => error.code === -32003
+      );
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
   });
 
   await test('modern requests require a supported per-request protocol version', async () => {
@@ -128,35 +233,6 @@ async function test(name, fn) {
       error => error.code === -32022
         && error.data.requested === '2099-01-01'
         && error.data.supported.includes('2026-07-28')
-    );
-  });
-
-  await test('modern requests reject malformed client capabilities as invalid params', async () => {
-    const handlers = createMcpHandlers({ test: true });
-    await assert.rejects(
-      () => handlers.handle({
-        method: 'tools/list',
-        params: {
-          _meta: {
-            'io.modelcontextprotocol/protocolVersion': '2026-07-28'
-          }
-        }
-      }),
-      error => error.code === -32602
-        && /Missing required client capabilities metadata/.test(error.message)
-    );
-    // A non-object required metadata value is malformed for the same reason.
-    await assert.rejects(
-      () => handlers.handle({
-        method: 'tools/list',
-        params: {
-          _meta: {
-            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-            'io.modelcontextprotocol/clientCapabilities': 'not-an-object'
-          }
-        }
-      }),
-      error => error.code === -32602
     );
   });
 

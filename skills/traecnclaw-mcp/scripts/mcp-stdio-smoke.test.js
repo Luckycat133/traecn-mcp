@@ -77,6 +77,10 @@ function readFrames(stream, expectedCount, timeoutMs = 5000) {
     const tools = responses.find(item => item.id === 2);
     assert.ok(discover.result.supportedVersions.includes('2026-07-28'));
     assert.strictEqual(discover.result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
+    assert.deepStrictEqual(
+      discover.result.capabilities.extensions['io.modelcontextprotocol/tasks'],
+      {}
+    );
     assert.strictEqual(tools.result.resultType, 'complete');
     assert.strictEqual(MCP_CONTRACT_VERSION, 5);
     assert.strictEqual(tools.result.tools.length, MCP_TOOLS.length);

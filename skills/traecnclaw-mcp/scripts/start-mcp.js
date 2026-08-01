@@ -10,6 +10,8 @@
  * Resolution order:
  *   1. TRAECN_MCP_SERVER_PATH env var (absolute path to mcp-server.js)
  *   2. In-repo relative path (skill/scripts/ → repo root)
+ *   3. Installed `traecnclaw` package export
+ *   4. `traecnclaw-mcp` executable on PATH
  *
  * Usage from an MCP client config:
  *   "command": "node",
@@ -18,6 +20,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { createRequire } = require('module');
 
 const SCRIPT_DIR = __dirname;
 
@@ -30,14 +33,43 @@ const SCRIPT_DIR = __dirname;
  *
  * @param {object} [env=process.env] - environment variables (injectable for tests)
  * @param {string} [scriptDir=__dirname] - scripts dir (injectable for tests)
+ * @param {object} [options] - process values (injectable for tests)
  * @returns {string|null} absolute path to mcp-server.js, or null if not found
  */
-function resolveServerPath(env = process.env, scriptDir = SCRIPT_DIR) {
+function resolveServerPath(env = process.env, scriptDir = SCRIPT_DIR, options = {}) {
   const repoRoot = path.resolve(scriptDir, '../../..');
+  const cwd = options.cwd || process.cwd();
+  const platform = options.platform || process.platform;
   const candidates = [
     env.TRAECN_MCP_SERVER_PATH,
     path.join(repoRoot, 'mcp-server.js')
   ].filter(Boolean);
+
+  try {
+    const searchPaths = [cwd, scriptDir];
+    if (env.NODE_PATH) searchPaths.push(...env.NODE_PATH.split(path.delimiter).filter(Boolean));
+    for (const searchPath of searchPaths) {
+      try {
+        const resolveFrom = createRequire(path.join(path.resolve(searchPath), 'package.json'));
+        candidates.push(resolveFrom.resolve('traecnclaw/mcp'));
+        break;
+      } catch {
+        // Try the next package search root.
+      }
+    }
+  } catch {
+    // The package channel is optional; continue to PATH resolution.
+  }
+
+  const pathEntries = String(env.PATH || '').split(path.delimiter).filter(Boolean);
+  const executableNames = platform === 'win32'
+    ? String(env.PATHEXT || '.EXE;.CMD;.BAT').split(';').map(ext => `traecnclaw-mcp${ext.toLowerCase()}`)
+    : ['traecnclaw-mcp'];
+  for (const entry of pathEntries) {
+    for (const executableName of executableNames) {
+      candidates.push(path.join(entry, executableName));
+    }
+  }
 
   for (const candidate of candidates) {
     try {
@@ -70,8 +102,8 @@ function main() {
     ].filter(Boolean);
     console.error('[traecnclaw-mcp] mcp-server.js not found.');
     console.error('Tried: ' + tried.join(', '));
-    console.error('Set TRAECN_MCP_SERVER_PATH to the absolute path of mcp-server.js,');
-    console.error('or install this skill inside the TRAECNclaw repository.');
+    console.error('Set TRAECN_MCP_SERVER_PATH, install the matching traecnclaw package,');
+    console.error('add traecnclaw-mcp to PATH, or install this skill inside the repository.');
     process.exit(1);
   }
 

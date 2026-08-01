@@ -2,6 +2,7 @@
 
 const packageInfo = require('../package.json');
 const { MCP_CONTRACT_VERSION } = require('./mcp/contract');
+const { listTraeAdapters } = require('./trae-adapters');
 
 // Keep capability data sources injectable so callers can avoid eager dependency
 // cycles and tests can provide focused implementations.
@@ -162,7 +163,8 @@ function buildCapabilities(options = {}, deps = {}) {
     traeCN: {
       modes: ['solo', 'ide'],
       knownModels: KNOWN_MODELS.slice(),
-      settingsSections: { ...SETTINGS_SECTIONS }
+      settingsSections: { ...SETTINGS_SECTIONS },
+      adapters: listTraeAdapters()
     }
   };
 }

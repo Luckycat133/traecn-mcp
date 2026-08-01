@@ -195,6 +195,19 @@ class TraeCNAutomationError extends Error {
       { cause: String(cause) }
     );
   }
+
+  static taskStoreUnavailable(health = {}) {
+    return new TraeCNAutomationError(
+      'Active task queue persistence is unavailable; the task was not accepted',
+      'TASK_STORE_UNAVAILABLE',
+      {
+        taskStoreWritable: false,
+        durabilityDegraded: true,
+        lastSuccessfulPersistAt: health.lastSuccessfulPersistAt || null,
+        lastPersistError: health.lastPersistError || null
+      }
+    );
+  }
 }
 
 const TraeAutomationError = TraeCNAutomationError;

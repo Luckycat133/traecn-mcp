@@ -1,10 +1,10 @@
 ---
 name: traecnclaw-mcp
-description: Operate TraeCN through TRAECNclaw's focused stdio MCP tools. Use when an MCP-capable agent must send or stop work, choose a workspace/model/mode/conversation, inspect or change Trae settings through its UI, manage conversations, or resolve an exceptional question or unsafe approval. Queueing, waiting, recovery, notifications, safe approvals, and keep/revert gates are gateway-managed.
+description: Operate TraeCN through TRAECNclaw's focused stdio MCP tools. Use when an MCP-capable agent must send or stop work, choose a workspace/model/mode/conversation, inspect or change Trae settings through its UI, manage conversations, or resolve an exceptional question or command approval. Queueing, waiting, recovery, notifications, routine non-command questions, and keep/revert gates are gateway-managed.
 license: MIT-0
 metadata:
   author: TRAECNclaw
-  version: "0.5.1"
+  version: "0.5.2"
   openclaw:
     requires:
       bins:
@@ -35,8 +35,8 @@ operations from the agent loop; the gateway owns those mechanics.
 
 ## Setup
 
-1. Run `npm run doctor` in the repository.
-2. Configure the client from [assets/mcp-client-config.json](assets/mcp-client-config.json), replacing `SKILL_DIR` with this folder's absolute path. Use [assets/mcp-client-config.direct.json](assets/mcp-client-config.direct.json) when directly referencing the repository server.
+1. Install the matching TRAECNclaw server from its source checkout or release server archive. The launcher checks `TRAECN_MCP_SERVER_PATH`, the repository, an installed `traecnclaw` package, then `traecnclaw-mcp` on `PATH`.
+2. Run `npm run doctor` in a source checkout, then configure the client from [assets/mcp-client-config.json](assets/mcp-client-config.json), replacing `SKILL_DIR` with this folder's absolute path. Use [assets/mcp-client-config.direct.json](assets/mcp-client-config.direct.json) when directly referencing the repository server.
 3. Start the gateway with `npm run start:gateway`, then reconnect the MCP client.
 4. Use mock mode only for development; never cite mock output as live TraeCN evidence.
 
@@ -54,14 +54,20 @@ message.
 ## Send and track work
 
 Call `traecn_send_message` with the exact message and, when concurrency makes
-the target ambiguous, an explicit `conversationId`. It returns only the
-accepted `taskId` and status.
+the target ambiguous, an explicit `conversationId`. Clients without the Tasks
+extension receive the accepted `taskId` and status. When the host declares
+`io.modelcontextprotocol/tasks` on the request, the same call returns that
+durable gateway identity as `resultType: "task"`.
 
 Do not wait or busy-poll after sending. Legacy initialization-based clients
 receive compact task notifications that the stdio server acknowledges
-internally. MCP `2026-07-28` clients call `traecn_get_task` only for an
-intentional later status/result read. Use `traecn_cancel_task` for one known
-gateway task. Use `traecn_stop_generation` only when the user wants the
+internally. Modern hosts can open `subscriptions/listen` for the returned task
+ID and receive a complete `notifications/tasks` snapshot; hosts without that
+extension call `traecn_get_task` only for an intentional later status/result
+read. If a modern task reports `input_required`, its elicitation and
+`tasks/update` response carry the same approval safeguards documented below.
+Use `traecn_cancel_task` for one known gateway task. Use
+`traecn_stop_generation` only when the user wants the
 generation currently visible in TraeCN stopped. First list conversations and
 pass the active `conversationId`; the gateway rejects a stale or different
 conversation. Because visible work may belong to the user or another agent,
@@ -89,12 +95,10 @@ manually or repeat reads after a successful write.
 
 ## Resolve exceptional interactions
 
-The gateway automatically approves only strict read-only shell chains. The
-allowlist covers directory changes, basic file inspection, and Git reads; it
-rejects redirection, substitution, network/process/package commands, project
-scripts, mutating `find`/`sed`, and external `rg`/Git hooks. Every automatic
-command approval is recorded in the local append-only audit log. Unknown or
-mutating commands are returned to the Agent instead.
+The gateway never approves shell commands automatically, including commands
+classified as read-only. Command text alone cannot establish workspace scope,
+exclude sensitive-file reads, or account for Git configuration and external
+hooks. Every command is returned to the Agent with its risk classification.
 
 If a task reports an unresolved interaction:
 

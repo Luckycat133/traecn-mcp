@@ -84,14 +84,14 @@ function _assessCommandApproval(command) {
     .split(/\s*(?:&&|\|\||;|\|)\s*/)
     .map(segment => segment.trim())
     .filter(Boolean);
-  const safeSegmentPatterns = [
+  const readOnlySegmentPatterns = [
     /^cd\s+\S+(?:\s+\S+)*$/i,
     /^(?:pwd|ls|rg|grep|cat|head|tail|wc|stat)\b/i,
     /^git\s+(?:status|diff|log|show|branch|rev-parse|ls-files)\b/i,
     /^echo\b/i
   ];
-  if (segments.length > 0 && segments.every(segment => safeSegmentPatterns.some(pattern => pattern.test(segment)))) {
-    return { decision: 'auto_approve', risk: 'low', reasonCodes: ['strict_read_only_allowlist'] };
+  if (segments.length > 0 && segments.every(segment => readOnlySegmentPatterns.some(pattern => pattern.test(segment)))) {
+    return { decision: 'agent_review', risk: 'low', reasonCodes: ['explicit_command_review_required'] };
   }
 
   return { decision: 'agent_review', risk: 'unknown', reasonCodes: ['unknown_command'] };
@@ -331,7 +331,7 @@ async function checkForApprovalDialog(driver) {
         buttons: dialog.buttons || [],
         options: dialog.options || [],
         isCommandExec: dialog.isCommandExec || false,
-        canAutoApprove: dialog.canAutoApprove === true || commandAssessment?.decision === 'auto_approve',
+        canAutoApprove: dialog.isCommandExec ? false : dialog.canAutoApprove === true,
         command: dialog.command ? String(dialog.command).slice(0, 1200) : null,
         approvalDecision: commandAssessment?.decision || null,
         commandRisk: commandAssessment?.risk || null,

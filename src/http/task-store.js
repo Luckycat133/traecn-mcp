@@ -8,6 +8,7 @@ const { getEnvWithFallback, isGenericQueueProbeTask } = require('../shared/utils
 
 const TASK_STORE_SCHEMA_VERSION = 2;
 const CHECKSUM_ALGORITHM = 'sha256';
+const OWNED_TASK_STORE_LOCKS = new Map();
 
 function resolveTaskStorePath(configuredPath = '') {
   const configured = configuredPath || getEnvWithFallback(
@@ -35,9 +36,15 @@ class TaskStore {
       ? isTerminalStatus
       : () => Boolean(isTerminalStatus);
     this.onWritePhase = typeof onWritePhase === 'function' ? onWritePhase : null;
+    this.taskStoreWritable = null;
+    this.lastSuccessfulPersistAt = null;
+    this.lastPersistError = null;
+    this._lockAcquired = false;
+    this._lockPath = null;
   }
 
   setPersistencePath(persistencePath) {
+    this.releaseLock();
     this.persistencePath = resolveTaskStorePath(persistencePath || '');
     return this.persistencePath;
   }
@@ -47,7 +54,10 @@ class TaskStore {
   }
 
   persist(taskQueue) {
-    if (!this.persistencePath || !taskQueue) return false;
+    if (!this.persistencePath || !taskQueue) {
+      this._recordWriteFailure({ code: 'PERSISTENCE_DISABLED' });
+      return false;
+    }
     const tasks = Array.from(taskQueue.entries())
       .filter(([, task]) => !this.isTerminalStatus(task.status))
       .filter(([, task]) => !isGenericQueueProbeTask(task && task.task))
@@ -67,6 +77,7 @@ class TaskStore {
 
     try {
       fs.mkdirSync(dirPath, { recursive: true });
+      this._acquireLock();
       this._removeIfExists(tempPath);
       this._removeIfExists(backupTempPath);
       this._writeDurableTemp(tempPath, serialized);
@@ -88,11 +99,50 @@ class TaskStore {
       this._fsyncDirectory(dirPath);
       this._emitWritePhase('directory_fsynced');
       this._removeIfExists(backupTempPath);
+      this.taskStoreWritable = true;
+      this.lastSuccessfulPersistAt = new Date().toISOString();
+      this.lastPersistError = null;
       return true;
     } catch (err) {
       this.logger.error('[TaskStore] Failed to persist active queue:', err.message);
+      this._recordWriteFailure(err);
       return false;
     }
+  }
+
+  getHealth() {
+    return {
+      taskStoreWritable: this.taskStoreWritable,
+      lastSuccessfulPersistAt: this.lastSuccessfulPersistAt,
+      lastPersistError: this.lastPersistError ? { ...this.lastPersistError } : null,
+      durabilityDegraded: this.taskStoreWritable === false || this.lastPersistError !== null
+    };
+  }
+
+  close() {
+    this.releaseLock();
+  }
+
+  releaseLock() {
+    if (!this._lockAcquired || !this._lockPath) return;
+    const lockPath = this._lockPath;
+    const owned = OWNED_TASK_STORE_LOCKS.get(lockPath);
+    if (owned) {
+      owned.owners.delete(this);
+      if (owned.owners.size === 0) {
+        OWNED_TASK_STORE_LOCKS.delete(lockPath);
+        try {
+          const current = this._readLock(lockPath);
+          if (current?.pid === process.pid && current.ownerId === owned.ownerId) {
+            this._removeIfExists(lockPath);
+          }
+        } catch (err) {
+          this.logger.warn(`[TaskStore] Failed to release single-writer lock: ${err.message}`);
+        }
+      }
+    }
+    this._lockAcquired = false;
+    this._lockPath = null;
   }
 
   load() {
@@ -257,6 +307,87 @@ class TaskStore {
 
   _emitWritePhase(phase) {
     if (this.onWritePhase) this.onWritePhase(phase);
+  }
+
+  _recordWriteFailure(error = {}) {
+    this.taskStoreWritable = false;
+    this.lastPersistError = {
+      code: typeof error.code === 'string' && error.code ? error.code : 'WRITE_FAILED',
+      message: 'Active task queue persistence is unavailable',
+      at: new Date().toISOString()
+    };
+  }
+
+  _acquireLock(allowStaleRetry = true) {
+    const lockPath = `${this.persistencePath}.lock`;
+    if (this._lockAcquired && this._lockPath === lockPath) return true;
+
+    const locallyOwned = OWNED_TASK_STORE_LOCKS.get(lockPath);
+    if (locallyOwned) {
+      locallyOwned.owners.add(this);
+      this._lockAcquired = true;
+      this._lockPath = lockPath;
+      return true;
+    }
+
+    const ownerId = crypto.randomBytes(16).toString('hex');
+    let fd;
+    try {
+      fd = fs.openSync(lockPath, 'wx', 0o600);
+      fs.writeFileSync(fd, `${JSON.stringify({
+        pid: process.pid,
+        ownerId,
+        acquiredAt: new Date().toISOString()
+      })}\n`, 'utf8');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = undefined;
+      OWNED_TASK_STORE_LOCKS.set(lockPath, { pid: process.pid, ownerId, owners: new Set([this]) });
+      this._lockAcquired = true;
+      this._lockPath = lockPath;
+      return true;
+    } catch (err) {
+      if (fd !== undefined) fs.closeSync(fd);
+      if (err.code !== 'EEXIST') throw err;
+
+      const current = this._readLock(lockPath);
+      if (current?.pid === process.pid) {
+        OWNED_TASK_STORE_LOCKS.set(lockPath, {
+          pid: process.pid,
+          ownerId: current.ownerId,
+          owners: new Set([this])
+        });
+        this._lockAcquired = true;
+        this._lockPath = lockPath;
+        return true;
+      }
+      if (allowStaleRetry && current?.pid && !this._isProcessAlive(current.pid)) {
+        this._removeIfExists(lockPath);
+        return this._acquireLock(false);
+      }
+      const locked = new Error('Another gateway owns the active task store');
+      locked.code = 'TASK_STORE_LOCKED';
+      throw locked;
+    }
+  }
+
+  _readLock(lockPath) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      return Number.isInteger(parsed.pid) && typeof parsed.ownerId === 'string' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  _isProcessAlive(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return err.code !== 'ESRCH';
+    }
   }
 }
 
