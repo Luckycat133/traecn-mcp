@@ -222,7 +222,7 @@ The MCP server exposes 20 focused tools grouped by intent:
 `traecn_send_message` accepts only the message and an optional stable
 conversation ID. Workspace, model, mode, and conversation changes are explicit
 single-purpose operations. The gateway still owns queues, persistence,
-recovery, routine approvals, file-review gates, and completion signaling.
+recovery, routine non-command questions, file-review gates, and completion signaling.
 Settings commands operate Trae's visible UI and return to chat automatically.
 
 ### Agent Skill Distribution
@@ -245,7 +245,8 @@ npm run pack:skill
 ```
 
 This writes `dist/traecnclaw-mcp-skill.tgz`, a zip artifact when `zip` is
-available, and `dist/traecnclaw-mcp-release.json` with checksums. See
+available, an installable `dist/traecnclaw-<version>.tgz` server package, and
+`dist/traecnclaw-mcp-release.json` with source revision and checksums. See
 [Distribution](docs/DISTRIBUTION.md) for catalog submission fields.
 
 ### Layered Architecture
@@ -258,6 +259,17 @@ TraeCNSkill uses a layered architecture for selective loading and minimal contex
 - **Config Layer**: Settings management
 - **Dialog Layer**: Dialog handling
 - **Batch Layer**: Batch operations
+
+The runtime also selects a versioned Trae adapter between the gateway and the
+generic CDP/DOM driver. TraeCN 1.107.x on macOS uses the verified
+`traecn-1.107` selectors and capability profile; unknown versions select
+`traecn-unknown`, keep generic fallbacks, and report degraded compatibility
+without claiming version-specific support.
+
+Task completion delivery is owned by `CompletionSignal`, which records the
+durable event before broadcasting WebSocket, OpenClaw, or webhook output. The
+Gateway retains lifecycle and dependency wiring instead of duplicating those
+delivery rules.
 
 ### Documentation
 
@@ -298,9 +310,20 @@ The OpenAPI schema is served at `/openapi.json` (requires the same auth token as
 
 MCP agents call focused context tools only when a requested selection must
 change, then use `traecn_send_message`. The gateway performs readiness, queue,
-recovery, waiting, notification, and routine approval work internally.
+recovery, waiting, notification, and routine non-command interaction work internally.
 Operator integrations can still inspect `GET /api/capabilities`,
 `POST /api/preflight`, or `/openapi.json` when diagnosing the gateway itself.
+
+`POST /api/tasks/submit` returns `202` only after the candidate task is present
+in a durable active-queue snapshot. If the store is read-only, full, or owned
+by another gateway process, the request returns `503 TASK_STORE_UNAVAILABLE`
+and no task is accepted. Supply `Idempotency-Key` for safe retries after an
+uncertain response; ownership survives gateway restart while the task remains
+active. `GET /api/status` exposes `durability.taskStoreWritable`,
+`lastSuccessfulPersistAt`, `lastPersistError`, and `durabilityDegraded`.
+The same status response exposes `traeAdapter` with the detected Trae version,
+platform, mode, selected adapter, compatibility level, evidence, and verified
+capability flags.
 
 For unattended local waiting on macOS, start the gateway as a LaunchAgent:
 
@@ -313,38 +336,48 @@ Every MCP message is gateway-managed. The Agent releases its context after
 receiving `taskId`; the gateway persists the task, maintains the queue, and
 restores interrupted work. Legacy initialization-based MCP clients also receive
 compact `notifications/message` completion events. MCP `2026-07-28` removed
-free-floating logging notifications, so modern clients use
-`traecn_get_task` for an intentional status or result read; do not busy-poll.
-Its optional `detailLevel` defaults to `result` (final answer only); use
-`trace` when the visible execution process is needed for diagnosis.
+free-floating logging notifications. For modern clients, TRAECNclaw advertises
+the separately negotiated `io.modelcontextprotocol/tasks` extension. A client
+that declares it on `traecn_send_message` receives a durable
+`resultType: "task"` handle and can either respect its suggested `tasks/get`
+interval or open `subscriptions/listen` for that task ID. The latter delivers a
+full `notifications/tasks` snapshot, including the final tool result, without
+an Agent polling loop. Command-approval pauses become `input_required` and are
+answered through `tasks/update` with the same explicit risk safeguards.
+
+Clients that do not declare the Tasks extension retain the compatible complete
+accepted result and may use `traecn_get_task` for an intentional status or
+result read. Its optional `detailLevel` defaults to `result` (final answer
+only); use `trace` when the visible execution process is needed for diagnosis.
 Set a stable, unique `TRAECN_MCP_CLIENT_ID` for each IDE connection when the
 derived legacy MCP client name is not unique. Events are acknowledged only after the
 stdio write succeeds, survive gateway restarts, and contain only status plus a
 short summary; fetch the full result with `traecn_get_task` only when needed.
 Event cursors and acknowledgements are internal and never consume Agent tool
-calls. Modern task-extension support is not advertised while the MCP Tasks
-extension remains experimental. Injection into a particular chat remains an
-IDE-adapter capability.
+calls. Tasks remains an independently versioned MCP extension whose upstream
+specification is still marked draft, so host support is capability-detected;
+it does not change TRAECNclaw's frozen 20-tool contract. Injection into a
+particular chat remains an IDE-adapter capability.
 Each submitted Solo task is rebound by task-specific visible text rather than
 by its transient sidebar index. If that identity cannot be found, collection
 waits instead of reading another conversation. Progress labels below 100%, such
 as `任务完成 16%`, remain non-terminal.
 
-Inline command cards are approved without model tokens only when every shell
-segment matches the strict read-only allowlist. Redirection, substitution,
-network/process/package commands, project scripts, mutating find/sed, and
-external ripgrep/Git hooks are rejected from automatic approval. Unsafe or
-unknown cards surface through `traecn_decide_approval`, which revalidates the
-exact visible command and requires a risk acknowledgement plus audit reason.
+Inline shell command cards are never approved automatically, including commands
+classified as read-only. Command text alone cannot establish workspace scope,
+exclude sensitive-file reads, or account for Git configuration and external
+hooks. Every command card surfaces through `traecn_decide_approval`, which
+revalidates the exact visible command and requires a risk acknowledgement plus
+an audit reason.
 TraeCN file-review gates keep changes by default and revert only on clear fatal
 automation failures.
 
 `traecn_stop_generation` is scoped to the supplied active Solo conversation
 and requires an untracked-work acknowledgement and audit reason. Permanent
 conversation deletion is limited to an inactive exact-title match and has no
-gateway recovery path. These actions and automatic command approvals are
-written to the local append-only audit log, enabled by default with sensitive
-field redaction and 30-day retention.
+gateway recovery path. These high-impact actions are written to the local
+append-only audit log, enabled by default with sensitive field redaction and
+30-day retention.
 
 The CLI retains detached wait and proof commands for maintainers and acceptance
 testing; these are not MCP Agent tools:
@@ -392,6 +425,10 @@ npm run audit:prod
 generated configuration and Skill contracts, the public-release scan, syntax,
 ESLint, unit/integration behavior, mock HTTP system behavior, UAT inventories,
 and coverage. It never spends TraeCN quota.
+
+`npm run test:release` additionally builds both Skill and complete server
+artifacts, installs them under a temporary HOME, starts the mock gateway and
+stdio MCP server, verifies the exact 20 tools, and completes one mock task.
 
 `npm run contract:audit` inventories contract declarations and already-recorded
 evidence. It does not execute the behaviors it lists, so a passing contract

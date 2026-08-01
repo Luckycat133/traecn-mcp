@@ -4,6 +4,13 @@
 > 采集时的工作目录已脱敏为：`<workspace>/TRAECNclaw`
 > CDP: 9222 · `~/Library/Application Support/Trae CN`（macOS 默认 user-data-dir，已登录态持久化）
 
+这份文档保存的是历史实机证据，不代表每次发布都重新执行了实机
+UAT。对应的版本适配器是 `src/trae-adapters/traecn-1.107`；脱敏后的
+关键工作流状态保存在
+`src/trae-adapters/traecn-1.107/fixtures/workflow.json`，可通过
+`npm run test:trae-adapters` 重放。当前实机检测结果以
+`GET /api/status` 的 `traeAdapter` 握手和 `npm run inspect:verify` 为准。
+
 ---
 
 ## 1. 启动后状态

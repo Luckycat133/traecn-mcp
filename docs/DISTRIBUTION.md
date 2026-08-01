@@ -26,7 +26,9 @@ The command writes:
 
 - `dist/traecnclaw-mcp-skill.tgz`
 - `dist/traecnclaw-mcp-skill.zip` when the local `zip` command is available
-- `dist/traecnclaw-mcp-release.json` with checksums and install hints
+- `dist/traecnclaw-<version>.tgz`, an npm-compatible complete server package
+- `dist/traecnclaw-mcp-release.json` with the source revision, checksums, and
+  install hints for both the Skill and server
 
 `dist/` is intentionally ignored by git. Attach these artifacts to a GitHub
 Release or upload them to a download page.
@@ -61,10 +63,21 @@ npm install
 npm run doctor
 ```
 
-**Option A (recommended): use the skill launcher**
+From a release download, install the complete server package either into the
+client's launch directory or a trusted npm prefix:
 
-The skill bundles a launcher that auto-locates `mcp-server.js` from the repo
-root. Copy the template from
+```sh
+npm install ./traecnclaw-<version>.tgz
+# Or install into a dedicated prefix and expose its bin directory on PATH.
+npm install --prefix "$HOME/.local/share/traecnclaw" ./traecnclaw-<version>.tgz
+export PATH="$HOME/.local/share/traecnclaw/node_modules/.bin:$PATH"
+```
+
+**Option A (recommended): use the Skill launcher**
+
+The Skill launcher resolves the server in this order: explicit
+`TRAECN_MCP_SERVER_PATH`, repository-local `mcp-server.js`, an installed
+`traecnclaw/mcp` package export, then `traecnclaw-mcp` on `PATH`. Copy the template from
 `skills/traecnclaw-mcp/assets/mcp-client-config.json` and replace `SKILL_DIR`
 with the absolute path to the skill folder:
 
@@ -107,7 +120,8 @@ template. Do not register it alongside Option A.
 
 For package installs, use `command: "traecnclaw-mcp"` only after that exact
 version is verified on npm. Source and release-archive instructions are the
-authoritative 0.5.1 path until publication completes.
+authoritative 0.5.2 path until registry publication completes; the generated
+server archive is installable directly from a GitHub Release download.
 
 ## Public mirror synchronization
 
@@ -121,17 +135,20 @@ node scripts/public-mirror.js --check --mirror /path/to/traecnclaw-mcp-skill --r
 The command copies `skills/traecnclaw-mcp` byte-for-byte, writes the exact
 canonical commit to `SOURCE_REVISION`, refreshes version/contract metadata,
 keeps `glama.json`, and removes the obsolete legacy `smithery.yaml`. The
-canonical commit must be the commit tagged `v0.5.1`; a dirty working tree is
+canonical commit must be the commit tagged `v0.5.2`; a dirty working tree is
 not a release source.
 
 The bundled MCP server supports the stable `2026-07-28` protocol over standard
 newline-delimited stdio and legacy `initialize` clients. Catalog descriptions
-should call it a local stdio server; Streamable HTTP is not exposed by 0.5.1.
+should call it a local stdio server; Streamable HTTP is not exposed by 0.5.2.
+The server also advertises the separately negotiated, upstream-draft
+`io.modelcontextprotocol/tasks` extension for durable task handles and exact-ID
+completion subscriptions; do not describe the extension itself as core MCP.
 
 Smithery now distributes local stdio servers as MCPB bundles, so no replacement
 legacy YAML is generated. The official MCP Registry metadata template lives at
 `distribution/public-mirror/server.json.template`, but it must not be copied to
-the public mirror or published until npm contains the matching 0.5.1 package.
+the public mirror or published until npm contains the matching 0.5.2 package.
 The Registry validates that package version and the `mcpName` field before it
 accepts `server.json`.
 
@@ -162,7 +179,8 @@ Before making the repository public or attaching release artifacts:
 1. Confirm `git status --short` contains only intended changes.
 2. Run `npm run verify`.
 3. Run `npm run check:skill-contracts` to validate the canonical Skill and generated MCP contract.
-4. Run `npm run pack:skill` and keep the generated checksums.
+4. Run `npm run test:release`; keep the generated checksums and require the
+   clean-room install, 20-tool discovery, mock submission, and result read to pass.
 5. Scan current files and git history for `.env`, tokens, cookies, auth headers,
    raw TraeCN profiles, and local-only paths.
 6. Replace any credential-bearing git remote URL with a credential-free HTTPS or

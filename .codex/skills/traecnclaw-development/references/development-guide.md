@@ -46,12 +46,31 @@ Do not repeat these changes without regression evidence:
   optional capabilities, and unsupported versions.
 - Settings navigation and extraction were hardened across Solo, IDE, narrow,
   collapsed-sidebar, lazy-page, card, and table layouts.
+- The portable Skill resolves installed server packages and PATH launchers; the
+  release build includes a checksummed npm-compatible server archive and a
+  clean-room install/task smoke test.
+- Task acceptance is atomic with TaskStore persistence, health is exposed, one
+  active writer owns a store, and idempotency ownership survives restart.
+- Modern `2026-07-28` clients can negotiate the draft Tasks extension, receive
+  durable task handles, update/cancel tasks, and use exact-ID subscriptions.
+- TraeCN 1.107 on macOS has a versioned adapter and sanitized workflow replay;
+  unknown versions report degraded capability instead of verified support.
+- The official MCP TypeScript client 2.x now exercises 2024, 2025, and 2026
+  sessions independently; a raw transcript peer covers Content-Length and
+  JSON-RPC error recovery.
+- Completion event delivery moved from `Gateway` into injected
+  `CompletionSignal` ownership.
 
-## Remaining engineering gaps
+## Historical gap analysis and current status
 
-Work only on gaps relevant to the requested task.
+The design rationale below is retained for maintenance context. Respect each
+status line and do not reimplement a closed gap without regression evidence.
 
-### 1. Clean-room distribution is not closed
+### 1. Clean-room distribution — closed in 0.5.2
+
+Current implementation follows the desired resolution and clean-room flow
+below. External publication still must use artifacts produced from the final
+tagged commit.
 
 At the baseline, the public Skill is a companion package. Its launcher resolves
 an explicit `TRAECN_MCP_SERVER_PATH` or an in-repository `mcp-server.js`; it does
@@ -85,7 +104,9 @@ Publish only a channel that has a reproducible artifact and a clean-room test:
 GitHub release archive, npm package, or MCPB bundle. Do not rely on the source
 version alone as proof that a package exists.
 
-### 2. Task acceptance is not yet a durability transaction
+### 2. Durable task acceptance — closed in 0.5.2
+
+The target invariant and fault cases below are implemented. Preserve them.
 
 TaskStore returns `false` when persistence fails, but task creation and unified
 submission can still proceed without checking that result. A caller may receive
@@ -118,7 +139,11 @@ Implementation goals:
 - Preserve idempotency: a retry after an uncertain response must not submit the
   same task twice.
 
-### 3. Modern MCP completion signaling is incomplete
+### 3. Modern MCP completion signaling — closed in 0.5.2
+
+The modern adapter uses the independently negotiated
+`io.modelcontextprotocol/tasks` draft extension and exact-ID
+`subscriptions/listen`; hosts without it retain intentional task reads.
 
 Legacy clients can receive task-event logging notifications. Modern stateless
 requests do not use the same free-floating notification path, so the caller can
@@ -145,7 +170,10 @@ Acceptance criteria:
 - Event replay never emits another task's result.
 - No new ordinary Agent-facing lifecycle tools are introduced.
 
-### 4. TraeCN compatibility needs an adapter layer
+### 4. TraeCN adapter layer — first verified adapter complete in 0.5.2
+
+The structure below exists for TraeCN 1.107 on macOS. A second version/platform
+remains unverified and must not be inferred from generic fallbacks.
 
 Current DOM automation mixes reusable CDP mechanics, TraeCN-version assumptions,
 selector fallbacks, visible-text parsing, and completion heuristics.
@@ -199,7 +227,10 @@ For every supported version:
 Unknown versions should report a capability gap or degraded adapter state rather
 than silently claiming verified compatibility.
 
-### 5. Protocol conformance needs independent clients
+### 5. Independent protocol conformance — closed in 0.5.2
+
+Run `npm run test:mcp-conformance`; it implements the matrix below with the
+official client 2.x and a separate raw transcript peer.
 
 Test the server against protocol behavior, not only its own decoder and handler.
 Build a matrix covering:
@@ -221,7 +252,11 @@ Use official SDK clients where practical. Assert:
 - text content and structured content describe the same result;
 - reconnect and event behavior remain deterministic.
 
-### 6. Gateway still owns too much application logic
+### 6. Gateway ownership reduction — in progress
+
+`CompletionSignal` is extracted and tested. `TaskOrchestrator` and additional
+task creation/completion classification remain future extractions; move one
+behavior at a time without restoring notification logic to `Gateway`.
 
 Continue the extraction without changing public behavior.
 
@@ -263,50 +298,23 @@ Extraction rules:
 - Prefer dependency injection for drivers, stores, clocks, and process hooks so
   fault tests remain deterministic.
 
-## Roadmap
+## Roadmap after 0.5.2
 
-### Next compatible patch — distribution closure and durability semantics
+Recommended next scope:
 
-Recommended scope:
+- Publish and verify GitHub/ClawHub artifacts from one final tagged commit.
+- Record a fresh live UAT for the current TraeCN build when a debug-enabled
+  desktop instance is available; keep historical 1.107.1 evidence labelled.
+- Add a second versioned Trae adapter only after sanitized fixtures and a live
+  run exist for that exact version/platform.
+- Extract `TaskOrchestrator` one behavior at a time while preserving route,
+  persistence, history, and completion-event semantics.
+- Track the independently versioned Tasks extension and official SDK releases;
+  update wire behavior only when the published extension or core revision
+  changes, not from draft assumptions.
 
-- Publish or package the complete server through one verified channel.
-- Extend launcher resolution beyond repository-relative paths.
-- Add the clean-room public Skill installation test.
-- Make task acceptance conditional on successful persistence.
-- Add TaskStore health and single-writer protection.
-- Remove duplicate queue snapshot writes.
-- Generate an artifact manifest with exact source revision and SHA-256 values.
-- Verify archives and mirrors against the final tagged commit.
-- Refresh stale third-party directory entries after publication.
-
-Exit criteria:
-
-- A fresh machine or isolated HOME can install, discover 20 tools, and complete
-  a mock task without manually locating repository internals.
-- A simulated persistence failure cannot return `accepted`.
-- A second gateway cannot corrupt or independently own the same active store.
-- All published artifacts identify and match one final commit.
-
-### 0.6.0 — modern completion and verified compatibility
-
-Recommended scope:
-
-- Implement a modern completion adapter or task/subscription integration.
-- Add official-SDK conformance tests for all supported protocol eras.
-- Add TraeAdapter discovery and version capability reporting.
-- Add sanitized DOM fixture replay.
-- Record live evidence for each claimed TraeCN version.
-- Move task orchestration and completion signaling out of `gateway.js`.
-- Replace source-text acceptance checks with executable behavior where possible.
-
-Exit criteria:
-
-- Modern clients can release context and later receive or discover terminal
-  state through a supported host mechanism.
-- Compatibility claims are versioned and reproducible.
-- Gateway responsibilities are substantially narrower.
-- Contract v5 remains unchanged unless a separately planned migration is
-  approved.
+Contract v5 remains unchanged unless a separately planned migration is
+approved.
 
 ## Change playbooks
 

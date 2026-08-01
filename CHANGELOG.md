@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-01
+
+### Added
+
+- Added an npm-compatible complete server archive to `npm run pack:skill`, with
+  its exact version, size, and SHA-256 recorded in the release manifest.
+- Added a clean-room release test that installs the portable Skill and server
+  package under a temporary HOME, discovers the exact 20-tool MCP contract,
+  submits one mock task, and reads its completed result.
+- Added TaskStore health to `/api/status`, an exclusive active-store writer
+  lock with stale-owner recovery, and deterministic ENOSPC, EACCES, EROFS,
+  interrupted-write, and competing-process coverage.
+- Added the separately negotiated `io.modelcontextprotocol/tasks` adapter for
+  modern `2026-07-28` clients. Opted-in sends return durable Task handles;
+  `tasks/get`, `tasks/update`, `tasks/cancel`, and exact-ID
+  `subscriptions/listen` delivery reuse the gateway task and event stores
+  without changing the frozen 20-tool contract.
+- Added a versioned Trae adapter registry, read-only product/version and mode
+  detection, a verified macOS TraeCN 1.107 profile, degraded unknown-version
+  fallback, status handshake, and sanitized workflow fixture replay.
+- Added an independent MCP conformance matrix using the official TypeScript
+  client 2.x for 2024, 2025, and pinned 2026 sessions, plus a raw transcript
+  client for legacy Content-Length framing and protocol error recovery.
+
+### Changed
+
+- Extracted durable event recording, WebSocket broadcast, OpenClaw messages,
+  and task webhooks from `Gateway` into one injected `CompletionSignal`.
+
+### Fixed
+
+- Extended the portable Skill launcher to resolve an installed `traecnclaw`
+  package or a `traecnclaw-mcp` executable on `PATH` after checking explicit
+  and repository-local server paths.
+- Kept unified mock submissions inside `MockDriver` for model and conversation
+  discovery instead of accidentally entering DOM handlers without a CDP client.
+- Made task acceptance atomic with the first durable queue snapshot. An
+  unwritable or already-owned TaskStore now rolls the candidate back and returns
+  `TASK_STORE_UNAVAILABLE` as HTTP 503 instead of returning a false 202.
+- Persisted `Idempotency-Key` ownership with active tasks so an uncertain retry
+  after a gateway restart resolves to the original task instead of submitting
+  duplicate work.
+- Made tool output schemas valid object schemas for official clients,
+  implemented the advertised legacy `ping` and `logging/setLevel` methods,
+  rejected malformed JSON-RPC request envelopes, and terminated modern
+  subscriptions with the standard graceful-close result.
+
 ## [0.5.1] - 2026-07-31
 
 ### Added
@@ -14,14 +61,6 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - Added `detailLevel` to `traecn_get_task`: `result` (the default) returns the
   final Trae answer, while `trace` returns the visible execution process for
   diagnosis and audit tracing when it is still available.
-
-### Changed
-
-- Clarified modern request errors for MCP `2026-07-28`: malformed required
-  per-request metadata uses JSON-RPC `-32602` Invalid Params, while `-32021`
-  `MissingRequiredClientCapability` is reserved for operations that require an
-  undeclared optional client capability and must identify it in
-  `requiredCapabilities`. `UnsupportedProtocolVersion` remains `-32022`.
 
 ### Fixed
 

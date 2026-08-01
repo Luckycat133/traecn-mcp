@@ -2,13 +2,16 @@
 
 ## Architecture
 
-TRAECNclaw is split into seven maintained layers:
+TRAECNclaw is split into maintained components with explicit ownership:
 
 - `src/shared`: reusable persistence, logging, security, metrics, and test utilities.
 - `src/config`: `.env` loading and quickstart configuration.
-- `src/cdp`: CDP discovery, WebSocket client, DOM driver, settings driver, and mock driver.
+- `src/cdp`: CDP discovery, WebSocket client, generic DOM driver, settings driver, and mock driver.
+- `src/trae-adapters`: Trae product/version detection, adapter selection, versioned selectors, capability declarations, and sanitized fixture replay.
 - `src/client`: the shared HTTP client and stable command catalog.
-- `src/http`: REST gateway, OpenAPI generation, and built-in chat UI.
+- `src/http`: REST routing and lifecycle, OpenAPI generation, built-in chat UI,
+  queue orchestration, and an isolated `CompletionSignal` for durable events,
+  WebSocket delivery, OpenClaw messages, and webhooks.
 - `src/mcp`: MCP tool schemas, authorization metadata, handlers, and stdio transport.
 - `src/skill`: programmatic JavaScript and TypeScript-facing automation APIs.
 - `integrations/openclaw-traecn-plugin`: OpenClaw tool and slash command registration.
@@ -44,7 +47,16 @@ Verify live TraeCN selectors when TraeCN is running with a remote debugging port
 npm run inspect:verify
 ```
 
-The verify mode loads `.env`, refuses CDP endpoints that do not look like TraeCN, checks composer/send/response/new-chat/mode selectors, and exits non-zero when the current TraeCN UI no longer matches the configured selector set.
+The verify mode loads `.env`, refuses CDP endpoints that do not look like
+TraeCN, probes the product version without changing UI state, requires a
+verified version adapter, checks composer/send/response/new-chat/mode
+selectors, and exits non-zero when the current TraeCN UI no longer matches the
+configured selector set. Deterministic adapter coverage is available without
+a desktop instance:
+
+```sh
+npm run test:trae-adapters
+```
 
 If Trae CN is already open without remote debugging, prefer restarting it with
 the existing logged-in profile and the debug port enabled:
@@ -84,6 +96,10 @@ With the current defaults the gateway will also:
 
 - Unit tests cover small utilities, environment parsing, error classes, CDP client behavior, and mock driver behavior.
 - Integration tests cover CDP discovery scoring, DOM driver configuration, gateway utility behavior, and plugin client requests.
+- `npm run test:mcp-conformance` spawns the published official MCP TypeScript
+  client for the 2024, 2025, and 2026 protocol eras, plus an independent raw
+  transcript client for Content-Length framing, JSON-RPC errors, and era
+  pinning. It does not reuse the server decoder.
 - System tests start a real local gateway in mock mode and verify authentication, session creation, delegation, response headers, and route compatibility.
 - Contract audit checks verify release documentation, OpenAPI declarations,
   source-level requirements, and already-recorded evidence. They do not execute
@@ -92,17 +108,18 @@ With the current defaults the gateway will also:
   `acceptance:audit` name remains an alias. Add `-- --require-complete` to fail
   on missing evidence, but use unit/integration/system or Live tests to prove
   behavior.
-- Live UAT checks a real Trae CN CDP endpoint with safe read-only gateway calls when available. It reports `SKIP` by default if CDP is not reachable; use `node scripts/live-uat.js --strict` when a real desktop instance is required. Add `--require-ready` to fail unless the logged-in Trae CN UI is automation-ready. Add `--cleanup-queue-probes` to stop/delete accidental `wait for Trae queue` Solo chats and verify `matched: 0`; strict runs fail if those chats remain. Add `--delegate` only when sending a real prompt is acceptable. Use `traecnclaw cleanup-queue --status --json` to inspect the singleton cleanup watcher without contacting TraeCN.
+- Live UAT checks a real Trae CN CDP endpoint with safe read-only gateway calls when available. It reports `SKIP` by default if CDP is not reachable; use `node scripts/live-uat.js --strict` when a real desktop instance is required. Add `--require-ready` to fail unless the logged-in Trae CN UI is automation-ready, and `--require-verified-adapter` to reject an unknown product version/platform. Add `--cleanup-queue-probes` to stop/delete accidental `wait for Trae queue` Solo chats and verify `matched: 0`; strict runs fail if those chats remain. Add `--delegate` only when sending a real prompt is acceptable. Use `traecnclaw cleanup-queue --status --json` to inspect the singleton cleanup watcher without contacting TraeCN.
 - `npm run proof:long-queue` prepares the remaining GLM-5.2 queue-drain proof without sending a prompt. It writes the marker, evidence log path, final JSON path, and readiness summary. Add `-- --execute --detach --allow-quota-spend` only for an explicitly approved quota-consuming proof run; the runner switches to GLM-5.2, submits an owned marker task, waits unattended, keeps queue-probe cleanup in the wait loop, and automatically stop/deletes accidental queue-probe Solo chats before submission. Execute mode requires consecutive clean dry-runs before submitting; tune it with `-- --cleanup-stabilize-checks <n> --cleanup-stabilize-delay-ms <ms> --cleanup-max-attempts <n>`. Re-running with the same marker resumes the existing task from the evidence log instead of submitting again; add `-- --force-new` only for an intentional new submission. Use `npm run proof:status`, CLI `traecnclaw proof status`, MCP `traecn_get_long_queue_proof_status`, or OpenClaw `traecn_long_queue_proof_status` for detached proof inspection; use `npm run proof:cancel -- --marker <id>`, CLI `traecnclaw proof cancel`, MCP `traecn_cancel_long_queue_proof`, or OpenClaw `traecn_long_queue_proof_cancel` for cancellation.
 
 Executable non-quota release gate:
 
 ```sh
 npm run verify
+npm run test:mcp-conformance
 npm run contract:audit -- --no-live
 npm run proof:long-queue
 npm run test:live
-node scripts/live-uat.js --strict --require-ready --cleanup-queue-probes
+node scripts/live-uat.js --strict --require-ready --require-verified-adapter --cleanup-queue-probes
 npm run audit:prod
 ```
 

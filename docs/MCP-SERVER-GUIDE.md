@@ -6,11 +6,11 @@ maintenance operations remain gateway or operator facilities.
 
 ## Protocol compatibility
 
-Version 0.5.1 is a dual-era stdio server:
+Version 0.5.2 is a dual-era stdio server:
 
 | MCP revision | Lifecycle | TRAECNclaw behavior |
 | --- | --- | --- |
-| `2026-07-28` | Stateless requests with `_meta` | `server/discover`, strict per-request version checks, `resultType`, cache hints, and server identity metadata |
+| `2026-07-28` | Stateless requests with `_meta` | `server/discover`, strict per-request version checks, `resultType`, cache hints, server identity metadata, and an optional Tasks extension |
 | `2025-11-25` | `initialize` handshake | Focused tools plus legacy logging notifications |
 | `2024-11-05` | `initialize` handshake | Compatibility mode for existing clients |
 
@@ -88,14 +88,13 @@ and are recorded in the local append-only security audit log.
 The Agent does not preflight, choose sync versus background execution, wait,
 poll, acknowledge events, recover tasks, clean queues, or operate keep/revert
 controls. The gateway persists accepted tasks, maintains queues, resumes work,
-auto-approves a strict read-only command allowlist, and resolves file-review
-gates.
+returns every command card for explicit review, and resolves file-review gates.
 
 Legacy initialization-based clients receive compact MCP logging notifications.
 The `2026-07-28` protocol does not allow those free-floating notifications;
-modern clients make an intentional `traecn_get_task` read when they need status
-or the final result. Do not use a tight polling loop. The experimental MCP Tasks
-extension is intentionally not advertised as a stable 0.5.1 capability.
+modern clients use the separately negotiated Tasks extension described below,
+or make an intentional `traecn_get_task` read when their host does not support
+extensions. Do not use a tight Agent polling loop.
 
 `traecn_get_task` exists for explicit progress/result reads and modern clients
 that cannot receive legacy logging notifications. It is not a required
@@ -103,28 +102,46 @@ immediate post-send step. The optional `detailLevel` is `result` by default,
 which returns only the final answer. Set it to `trace` when detailed visible
 execution steps are needed to investigate an unexpected result.
 
-## Modern-era error codes
+## Modern Tasks extension
 
-The `2026-07-28` revision partitions the JSON-RPC server-error range: `-32000`
-to `-32019` remains implementation-defined, and `-32020` to `-32099` is reserved
-for specification-defined errors (SEP-2575). TRAECNclaw applies these errors as
-follows:
+`server/discover` advertises `io.modelcontextprotocol/tasks`. The upstream
+extension is independently versioned and still published as a draft; the core
+`2026-07-28` revision and TRAECNclaw contract version 5 remain separate.
 
-| Code | Spec name | When TRAECNclaw returns it |
-| --- | --- | --- |
-| `-32602` | `Invalid Params` | A modern request omits required per-request metadata, sends a malformed value, or calls an unknown tool. |
-| `-32021` | `MissingRequiredClientCapability` | Processing requires an optional client capability that the request did not declare; `error.data.requiredCapabilities` identifies the missing capability. TRAECNclaw currently has no operation with such a requirement. |
-| `-32022` | `UnsupportedProtocolVersion` | A modern request declares a protocol version the server does not support; `error.data.supported` lists the supported versions and `error.data.requested` echoes the requested one. |
+A client opts in on each request through
+`_meta.io.modelcontextprotocol/clientCapabilities.extensions`. For an opted-in
+`traecn_send_message`, the server returns the same durable gateway identity as
+a `resultType: "task"` handle. The extension adds protocol methods, not tools:
 
-Unspecified server errors keep implementation-defined `-32000`.
+| Method | Behavior |
+| --- | --- |
+| `tasks/get` | Returns the complete current task state and final `CallToolResult` when terminal. |
+| `tasks/update` | Supplies a response to an outstanding `input_required` approval or review request. |
+| `tasks/cancel` | Cooperatively cancels the corresponding gateway task. |
+| `subscriptions/listen` | Subscribes to exact task IDs and streams full `notifications/tasks` snapshots over stdio. |
+
+Respect `pollIntervalMs` when polling. Prefer a task-ID subscription when the
+host implements it: the acknowledgement and every notification carry
+`io.modelcontextprotocol/subscriptionId`, and reconnecting produces a fresh
+snapshot before durable event replay. On deliberate server shutdown, the
+listen request receives the standard empty, correlated result so official SDK
+clients classify the close as graceful. A client that does not opt in always
+receives the ordinary complete tool result shape and can continue using the
+focused `traecn_get_task` tool. Streamable HTTP transport is not exposed.
 
 ## Validation
 
 ```sh
 npm run test:mcp-stdio-smoke
+npm run test:mcp-conformance
 npm run check:skill-contracts
 npm test
 ```
+
+The conformance command uses `@modelcontextprotocol/client` 2.x for independent
+2024, 2025, and pinned `2026-07-28` sessions. A separate transcript peer covers
+the legacy Content-Length compatibility path, malformed JSON recovery,
+JSON-RPC error codes, argument rejection, and connection-era pinning.
 
 Generated schemas live in
 `skills/traecnclaw-mcp/references/mcp-tool-contracts.json`.

@@ -3,10 +3,17 @@
 This matrix separates observed compatibility from assumptions. Update it only
 after the stated test level has been rerun.
 
-| TraeCN version | Platform | Selector evidence | Mock/system tests | Live test | Status |
+| TraeCN version | Platform | Adapter | Repeatable evidence | Live evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1.107.1 | macOS | `docs/REAL-DOM-FINDINGS.md` | Supported | 24/25 in v0.4.0 notes; palette retry added | Verified with documented limitation |
-| Other versions | macOS/Windows | Not captured | Expected to run | Not verified | Experimental |
+| 1.107.x | macOS | `traecn-1.107` | Sanitized list/select/submit/queue/approval/response/review fixture replay | 1.107.1 DOM capture and 24/25 v0.4.0 UAT; palette retry added afterward | Verified adapter, with the historical live-test limitation documented |
+| Any other version/platform | Any | `traecn-unknown` | Generic mock/system coverage only | None | Degraded; no version-specific capabilities are claimed |
+
+The gateway detects the product version and structural mode through a read-only
+CDP probe, then returns the selected adapter handshake in
+`GET /api/status.traeAdapter`. Only an exact registry match can report
+`verified: true`. An unknown version deliberately keeps all version-specific
+capability flags false while generic DOM fallbacks remain available on a
+best-effort basis.
 
 ## Validation levels
 
@@ -18,5 +25,7 @@ after the stated test level has been rerun.
   `--allow-quota-spend` gate and must never run in default CI.
 
 When TraeCN changes, capture selector findings with `npm run inspect:traecn`,
-run `npm run inspect:verify`, update this matrix, and record the affected
-version in the changelog.
+add a sanitized fixture under `src/trae-adapters/<adapter>/fixtures`, run
+`npm run test:trae-adapters` and `npm run inspect:verify`, update this matrix,
+and record the affected version in the changelog. Historical live evidence
+must not be relabelled as a current live run.

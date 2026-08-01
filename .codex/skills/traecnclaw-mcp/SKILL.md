@@ -1,6 +1,6 @@
 ---
 name: traecnclaw-mcp
-description: Use when an MCP-capable agent must operate TRAECNclaw or TraeCN. Send or stop work, select a workspace/model/mode/conversation, inspect or change Trae settings through its UI, manage conversations, or resolve an exceptional question or approval through focused MCP tools. The gateway owns preflight, queues, waiting, polling, recovery, notifications, safe approvals, and keep/revert decisions.
+description: Use when an MCP-capable agent must operate TRAECNclaw or TraeCN. Send or stop work, select a workspace/model/mode/conversation, inspect or change Trae settings through its UI, manage conversations, or resolve an exceptional question or command approval through focused MCP tools. The gateway owns preflight, queues, waiting, polling, recovery, notifications, routine non-command questions, and keep/revert decisions.
 ---
 
 # TRAECNclaw MCP
@@ -11,13 +11,13 @@ Use the real stdio MCP server. Do not replace it with browser or GUI control.
 
 1. Change context only when needed with `traecn_open_workspace`, `traecn_list_models` plus `traecn_select_model`, `traecn_select_mode`, and the focused conversation tools.
 2. Call `traecn_send_message` with the exact message and optional stable `conversationId`.
-3. Return after receiving `taskId`. Do not wait, poll, acknowledge events, recover tasks, or probe queues; the gateway persists work and pushes completion notifications.
+3. Return after receiving `taskId`. Do not wait, poll, acknowledge events, recover tasks, or probe queues; the gateway persists work and pushes completion notifications. Modern hosts that negotiate `io.modelcontextprotocol/tasks` receive the same durable ID as a Task and can subscribe to it without adding an Agent tool.
 4. Call `traecn_get_task` only for an explicit query. Its default `detailLevel: "result"` returns the final answer; use `detailLevel: "trace"` only when the visible execution process is needed for diagnosis or traceability. Cancel a known task with `traecn_cancel_task`. For untracked visible work, list conversations and call `traecn_stop_generation` with the active conversation ID, explicit untracked-work acknowledgement, and an audit reason; the gateway rejects a mismatched conversation.
 5. For settings, list sections, list one section's items, optionally list a dropdown's choices, then call the matching toggle, option, or text tool. The gateway operates the Trae UI and restores chat.
 6. Use `traecn_answer_question` or `traecn_decide_approval` only for an exceptional interaction returned by the gateway. Approve only with the exact visible command, a risk acknowledgement, and an audit reason; the gateway rejects stale command cards.
 
-The gateway maintains queues, recovers persisted work, auto-approves only a
-strict read-only shell allowlist, and resolves file-review gates with keep by
+The gateway maintains queues, recovers persisted work, returns every shell
+command for explicit Agent review, and resolves file-review gates with keep by
 default or revert for clear fatal automation failures. High-impact approvals,
 stops, and permanent inactive-conversation deletions are scoped and written to
 the local append-only security audit log. Delete only when the current user

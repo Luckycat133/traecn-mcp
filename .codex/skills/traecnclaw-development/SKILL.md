@@ -4,7 +4,7 @@ description: Develop, debug, refactor, test, package, and release the TRAECNclaw
 license: MIT
 metadata:
   author: TRAECNclaw
-  version: "1.0.1"
+  version: "1.1.0"
 ---
 
 # TRAECNclaw Development
@@ -36,11 +36,16 @@ copy it into `skills/traecnclaw-mcp` or the public ClawHub mirror.
 - `src/mcp/contract.js`: MCP contract version and the exact ordered 20-tool
   surface. Treat it as frozen unless the requested work explicitly authorizes a
   contract migration.
-- `src/mcp/protocol.js` and `src/mcp/stdio-server.js`: protocol negotiation,
-  result envelopes, and stdio framing.
+- `src/mcp/protocol.js`, `src/mcp/stdio-server.js`, and
+  `src/mcp/task-extension.js`: protocol negotiation, result envelopes, stdio
+  framing, modern Tasks, and correlated subscriptions.
 - `src/config/runtime-schema.js`: canonical runtime names, aliases, defaults,
   and generated configuration documentation.
 - `src/http/task-store.js`: durable active-task snapshot format and recovery.
+- `src/http/completion-signal.js`: durable completion events and outbound
+  WebSocket, OpenClaw, and webhook delivery.
+- `src/trae-adapters`: exact-version detection, selector/capability profiles,
+  and sanitized deterministic fixture replay.
 - `docs/COMPATIBILITY.md`: verified TraeCN/platform support. Do not generalize
   beyond recorded live evidence.
 - `skills/traecnclaw-mcp`: canonical public runtime Skill.
@@ -143,9 +148,10 @@ package channel until that exact version is visible and installable.
 
 - Do not reopen settled 0.5.x work—including the atomic TaskStore, generated
   runtime defaults, removed MCP profiles, Monaco severity mapping, Git branch
-  parsing, task result/trace separation, modern error semantics, settings
-  navigation/extraction, or public mirror sync—unless a concrete regression
-  demonstrates a defect.
+  parsing, task result/trace separation, modern error semantics, Tasks
+  extension, official-client conformance matrix, versioned Trae adapter,
+  `CompletionSignal`, settings navigation/extraction, or public mirror
+  sync—unless a concrete regression demonstrates a defect.
 - Do not spend an unrelated development task revising security posture,
   marketplace wording, protocol-status wording, or general policy language.
   Fix concrete implementation defects that are in scope and move on.

@@ -20,7 +20,7 @@ selection. There is one ordered 20-tool Agent surface:
 - prepare context only when needed with `traecn_open_workspace`,
   `traecn_select_model`, `traecn_select_mode`, and conversation tools;
 - submit once with `traecn_send_message`;
-- let the gateway own queueing, waiting, recovery, routine approvals, and
+- let the gateway own queueing, waiting, recovery, routine non-command questions, and
   durable notifications;
 - use `traecn_get_task` only for an intentional read, not a polling loop.
 
@@ -42,9 +42,12 @@ instead of being echoed back unchecked.
 
 Replace custom `Content-Length` stdio framing with one compact JSON-RPC object
 per line. The server still accepts the old framing during migration. Legacy
-clients retain logging notifications; modern clients intentionally read a
-known task with `traecn_get_task` when they need its state because
-`2026-07-28` removed free-floating logging notifications.
+clients retain logging notifications. Modern clients should declare the
+separately negotiated `io.modelcontextprotocol/tasks` extension on each
+eligible request, handle `resultType: "task"`, and either respect
+`pollIntervalMs` on `tasks/get` or subscribe to exact task IDs with
+`subscriptions/listen`. Hosts without extension support intentionally read a
+known task with `traecn_get_task`; no ordinary wait or event tool was added.
 
 ## Canonical environment names and defaults
 
@@ -72,6 +75,15 @@ checksummed schema version 2. The new store writes an atomic primary snapshot
 and keeps `.bak` as last-known-good. Invalid primary files are renamed with a
 `.corrupt-<timestamp>-<pid>` suffix before backup recovery. Preserve these
 files when investigating storage or shutdown failures.
+
+Only one gateway process may own an active-queue file. A second writer reports
+degraded durability instead of replacing the first process's snapshot; a lock
+left by a dead process is reclaimed on the next write. Task submission now
+returns `202` only after its first snapshot is durable, and returns
+`503 TASK_STORE_UNAVAILABLE` without accepting the candidate when persistence
+fails. Retry uncertain submissions with a stable `Idempotency-Key`; active-task
+ownership is restored with the queue after restart. Inspect the `durability`
+object returned by `GET /api/status` before unattended delegation.
 
 ## Network security
 

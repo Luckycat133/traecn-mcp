@@ -56,10 +56,12 @@ Send example after any required context-selection calls:
 
 The gateway returns `taskId`, maintains any queue, and pushes completion through
 MCP logging notifications for legacy initialization-based clients. Modern MCP
-`2026-07-28` clients use `traecn_get_task` for an intentional later read because
-the current protocol removed free-floating logging notifications. The caller
-does not need gateway wait, recovery, preflight, proof, cleanup, or review-gate
-tools, and should not busy-poll.
+`2026-07-28` hosts can negotiate `io.modelcontextprotocol/tasks`: an opted-in
+send returns a durable Task, and `subscriptions/listen` can deliver the final
+`notifications/tasks` result without polling. Hosts without extension support
+use `traecn_get_task` for an intentional later read. The caller does not need
+gateway wait, recovery, preflight, proof, cleanup, or review-gate tools, and
+should not busy-poll.
 
 ## OpenClaw plugin
 
@@ -72,10 +74,12 @@ the gateway bound to loopback unless remote access is secured.
 
 ## Approval behavior
 
-The gateway handles only a documented strict read-only command allowlist without an Agent call. It keeps
-generated file changes by default and reverts only when the collected state
-contains a clear fatal automation failure. Questions and unsafe approvals are
-returned for `traecn_answer_question` or `traecn_decide_approval`.
+The gateway never auto-approves shell commands, including commands classified
+as read-only. Every command is returned for `traecn_decide_approval`, which
+revalidates the exact visible command and requires a risk acknowledgement and
+audit reason. The gateway can still answer documented non-command review-scope
+questions and keeps generated file changes by default, reverting only when the
+collected state contains a clear fatal automation failure.
 
 High-impact tools remain focused but policy-backed: direct stop is bound to the
 active Solo conversation and requires an untracked-work acknowledgement;
@@ -93,7 +97,7 @@ append-only audit log instead of adding a separate confirmation tool.
 | CDP unavailable | TraeCN remote-debugging process and configured port |
 | Workspace cannot switch | Requested absolute path and TraeCN binary discovery |
 | Legacy completion notification missing | MCP logging support and `TRAECN_MCP_CLIENT_ID` uniqueness |
-| Modern client shows no pushed completion | Expected on `2026-07-28`; read the known task once with `traecn_get_task` when needed |
+| Modern client shows no pushed completion | Confirm the host declares `io.modelcontextprotocol/tasks` and opens `subscriptions/listen`; otherwise read the known task intentionally with `traecn_get_task` |
 
 Run `npm run test:mcp-stdio-smoke` for protocol discovery and
 `npm run check:skill-contracts` for schema/example consistency.
