@@ -4,13 +4,13 @@ description: Develop, debug, refactor, test, package, and release the TRAECNclaw
 license: MIT
 metadata:
   author: TRAECNclaw
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # TRAECNclaw Development
 
 Make the smallest coherent change that improves real behavior. Treat the
-current repository as the source of truth, preserve settled 0.5.0 decisions,
+current repository as the source of truth, preserve settled 0.5.x decisions,
 and avoid expanding an implementation task into a general policy, wording, or
 marketplace review.
 
@@ -141,9 +141,11 @@ package channel until that exact version is visible and installable.
 
 ## Avoid unproductive work
 
-- Do not reopen the atomic TaskStore, generated runtime defaults, removed MCP
-  profiles, Monaco severity mapping, Git branch parsing, or public mirror sync
-  unless a concrete regression demonstrates a defect.
+- Do not reopen settled 0.5.x work—including the atomic TaskStore, generated
+  runtime defaults, removed MCP profiles, Monaco severity mapping, Git branch
+  parsing, task result/trace separation, modern error semantics, settings
+  navigation/extraction, or public mirror sync—unless a concrete regression
+  demonstrates a defect.
 - Do not spend an unrelated development task revising security posture,
   marketplace wording, protocol-status wording, or general policy language.
   Fix concrete implementation defects that are in scope and move on.
