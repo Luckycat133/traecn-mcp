@@ -6,7 +6,7 @@ source always win over this document.
 
 ## Baseline at Skill creation
 
-- Release line: `0.5.0`.
+- Release line: `0.5.1`.
 - Runtime: Node.js 22, CommonJS, plain Node `assert` tests.
 - MCP tool contract: version 5, exactly 20 ordered single-intent tools in
   `src/mcp/contract.js`.
@@ -25,7 +25,7 @@ source always win over this document.
   Windows remain unverified unless `docs/COMPATIBILITY.md` has changed.
 - Default repository gate: `npm run verify`.
 
-## Settled 0.5.0 work
+## Settled 0.5.x work
 
 Do not repeat these changes without regression evidence:
 
@@ -40,6 +40,12 @@ Do not repeat these changes without regression evidence:
 - Verify CI, release scan, Skill contract checks, and public mirror provenance
   were restored.
 - The public Skill mirror was synchronized to the final 0.5.0 source revision.
+- `traecn_get_task` gained explicit `result` and `trace` detail levels without
+  expanding the 20-tool contract.
+- Modern protocol error semantics were separated for invalid metadata, missing
+  optional capabilities, and unsupported versions.
+- Settings navigation and extraction were hardened across Solo, IDE, narrow,
+  collapsed-sidebar, lazy-page, card, and table layouts.
 
 ## Remaining engineering gaps
 
@@ -259,7 +265,7 @@ Extraction rules:
 
 ## Roadmap
 
-### 0.5.1 — Distribution closure and durability semantics
+### Next compatible patch — distribution closure and durability semantics
 
 Recommended scope:
 
@@ -281,7 +287,7 @@ Exit criteria:
 - A second gateway cannot corrupt or independently own the same active store.
 - All published artifacts identify and match one final commit.
 
-### 0.6.0 — Modern completion and verified compatibility
+### 0.6.0 — modern completion and verified compatibility
 
 Recommended scope:
 
