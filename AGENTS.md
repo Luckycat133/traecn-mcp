@@ -16,9 +16,11 @@ For substantive repository development, debugging, refactoring, compatibility, p
 - `npm run mcp`: start the stdio MCP server from `mcp-server.js`.
 - `npm run doctor`: check Node, npm, `.env`, gateway, CDP, and TraeCN.
 - `npm run lint`: run `node --check` against key files.
-- `npm run lint:eslint`: run ESLint v9.
+- `npm run lint:eslint`: run ESLint.
 - `npm test`: run the maintained in-repo test sequence.
-- `npm run acceptance:audit -- --require-complete`: fail unless unattended workflow evidence is complete.
+- `npm run verify:static`: check versions, generated configuration, Skill contracts, and release scanning.
+- `npm run contract:audit -- --no-live`: inspect contract and evidence inventory without claiming behavioral execution.
+- `npm run verify`: run the default repository-wide CI and release gate.
 
 ## Coding Style & Naming Conventions
 
@@ -26,7 +28,7 @@ Use CommonJS (`require`, `module.exports`) and keep `'use strict';` in JavaScrip
 
 ## Testing Guidelines
 
-Tests are plain Node scripts using `assert` and `src/shared/test-runner.js`, not an external framework. Place focused tests next to the module they cover, for example `src/http/route-table.test.js`. Add route or OpenAPI coverage for gateway changes, plugin client tests for OpenClaw-facing changes, and mock-mode tests when live TraeCN is not required. Use `npm run test:all` before release-style changes.
+Tests are plain Node scripts using `assert` and `src/shared/test-runner.js`, not an external framework. Place focused tests next to the module they cover, for example `src/http/route-table.test.js`. Add route or OpenAPI coverage for gateway changes, plugin client tests for OpenClaw-facing changes, and mock-mode tests when live TraeCN is not required. Run the nearest focused test first, use `npm run verify` for repository-wide or release-facing work, and keep contract audit, mock/system tests, live UAT, clean-room installation, and fault injection as distinct evidence layers.
 
 ## Commit & Pull Request Guidelines
 
