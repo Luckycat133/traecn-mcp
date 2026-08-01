@@ -6,7 +6,7 @@ TRAECNclaw is a Node.js 22 CommonJS project for a TraeCN automation gateway, MCP
 
 ## Repository Development Skill
 
-For substantive repository development, debugging, refactoring, compatibility, packaging, CI, or release work, use `.codex/skills/traecnclaw-development/SKILL.md`. It records the current architecture, development priorities, focused playbooks, evidence standards, and settled 0.5.0 work. Use `skills/traecnclaw-mcp` only for operating TraeCN through the public runtime MCP surface.
+For substantive repository development, debugging, refactoring, compatibility, packaging, CI, or release work, use `.codex/skills/traecnclaw-development/SKILL.md`. It records the current architecture, development priorities, focused playbooks, evidence standards, and settled 0.5.x work. Use `skills/traecnclaw-mcp` only for operating TraeCN through the public runtime MCP surface.
 
 ## Build, Test, and Development Commands
 
