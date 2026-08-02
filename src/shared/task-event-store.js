@@ -107,11 +107,14 @@ class TaskEventStore {
     const events = this.events
       .filter(event => eventSequence(event.eventId) > afterSequence)
       .slice(0, limit);
+    const lastReturnedSequence = events.length > 0
+      ? eventSequence(events[events.length - 1].eventId)
+      : afterSequence;
     return {
       clientId,
       events,
       cursor: events.length > 0 ? events[events.length - 1].eventId : (this.acknowledged[clientId] || options.after || null),
-      hasMore: this.events.some(event => eventSequence(event.eventId) > eventSequence(events.at(-1)?.eventId || afterSequence))
+      hasMore: this.events.some(event => eventSequence(event.eventId) > lastReturnedSequence)
     };
   }
 
