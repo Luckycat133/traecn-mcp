@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { TaskQueueService } = require('./task-queue-service');
+const { TASK_STORE_LOCK_METADATA_GRACE_MS } = require('./task-store');
 const { createRunner } = require('../shared/test-runner');
 
 const runner = createRunner('task-store.test.js');
@@ -206,6 +207,59 @@ asyncTest('TaskQueueService prevents a second process from owning the same activ
     assert.strictEqual(readJson(persistencePath).tasks[0].taskId, 'task-owner');
   } finally {
     if (typeof service.close === 'function') service.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+asyncTest('TaskQueueService does not steal a fresh malformed lock', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-task-store-fresh-malformed-lock-'));
+  const persistencePath = path.join(dir, 'active-queue.json');
+  const lockPath = `${persistencePath}.lock`;
+  fs.writeFileSync(lockPath, '{', 'utf8');
+  const service = createService(persistencePath, {
+    logger: { error() {}, warn() {} }
+  });
+  try {
+    const queue = new Map([['task-fresh-lock', {
+      taskId: 'task-fresh-lock',
+      status: 'queued',
+      task: 'must wait for fresh lock metadata',
+      createdAt: Date.now()
+    }]]);
+
+    assert.strictEqual(service.persist(queue), false);
+    assert.strictEqual(service.getPersistenceHealth().lastPersistError.code, 'TASK_STORE_LOCKED');
+    assert.strictEqual(fs.existsSync(persistencePath), false);
+    assert.strictEqual(fs.readFileSync(lockPath, 'utf8'), '{');
+  } finally {
+    service.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+asyncTest('TaskQueueService reclaims a stale malformed lock left before metadata commit', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-task-store-stale-malformed-lock-'));
+  const persistencePath = path.join(dir, 'active-queue.json');
+  const lockPath = `${persistencePath}.lock`;
+  fs.writeFileSync(lockPath, '{', 'utf8');
+  const staleAt = new Date(Date.now() - TASK_STORE_LOCK_METADATA_GRACE_MS - 1000);
+  fs.utimesSync(lockPath, staleAt, staleAt);
+  const service = createService(persistencePath);
+  try {
+    const queue = new Map([['task-after-incomplete-lock', {
+      taskId: 'task-after-incomplete-lock',
+      status: 'queued',
+      task: 'recover ownership after lock metadata was interrupted',
+      createdAt: Date.now()
+    }]]);
+
+    assert.strictEqual(service.persist(queue), true);
+    assert.strictEqual(readJson(persistencePath).tasks[0].taskId, 'task-after-incomplete-lock');
+    const lock = readJson(lockPath);
+    assert.strictEqual(lock.pid, process.pid);
+    assert.match(lock.ownerId, /^[a-f0-9]{32}$/);
+  } finally {
+    service.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
