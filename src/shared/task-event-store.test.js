@@ -28,6 +28,28 @@ test('TaskEventStore keeps acknowledgements independent for each IDE client', ()
   assert.deepStrictEqual(store.list({ clientId: 'ide-b' }).events.map(event => event.taskId), ['task-1', 'task-2']);
 });
 
+test('TaskEventStore computes hasMore from the effective cursor', () => {
+  const store = new TaskEventStore({ persistencePath: null });
+  const first = store.append({ type: 'task.completed', taskId: 'task-1', status: 'done' });
+  const second = store.append({ type: 'task.completed', taskId: 'task-2', status: 'done' });
+
+  const firstPage = store.list({ clientId: 'paged', limit: 1 });
+  assert.deepStrictEqual(firstPage.events.map(event => event.taskId), ['task-1']);
+  assert.strictEqual(firstPage.cursor, first.eventId);
+  assert.strictEqual(firstPage.hasMore, true);
+
+  const exhaustedByCursor = store.list({ clientId: 'paged', after: second.eventId });
+  assert.deepStrictEqual(exhaustedByCursor.events, []);
+  assert.strictEqual(exhaustedByCursor.cursor, second.eventId);
+  assert.strictEqual(exhaustedByCursor.hasMore, false);
+
+  store.ack('acked', second.eventId);
+  const exhaustedByAcknowledgement = store.list({ clientId: 'acked' });
+  assert.deepStrictEqual(exhaustedByAcknowledgement.events, []);
+  assert.strictEqual(exhaustedByAcknowledgement.cursor, second.eventId);
+  assert.strictEqual(exhaustedByAcknowledgement.hasMore, false);
+});
+
 test('TaskEventStore reloads events and client cursors after restart', () => {
   const target = tempStorePath();
   try {
