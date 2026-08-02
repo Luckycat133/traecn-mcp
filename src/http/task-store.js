@@ -8,6 +8,7 @@ const { getEnvWithFallback, isGenericQueueProbeTask } = require('../shared/utils
 
 const TASK_STORE_SCHEMA_VERSION = 2;
 const CHECKSUM_ALGORITHM = 'sha256';
+const TASK_STORE_LOCK_METADATA_GRACE_MS = 5000;
 const OWNED_TASK_STORE_LOCKS = new Map();
 
 function resolveTaskStorePath(configuredPath = '') {
@@ -361,6 +362,10 @@ class TaskStore {
         this._lockPath = lockPath;
         return true;
       }
+      if (allowStaleRetry && !current && this._isMalformedLockStale(lockPath)) {
+        this._removeIfExists(lockPath);
+        return this._acquireLock(false);
+      }
       if (allowStaleRetry && current?.pid && !this._isProcessAlive(current.pid)) {
         this._removeIfExists(lockPath);
         return this._acquireLock(false);
@@ -380,6 +385,16 @@ class TaskStore {
     }
   }
 
+  _isMalformedLockStale(lockPath, now = Date.now()) {
+    try {
+      const stat = fs.statSync(lockPath);
+      return Number.isFinite(stat.mtimeMs)
+        && now - stat.mtimeMs >= TASK_STORE_LOCK_METADATA_GRACE_MS;
+    } catch {
+      return false;
+    }
+  }
+
   _isProcessAlive(pid) {
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
@@ -393,6 +408,7 @@ class TaskStore {
 
 module.exports = {
   CHECKSUM_ALGORITHM,
+  TASK_STORE_LOCK_METADATA_GRACE_MS,
   TASK_STORE_SCHEMA_VERSION,
   TaskStore,
   resolveTaskStorePath
