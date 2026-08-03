@@ -29,7 +29,10 @@ async function handleAckTaskEvent(req, res, ctx) {
     return;
   }
   const result = ctx.taskEventStore.ack(body.clientId, body.eventId);
-  ctx._json(req, res, result, result.acknowledged ? 200 : 404);
+  const status = result.acknowledged
+    ? 200
+    : (result.error === 'TASK_EVENT_STORE_UNAVAILABLE' ? 503 : 404);
+  ctx._json(req, res, result, status);
 }
 
 module.exports = {

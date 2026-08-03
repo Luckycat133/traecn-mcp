@@ -91,8 +91,18 @@ class CompletionSignal {
 
   async emit(taskId, task, eventType, extra = {}) {
     const eventStore = this.getTaskEventStore();
+    let recorded = false;
     if (eventStore && typeof eventStore.append === 'function') {
-      eventStore.append(durableEvent(taskId, task, eventType, extra));
+      const recordedEvent = eventStore.append(durableEvent(taskId, task, eventType, extra));
+      if (recordedEvent === null) {
+        this.logger.error(
+          '[TaskNotify] completion event was not durably recorded:',
+          taskId,
+          eventType
+        );
+        return { recorded: false, delivered: false };
+      }
+      recorded = true;
     }
 
     const webSocketHandler = this.getWebSocketHandler();
@@ -115,6 +125,7 @@ class CompletionSignal {
         this.logger.error('[TaskNotify] webhook failed:', error.message);
       }
     }
+    return { recorded, delivered: true };
   }
 }
 

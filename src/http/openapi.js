@@ -77,7 +77,20 @@ function generateOpenAPISpec() {
                           taskStoreWritable: { type: 'boolean', nullable: true },
                           lastSuccessfulPersistAt: { type: 'string', nullable: true },
                           lastPersistError: { type: 'object', nullable: true },
-                          durabilityDegraded: { type: 'boolean' }
+                          durabilityDegraded: { type: 'boolean' },
+                          taskEvents: {
+                            type: 'object',
+                            nullable: true,
+                            properties: {
+                              persistenceEnabled: { type: 'boolean' },
+                              eventStoreWritable: { type: 'boolean', nullable: true },
+                              lastSuccessfulPersistAt: { type: 'string', nullable: true },
+                              lastPersistError: { type: 'object', nullable: true },
+                              lastLoadError: { type: 'object', nullable: true },
+                              lastRecovery: { type: 'object', nullable: true },
+                              durabilityDegraded: { type: 'boolean' }
+                            }
+                          }
                         }
                       },
                       uptime: { type: 'number' }
@@ -1060,7 +1073,8 @@ function generateOpenAPISpec() {
           responses: {
             '200': { description: 'Event cursor acknowledged' },
             '400': { description: 'Missing clientId or eventId' },
-            '404': { description: 'Event no longer exists' }
+            '404': { description: 'Event no longer exists' },
+            '503': { description: 'Event cursor could not be durably acknowledged' }
           }
         }
       },

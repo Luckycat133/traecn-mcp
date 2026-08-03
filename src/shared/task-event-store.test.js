@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -15,6 +16,17 @@ console.log('\n[task-event-store.test.js] Running tests...\n');
 function tempStorePath() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-task-events-'));
   return { dir, file: path.join(dir, 'events.json') };
+}
+
+function documentChecksum(document) {
+  const payload = {
+    schemaVersion: document.schemaVersion,
+    savedAt: document.savedAt,
+    sequence: document.sequence,
+    acknowledged: document.acknowledged,
+    events: document.events
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
 test('TaskEventStore keeps acknowledgements independent for each IDE client', () => {
@@ -60,6 +72,168 @@ test('TaskEventStore reloads events and client cursors after restart', () => {
     const restarted = new TaskEventStore({ persistencePath: target.file });
     assert.deepStrictEqual(restarted.list({ clientId: 'codex' }).events, []);
     assert.deepStrictEqual(restarted.list({ clientId: 'other-ide' }).events.map(item => item.taskId), ['task-persisted']);
+  } finally {
+    fs.rmSync(target.dir, { recursive: true, force: true });
+  }
+});
+
+test('TaskEventStore writes checksummed snapshots atomically and preserves a backup', () => {
+  const target = tempStorePath();
+  try {
+    const store = new TaskEventStore({ persistencePath: target.file });
+    store.append({ type: 'task.completed', taskId: 'task-first', status: 'done' });
+    store.append({ type: 'task.completed', taskId: 'task-second', status: 'done' });
+
+    const primary = JSON.parse(fs.readFileSync(target.file, 'utf8'));
+    const backup = JSON.parse(fs.readFileSync(`${target.file}.bak`, 'utf8'));
+    assert.strictEqual(primary.schemaVersion, 2);
+    assert.strictEqual(primary.checksum.algorithm, 'sha256');
+    assert.strictEqual(primary.checksum.digest, documentChecksum(primary));
+    assert.deepStrictEqual(primary.events.map(event => event.taskId), ['task-first', 'task-second']);
+    assert.deepStrictEqual(backup.events.map(event => event.taskId), ['task-first']);
+    assert.strictEqual(fs.existsSync(`${target.file}.tmp`), false);
+    assert.strictEqual(fs.existsSync(`${target.file}.bak.tmp`), false);
+  } finally {
+    fs.rmSync(target.dir, { recursive: true, force: true });
+  }
+});
+
+test('TaskEventStore quarantines a corrupt primary and recovers the validated backup', () => {
+  const target = tempStorePath();
+  try {
+    const store = new TaskEventStore({ persistencePath: target.file, logger: { error() {}, warn() {} } });
+    store.append({ type: 'task.completed', taskId: 'task-backed-up', status: 'done' });
+    store.append({ type: 'task.completed', taskId: 'task-primary-only', status: 'done' });
+    fs.writeFileSync(target.file, '{"schemaVersion":2,"events":[', 'utf8');
+
+    const restarted = new TaskEventStore({
+      persistencePath: target.file,
+      logger: { error() {}, warn() {} }
+    });
+
+    assert.deepStrictEqual(
+      restarted.list({ clientId: 'recovery-client' }).events.map(event => event.taskId),
+      ['task-backed-up']
+    );
+    assert.ok(fs.readdirSync(target.dir).some(name => name.startsWith('events.json.corrupt-')));
+    assert.strictEqual(JSON.parse(fs.readFileSync(target.file, 'utf8')).schemaVersion, 2);
+    assert.strictEqual(restarted.getHealth().lastRecovery.source, 'backup');
+  } finally {
+    fs.rmSync(target.dir, { recursive: true, force: true });
+  }
+});
+
+test('TaskEventStore migrates a legacy version 1 snapshot without losing cursors', () => {
+  const target = tempStorePath();
+  try {
+    fs.writeFileSync(target.file, `${JSON.stringify({
+      version: 1,
+      savedAt: '2026-08-01T00:00:00.000Z',
+      sequence: 7,
+      acknowledged: { codex: 'evt_7' },
+      events: [{
+        eventId: 'evt_7',
+        type: 'task.completed',
+        taskId: 'task-legacy',
+        status: 'done',
+        createdAt: '2026-08-01T00:00:00.000Z',
+        terminal: true,
+        attentionRequired: false,
+        resultAvailable: true,
+        sessionId: null,
+        summary: 'legacy event'
+      }]
+    }, null, 2)}\n`, 'utf8');
+
+    const restarted = new TaskEventStore({ persistencePath: target.file });
+    assert.deepStrictEqual(restarted.list({ clientId: 'codex' }).events, []);
+    assert.deepStrictEqual(
+      restarted.list({ clientId: 'other-client' }).events.map(event => event.taskId),
+      ['task-legacy']
+    );
+    const migrated = JSON.parse(fs.readFileSync(target.file, 'utf8'));
+    assert.strictEqual(migrated.schemaVersion, 2);
+    assert.strictEqual(migrated.checksum.digest, documentChecksum(migrated));
+    assert.strictEqual(restarted.getHealth().lastRecovery.source, 'legacy');
+  } finally {
+    fs.rmSync(target.dir, { recursive: true, force: true });
+  }
+});
+
+test('TaskEventStore recovers a complete interrupted temporary snapshot', () => {
+  const target = tempStorePath();
+  try {
+    const store = new TaskEventStore({ persistencePath: target.file });
+    store.append({ type: 'task.completed', taskId: 'task-temp', status: 'done' });
+    fs.copyFileSync(target.file, `${target.file}.tmp`);
+    fs.unlinkSync(target.file);
+
+    const restarted = new TaskEventStore({ persistencePath: target.file });
+    assert.deepStrictEqual(
+      restarted.list({ clientId: 'temp-recovery' }).events.map(event => event.taskId),
+      ['task-temp']
+    );
+    assert.strictEqual(restarted.getHealth().lastRecovery.source, 'temp');
+    assert.strictEqual(fs.existsSync(target.file), true);
+    assert.strictEqual(fs.existsSync(`${target.file}.tmp`), false);
+  } finally {
+    fs.rmSync(target.dir, { recursive: true, force: true });
+  }
+});
+
+test('TaskEventStore rolls back an append when the event snapshot cannot persist', () => {
+  const target = tempStorePath();
+  try {
+    const blocker = path.join(target.dir, 'not-a-directory');
+    fs.writeFileSync(blocker, 'block persistence directory creation', 'utf8');
+    const store = new TaskEventStore({
+      persistencePath: path.join(blocker, 'events.json'),
+      logger: { error() {}, warn() {} }
+    });
+    let appendSignals = 0;
+    store.emitter.on('append', () => { appendSignals += 1; });
+
+    const result = store.append({ type: 'task.completed', taskId: 'task-not-durable', status: 'done' });
+
+    assert.strictEqual(result, null);
+    assert.deepStrictEqual(store.list({ clientId: 'client' }).events, []);
+    assert.strictEqual(store.sequence, 0);
+    assert.strictEqual(appendSignals, 0);
+    assert.strictEqual(store.getHealth().eventStoreWritable, false);
+    assert.strictEqual(store.getHealth().durabilityDegraded, true);
+    assert.ok(store.getHealth().lastPersistError);
+  } finally {
+    fs.rmSync(target.dir, { recursive: true, force: true });
+  }
+});
+
+test('TaskEventStore does not claim an acknowledgement when cursor persistence fails', () => {
+  const target = tempStorePath();
+  let failWrites = false;
+  try {
+    const store = new TaskEventStore({
+      persistencePath: target.file,
+      logger: { error() {}, warn() {} },
+      onWritePhase(phase) {
+        if (failWrites && phase === 'temp_written') {
+          const error = new Error('simulated event-store disk failure');
+          error.code = 'ENOSPC';
+          throw error;
+        }
+      }
+    });
+    const event = store.append({ type: 'task.completed', taskId: 'task-unacked', status: 'done' });
+    failWrites = true;
+
+    const result = store.ack('codex', event.eventId);
+
+    assert.strictEqual(result.acknowledged, false);
+    assert.strictEqual(result.error, 'TASK_EVENT_STORE_UNAVAILABLE');
+    assert.deepStrictEqual(
+      store.list({ clientId: 'codex' }).events.map(item => item.taskId),
+      ['task-unacked']
+    );
+    assert.strictEqual(store.getHealth().eventStoreWritable, false);
   } finally {
     fs.rmSync(target.dir, { recursive: true, force: true });
   }

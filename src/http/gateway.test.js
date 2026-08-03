@@ -1165,6 +1165,21 @@ asyncTest('Gateway status snapshot exposes task-store durability health', async 
     },
     durabilityDegraded: true
   });
+  gateway.taskEventStore = {
+    getHealth: () => ({
+      persistenceEnabled: true,
+      eventStoreWritable: false,
+      lastSuccessfulPersistAt: null,
+      lastPersistError: {
+        code: 'ENOSPC',
+        message: 'Task completion-event persistence is unavailable',
+        at: '2026-08-01T00:02:00.000Z'
+      },
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: true
+    })
+  };
 
   const snapshot = await gateway._statusSnapshot();
 
@@ -1176,7 +1191,20 @@ asyncTest('Gateway status snapshot exposes task-store durability health', async 
       message: 'Active task queue persistence is unavailable',
       at: '2026-08-01T00:01:00.000Z'
     },
-    durabilityDegraded: true
+    durabilityDegraded: true,
+    taskEvents: {
+      persistenceEnabled: true,
+      eventStoreWritable: false,
+      lastSuccessfulPersistAt: null,
+      lastPersistError: {
+        code: 'ENOSPC',
+        message: 'Task completion-event persistence is unavailable',
+        at: '2026-08-01T00:02:00.000Z'
+      },
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: true
+    }
   });
 });
 
@@ -2164,6 +2192,55 @@ asyncTest('Gateway task-event API lists pending events and acknowledges a client
   await gateway._handleAckTaskEvent(ackReq, {});
   assert.strictEqual(acknowledged.acknowledged, true);
   assert.deepStrictEqual(gateway.taskEventStore.list({ clientId: 'codex-test' }).events, []);
+});
+
+asyncTest('Gateway task-event API returns 503 when acknowledgement persistence fails', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecnclaw-event-ack-failure-'));
+  let failWrites = false;
+  try {
+    const { TaskEventStore } = require('../shared/task-event-store');
+    const eventStore = new TaskEventStore({
+      persistencePath: path.join(dir, 'events.json'),
+      logger: { error() {}, warn() {} },
+      onWritePhase(phase) {
+        if (failWrites && phase === 'temp_written') {
+          const error = new Error('simulated full event store');
+          error.code = 'ENOSPC';
+          throw error;
+        }
+      }
+    });
+    const event = eventStore.append({
+      type: 'task.completed',
+      taskId: 'task-ack-failure',
+      status: 'done',
+      terminal: true
+    });
+    failWrites = true;
+    const gateway = new Gateway({ taskEventStore: eventStore });
+    let response = null;
+    gateway._json = (req, res, data, status = 200) => {
+      response = { data, status };
+      return data;
+    };
+    const ackReq = new Readable({ read() {} });
+    ackReq.url = '/api/task-events/ack';
+    ackReq.headers = { host: '127.0.0.1:8788', 'content-type': 'application/json' };
+    ackReq.push(JSON.stringify({ clientId: 'codex-failure', eventId: event.eventId }));
+    ackReq.push(null);
+
+    await gateway._handleAckTaskEvent(ackReq, {});
+
+    assert.strictEqual(response.status, 503);
+    assert.strictEqual(response.data.acknowledged, false);
+    assert.strictEqual(response.data.error, 'TASK_EVENT_STORE_UNAVAILABLE');
+    assert.deepStrictEqual(
+      eventStore.list({ clientId: 'codex-failure' }).events.map(item => item.taskId),
+      ['task-ack-failure']
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 asyncTest('Gateway continues workflow without mutating parent followup list', async () => {

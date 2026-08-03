@@ -1796,6 +1796,11 @@ class Gateway {
       });
     }
 
+    const taskStoreDurability = this.taskQueueService.getPersistenceHealth();
+    const taskEventDurability = this.taskEventStore && typeof this.taskEventStore.getHealth === 'function'
+      ? this.taskEventStore.getHealth()
+      : null;
+
     return {
       status: (this.mockBridge || (this.client && this.client.isConnected)) ? 'connected' : 'disconnected',
       service: 'traecn-cdp-http-bridge',
@@ -1806,7 +1811,12 @@ class Gateway {
       traeAdapter: activeAdapter ? adapterHandshake(activeAdapter) : null,
       traeRunning: this.mockBridge ? null : isTraeCNRunning(),
       surface,
-      durability: this.taskQueueService.getPersistenceHealth(),
+      durability: {
+        ...taskStoreDurability,
+        durabilityDegraded: taskStoreDurability.durabilityDegraded === true
+          || taskEventDurability?.durabilityDegraded === true,
+        taskEvents: taskEventDurability
+      },
       uptime: process.uptime()
     };
   }

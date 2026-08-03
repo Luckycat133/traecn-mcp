@@ -70,6 +70,40 @@ test('CompletionSignal contains webhook failures without losing the durable even
   assert.deepStrictEqual(errors, [['[TaskNotify] webhook failed:', 'webhook offline']]);
 });
 
+test('CompletionSignal does not deliver notifications when the durable event write fails', async () => {
+  const calls = [];
+  const errors = [];
+  const signal = new CompletionSignal({
+    getTaskEventStore: () => ({
+      append(event) {
+        calls.push(['event-attempt', event]);
+        return null;
+      }
+    }),
+    getWebSocketHandler: () => ({
+      broadcastEvent(type, data) { calls.push(['websocket', type, data]); }
+    }),
+    async notifyOpenClaw(chatId, message) { calls.push(['openclaw', chatId, message]); },
+    async sendTaskWebhook(url, payload) { calls.push(['webhook', url, payload]); },
+    logger: { error(...args) { errors.push(args); } }
+  });
+
+  const result = await signal.emit('task-undelivered', {
+    status: 'done',
+    chatId: 'chat-undelivered',
+    notifyUrl: 'https://example.invalid/task',
+    result: { text: 'This completion must remain retryable.' }
+  }, 'task.completed');
+
+  assert.deepStrictEqual(calls.map(call => call[0]), ['event-attempt']);
+  assert.deepStrictEqual(result, { recorded: false, delivered: false });
+  assert.deepStrictEqual(errors, [[
+    '[TaskNotify] completion event was not durably recorded:',
+    'task-undelivered',
+    'task.completed'
+  ]]);
+});
+
 (async () => {
   await pendingAsyncTests();
   summary();
