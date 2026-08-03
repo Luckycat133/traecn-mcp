@@ -14,6 +14,13 @@ const DEFAULT_TASK_TTL_MS = parsePositiveInt(
 );
 
 const TOOL_ERROR_STATUSES = new Set(['error', 'queue_timeout', 'review_rejected', 'not_found']);
+const TERMINAL_GATEWAY_STATUSES = new Set([
+  'done',
+  'error',
+  'cancelled',
+  'queue_timeout',
+  'review_rejected'
+]);
 
 function normalizedOptions(options) {
   if (!Array.isArray(options)) return [];
@@ -331,11 +338,22 @@ class McpTaskAdapter {
     const current = await this.get(taskId);
     if (['completed', 'cancelled'].includes(current.status)) return {};
     const response = await this.client.cancelTask(taskId);
-    if (Number(response?.status) === 404) {
+    const statusCode = Number(response?.status);
+    if (statusCode === 404) {
       throw new McpProtocolError(-32602, `Failed to cancel task: ${taskId} was not found`);
     }
-    if (Number(response?.status) >= 500) {
-      throw new McpProtocolError(-32603, 'Failed to forward task cancellation to the gateway');
+    if (statusCode >= 400 || response?.data?.success === false) {
+      const gatewayStatus = String(response?.data?.status || '').toLowerCase();
+      if (TERMINAL_GATEWAY_STATUSES.has(gatewayStatus)) return {};
+      const detail = typeof response?.data?.error === 'string'
+        ? response.data.error.trim()
+        : '';
+      throw new McpProtocolError(
+        -32603,
+        detail
+          ? `Failed to forward task cancellation to the gateway: ${detail}`
+          : 'Failed to forward task cancellation to the gateway'
+      );
     }
     return {};
   }
