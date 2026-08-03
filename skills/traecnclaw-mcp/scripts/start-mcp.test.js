@@ -87,12 +87,13 @@ test('module exports resolveServerPath and main', () => {
   expect(typeof mod.main).toBe('function');
 });
 
-test('resolveServerPath returns env var path when it points to a valid file', () => {
+test('resolveServerPath never loads an arbitrary server path from the environment', () => {
   const { dir, serverFile } = makeFakeRepo();
   try {
     const env = { TRAECN_MCP_SERVER_PATH: serverFile };
-    const result = require('./start-mcp').resolveServerPath(env, dir);
-    expect(result).toBe(path.resolve(serverFile));
+    const scriptDir = makeFakeScriptDir(path.join(dir, 'skill-root'));
+    const result = require('./start-mcp').resolveServerPath(env, scriptDir, { cwd: dir });
+    expect(result).toBeNull();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -137,7 +138,7 @@ test('resolveServerPath rejects directories even if they exist', () => {
   }
 });
 
-test('resolveServerPath prefers env var over in-repo path', () => {
+test('resolveServerPath prefers the repository entry point over an environment override', () => {
   const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'start-mcp-prio-'));
   const scriptDir = makeFakeScriptDir(repoDir);
   const inRepoServer = path.join(repoDir, 'mcp-server.js');
@@ -147,7 +148,7 @@ test('resolveServerPath prefers env var over in-repo path', () => {
   try {
     const env = { TRAECN_MCP_SERVER_PATH: envServer };
     const result = require('./start-mcp').resolveServerPath(env, scriptDir);
-    expect(result).toBe(path.resolve(envServer));
+    expect(result).toBe(path.resolve(inRepoServer));
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
   }
@@ -164,19 +165,6 @@ test('resolveServerPath ignores empty string env var', () => {
     expect(result).toBe(path.resolve(inRepoServer));
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
-test('resolveServerPath returns absolute path even for relative input', () => {
-  const { dir, serverFile } = makeFakeRepo();
-  try {
-    // Use a relative path by creating a symlink-like scenario — instead just
-    // verify that the result is always absolute.
-    const env = { TRAECN_MCP_SERVER_PATH: serverFile };
-    const result = require('./start-mcp').resolveServerPath(env, dir);
-    expect(path.isAbsolute(result)).toBe(true);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
