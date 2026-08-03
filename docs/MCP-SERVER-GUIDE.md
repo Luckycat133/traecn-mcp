@@ -6,7 +6,7 @@ maintenance operations remain gateway or operator facilities.
 
 ## Protocol compatibility
 
-Version 0.5.2 is a dual-era stdio server:
+Version 0.5.3 is a dual-era stdio server:
 
 | MCP revision | Lifecycle | TRAECNclaw behavior |
 | --- | --- | --- |

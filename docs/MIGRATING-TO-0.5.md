@@ -1,8 +1,22 @@
-# Migrating from 0.3.x to 0.5.0
+# Migrating to 0.5.x
 
-TRAECNclaw 0.5.0 freezes MCP contract version 5 and repairs the distribution,
-configuration, persistence, and security boundaries that changed throughout
-the 0.4.x series.
+This guide covers the 0.3.x to 0.5.0 migration and compatible patch updates
+through 0.5.3. TRAECNclaw 0.5.0 freezes MCP contract version 5 and repairs the
+distribution, configuration, persistence, and security boundaries that changed
+throughout the 0.4.x series.
+
+## Updating from 0.5.2 to 0.5.3
+
+Version 0.5.3 is a compatible security and durability update. Remove
+`TRAECN_MCP_SERVER_PATH` from portable Skill configuration: the launcher now
+uses only a repository-local server, an installed `traecnclaw` package, or the
+`traecnclaw-mcp` executable on `PATH`. A source checkout that needs a direct
+entry point should use `assets/mcp-client-config.direct.json` instead.
+
+Existing completion-event snapshots migrate automatically to checksummed
+schema version 2. Preserve the primary, `.bak`, `.tmp`, and quarantined files
+when diagnosing recovery. No MCP tool-contract migration is required; contract
+version 5 and its ordered 20-tool surface are unchanged.
 
 ## Installation source
 
@@ -84,6 +98,12 @@ returns `202` only after its first snapshot is durable, and returns
 fails. Retry uncertain submissions with a stable `Idempotency-Key`; active-task
 ownership is restored with the queue after restart. Inspect the `durability`
 object returned by `GET /api/status` before unattended delegation.
+
+Completion events and per-client acknowledgement cursors use their own
+checksummed schema version 2 snapshot with atomic replacement, `.bak` recovery,
+and corrupt-file quarantine. `durability.taskEvents` reports its health. A
+failed event write is not broadcast as a completed delivery, and a failed
+cursor write returns HTTP 503 without advancing that client's durable cursor.
 
 ## Network security
 

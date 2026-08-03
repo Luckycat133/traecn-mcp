@@ -1,13 +1,14 @@
 # TRAECNclaw current roadmap
 
-This file is the active engineering backlog after the 0.5.2 runtime work. Check
+This file is the active engineering backlog after the 0.5.3 reliability and
+security release. Check
 `package.json`, the latest commits, open pull requests, and open issues before
 treating an item as unfinished. The longer `development-guide.md` retains
 architecture history and full playbooks.
 
 ## Current baseline
 
-- Release line: 0.5.2.
+- Release line: 0.5.3.
 - Runtime: Node.js 22 CommonJS.
 - Public MCP contract: version 5 with exactly 20 ordered tools.
 - Modern MCP: per-request 2026 metadata, Tasks adapter, exact-ID task
@@ -20,7 +21,8 @@ architecture history and full playbooks.
 - Trae compatibility: versioned 1.107 macOS adapter with sanitized fixture
   replay; broader support requires new evidence.
 - Completion delivery: `CompletionSignal` owns durable events and outbound
-  adapters.
+  adapters; TaskEventStore schema 2 provides atomic snapshots, checksums,
+  backup recovery, quarantine, migration, and write/load health.
 
 Do not rebuild these capabilities from scratch. Fix demonstrated regressions at
 the component that owns them.
@@ -43,17 +45,22 @@ Preserve these behaviors after the patch is merged:
   task snapshots, so historical events are not replayed after the snapshot.
 - A partial initial-snapshot failure retries only the unfinished task IDs rather
   than duplicating snapshots already written successfully.
+- `TaskEventStore` commits checksummed schema 2 snapshots through a durable
+  temporary file, preserves a validated backup, quarantines corrupt candidates,
+  and migrates version 1 or complete interrupted snapshots without losing
+  events or acknowledgement cursors.
+- Completion-event append failure rolls back the candidate and suppresses
+  outbound delivery. A cursor persistence failure leaves the cursor unchanged
+  and returns HTTP 503 instead of claiming acknowledgement.
+- `GET /api/status` reports completion-event persistence and recovery health
+  under `durability.taskEvents`, and aggregate degraded durability includes both
+  active tasks and completion events.
 
 ## P0 — durable-state reliability
 
 Continue with the remaining edge behavior around the two durable stores and task
 identity:
 
-- Make `TaskEventStore` persistence atomic and recoverable like TaskStore. A
-  process interruption or corrupt primary file must not silently discard
-  terminal events or client acknowledgements.
-- Add backup, quarantine, migration, and failure-health tests for completion
-  events without coupling event persistence back into `Gateway`.
 - Keep pagination, acknowledgement, pruning, restart, long-poll, and subscription
   cursor semantics executable and deterministic across multiple clients.
 - Exercise restart and retry boundaries before submit, after durable accept,
@@ -66,14 +73,8 @@ identity:
 
 Exit criteria for the next reliability patch:
 
-- A complete/corrupt/interrupted TaskEventStore file always yields either a
-  validated current snapshot or a validated last-known-good snapshot.
-- Event acknowledgement persistence failure is observable and does not claim a
-  durable acknowledgement.
 - Pruning does not make active client/subscription cursors replay another task or
   stall permanently.
-- Persistence failures remain observable and cannot produce a false durable
-  acceptance or false completion-delivery claim.
 - Focused fault tests and the repository-wide gate pass.
 
 ## P1 — current live compatibility evidence
@@ -142,14 +143,13 @@ through tests, not speculation:
 
 ## Suggested next issues
 
-1. Make `TaskEventStore` persistence atomic, checksummed, and recoverable.
-2. Add pruning/restart tests for several legacy and Tasks subscription cursors.
-3. Record live evidence for the currently installed TraeCN build.
-4. Extract durable task acceptance into a TaskOrchestrator component.
-5. Consolidate route ownership after the orchestrator boundary is stable.
-6. Add a release job that verifies artifact source revision and checksums from
+1. Add pruning/restart tests for several legacy and Tasks subscription cursors.
+2. Record live evidence for the currently installed TraeCN build.
+3. Extract durable task acceptance into a TaskOrchestrator component.
+4. Consolidate route ownership after the orchestrator boundary is stable.
+5. Add a release job that verifies artifact source revision and checksums from
    the final tag candidate.
-7. Refresh third-party listings only after the verified package is published.
+6. Refresh third-party listings only after the verified package is published.
 
 ## Non-goals for the next patch
 

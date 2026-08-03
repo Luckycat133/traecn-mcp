@@ -60,6 +60,9 @@ Do not repeat these changes without regression evidence:
   JSON-RPC error recovery.
 - Completion event delivery moved from `Gateway` into injected
   `CompletionSignal` ownership.
+- Completion events and client cursors use checksummed TaskEventStore schema 2
+  snapshots with atomic replacement, backup recovery, quarantine, legacy/temp
+  migration, persistence health, and failure rollback.
 
 ## Historical gap analysis and current status
 
@@ -90,15 +93,18 @@ fresh HOME
   -> read one completed result
 ```
 
-Recommended launcher resolution order:
+Current hardened launcher resolution order:
 
 ```text
-TRAECN_MCP_SERVER_PATH
-  -> repository-local mcp-server.js
+repository-local mcp-server.js
   -> require.resolve("traecnclaw/mcp")
   -> executable `traecnclaw-mcp` on PATH
   -> one clear installation diagnostic
 ```
+
+The public launcher no longer accepts an environment-selected JavaScript entry
+point. Source checkouts that need a direct path use the separate direct MCP
+client configuration instead.
 
 Publish only a channel that has a reproducible artifact and a clean-room test:
 GitHub release archive, npm package, or MCPB bundle. Do not rely on the source
@@ -298,11 +304,11 @@ Extraction rules:
 - Prefer dependency injection for drivers, stores, clocks, and process hooks so
   fault tests remain deterministic.
 
-## Roadmap after 0.5.2
+## Roadmap after 0.5.3
 
 Recommended next scope:
 
-- Publish and verify GitHub/ClawHub artifacts from one final tagged commit.
+- Keep GitHub and ClawHub artifacts traceable to one verified tagged commit.
 - Record a fresh live UAT for the current TraeCN build when a debug-enabled
   desktop instance is available; keep historical 1.107.1 evidence labelled.
 - Add a second versioned Trae adapter only after sanitized fixtures and a live

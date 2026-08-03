@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-08-03
+
+### Added
+
+- Added checksummed TaskEventStore schema 2 snapshots, durable temporary-file
+  replacement, last-known-good backups, corrupt-file quarantine, legacy schema
+  migration, interrupted-write recovery, and event-store persistence health in
+  `GET /api/status`.
+
+### Fixed
+
+- Rolled back completion-event appends and client cursor acknowledgements when
+  persistence fails. Failed acknowledgements now return HTTP 503, and
+  `CompletionSignal` does not continue outbound delivery when its durable event
+  was not recorded.
+- Calculated completion-event pagination from the effective acknowledged or
+  requested cursor, including empty pages after an exhausted cursor.
+- Preserved fresh malformed TaskStore locks during their metadata-write grace
+  period while allowing stale locks left by a crashed creator to be reclaimed.
+- Propagated gateway failures from MCP `tasks/cancel` instead of reporting false
+  success, while retaining idempotent success for a confirmed terminal race.
+- Closed modern MCP subscription requests exactly once on cancellation or
+  shutdown, rejected null and duplicate request IDs, baselined prior durable
+  events before the current snapshot, and retried partial initial snapshots
+  without duplicate delivery.
+
+### Security
+
+- Removed `TRAECN_MCP_SERVER_PATH` from the public Skill launcher so an
+  environment-controlled value cannot select arbitrary JavaScript for the
+  launcher to execute. Server discovery now uses only the repository entry
+  point, the installed `traecnclaw/mcp` package export, or the
+  `traecnclaw-mcp` executable on `PATH`.
+- Declared `TRAECN_GATEWAY_TOKEN` as the Skill's primary credential while
+  retaining machine-readable declarations for every supported optional
+  environment variable, and added contract coverage for secret-handling
+  guidance and metadata drift.
+
 ## [0.5.2] - 2026-08-01
 
 ### Added

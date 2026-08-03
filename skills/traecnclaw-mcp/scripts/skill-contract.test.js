@@ -69,6 +69,23 @@ assertNoPrivateKeys(direct);
 assert.deepStrictEqual(Object.keys(direct.mcpServers || {}), ['traecn']);
 assert.deepStrictEqual(direct.mcpServers.traecn.args, ['/absolute/path/to/TRAECNclaw/mcp-server.js']);
 
+const skillDocument = fs.readFileSync(path.join(skillRoot, 'SKILL.md'), 'utf8');
+assert.match(
+  skillDocument,
+  /^    primaryEnv: TRAECN_GATEWAY_TOKEN$/m,
+  'the gateway credential must be identified as the primary environment secret'
+);
+assert.match(
+  skillDocument,
+  /^    envVars:\n(?:.*\n)*?      - name: TRAECN_GATEWAY_TOKEN\n        required: false\n        description: .*never (?:read, )?print, log, or persist it\.$/m,
+  'the optional gateway token must have a machine-readable declaration and handling restriction'
+);
+assert.doesNotMatch(
+  skillDocument,
+  /TRAECN_MCP_SERVER_PATH/,
+  'the public Skill must not accept an environment-selected JavaScript entry point'
+);
+
 const toolsByName = new Map(MCP_TOOLS.map(tool => [tool.name, tool]));
 const examples = readJson('references/mcp-call-examples.json');
 for (const example of examples.calls) {
@@ -91,7 +108,7 @@ assert.match(
 assert.deepStrictEqual(readJson('references/mcp-tool-contracts.json'), expectedContract());
 
 const docs = [
-  fs.readFileSync(path.join(skillRoot, 'SKILL.md'), 'utf8'),
+  skillDocument,
   fs.readFileSync(path.join(skillRoot, 'references/mcp-surface.md'), 'utf8')
 ].join('\n');
 assert.ok(!docs.includes('batch.runTasks'), 'JS SDK batch.runTasks must not be documented as an MCP tool');

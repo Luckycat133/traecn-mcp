@@ -320,7 +320,9 @@ by another gateway process, the request returns `503 TASK_STORE_UNAVAILABLE`
 and no task is accepted. Supply `Idempotency-Key` for safe retries after an
 uncertain response; ownership survives gateway restart while the task remains
 active. `GET /api/status` exposes `durability.taskStoreWritable`,
-`lastSuccessfulPersistAt`, `lastPersistError`, and `durabilityDegraded`.
+`lastSuccessfulPersistAt`, `lastPersistError`, and `durabilityDegraded`. Its
+`durability.taskEvents` object separately reports completion-event write/load
+health, recovery source, and the most recent persistence error.
 The same status response exposes `traeAdapter` with the detected Trae version,
 platform, mode, selected adapter, compatibility level, evidence, and verified
 capability flags.
@@ -344,6 +346,10 @@ interval or open `subscriptions/listen` for that task ID. The latter delivers a
 full `notifications/tasks` snapshot, including the final tool result, without
 an Agent polling loop. Command-approval pauses become `input_required` and are
 answered through `tasks/update` with the same explicit risk safeguards.
+Completion events are backed by checksummed, atomic task-event snapshots with a
+last-known-good backup. A cursor acknowledgement is reported only after that
+cursor is durable; the acknowledgement endpoint returns HTTP 503 on persistence
+failure.
 
 Clients that do not declare the Tasks extension retain the compatible complete
 accepted result and may use `traecn_get_task` for an intentional status or
@@ -468,7 +474,7 @@ or `traecnclaw-mcp` for the server entrypoint.
 ## Documentation
 
 - [Compatibility Matrix](docs/COMPATIBILITY.md)
-- [0.5.0 Migration Guide](docs/MIGRATING-TO-0.5.md)
+- [0.5.x Migration Guide](docs/MIGRATING-TO-0.5.md)
 - [Runtime Configuration](docs/configuration.md)
 - [Development Guide](docs/development.md)
 - [Deployment Guide](docs/deployment.md)
