@@ -1,9 +1,9 @@
 # TRAECNclaw current roadmap
 
 This file is the active engineering backlog after the 0.5.2 runtime work. Check
-`package.json`, the latest commits, and open issues before treating an item as
-unfinished. The longer `development-guide.md` retains architecture history and
-full playbooks.
+`package.json`, the latest commits, open pull requests, and open issues before
+treating an item as unfinished. The longer `development-guide.md` retains
+architecture history and full playbooks.
 
 ## Current baseline
 
@@ -25,33 +25,55 @@ full playbooks.
 Do not rebuild these capabilities from scratch. Fix demonstrated regressions at
 the component that owns them.
 
+## Reliability edge cases closed by the current patch
+
+Preserve these behaviors after the patch is merged:
+
+- `TaskEventStore.hasMore` uses the effective acknowledged/requested cursor even
+  when the returned event page is empty.
+- A fresh malformed TaskStore lock remains protected during the metadata-write
+  grace period; an old malformed lock left by a crashed creator is recoverable.
+- `tasks/cancel` does not turn HTTP 4xx or explicit gateway failures into false
+  success. A race to a confirmed terminal status remains an idempotent no-op.
+- `subscriptions/listen` requires a non-null request ID and duplicate active IDs
+  are rejected instead of replacing unresolved requests.
+- A cancelled subscription writes the final result for its original long-running
+  request and cannot be closed a second time during server shutdown.
+- A subscription baselines existing durable events before sending its current
+  task snapshots, so historical events are not replayed after the snapshot.
+- A partial initial-snapshot failure retries only the unfinished task IDs rather
+  than duplicating snapshots already written successfully.
+
 ## P0 — durable-state reliability
 
-Finish edge behavior around the two durable stores and task identity:
+Continue with the remaining edge behavior around the two durable stores and task
+identity:
 
-- Keep `TaskEventStore` pagination, cursor, acknowledgement, pruning, restart,
-  and long-poll semantics executable and deterministic.
-- Make completion-event persistence resilient to interrupted writes and corrupt
-  files without coupling it back into `Gateway`.
-- Preserve conservative TaskStore lock acquisition: never steal a fresh
-  incomplete lock, but recover a stale malformed lock left before owner
-  metadata was committed.
+- Make `TaskEventStore` persistence atomic and recoverable like TaskStore. A
+  process interruption or corrupt primary file must not silently discard
+  terminal events or client acknowledgements.
+- Add backup, quarantine, migration, and failure-health tests for completion
+  events without coupling event persistence back into `Gateway`.
+- Keep pagination, acknowledgement, pruning, restart, long-poll, and subscription
+  cursor semantics executable and deterministic across multiple clients.
 - Exercise restart and retry boundaries before submit, after durable accept,
-  after Trae submission, during result collection, and after terminal event
-  creation.
+  after Trae submission, during result collection, after terminal event
+  creation, and during subscription reconnect.
 - Verify idempotent retries return the same task without suppressing a genuinely
   different request.
-- Keep task, conversation, result, event, and subscription identities visibly
-  correlated in fixtures.
+- Keep task, conversation, result, event, subscription, and request identities
+  visibly correlated in fixtures.
 
-Exit criteria for a reliability patch:
+Exit criteria for the next reliability patch:
 
-- Empty event pages report `hasMore: false` when the effective cursor is at the
-  latest event.
-- A crashed lock writer cannot block the store forever, and a live/fresh writer
-  cannot be pre-empted.
+- A complete/corrupt/interrupted TaskEventStore file always yields either a
+  validated current snapshot or a validated last-known-good snapshot.
+- Event acknowledgement persistence failure is observable and does not claim a
+  durable acknowledgement.
+- Pruning does not make active client/subscription cursors replay another task or
+  stall permanently.
 - Persistence failures remain observable and cannot produce a false durable
-  acceptance.
+  acceptance or false completion-delivery claim.
 - Focused fault tests and the repository-wide gate pass.
 
 ## P1 — current live compatibility evidence
@@ -112,15 +134,16 @@ through tests, not speculation:
 - Keep 2024, 2025, modern 2026, and Content-Length compatibility cases separate.
 - Add or change wire behavior only when an official client transcript or
   published schema demonstrates the need.
-- Preserve JSON-RPC error codes, task identity, subscription correlation,
-  structured/text result equivalence, and protocol-era isolation.
+- Preserve JSON-RPC error codes, task identity, request-ID lifetime,
+  subscription correlation, structured/text result equivalence, and
+  protocol-era isolation.
 - Do not expand the 20-tool contract to solve transport, subscription, or host
   lifecycle concerns.
 
 ## Suggested next issues
 
-1. Make `TaskEventStore` persistence atomic and recoverable like TaskStore.
-2. Add pruning and restart tests for multiple subscription cursors.
+1. Make `TaskEventStore` persistence atomic, checksummed, and recoverable.
+2. Add pruning/restart tests for several legacy and Tasks subscription cursors.
 3. Record live evidence for the currently installed TraeCN build.
 4. Extract durable task acceptance into a TaskOrchestrator component.
 5. Consolidate route ownership after the orchestrator boundary is stable.
