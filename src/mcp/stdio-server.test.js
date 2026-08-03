@@ -10,6 +10,7 @@ const {
   nextProtocolEra,
   startStdioServer,
   subscriptionAcknowledgedNotification,
+  subscriptionClosedResult,
   taskEventNotification,
   stableMcpClientId
 } = require('./stdio-server');
@@ -206,6 +207,113 @@ test('TaskSubscriptionPump never emits another task result', async () => {
   ]);
 });
 
+test('TaskSubscriptionPump baselines history before emitting the current task snapshot', async () => {
+  const calls = [];
+  let listCall = 0;
+  let snapshotRead = 0;
+  const client = {
+    async listTaskEvents(clientId, options) {
+      calls.push(['list', clientId, options]);
+      listCall += 1;
+      if (listCall === 1) {
+        return {
+          data: {
+            events: [
+              { eventId: 'evt_30', taskId: 'task-owned', status: 'approval_required' },
+              { eventId: 'evt_31', taskId: 'task-foreign', status: 'done' }
+            ],
+            cursor: 'evt_31',
+            hasMore: false
+          }
+        };
+      }
+      return {
+        data: {
+          events: [{ eventId: 'evt_32', taskId: 'task-owned', status: 'done' }],
+          cursor: 'evt_32',
+          hasMore: false
+        }
+      };
+    },
+    async ackTaskEvent(clientId, eventId) {
+      calls.push(['ack', clientId, eventId]);
+      return { data: { acknowledged: true } };
+    }
+  };
+  const pump = new TaskSubscriptionPump({
+    client,
+    taskAdapter: {
+      async get(taskId) {
+        snapshotRead += 1;
+        calls.push(['get', taskId, snapshotRead]);
+        return {
+          taskId,
+          status: snapshotRead === 1 ? 'working' : 'completed',
+          createdAt: '2026-08-01T00:00:00.000Z',
+          lastUpdatedAt: '2026-08-01T00:01:00.000Z',
+          ttlMs: 604800000,
+          ...(snapshotRead === 1 ? {} : {
+            result: { content: [{ type: 'text', text: 'fresh completion' }], isError: false }
+          })
+        };
+      }
+    },
+    clientId: 'modern-client:listen-history',
+    subscriptionId: 'listen-history',
+    taskIds: ['task-owned'],
+    write(message) {
+      calls.push(['write', message.params.taskId, message.params.status]);
+    },
+    waitMs: 25000
+  });
+
+  assert.strictEqual(await pump.primeCursor(), 'evt_31');
+  assert.strictEqual(await pump.deliverInitialSnapshots(), 1);
+  assert.strictEqual(await pump.pollOnce(), 1);
+  assert.deepStrictEqual(calls, [
+    ['list', 'modern-client:listen-history', { limit: 100, waitMs: 0 }],
+    ['get', 'task-owned', 1],
+    ['write', 'task-owned', 'working'],
+    ['list', 'modern-client:listen-history', { limit: 20, waitMs: 25000, after: 'evt_31' }],
+    ['get', 'task-owned', 2],
+    ['write', 'task-owned', 'completed'],
+    ['ack', 'modern-client:listen-history', 'evt_32']
+  ]);
+});
+
+test('TaskSubscriptionPump does not duplicate successful initial snapshots after a retry', async () => {
+  const writes = [];
+  let secondTaskAttempts = 0;
+  const pump = new TaskSubscriptionPump({
+    client: {},
+    taskAdapter: {
+      async get(taskId) {
+        if (taskId === 'task-b' && ++secondTaskAttempts === 1) {
+          throw new Error('temporary task read failure');
+        }
+        return {
+          taskId,
+          status: 'working',
+          createdAt: '2026-08-01T00:00:00.000Z',
+          lastUpdatedAt: '2026-08-01T00:00:00.000Z',
+          ttlMs: 604800000
+        };
+      }
+    },
+    clientId: 'modern-client:listen-retry',
+    subscriptionId: 'listen-retry',
+    taskIds: ['task-a', 'task-b'],
+    write(message) {
+      writes.push(message.params.taskId);
+    }
+  });
+
+  await assert.rejects(() => pump.deliverInitialSnapshots(), /temporary task read failure/);
+  assert.deepStrictEqual(writes, ['task-a']);
+  assert.strictEqual(await pump.deliverInitialSnapshots(), 1);
+  assert.deepStrictEqual(writes, ['task-a', 'task-b']);
+});
+
 test('stdio opens and cancels a correlated modern task subscription', async () => {
   const input = new EventEmitter();
   const writes = [];
@@ -265,7 +373,52 @@ test('stdio opens and cancels a correlated modern task subscription', async () =
   })}\n`));
   await new Promise(resolve => setImmediate(resolve));
   assert.strictEqual(stopped, true);
-  server.stop();
+  assert.deepStrictEqual(writes[1], subscriptionClosedResult('listen-stdio-1'));
+  assert.strictEqual(server.getTaskSubscriptions().size, 0);
+  await server.stop();
+  assert.strictEqual(writes.length, 2);
+});
+
+test('stdio ignores an id-less subscription notification without starting a pump', async () => {
+  const input = new EventEmitter();
+  const writes = [];
+  let subscribed = false;
+  let pumpCreated = false;
+  const taskMeta = {
+    'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+    'io.modelcontextprotocol/clientCapabilities': {
+      extensions: { 'io.modelcontextprotocol/tasks': {} }
+    }
+  };
+  const server = startStdioServer({
+    input,
+    handlers: {
+      subscribe() {
+        subscribed = true;
+        return { taskIds: ['task-owned'] };
+      },
+      async handle() { return undefined; }
+    },
+    write(message) { writes.push(message); },
+    clientFactory() { return {}; },
+    taskSubscriptionPumpFactory() {
+      pumpCreated = true;
+      return { start() {}, stop() {} };
+    }
+  });
+
+  input.emit('data', Buffer.from(`${JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'subscriptions/listen',
+    params: { notifications: { taskIds: ['task-owned'] }, _meta: taskMeta }
+  })}\n`));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.strictEqual(subscribed, false);
+  assert.strictEqual(pumpCreated, false);
+  assert.strictEqual(server.getTaskSubscriptions().size, 0);
+  assert.deepStrictEqual(writes, []);
+  await server.stop();
 });
 
 test('stdio closes a live subscription with the standard graceful result', async () => {
