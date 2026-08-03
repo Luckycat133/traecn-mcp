@@ -237,18 +237,52 @@ class TaskSubscriptionPump extends TaskEventPump {
     this.taskAdapter = options.taskAdapter;
     this.subscriptionId = options.subscriptionId;
     this.taskIds = new Set((options.taskIds || []).map(value => String(value)));
+    this.deliveredInitialTaskIds = new Set();
     this.initialSnapshotsDelivered = false;
+    this.historyPrimed = false;
+  }
+
+  async primeCursor() {
+    if (this.historyPrimed) return this.cursor;
+    let cursor = this.cursor;
+    while (true) {
+      const request = { limit: 100, waitMs: 0 };
+      if (cursor) request.after = cursor;
+      const response = await this.client.listTaskEvents(this.clientId, request);
+      if (response && Number(response.status) >= 400) {
+        throw new Error(`Task event request failed with HTTP ${response.status}`);
+      }
+      const payload = response && response.data !== undefined ? response.data : response;
+      const events = payload && Array.isArray(payload.events) ? payload.events : [];
+      for (const event of events) {
+        if (!event.eventId) throw new Error('Task event is missing eventId');
+      }
+      const nextCursor = events.length > 0
+        ? events[events.length - 1].eventId
+        : (payload?.cursor || cursor);
+      const progressed = Boolean(nextCursor && nextCursor !== cursor);
+      if (nextCursor) cursor = nextCursor;
+      if (payload?.hasMore !== true) break;
+      if (!progressed) {
+        throw new Error('Task event cursor did not advance while priming subscription');
+      }
+    }
+    this.cursor = cursor;
+    this.historyPrimed = true;
+    return this.cursor;
   }
 
   async deliverInitialSnapshots() {
     if (this.initialSnapshotsDelivered) return 0;
     let delivered = 0;
     for (const taskId of this.taskIds) {
+      if (this.deliveredInitialTaskIds.has(taskId)) continue;
       const task = await this.taskAdapter.get(taskId);
       await Promise.resolve(this.write(taskSubscriptionNotification(task, this.subscriptionId)));
+      this.deliveredInitialTaskIds.add(taskId);
       delivered += 1;
     }
-    this.initialSnapshotsDelivered = true;
+    this.initialSnapshotsDelivered = this.deliveredInitialTaskIds.size === this.taskIds.size;
     return delivered;
   }
 
@@ -284,6 +318,7 @@ class TaskSubscriptionPump extends TaskEventPump {
     this.loopPromise = (async () => {
       while (this.running) {
         try {
+          await this.primeCursor();
           await this.deliverInitialSnapshots();
           await this.pollOnce();
         } catch {
@@ -335,11 +370,18 @@ function startStdioServer(options = {}) {
           assertJsonRpcRequest(request);
           protocolEra = nextProtocolEra(protocolEra, request);
           if (request.method === 'subscriptions/listen') {
+            if (request.id === undefined || request.id === null) {
+              throw new McpProtocolError(-32600, 'subscriptions/listen requires a request id');
+            }
             if (typeof handlers.subscribe !== 'function') {
               throw new McpProtocolError(-32601, 'Task subscriptions are unavailable');
             }
-            const { taskIds } = handlers.subscribe(request);
             const subscriptionId = request.id;
+            const key = String(subscriptionId);
+            if (taskSubscriptions.has(key)) {
+              throw new McpProtocolError(-32600, 'Subscription request id is already active');
+            }
+            const { taskIds } = handlers.subscribe(request);
             await Promise.resolve(write(
               subscriptionAcknowledgedNotification(taskIds, subscriptionId),
               frame.framing
@@ -355,9 +397,6 @@ function startStdioServer(options = {}) {
               taskIds,
               write: message => write(message, frame.framing)
             });
-            const key = String(subscriptionId);
-            const previous = taskSubscriptions.get(key);
-            if (previous) previous.pump.stop();
             taskSubscriptions.set(key, {
               pump,
               framing: frame.framing,
@@ -372,6 +411,10 @@ function startStdioServer(options = {}) {
             if (subscription) {
               subscription.pump.stop();
               taskSubscriptions.delete(key);
+              await Promise.resolve(write(
+                subscriptionClosedResult(subscription.subscriptionId),
+                subscription.framing
+              ));
               return;
             }
           }
