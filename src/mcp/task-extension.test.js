@@ -233,6 +233,48 @@ asyncTest('McpTaskAdapter rejects unknown task ids as invalid params', async () 
   await assert.rejects(() => adapter.get('missing'), error => error.code === -32602);
 });
 
+asyncTest('McpTaskAdapter propagates non-terminal gateway cancellation failures', async () => {
+  const adapter = new McpTaskAdapter({
+    client: {
+      async getTaskStatus(taskId) {
+        return {
+          status: 200,
+          data: { taskId, status: 'queued', createdAt: 1785542400000 }
+        };
+      },
+      async cancelTask() {
+        return { status: 401, data: { error: 'Unauthorized' } };
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => adapter.cancel('task-cancel-auth'),
+    error => error.code === -32603 && /Unauthorized/.test(error.message)
+  );
+});
+
+asyncTest('McpTaskAdapter treats a terminal cancellation race as an idempotent no-op', async () => {
+  const adapter = new McpTaskAdapter({
+    client: {
+      async getTaskStatus(taskId) {
+        return {
+          status: 200,
+          data: { taskId, status: 'queued', createdAt: 1785542400000 }
+        };
+      },
+      async cancelTask() {
+        return {
+          status: 400,
+          data: { error: 'Task is not in a cancellable state', status: 'done' }
+        };
+      }
+    }
+  });
+
+  assert.deepStrictEqual(await adapter.cancel('task-cancel-race'), {});
+});
+
 test('task subscription notifications carry the complete task and subscription id', () => {
   const notification = taskSubscriptionNotification({
     taskId: 'task-only-this-one',
