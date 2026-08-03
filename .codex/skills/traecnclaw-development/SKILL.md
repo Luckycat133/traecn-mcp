@@ -4,7 +4,7 @@ description: Develop, debug, refactor, test, package, and release the TRAECNclaw
 license: MIT
 metadata:
   author: TRAECNclaw
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # TRAECNclaw Development
@@ -38,7 +38,7 @@ copy it into `skills/traecnclaw-mcp` or the public ClawHub mirror.
   contract migration.
 - `src/mcp/protocol.js`, `src/mcp/stdio-server.js`, and
   `src/mcp/task-extension.js`: protocol negotiation, result envelopes, stdio
-  framing, modern Tasks, and correlated subscriptions.
+  framing, modern Tasks, correlated subscriptions, and subscription lifetime.
 - `src/config/runtime-schema.js`: canonical runtime names, aliases, defaults,
   and generated configuration documentation.
 - `src/http/task-store.js`: durable active-task snapshots, atomic writes,
@@ -59,8 +59,9 @@ copy it into `skills/traecnclaw-mcp` or the public ClawHub mirror.
 Unless the user names another target, prefer work in this order:
 
 1. **Durable-state reliability** — fix concrete cursor, pagination, lock,
-   restart, idempotency, replay, and partial-write regressions. Preserve the
-   acceptance transaction and exact task/result ownership.
+   restart, idempotency, event persistence, replay, subscription-lifetime, and
+   partial-write regressions. Preserve the acceptance transaction and exact
+   task/result ownership.
 2. **Live compatibility evidence** — run current-version live UAT, refresh the
    compatibility matrix, and add another adapter only with sanitized fixtures
    plus evidence for that exact version and platform.
@@ -95,6 +96,14 @@ architecture history, full playbooks, evidence layers, and release checklist.
   requested cursor, including an empty returned page.
 - A fresh unreadable TaskStore lock must not be stolen, while a sufficiently old
   malformed lock left before metadata commit must be recoverable.
+- `subscriptions/listen` is a long-running JSON-RPC request and therefore must
+  have a non-null request ID. Cancellation and transport shutdown must resolve
+  that original request exactly once.
+- A new task subscription must baseline prior durable events before sending the
+  current snapshot. Historical events must not be replayed after that snapshot,
+  and a retry must not duplicate initial snapshots already written successfully.
+- `tasks/cancel` must propagate gateway failures. Only a confirmed race to an
+  already-terminal gateway status is an idempotent successful no-op.
 - Runtime defaults have one canonical schema. Change the schema, regenerate the
   derived files, and check them; do not hand-edit multiple copies.
 - Public mirrors and release artifacts are generated from an exact canonical
@@ -118,9 +127,9 @@ persistence operation.
 Start from `contract.js`, `tools.js`, `tool-metadata.js`, `handler.js`,
 `protocol.js`, `task-extension.js`, and `stdio-server.js`. Test legacy
 initialization, modern per-request metadata, both supported framings, Tasks and
-subscriptions, JSON-RPC error codes, structured content, and exact tools/list
-order. Do not add an ordinary tool to solve a transport or completion-signaling
-problem.
+subscriptions, initial subscription baselines, cancellation closure, JSON-RPC
+error codes, structured content, and exact tools/list order. Do not add an
+ordinary tool to solve a transport or completion-signaling problem.
 
 ### TraeCN DOM or CDP behavior
 
@@ -164,6 +173,9 @@ package channel until that exact version is visible and installable.
   Tasks extension, official-client conformance matrix, first versioned Trae
   adapter, `CompletionSignal`, settings navigation/extraction, or public mirror
   sync. Fix a demonstrated regression at its owning boundary instead.
+- Do not reintroduce historical task replay after a subscription's initial
+  snapshot, leave cancelled subscription requests unresolved, or report a
+  failed gateway cancellation as success.
 - Do not spend an unrelated development task revising general posture,
   marketplace wording, protocol-status wording, or policy language.
 - Do not add tools, profiles, low-level wait/poll/recovery controls, or generic
@@ -185,7 +197,7 @@ Before finishing a change:
 2. The relevant targeted tests pass.
 3. Generated files and contracts are synchronized when affected.
 4. Public behavior changes have matching docs and `CHANGELOG.md` entries.
-5. Contract v5, task ownership, durability, event cursors, and compatibility
-   claims have not drifted unintentionally.
+5. Contract v5, task ownership, durability, event cursors, task-subscription
+   lifetime, and compatibility claims have not drifted unintentionally.
 6. The final report states what changed, what was run, and any live or
    clean-room evidence that remains unavailable.
