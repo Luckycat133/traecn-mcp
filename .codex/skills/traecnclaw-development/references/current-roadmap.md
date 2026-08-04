@@ -1,6 +1,6 @@
 # TRAECNclaw current roadmap
 
-This file is the active engineering backlog after the 0.5.3 reliability and
+This file is the active engineering backlog after the 0.5.4 reliability and
 security release. Check
 `package.json`, the latest commits, open pull requests, and open issues before
 treating an item as unfinished. The longer `development-guide.md` retains
@@ -8,7 +8,7 @@ architecture history and full playbooks.
 
 ## Current baseline
 
-- Release line: 0.5.3.
+- Release line: 0.5.4.
 - Runtime: Node.js 22 CommonJS.
 - Public MCP contract: version 5 with exactly 20 ordered tools.
 - Modern MCP: per-request 2026 metadata, Tasks adapter, exact-ID task

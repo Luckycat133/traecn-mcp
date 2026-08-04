@@ -306,7 +306,7 @@ Extraction rules:
 - Prefer dependency injection for drivers, stores, clocks, and process hooks so
   fault tests remain deterministic.
 
-## Roadmap after 0.5.3
+## Roadmap after 0.5.4
 
 Recommended next scope:
 

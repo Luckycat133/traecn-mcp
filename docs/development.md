@@ -160,6 +160,11 @@ Keep `CHANGELOG.md` under `Unreleased` during development. At release time,
 move those entries under `## [X.Y.Z] - YYYY-MM-DD`; do not put commit-message
 dumps or a hard-coded current version in usage guides.
 
+For a public release, tag the verified commit, push the tag to GitHub, and
+publish the canonical Skill directory to ClawHub with the same version and
+source commit. Inspect the ClawHub version after publishing; a source version
+alone is not evidence that a public package exists.
+
 ## Adding API Endpoints
 
 1. Implement the handler in `src/http/gateway.js`.

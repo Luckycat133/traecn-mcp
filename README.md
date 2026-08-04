@@ -469,7 +469,10 @@ Verify workflow runs the same non-quota gate on pushes and pull requests.
 Pushing a version tag starts the GitHub release workflow. The workflow repeats
 the clean-room gate, verifies the tag's source revision and artifact manifest,
 then creates or updates the matching GitHub Release assets. npm publication and
-marketplace submission remain explicit maintainer actions.
+marketplace submission remain explicit maintainer actions. ClawHub publication
+must use the tagged `skills/traecnclaw-mcp` directory and record the same source
+commit; the exact command and post-publish inspection are in
+`docs/DISTRIBUTION.md`.
 
 Before public distribution, make the repository or release artifact public,
 run `npm run verify`, synchronize the public mirror to the exact tagged commit,

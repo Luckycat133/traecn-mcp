@@ -1,9 +1,23 @@
 # Migrating to 0.5.x
 
 This guide covers the 0.3.x to 0.5.0 migration and compatible patch updates
-through 0.5.3. TRAECNclaw 0.5.0 freezes MCP contract version 5 and repairs the
+through 0.5.4. TRAECNclaw 0.5.0 freezes MCP contract version 5 and repairs the
 distribution, configuration, persistence, and security boundaries that changed
 throughout the 0.4.x series.
+
+## Updating from 0.5.3 to 0.5.4
+
+Version 0.5.4 is a compatible reliability, architecture, and release-verification
+update. Durable task acceptance is now owned by `TaskOrchestrator`, which rolls
+back the in-memory candidate and records a failed history state when the active
+queue cannot be persisted. Completion-event clients can acknowledge cursors
+after retention pruning, and an unknown future cursor no longer stalls later
+events or long-poll subscriptions.
+
+The HTTP route table now composes metadata from extracted handler modules. The
+frozen MCP contract version 5 and its ordered 20-tool surface are unchanged.
+Release tags now run the clean-room gate and artifact manifest checks before
+GitHub Release assets are uploaded.
 
 ## Updating from 0.5.2 to 0.5.3
 
@@ -20,11 +34,10 @@ version 5 and its ordered 20-tool surface are unchanged.
 
 ## Installation source
 
-Do not keep the `traecnclaw` npm package pinned to version `0.3.1`. Until a 0.5.0 npm artifact
-has actually been published, install from the canonical GitHub release or a
-source checkout and point the MCP client at `mcp-server.js` (or the bundled
-Skill launcher). The repository does not claim an unpublished registry
-artifact is available.
+Install the exact 0.5.4 GitHub Release artifact or the matching published
+package when using a registry. A source checkout can point the MCP client at
+`mcp-server.js` or use the bundled Skill launcher. Do not mix a 0.5.4 Skill with
+an older server package when validating release-specific behavior.
 
 ## MCP contract
 
@@ -115,7 +128,7 @@ when other local processes are not trusted.
 ## Upgrade checklist
 
 1. Stop the old gateway and back up its active queue file.
-2. Update the source checkout or unpack the 0.5.0 release artifacts.
+2. Update the source checkout or unpack the 0.5.4 release artifacts.
 3. Remove MCP profile configuration and switch to canonical environment names.
 4. Run `npm install`, `npm run doctor`, and `npm run verify`.
 5. Start TraeCN with CDP on port 9222, then start the gateway and reconnect the

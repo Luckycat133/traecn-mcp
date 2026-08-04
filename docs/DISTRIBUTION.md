@@ -44,6 +44,29 @@ marker, artifact sizes, and SHA-256 digests. Pushing a `vX.Y.Z` tag runs the
 same check in `.github/workflows/release.yml` and uploads the exact artifacts
 to the matching GitHub Release.
 
+## ClawHub Publication
+
+Publish the canonical Skill directory only after the final version commit is
+tagged and the release gate has passed:
+
+```sh
+clawhub publish skills/traecnclaw-mcp \
+  --slug traecnclaw-mcp \
+  --name "TRAECNclaw MCP" \
+  --version "$(node -p "require('./package.json').version")" \
+  --tags latest,mcp,agent-skills,codex,openclaw,traecn \
+  --source-repo https://github.com/Luckycat133/TRAECNclaw \
+  --source-commit "$(git rev-parse HEAD)" \
+  --source-ref "v$(node -p "require('./package.json').version")" \
+  --source-path skills/traecnclaw-mcp \
+  --changelog "See CHANGELOG.md for the verified release changes."
+clawhub inspect traecnclaw-mcp --versions --limit 3
+```
+
+The inspect result must show the requested version as `latest` and the clean
+security scan before announcing the listing. Never publish a working tree or a
+Skill directory copied from a different commit.
+
 ## Manual Skill Install
 
 From a source checkout:
@@ -132,8 +155,8 @@ template. Do not register it alongside Option A.
 
 For package installs, use `command: "traecnclaw-mcp"` only after that exact
 version is verified on npm. Source and release-archive instructions are the
-authoritative 0.5.3 path until registry publication completes; the generated
-server archive is installable directly from a GitHub Release download.
+authoritative 0.5.4 path; the generated server archive is installable directly
+from a GitHub Release download.
 
 ## Public mirror synchronization
 
@@ -147,12 +170,12 @@ node scripts/public-mirror.js --check --mirror /path/to/traecnclaw-mcp-skill --r
 The command copies `skills/traecnclaw-mcp` byte-for-byte, writes the exact
 canonical commit to `SOURCE_REVISION`, refreshes version/contract metadata,
 keeps `glama.json`, and removes the obsolete legacy `smithery.yaml`. The
-canonical commit must be the commit tagged `v0.5.3`; a dirty working tree is
+canonical commit must be the commit tagged `v0.5.4`; a dirty working tree is
 not a release source.
 
 The bundled MCP server supports the stable `2026-07-28` protocol over standard
 newline-delimited stdio and legacy `initialize` clients. Catalog descriptions
-should call it a local stdio server; Streamable HTTP is not exposed by 0.5.3.
+should call it a local stdio server; Streamable HTTP is not exposed by 0.5.4.
 The server also advertises the separately negotiated, upstream-draft
 `io.modelcontextprotocol/tasks` extension for durable task handles and exact-ID
 completion subscriptions; do not describe the extension itself as core MCP.
@@ -160,9 +183,10 @@ completion subscriptions; do not describe the extension itself as core MCP.
 Smithery now distributes local stdio servers as MCPB bundles, so no replacement
 legacy YAML is generated. The official MCP Registry metadata template lives at
 `distribution/public-mirror/server.json.template`, but it must not be copied to
-the public mirror or published until npm contains the matching 0.5.3 package.
+the public mirror or published until npm contains the matching 0.5.4 package.
 The Registry validates that package version and the `mcpName` field before it
-accepts `server.json`.
+accepts `server.json`. The current GitHub and ClawHub release is 0.5.4; npm
+publication remains a separate maintainer action.
 
 ## Directory Submissions
 
