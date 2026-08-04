@@ -1,0 +1,58 @@
+name: Release verification
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to verify (for example v0.5.4)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify the tag is the checked-out commit
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          test "$(git rev-list -n1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then test "$(git rev-parse HEAD)" = "$GITHUB_SHA"; fi
+          test -z "$(git status --porcelain)"
+
+      - run: npm ci
+      - run: npm run test:release
+
+      - name: Verify release version and manifest provenance
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          test "${RELEASE_TAG#v}" = "$(node -p "require('./package.json').version")"
+          npm run verify:release-manifest
+
+      - name: Create or update the GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
+          mapfile -t ARTIFACTS < <(node -e "const m=require('./dist/traecnclaw-mcp-release.json'); console.log(m.artifacts.map(a=>a.path).concat(m.serverPackage.artifact.path, 'dist/traecnclaw-mcp-release.json').join('\\n'))")
+          gh release upload "$RELEASE_TAG" "${ARTIFACTS[@]}" --clobber

@@ -260,9 +260,11 @@ Use official SDK clients where practical. Assert:
 
 ### 6. Gateway ownership reduction — in progress
 
-`CompletionSignal` is extracted and tested. `TaskOrchestrator` and additional
-task creation/completion classification remain future extractions; move one
-behavior at a time without restoring notification logic to `Gateway`.
+`CompletionSignal` is extracted and tested. The first `TaskOrchestrator` slice
+now owns candidate task construction and durable acceptance, and extracted
+handler route slices are composed by the central route table. Additional task
+lifecycle and completion-classification behavior remains future extraction;
+move one behavior at a time without restoring notification logic to `Gateway`.
 
 Continue the extraction without changing public behavior.
 

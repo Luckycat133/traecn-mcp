@@ -43,6 +43,7 @@ const {
 const { redactUrl: _redactUrl } = require('./request-gate');
 const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, RateLimiter } = require('./request-gate');
 const { TaskQueueService } = require('./task-queue-service');
+const { TaskOrchestrator } = require('./task-orchestrator');
 const { resolveTaskStorePath } = require('./task-store');
 const { TraeControl } = require('../cdp/trae-control');
 const { matchRoute, resolveHandler } = require('./route-table');
@@ -163,6 +164,21 @@ class Gateway {
     // Point the read-only alias at the state machine's lock map. All
     // mutations go through taskQueueService.tryAcquire/release.
     this.taskLocks = this.taskQueueService.taskLocks;
+
+    this.taskOrchestrator = options.taskOrchestrator || new TaskOrchestrator({
+      taskHistoryStore: this.taskHistoryStore,
+      taskQueue: this.taskQueue,
+      taskQueueService: this.taskQueueService,
+      getDriverConfig: () => this.driver?.config || {},
+      normalizeFollowupTasks: items => this._normalizeFollowupTasks(items),
+      normalizeCompletionChecks: input => this._normalizeCompletionChecks(input),
+      hasCompletionChecks: checks => this._hasCompletionChecks(checks),
+      normalizeFallbackModels: (items, autoModelFallback) => this._normalizeFallbackModels(items, autoModelFallback),
+      modelProbeIntervalMs: value => this._modelProbeIntervalMs(value),
+      normalizeAutoApproveDialog: value => this._normalizeAutoApproveDialog(value),
+      normalizeSoloChatTarget: value => this._normalizeSoloChatTarget(value),
+      syncTaskHistoryMirror: task => this._syncTaskHistoryMirror(task)
+    });
 
     this.configManager.on('configChanged', (data) => {
       this._applyConfigChanges(data.changes);
@@ -476,110 +492,12 @@ class Gateway {
   }
 
   _createQueuedTask(body, queueStatus = {}) {
-    if (isGenericQueueProbeTask(body && body.task)) {
-      throw TraeCNAutomationError.invalidInput('task', '[generic queue probe]', 'generic_queue_probe_task_rejected');
-    }
-    const reviewRequired = body.reviewRequired === true;
-    const autoContinue = body.autoContinue === true;
-    const followupTasks = this._normalizeFollowupTasks(body.followupTasks);
-    const completionChecks = this._normalizeCompletionChecks(body.completionChecks || body);
-    const fallbackModels = this._normalizeFallbackModels(body.fallbackModels, body.autoModelFallback === true);
-    const modelProbeIntervalMs = this._modelProbeIntervalMs(body.modelProbeIntervalMs);
-    const autoApproveDialog = this._normalizeAutoApproveDialog(body.autoApproveDialog);
-    const projectPath = typeof body.projectPath === 'string' && body.projectPath.trim()
-      ? body.projectPath.trim()
-      : null;
-    const historyTaskId = this.taskHistoryStore.createTask(null, body.task, {
-      metadata: {
-        source: 'delegate_async',
-        projectPath,
-        reviewRequired,
-        autoContinue,
-        followupCount: followupTasks.length,
-        notifyUrl: body.notifyUrl || null,
-        autoApproveDialog,
-        fallbackModels
-      }
-    });
-    const perTaskTimeoutMs = this.driver.config.queuePerTaskTimeoutMs || 600000;
-    const explicitQueueMaxWaitMs = Number(body.maxQueueWaitMs ?? body.queueMaxWaitMs ?? this.driver.config.queueMaxWaitMs);
-    const queueMaxWaitMs = Number.isFinite(explicitQueueMaxWaitMs) && explicitQueueMaxWaitMs > 0
-      ? explicitQueueMaxWaitMs
-      : null;
-    const now = Date.now();
-    const task = {
-      taskId: historyTaskId,
-      sessionId: typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : null,
-      idempotencyKey: typeof body.idempotencyKey === 'string' && body.idempotencyKey.trim()
-        ? body.idempotencyKey.trim()
-        : null,
-      chatId: body.chatId || null,
-      soloChat: this._normalizeSoloChatTarget(body.soloChat || body.soloChatTarget || {
-        index: body.soloChatIndex,
-        titleIncludes: body.soloChatTitleIncludes,
-        textIncludes: body.soloChatTextIncludes
-      }),
-      task: body.task,
-      projectPath,
-      desiredModel: typeof body.desiredModel === 'string' ? body.desiredModel : null,
-      desiredMode: body.desiredMode === 'solo' || body.desiredMode === 'ide' ? body.desiredMode : null,
-      newConversation: body.newConversation !== false,
-      status: 'queued',
-      createdAt: now,
-      deadline: queueMaxWaitMs ? now + Math.min(perTaskTimeoutMs, queueMaxWaitMs) : null,
-      maxDeadline: queueMaxWaitMs ? now + queueMaxWaitMs : null,
-      timeoutExtensions: 0,
-      attempts: 0,
-      includeProcessText: body.includeProcessText === true,
-      reviewRequired,
-      autoContinue,
-      followupTasks,
-      completionChecks,
-      autoApproveDialog,
-      notifyUrl: typeof body.notifyUrl === 'string' ? body.notifyUrl : null,
-      submittedToTrae: false,
-      submittedAt: null,
-      queueState: queueStatus.running ? 'running' : 'queued',
-      queuePosition: queueStatus.queuePosition || queueStatus.position || null,
-      currentModel: queueStatus.currentModel || null,
-      queueEstimatedWait: queueStatus.queueEstimatedWait || null,
-      queueMessage: queueStatus.queueMessage || queueStatus.message || null,
-      fallbackModels,
-      modelProbeIntervalMs,
-      lastModelProbeAt: null,
-      nextModelProbeAt: fallbackModels.length > 0 ? Date.now() : null,
-      modelProbeResults: [],
-      result: null,
-      error: null,
-      reviewDecision: null,
-      reviewNotes: null,
-      nextTaskId: null
-    };
-    this.taskHistoryStore.recordStep(historyTaskId, 'queued', {
-      details: {
-        queueState: task.queueState,
-        queuePosition: queueStatus.queuePosition || queueStatus.position || null,
-        queueMessage: task.queueMessage,
-        fallbackModels,
-        reviewRequired,
-        autoContinue,
-        autoApproveDialog,
-        completionChecks: this._hasCompletionChecks(completionChecks),
-        followupCount: followupTasks.length
-      }
-    });
-    this.taskQueue.set(historyTaskId, task);
-    if (!this._persistActiveQueue()) {
-      this.taskQueue.delete(historyTaskId);
-      const health = this.taskQueueService.getPersistenceHealth();
-      const error = TraeCNAutomationError.taskStoreUnavailable(health);
-      if (this.taskHistoryStore && typeof this.taskHistoryStore.failTask === 'function') {
-        this.taskHistoryStore.failTask(historyTaskId, error);
-      }
-      throw error;
-    }
-    this._syncTaskHistoryMirror(task);
-    return task;
+    // Keep the extracted boundary aligned with Gateway-owned stores. Tests,
+    // recovery, and embedders may replace these dependencies after startup.
+    this.taskOrchestrator.taskHistoryStore = this.taskHistoryStore;
+    this.taskOrchestrator.taskQueue = this.taskQueue;
+    this.taskOrchestrator.taskQueueService = this.taskQueueService;
+    return this.taskOrchestrator.createQueuedTask(body, queueStatus);
   }
 
   _appendSessionMessage(sessionId, message = {}) {

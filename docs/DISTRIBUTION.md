@@ -33,6 +33,17 @@ The command writes:
 `dist/` is intentionally ignored by git. Attach these artifacts to a GitHub
 Release or upload them to a download page.
 
+Verify a manifest generated from a clean final commit before publishing it:
+
+```sh
+npm run verify:release-manifest
+```
+
+This checks the checked-out source revision, package version, clean-source
+marker, artifact sizes, and SHA-256 digests. Pushing a `vX.Y.Z` tag runs the
+same check in `.github/workflows/release.yml` and uploads the exact artifacts
+to the matching GitHub Release.
+
 ## Manual Skill Install
 
 From a source checkout:
@@ -181,7 +192,9 @@ Before making the repository public or attaching release artifacts:
 2. Run `npm run verify`.
 3. Run `npm run check:skill-contracts` to validate the canonical Skill and generated MCP contract.
 4. Run `npm run test:release`; keep the generated checksums and require the
-   clean-room install, 20-tool discovery, mock submission, and result read to pass.
+   clean-room install, 20-tool discovery, mock submission, result read, and
+   release-manifest verification to pass. A pushed version tag repeats this
+   gate in GitHub Actions before creating or updating the GitHub Release.
 5. Scan current files and git history for `.env`, tokens, cookies, auth headers,
    raw TraeCN profiles, and local-only paths.
 6. Replace any credential-bearing git remote URL with a credential-free HTTPS or

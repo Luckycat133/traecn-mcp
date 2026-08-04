@@ -175,9 +175,7 @@ class TaskEventStore {
 
   list(options = {}) {
     const clientId = normalizeClientId(options.clientId);
-    const acknowledgedSequence = eventSequence(this.acknowledged[clientId]);
-    const requestedSequence = eventSequence(options.after);
-    const afterSequence = Math.max(acknowledgedSequence, requestedSequence);
+    const afterSequence = this._effectiveCursor(clientId, options.after);
     const limit = Math.min(parsePositiveInt(options.limit, 20), 100);
     const events = this.events
       .filter(event => eventSequence(event.eventId) > afterSequence)
@@ -188,15 +186,26 @@ class TaskEventStore {
     return {
       clientId,
       events,
-      cursor: events.length > 0 ? events[events.length - 1].eventId : (this.acknowledged[clientId] || options.after || null),
+      cursor: events.length > 0 ? events[events.length - 1].eventId : (afterSequence > 0 ? `evt_${afterSequence}` : null),
       hasMore: this.events.some(event => eventSequence(event.eventId) > lastReturnedSequence)
     };
+  }
+
+  _effectiveCursor(clientId, requestedCursor) {
+    const acknowledgedSequence = Math.min(eventSequence(this.acknowledged[clientId]), this.sequence);
+    const requestedSequence = eventSequence(requestedCursor);
+    // A cursor from a newer process or a corrupted client must not move the
+    // effective position beyond the current log. Reset unknown future
+    // cursors to the beginning of the retained window so a later append can
+    // still wake the client instead of stalling forever.
+    const safeRequestedSequence = requestedSequence > this.sequence ? 0 : requestedSequence;
+    return Math.max(acknowledgedSequence, safeRequestedSequence);
   }
 
   ack(clientId, eventId) {
     const normalizedClientId = normalizeClientId(clientId);
     const nextSequence = eventSequence(eventId);
-    if (nextSequence <= 0 || !this.events.some(event => event.eventId === eventId)) {
+    if (nextSequence <= 0 || nextSequence > this.sequence) {
       return { acknowledged: false, clientId: normalizedClientId, eventId: null };
     }
     const currentSequence = eventSequence(this.acknowledged[normalizedClientId]);

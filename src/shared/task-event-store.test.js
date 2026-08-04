@@ -62,6 +62,35 @@ test('TaskEventStore computes hasMore from the effective cursor', () => {
   assert.strictEqual(exhaustedByAcknowledgement.hasMore, false);
 });
 
+test('TaskEventStore accepts an acknowledged cursor after its event was pruned', () => {
+  const store = new TaskEventStore({ persistencePath: null, maxEvents: 2 });
+  const first = store.append({ type: 'task.completed', taskId: 'task-1', status: 'done' });
+  store.append({ type: 'task.completed', taskId: 'task-2', status: 'done' });
+  store.append({ type: 'task.completed', taskId: 'task-3', status: 'done' });
+
+  assert.deepStrictEqual(store.list({ clientId: 'slow-client' }).events.map(event => event.taskId), ['task-2', 'task-3']);
+  const acknowledgement = store.ack('slow-client', first.eventId);
+  assert.deepStrictEqual(acknowledgement, {
+    acknowledged: true,
+    clientId: 'slow-client',
+    eventId: first.eventId
+  });
+
+  store.append({ type: 'task.completed', taskId: 'task-4', status: 'done' });
+  assert.deepStrictEqual(store.list({ clientId: 'slow-client' }).events.map(event => event.taskId), ['task-3', 'task-4']);
+});
+
+test('TaskEventStore does not let an unknown future cursor stall later events', () => {
+  const store = new TaskEventStore({ persistencePath: null });
+  const before = store.list({ clientId: 'future-client', after: 'evt_999' });
+  assert.deepStrictEqual(before.events, []);
+  assert.strictEqual(before.cursor, null);
+
+  store.append({ type: 'task.completed', taskId: 'task-after-future-cursor', status: 'done' });
+  const after = store.list({ clientId: 'future-client', after: 'evt_999' });
+  assert.deepStrictEqual(after.events.map(event => event.taskId), ['task-after-future-cursor']);
+});
+
 test('TaskEventStore reloads events and client cursors after restart', () => {
   const target = tempStorePath();
   try {
@@ -72,6 +101,26 @@ test('TaskEventStore reloads events and client cursors after restart', () => {
     const restarted = new TaskEventStore({ persistencePath: target.file });
     assert.deepStrictEqual(restarted.list({ clientId: 'codex' }).events, []);
     assert.deepStrictEqual(restarted.list({ clientId: 'other-ide' }).events.map(item => item.taskId), ['task-persisted']);
+  } finally {
+    fs.rmSync(target.dir, { recursive: true, force: true });
+  }
+});
+
+test('TaskEventStore preserves a pruned client cursor across restart', () => {
+  const target = tempStorePath();
+  try {
+    const firstStore = new TaskEventStore({ persistencePath: target.file, maxEvents: 2 });
+    const first = firstStore.append({ type: 'task.completed', taskId: 'task-pruned-1', status: 'done' });
+    firstStore.append({ type: 'task.completed', taskId: 'task-pruned-2', status: 'done' });
+    firstStore.append({ type: 'task.completed', taskId: 'task-pruned-3', status: 'done' });
+    assert.strictEqual(firstStore.ack('slow-client', first.eventId).acknowledged, true);
+
+    const restarted = new TaskEventStore({ persistencePath: target.file, maxEvents: 2 });
+    restarted.append({ type: 'task.completed', taskId: 'task-pruned-4', status: 'done' });
+    assert.deepStrictEqual(
+      restarted.list({ clientId: 'slow-client' }).events.map(event => event.taskId),
+      ['task-pruned-3', 'task-pruned-4']
+    );
   } finally {
     fs.rmSync(target.dir, { recursive: true, force: true });
   }
@@ -249,6 +298,17 @@ asyncTest('TaskEventStore wait resolves when a new event is appended', async () 
   const result = await waiting;
   assert.strictEqual(result.events.length, 1);
   assert.strictEqual(result.events[0].taskId, 'task-needs-input');
+});
+
+asyncTest('TaskEventStore long-poll wakes for a new event after an unknown future cursor', async () => {
+  const store = new TaskEventStore({ persistencePath: null });
+  const waiting = store.wait({ clientId: 'future-long-poll', after: 'evt_999', timeoutMs: 1000 });
+  setTimeout(() => {
+    store.append({ type: 'task.completed', taskId: 'task-wakes-future-client', status: 'done' });
+  }, 10);
+
+  const result = await waiting;
+  assert.deepStrictEqual(result.events.map(event => event.taskId), ['task-wakes-future-client']);
 });
 
 (async () => {

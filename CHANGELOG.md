@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- Added an injectable `TaskOrchestrator` boundary for candidate task
+  construction and durable acceptance, including rollback coverage when the
+  active TaskStore is unavailable.
+- Added `npm run verify:release-manifest` and a tag-triggered GitHub workflow
+  that verifies source provenance, versions, artifact sizes, and SHA-256
+  checksums before uploading release assets.
+
+### Changed
+
+- Made extracted HTTP handler modules the source of truth for their route
+  metadata; the Gateway route table now composes those slices and retains only
+  Gateway-owned configuration, settings, confirmation, and debug routes.
+
+### Fixed
+
+- Accepted acknowledgements for valid completion-event cursors after their
+  events have been pruned, and reset unknown future cursors so later events do
+  not stall a client or long-poll subscription permanently.
+
 ## [0.5.3] - 2026-08-03
 
 ### Added

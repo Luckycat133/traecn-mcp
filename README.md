@@ -268,8 +268,10 @@ without claiming version-specific support.
 
 Task completion delivery is owned by `CompletionSignal`, which records the
 durable event before broadcasting WebSocket, OpenClaw, or webhook output. The
-Gateway retains lifecycle and dependency wiring instead of duplicating those
-delivery rules.
+`TaskOrchestrator` now owns candidate task construction and the acceptance
+transaction (history identity, active-queue persistence, rollback, and history
+mirror). The Gateway retains lifecycle and dependency wiring instead of
+duplicating those ownership boundaries.
 
 ### Documentation
 
@@ -435,6 +437,9 @@ and coverage. It never spends TraeCN quota.
 `npm run test:release` additionally builds both Skill and complete server
 artifacts, installs them under a temporary HOME, starts the mock gateway and
 stdio MCP server, verifies the exact 20 tools, and completes one mock task.
+It also runs `npm run verify:release-manifest`, which checks that every release
+artifact is built from the checked-out commit and matches its recorded size and
+SHA-256 checksum.
 
 `npm run contract:audit` inventories contract declarations and already-recorded
 evidence. It does not execute the behaviors it lists, so a passing contract
@@ -461,9 +466,10 @@ without creating a tag and synchronize every distribution surface. Run
 increments only for a deliberately larger compatibility milestone, and major
 increments only for an explicitly documented breaking contract. The checked-in
 Verify workflow runs the same non-quota gate on pushes and pull requests.
-Tagging, artifact upload, npm publication, marketplace submission, and GitHub
-Release creation remain explicit maintainer actions; the repository does not
-claim they happened merely because a version was changed.
+Pushing a version tag starts the GitHub release workflow. The workflow repeats
+the clean-room gate, verifies the tag's source revision and artifact manifest,
+then creates or updates the matching GitHub Release assets. npm publication and
+marketplace submission remain explicit maintainer actions.
 
 Before public distribution, make the repository or release artifact public,
 run `npm run verify`, synchronize the public mirror to the exact tagged commit,

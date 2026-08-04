@@ -23,6 +23,9 @@ architecture history and full playbooks.
 - Completion delivery: `CompletionSignal` owns durable events and outbound
   adapters; TaskEventStore schema 2 provides atomic snapshots, checksums,
   backup recovery, quarantine, migration, and write/load health.
+- Acceptance ownership: `TaskOrchestrator` owns candidate task construction,
+  durable active-queue acceptance, rollback, and history mirroring; extracted
+  handler route slices are composed by the central route table.
 
 Do not rebuild these capabilities from scratch. Fix demonstrated regressions at
 the component that owns them.
@@ -52,6 +55,9 @@ Preserve these behaviors after the patch is merged:
 - Completion-event append failure rolls back the candidate and suppresses
   outbound delivery. A cursor persistence failure leaves the cursor unchanged
   and returns HTTP 503 instead of claiming acknowledgement.
+- A valid completion-event cursor remains acknowledgeable after its event is
+  pruned, and an unknown future cursor resets to the retained window instead of
+  stalling future list or long-poll calls.
 - `GET /api/status` reports completion-event persistence and recovery health
   under `durability.taskEvents`, and aggregate degraded durability includes both
   active tasks and completion events.
@@ -77,6 +83,9 @@ Exit criteria for the next reliability patch:
   stall permanently.
 - Focused fault tests and the repository-wide gate pass.
 
+The cursor/pruning edge cases above are now covered by deterministic unit tests;
+continue with restart and retry fault injection before changing retention policy.
+
 ## P1 — current live compatibility evidence
 
 The adapter framework exists; the next value comes from evidence rather than
@@ -94,10 +103,10 @@ more fallback selectors:
 
 ## P1 — TaskOrchestrator extraction
 
-`Gateway` still contains too much task application logic. Reduce it without a
-broad rewrite:
+`Gateway` still contains too much task application logic. The first extraction
+is complete: `TaskOrchestrator` now owns candidate construction and the durable
+acceptance transaction. Continue without a broad rewrite:
 
-- Extract candidate-task construction and acceptance as one component first.
 - Move lifecycle transitions only after characterizing current status codes,
   history steps, persisted fields, idempotency, and completion events.
 - Inject driver, TaskStore, TaskEventStore, history, clock, and completion
@@ -123,6 +132,8 @@ For each release-facing change:
 - Generate the public mirror from the same commit and compare canonical Skill
   bytes.
 - Tag only after the final verification commit is known.
+- `npm run verify:release-manifest` and the tag workflow verify source
+  provenance, artifact sizes, and SHA-256 checksums before asset upload.
 - Update external listings only after the exact downloadable/package version is
   visible.
 
@@ -143,13 +154,15 @@ through tests, not speculation:
 
 ## Suggested next issues
 
-1. Add pruning/restart tests for several legacy and Tasks subscription cursors.
+1. Add restart/retry fault tests for several legacy and Tasks subscription
+   cursors.
 2. Record live evidence for the currently installed TraeCN build.
-3. Extract durable task acceptance into a TaskOrchestrator component.
-4. Consolidate route ownership after the orchestrator boundary is stable.
-5. Add a release job that verifies artifact source revision and checksums from
-   the final tag candidate.
-6. Refresh third-party listings only after the verified package is published.
+3. Move one lifecycle transition from Gateway into `TaskOrchestrator` while
+   preserving status, history, and completion-event behavior.
+4. Consolidate remaining Gateway-owned route metadata only when the handler
+   boundary is stable.
+5. Refresh third-party listings only after the next verified package is
+   published.
 
 ## Non-goals for the next patch
 
