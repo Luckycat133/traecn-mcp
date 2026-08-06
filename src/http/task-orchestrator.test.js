@@ -126,5 +126,57 @@ test('TaskOrchestrator rolls back candidate acceptance when persistence throws',
   assert.strictEqual(dependencies.history.failed[0].taskId, 'task-accepted-1');
 });
 
+test('TaskOrchestrator resolveIdempotentTask replays an accepted task as HTTP 202', () => {
+  const dependencies = createDependencies();
+  const orchestrator = createOrchestrator(dependencies, {
+    isTerminalStatus: (status) => ['done', 'error', 'cancelled'].includes(status)
+  });
+  const task = orchestrator.createQueuedTask(
+    { task: 'replay me', idempotencyKey: 'retry-safe-2' },
+    { queued: true }
+  );
+
+  const replay = orchestrator.resolveIdempotentTask('retry-safe-2');
+  assert.deepStrictEqual(replay, {
+    taskId: task.taskId,
+    status: 'accepted',
+    statusCode: 202
+  });
+  // The replay must not create a duplicate task.
+  assert.strictEqual(dependencies.taskQueue.size, 1);
+});
+
+test('TaskOrchestrator resolveIdempotentTask reports the real terminal status once finished', () => {
+  const dependencies = createDependencies();
+  const orchestrator = createOrchestrator(dependencies, {
+    isTerminalStatus: (status) => ['done', 'error', 'cancelled'].includes(status)
+  });
+  const task = orchestrator.createQueuedTask(
+    { task: 'already finished', idempotencyKey: 'terminal-replay-2' },
+    { queued: true }
+  );
+  task.status = 'done';
+
+  const replay = orchestrator.resolveIdempotentTask('terminal-replay-2');
+  assert.ok(replay);
+  assert.strictEqual(replay.taskId, task.taskId);
+  assert.strictEqual(replay.status, 'done');
+  assert.strictEqual(replay.statusCode, 202);
+});
+
+test('TaskOrchestrator resolveIdempotentTask returns null for an unknown or empty key', () => {
+  const dependencies = createDependencies();
+  const orchestrator = createOrchestrator(dependencies);
+  orchestrator.createQueuedTask(
+    { task: 'owned task', idempotencyKey: 'owned-key' },
+    { queued: true }
+  );
+
+  assert.strictEqual(orchestrator.resolveIdempotentTask('never-seen'), null);
+  assert.strictEqual(orchestrator.resolveIdempotentTask(''), null);
+  assert.strictEqual(orchestrator.resolveIdempotentTask(null), null);
+  assert.strictEqual(dependencies.taskQueue.size, 1);
+});
+
 summary();
 if (r.failed > 0) process.exit(1);

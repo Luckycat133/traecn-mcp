@@ -177,7 +177,8 @@ class Gateway {
       modelProbeIntervalMs: value => this._modelProbeIntervalMs(value),
       normalizeAutoApproveDialog: value => this._normalizeAutoApproveDialog(value),
       normalizeSoloChatTarget: value => this._normalizeSoloChatTarget(value),
-      syncTaskHistoryMirror: task => this._syncTaskHistoryMirror(task)
+      syncTaskHistoryMirror: task => this._syncTaskHistoryMirror(task),
+      isTerminalStatus: (status) => this._isTerminalTaskStatus(status)
     });
 
     this.configManager.on('configChanged', (data) => {
@@ -1271,15 +1272,17 @@ class Gateway {
     if (this.idempotencyKeys.has(key)) {
       return this.idempotencyKeys.get(key);
     }
-    const ownedTask = Array.from(this.taskQueue.values())
-      .find(task => task?.idempotencyKey === key);
-    if (ownedTask) {
+    // Delegate task-identity resolution to the orchestrator so the queue is
+    // not reached into from the HTTP layer. Keep the orchestrator's queue
+    // reference aligned the same way `_createQueuedTask` does, since tests
+    // and embedders may replace these dependencies after startup.
+    this.taskOrchestrator.taskQueue = this.taskQueue;
+    this.taskOrchestrator.isTerminalStatus = (status) => this._isTerminalTaskStatus(status);
+    const owned = this.taskOrchestrator.resolveIdempotentTask(key);
+    if (owned) {
       return {
-        data: {
-          taskId: ownedTask.taskId,
-          status: this._isTerminalTaskStatus(ownedTask.status) ? ownedTask.status : 'accepted'
-        },
-        statusCode: 202
+        data: { taskId: owned.taskId, status: owned.status },
+        statusCode: owned.statusCode
       };
     }
     return null;

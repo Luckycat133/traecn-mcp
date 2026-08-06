@@ -27,6 +27,7 @@ The repository is the source of truth. Do not assume roadmap items are unfinishe
 - `src/mcp/contract.js`: frozen MCP contract v5 and ordered 20-tool surface.
 - `src/mcp/protocol.js`, `stdio-server.js`, `task-extension.js`: MCP transport, Tasks, subscriptions, protocol eras.
 - `src/http/task-store.js`: durable active-task snapshots, atomic persistence, recovery, ownership.
+- `src/http/task-orchestrator.js`: candidate task construction, durable acceptance, rollback, history mirror, idempotency-key replay resolution.
 - `src/shared/task-event-store.js`: completion event ordering, cursors, acknowledgements, replay.
 - `src/http/completion-signal.js`: completion event generation and delivery adapters.
 - `src/trae-adapters`: versioned TraeCN capability detection and fixture replay.

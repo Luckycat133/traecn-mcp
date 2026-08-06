@@ -1,14 +1,14 @@
 # TRAECNclaw current roadmap
 
-This file is the active engineering backlog after the 0.5.4 reliability and
-security release. Check
+This file is the active engineering backlog after the 0.5.5 reliability and
+extraction patch. Check
 `package.json`, the latest commits, open pull requests, and open issues before
 treating an item as unfinished. The longer `development-guide.md` retains
 architecture history and full playbooks.
 
 ## Current baseline
 
-- Release line: 0.5.4.
+- Release line: 0.5.5.
 - Runtime: Node.js 22 CommonJS.
 - Public MCP contract: version 5 with exactly 20 ordered tools.
 - Modern MCP: per-request 2026 metadata, Tasks adapter, exact-ID task
@@ -24,8 +24,9 @@ architecture history and full playbooks.
   adapters; TaskEventStore schema 2 provides atomic snapshots, checksums,
   backup recovery, quarantine, migration, and write/load health.
 - Acceptance ownership: `TaskOrchestrator` owns candidate task construction,
-  durable active-queue acceptance, rollback, and history mirroring; extracted
-  handler route slices are composed by the central route table.
+  durable active-queue acceptance, rollback, history mirroring, and
+  idempotency-key replay resolution; extracted handler route slices are
+  composed by the central route table.
 
 Do not rebuild these capabilities from scratch. Fix demonstrated regressions at
 the component that owns them.
@@ -61,11 +62,23 @@ Preserve these behaviors after the patch is merged:
 - `GET /api/status` reports completion-event persistence and recovery health
   under `durability.taskEvents`, and aggregate degraded durability includes both
   active tasks and completion events.
+- Restart preserves task identity, idempotency ownership, `submittedToTrae`,
+  and partial results across the before-submit, after-durable-accept,
+  after-Trae-submission, and during-result-collection boundaries; terminal
+  tasks are not restored into the active queue.
+- Idempotency-key replay resolves through `TaskOrchestrator` after restart and
+  returns the original task identity with HTTP 202; a rolled-back acceptance
+  stores no replay and records a failed history step.
+- TaskEventStore client cursors remain independent across restart, and pruning
+  does not make a retained cursor replay another task's events.
 
 ## P0 — durable-state reliability
 
-Continue with the remaining edge behavior around the two durable stores and task
-identity:
+The cursor/pruning edge cases and the restart/retry fault-injection matrix are
+now covered by deterministic unit tests in `src/http/task-store.test.js`,
+`src/shared/task-event-store.test.js`, and `src/http/task-restart-retry.test.js`.
+Continue with the remaining edge behavior around the two durable stores and
+task identity only when a new regression appears:
 
 - Keep pagination, acknowledgement, pruning, restart, long-poll, and subscription
   cursor semantics executable and deterministic across multiple clients.
@@ -82,9 +95,6 @@ Exit criteria for the next reliability patch:
 - Pruning does not make active client/subscription cursors replay another task or
   stall permanently.
 - Focused fault tests and the repository-wide gate pass.
-
-The cursor/pruning edge cases above are now covered by deterministic unit tests;
-continue with restart and retry fault injection before changing retention policy.
 
 ## P1 — current live compatibility evidence
 
@@ -154,14 +164,12 @@ through tests, not speculation:
 
 ## Suggested next issues
 
-1. Add restart/retry fault tests for several legacy and Tasks subscription
-   cursors.
-2. Record live evidence for the currently installed TraeCN build.
-3. Move one lifecycle transition from Gateway into `TaskOrchestrator` while
-   preserving status, history, and completion-event behavior.
-4. Consolidate remaining Gateway-owned route metadata only when the handler
+1. Record live evidence for the currently installed TraeCN build.
+2. Move one more lifecycle transition from Gateway into `TaskOrchestrator`
+   while preserving status, history, and completion-event behavior.
+3. Consolidate remaining Gateway-owned route metadata only when the handler
    boundary is stable.
-5. Refresh third-party listings only after the next verified package is
+4. Refresh third-party listings only after the next verified package is
    published.
 
 ## Non-goals for the next patch

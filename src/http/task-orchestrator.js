@@ -31,6 +31,7 @@ class TaskOrchestrator {
     syncTaskHistoryMirror = () => {},
     now = () => Date.now(),
     isGenericQueueProbeTask: isQueueProbe = isGenericQueueProbeTask,
+    isTerminalStatus = () => false,
     taskStoreUnavailable = (health) => TraeCNAutomationError.taskStoreUnavailable(health),
   } = {}) {
     this.taskHistoryStore = taskHistoryStore;
@@ -47,6 +48,7 @@ class TaskOrchestrator {
     this.syncTaskHistoryMirror = syncTaskHistoryMirror;
     this.now = now;
     this.isGenericQueueProbeTask = isQueueProbe;
+    this.isTerminalStatus = typeof isTerminalStatus === 'function' ? isTerminalStatus : () => false;
     this.taskStoreUnavailable = taskStoreUnavailable;
   }
 
@@ -201,6 +203,31 @@ class TaskOrchestrator {
 
     this.syncTaskHistoryMirror(task);
     return task;
+  }
+
+  /**
+   * Resolve an idempotency-key replay against the active task queue.
+   *
+   * Returns `{ taskId, status, statusCode }` when an owned task matches the
+   * key, or `null` when no owned task matches. The `status` field reports the
+   * real terminal status once the task has finished, otherwise `accepted`; the
+   * `statusCode` is always 202 so the HTTP/MCP adapters keep their existing
+   * response shape.
+   *
+   * This consolidates task-identity resolution in the same boundary that owns
+   * acceptance, so restart, retry, and reconnect replays can be exercised
+   * without the HTTP layer reaching into the queue directly.
+   */
+  resolveIdempotentTask(idempotencyKey) {
+    if (!idempotencyKey || typeof idempotencyKey !== 'string') return null;
+    const ownedTask = Array.from(this.taskQueue.values())
+      .find(task => task && task.idempotencyKey === idempotencyKey);
+    if (!ownedTask) return null;
+    return {
+      taskId: ownedTask.taskId,
+      status: this.isTerminalStatus(ownedTask.status) ? ownedTask.status : 'accepted',
+      statusCode: 202
+    };
   }
 }
 

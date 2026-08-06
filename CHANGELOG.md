@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 <!-- Future changes go here. -->
 
+## [0.5.5] - 2026-08-05
+
+### Added
+
+- Added deterministic fault-injection and regression tests for task restart,
+  retry, and reconnection boundaries in `src/http/task-restart-retry.test.js`.
+  Coverage includes restart before Trae submission, after durable accept,
+  after Trae submission, during result collection, and after a terminal
+  event; idempotency replay after restart; TaskStore write-failure rollback
+  with history `failTask` and no stored replay; TaskEventStore cursor
+  independence across restart; pruning cursor safety across tasks; and
+  long-poll wake after restart with a future cursor.
+
+### Changed
+
+- Extracted idempotency-key replay resolution from
+  `Gateway._checkIdempotency` into `TaskOrchestrator.resolveIdempotentTask`,
+  consolidating task-identity ownership in the orchestrator boundary. The
+  HTTP layer now delegates the active-queue lookup to the orchestrator while
+  retaining the in-memory idempotency cache. HTTP 202 status codes, response
+  shapes, terminal-status mapping, history, persistence, and
+  completion-event semantics are unchanged.
+
 ## [0.5.4] - 2026-08-04
 
 ### Added

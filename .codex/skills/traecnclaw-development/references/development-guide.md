@@ -260,11 +260,13 @@ Use official SDK clients where practical. Assert:
 
 ### 6. Gateway ownership reduction — in progress
 
-`CompletionSignal` is extracted and tested. The first `TaskOrchestrator` slice
-now owns candidate task construction and durable acceptance, and extracted
-handler route slices are composed by the central route table. Additional task
-lifecycle and completion-classification behavior remains future extraction;
-move one behavior at a time without restoring notification logic to `Gateway`.
+`CompletionSignal` is extracted and tested. The `TaskOrchestrator` slice now
+owns candidate task construction, durable acceptance, rollback, history
+mirroring, and idempotency-key replay resolution (`resolveIdempotentTask`).
+Extracted handler route slices are composed by the central route table.
+Additional task lifecycle and completion-classification behavior remains
+future extraction; move one behavior at a time without restoring notification
+logic to `Gateway`.
 
 Continue the extraction without changing public behavior.
 
@@ -306,7 +308,7 @@ Extraction rules:
 - Prefer dependency injection for drivers, stores, clocks, and process hooks so
   fault tests remain deterministic.
 
-## Roadmap after 0.5.4
+## Roadmap after 0.5.5
 
 Recommended next scope:
 
