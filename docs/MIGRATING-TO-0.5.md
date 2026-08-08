@@ -1,13 +1,13 @@
 # Migrating to 0.5.x
 
 This guide covers the 0.3.x to 0.5.0 migration and compatible patch updates
-through the selected 0.5.6 release candidate. TRAECNclaw 0.5.0 freezes MCP contract version 5 and repairs the
+through source version 0.5.6. TRAECNclaw 0.5.0 freezes MCP contract version 5 and repairs the
 distribution, configuration, persistence, and security boundaries that changed
 throughout the 0.4.x series.
 
 ## Updating to 0.5.6
 
-The current 0.5.6 candidate contains compatible reliability and onboarding
+Source version 0.5.6 contains compatible reliability and onboarding
 changes newer than the immutable `v0.5.5` tag. It hardens Quickstart CDP
 identity probing, applies the CLI's intended request timeout, upgrades
 TaskHistory to checksummed atomic schema 2 persistence with health reporting,
@@ -21,15 +21,15 @@ original active task or the retained terminal result; a different semantic
 request using the same key returns HTTP 409. Terminal replays expire after
 `TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS`, which defaults to 24 hours.
 
-MCP is the primary Agent path in this release candidate. Generate a resolved
+MCP is the primary Agent path in 0.5.6. Generate a resolved
 client entry with `npm run --silent setup:mcp`, or create a new file with
 `npm run setup:mcp -- --output FILE`. The CLI remains the live-validation path,
 the web UI is diagnostic, and OpenClaw remains an ecosystem adapter.
 
-The compatible version decision is `0.5.6`, but it is not a public release
-until the exact clean version-preparation commit passes `npm run test:release`
-and matching GitHub Release server and Skill artifacts are published. Never
-move the historical `v0.5.5` tag.
+The compatible version decision has been applied as source version `0.5.6`,
+but source metadata alone is not a public release. Publishing still requires
+`npm run test:release` on the exact clean revision plus matching GitHub Release
+server and Skill artifacts. Never move the historical `v0.5.5` tag.
 
 ## Updating from 0.5.4 to 0.5.5
 
@@ -43,7 +43,7 @@ replay resolution is owned by `TaskOrchestrator`; HTTP response status and the
 The immutable `v0.5.5` tag already points to commit `4c01911`, but no matching
 GitHub Release assets were published. Do not move the tag to include later
 fixes. Any historical 0.5.5 artifact must be built from that exact commit; the
-current Unreleased work belongs to the next selected version.
+later completion work is source version 0.5.6.
 
 ## Updating from 0.5.3 to 0.5.4
 
@@ -74,11 +74,11 @@ version 5 and its ordered 20-tool surface are unchanged.
 
 ## Installation source
 
-As of 2026-08-08, there is no complete public 0.5.5 server + Skill installation
-pair: ClawHub has the 0.5.5 Skill, the latest downloadable canonical GitHub
-Release is 0.5.4, npm `traecnclaw` is 0.3.1, and the public mirror still
-identifies canonical 0.5.3. Use an authorized source checkout for current
-Unreleased behavior. A source checkout can point the MCP client at
+As of 2026-08-08, there is no complete public 0.5.6 server + Skill installation
+pair: source is 0.5.6, ClawHub has the 0.5.5 Skill, the latest downloadable
+canonical GitHub Release is 0.5.4, npm `traecnclaw` is 0.3.1, and the public
+mirror still identifies canonical 0.5.3. Use an authorized exact 0.5.6 source
+checkout for current behavior. A source checkout can point the MCP client at
 `mcp-server.js` or use the bundled Skill launcher. Never mix a newer Skill with
 an older server when validating version-specific behavior.
 

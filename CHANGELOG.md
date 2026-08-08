@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-08-08
+
 ### Added
 
 - Added a checksummed terminal idempotency ledger to TaskStore schema 3. A
@@ -42,9 +44,9 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
-- Rejected `Idempotency-Key` values longer than 256 characters with HTTP 400
-  and rejected reuse of an active or retained terminal key for different
-  semantic work with HTTP 409.
+- Rejected `Idempotency-Key` values longer than 256 characters on
+  `POST /api/tasks/submit` with HTTP 400, and rejected reuse of an active or
+  retained terminal task key for different semantic work with HTTP 409.
 - Applied the CLI's intended 60-second HTTP request timeout through the
   client's canonical `timeout` constructor option.
 - Made Quickstart reject CDP endpoints that do not identify TraeCN and print

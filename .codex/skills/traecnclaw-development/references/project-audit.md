@@ -6,8 +6,8 @@ This file replaces the historical development guide and rolling roadmap. It is a
 
 Observed on 2026-08-08:
 
-- `package.json` still identifies source version `0.5.5`, but tag `v0.5.5` points to `4c01911` while current `main` is newer (`2f5d2b6` before this uncommitted completion work). The tag does not contain the current fixes.
-- The latest downloadable GitHub Release is still `v0.5.4`; do not tell users that a `0.5.5` Release archive is available until it actually exists.
+- `package.json`, the lockfile, portable Skill, and OpenClaw manifests now identify source version `0.5.6`. The completed feature milestone is `ba53f06`; tag `v0.5.5` still points to `4c01911` and does not contain these changes.
+- The latest downloadable GitHub Release is still `v0.5.4`; do not tell users that a `0.5.6` Release archive is available until it actually exists.
 - The canonical GitHub repository is private. npm `traecnclaw` exists publicly but its `latest` tag is still `0.3.1`, sourced from the public mirror repository; it is not a matching server channel for current `0.5.x` behavior.
 - ClawHub `traecnclaw-mcp` publishes a clean `0.5.5` Skill. Its canonical Skill/config/contract/launcher file hashes match the local `v0.5.5` Skill, but ClawHub does not supply the matching server by itself.
 - The public `Luckycat133/traecnclaw-mcp-skill` mirror is visible, but its `SOURCE_REVISION` still identifies canonical commit `8b97e37` / release `v0.5.3`; its latest GitHub Release is the older `v0.3.0-mcp-skill.1` bundle.
@@ -46,16 +46,16 @@ gh api -H 'Accept: application/vnd.github.raw+json' repos/Luckycat133/traecnclaw
 - **Live readiness:** strict no-delegation UAT passed against TraeCN 1.107.1
   with the verified `traecn-1.107` adapter. It sent no prompt and deleted no
   conversation.
-- **Release/product completion:** not complete. The working tree is still an
-  Unreleased post-`v0.5.5` change set, `npm run test:release` has not been run
-  from its future clean release commit, and public server distribution is
-  version fragmented. The 0.5.6, I1, P1, and GitHub Release channel decisions
-  are settled locally; publication access and real-host/live evidence remain
-  external.
+- **Release/product completion:** source preparation is at 0.5.6, but public
+  completion is not. The exact clean revision must pass `npm run test:release`,
+  and public server distribution remains version fragmented. The 0.5.6, I1,
+  P1, and GitHub Release channel decisions are settled locally; publication
+  access and real-host/live evidence remain external.
 
-## Current uncommitted completion set
+## 0.5.6 completion milestone
 
-Keep these changes together as one post-`v0.5.5` reliability milestone:
+The feature and documentation set is committed at `ba53f06`; generated version
+surfaces form the separate 0.5.6 release-preparation change:
 
 | Area | Owning files | Outcome |
 | --- | --- | --- |
@@ -67,8 +67,8 @@ Keep these changes together as one post-`v0.5.5` reliability milestone:
 | Live contract and compatibility | `scripts/live-uat.js`, `scripts/uat-checklist.js`, `docs/COMPATIBILITY.md`, `docs/REAL-DOM-FINDINGS.md` | Live UAT follows the current MCP v5 surface and records fresh TraeCN 1.107.1 readiness evidence. |
 | Maintainer and release truth | `.codex/skills/traecnclaw-development/SKILL.md`, this audit, `CHANGELOG.md`, `docs/DISTRIBUTION.md` | Closed defects, accepted 0.5.6/MCP/idempotency/Release decisions, version-channel inventory, and exact next actions are synchronized. |
 
-Do not label this working tree `v0.5.5`: that immutable tag predates every
-change in this table.
+Do not move or rebuild `v0.5.5` with these changes: that immutable tag predates
+every change in this table.
 
 ## Implemented capabilities
 
@@ -154,22 +154,22 @@ intended-host task is still evidence to collect, not a missing local feature.
 
 ### D1 — source, tag, and published artifacts are out of sync
 
-At this snapshot `package.json` is `0.5.5`, but the immutable `v0.5.5` tag is
-older than current `main` and this completion work. The latest downloadable
+At this snapshot source is `0.5.6`, but the immutable `v0.5.5` tag is older
+than the `ba53f06` feature milestone and its release preparation. The latest downloadable
 GitHub Release is `v0.5.4`; npm is `0.3.1`; the public mirror identifies
 `v0.5.3`; and only the standalone ClawHub Skill is at `0.5.5`. Current fixes
 therefore have no exact published version or complete public server + Skill
 installation pair.
 
-Do not move or overwrite `v0.5.5`. Either publish artifacts from that exact
-historical tag while describing its actual contents, or assign current work a
-new version, verify the exact release commit, and publish matching artifacts.
+Do not move or overwrite `v0.5.5`. Historical artifacts must come from that
+exact tag. Verify source version 0.5.6 at one exact release commit and publish
+only matching artifacts from that revision.
 
 ## Features not completed
 
 ### Required before broad public promotion
 
-- Assign this working tree a new exact version and verify it from a clean commit.
+- Verify source version 0.5.6 from one exact clean commit.
 - Publish a matching server artifact or package; the ClawHub Skill alone cannot run TRAECNclaw.
 - Synchronize the public mirror and every published Skill/server surface from that exact commit.
 - Publish the selected canonical GitHub Release through an explicitly public or otherwise intended access path.
@@ -359,11 +359,8 @@ product:
 
 ## Recommended order
 
-1. Commit the completed reliability, terminal-idempotency, MCP onboarding, and
-   documentation set coherently. Apply the accepted version with
-   `npm run version:patch` (for `0.5.6`) plus generated synchronization, commit
-   that release preparation, then run `npm run test:release` from the resulting
-   clean exact commit.
+1. Commit the generated 0.5.6 version synchronization, then run
+   `npm run test:release` from the resulting clean exact commit.
 2. When model quota and UI effects are authorized, run the live delegated task
    and intended-host MCP completion path. Expected evidence is one owned task
    ID, one terminal result, no duplicate submission, and the same identity in

@@ -47,16 +47,16 @@ Before substantial work:
 5. Treat missing Actions visibility as missing evidence, not a code blocker. Run local equivalent gates.
 6. Treat live TraeCN, platform access, release credentials, and registry publication as external only when the task genuinely requires them.
 
-At the 2026-08-08 recheck, `package.json` still declared `0.5.5`, but tag
-`v0.5.5` pointed to the earlier release-preparation commit and the latest
+At the 2026-08-08 recheck, source metadata now declares `0.5.6`, while tag
+`v0.5.5` still points to the earlier release-preparation commit and the latest
 downloadable GitHub Release remained `v0.5.4`. ClawHub exposed a clean `0.5.5`
 Skill whose canonical files matched the tagged Skill, while npm `traecnclaw`
 remained `0.3.1` and the public mirror still declared canonical release
-`v0.5.3`. Current completion work is newer than all of those immutable
-surfaces. The maintainer selected `0.5.6` as the next compatible version, but
-that choice is not a release until the exact clean commit passes the release
-gate. Never move the old tag or publish current artifacts as if they came from
-it. Recheck before making any current claim.
+`v0.5.3`. The `ba53f06` feature milestone and its 0.5.6 release preparation
+are newer than all of those immutable surfaces. The source version is not a
+release until the exact clean commit passes the release gate and matching
+assets are published. Never move the old tag or publish current artifacts as
+if they came from it. Recheck before making any current claim.
 
 ## Architecture owners
 
@@ -108,7 +108,7 @@ appears.
 
 ## Product decisions
 
-Settled for the 0.5.6 candidate:
+Settled for the 0.5.6 source line:
 
 - **Version:** the compatible post-`v0.5.5` work becomes `0.5.6`.
 - **Terminal idempotency:** persist a semantic request fingerprint and terminal response for a configurable 24-hour default TTL.

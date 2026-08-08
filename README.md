@@ -44,11 +44,13 @@ Edit `.env` for your TraeCN installation path, CDP port, gateway token, and sele
 Upgrading from 0.3.x: read [the 0.5.0 migration guide](docs/MIGRATING-TO-0.5.md)
 before replacing MCP configuration.
 
-Release channels must match. As of the 2026-08-08 audit, ClawHub provides the
-standalone 0.5.5 Skill, while the latest canonical GitHub server Release is
-0.5.4, npm `traecnclaw` is 0.3.1, and the public mirror identifies canonical
-0.5.3. Use this source checkout for the current Unreleased behavior; do not pair
-the newer Skill with an older public server package. See the
+Release channels must match. This checkout now identifies source version
+0.5.6, but it is not yet a published tag or downloadable Release. As of the
+2026-08-08 audit, ClawHub provides the standalone 0.5.5 Skill, the latest
+canonical GitHub server Release is 0.5.4, npm `traecnclaw` is 0.3.1, and the
+public mirror identifies canonical 0.5.3. Use an exact authorized source
+checkout for 0.5.6 behavior; do not pair it with an older public Skill or
+server package. See the
 [distribution inventory](docs/DISTRIBUTION.md#current-publication-inventory).
 
 ## Configuration

@@ -8,20 +8,20 @@ code or an installable package.
 
 Observed on 2026-08-08. Treat each row as a separate version surface:
 
-| Surface | Observed state | Usable for current Unreleased code? |
+| Surface | Observed state | Usable for current 0.5.6 source? |
 | --- | --- | --- |
-| Canonical repository | Private `Luckycat133/TRAECNclaw`; `main` at `2f5d2b6` before the current uncommitted changes | Only for authorized source-checkout users |
-| Source version | `package.json` and generated surfaces still say `0.5.5` | No; the working tree is newer than the immutable tag |
+| Canonical repository | Private `Luckycat133/TRAECNclaw`; the completed feature milestone is `ba53f06`, followed by generated 0.5.6 release preparation | Only for authorized source-checkout users |
+| Source version | `package.json`, lockfile, Skill, and OpenClaw manifests say `0.5.6` | Yes for the exact checkout; this is not publication evidence |
 | Canonical tag | `v0.5.5` at `4c01911` | Historical 0.5.5 source only; never move this tag |
 | Canonical GitHub Release | Latest downloadable assets are `v0.5.4` | No |
 | ClawHub | `traecnclaw-mcp` 0.5.5, clean; canonical Skill/config/contract/launcher hashes match the tagged Skill | Skill only; it still needs a matching server |
 | npm | Package `traecnclaw` has dist-tag `latest=0.3.1` | No; it is not the 0.5.x server |
 | Public mirror | Public repository, but `SOURCE_REVISION` identifies canonical `v0.5.3` / `8b97e37`; latest mirror Release is `v0.3.0-mcp-skill.1` | No |
 
-There is therefore no complete public server + Skill pair for 0.5.5 or the
-current Unreleased fixes. The accepted compatible next version is `0.5.6`.
-It remains an unreleased target until the version-preparation commit is clean
-and `npm run test:release` passes from that exact revision. A release is
+There is therefore no complete public server + Skill pair for source version
+0.5.6. The accepted compatible version has been applied locally, but remains
+unpublished until `npm run test:release` passes from its exact clean revision
+and matching assets are attached. A release is
 complete only when one exact commit supplies matching server and Skill
 artifacts and every advertised channel has been inspected afterward.
 
@@ -227,9 +227,9 @@ The Registry validates that package version and the `mcpName` field before it
 accepts `server.json`. The ClawHub 0.5.5 Skill is already published, but the
 matching npm package and canonical GitHub Release are not. The public mirror is
 older still. Do not publish Registry metadata or describe 0.5.5 as a complete
-public install until one matching server channel exists. Current fixes require
-a new exact version, followed by mirror, GitHub, npm (if selected), and ClawHub
-synchronization from the same verified commit.
+public install until one matching server channel exists. Source version 0.5.6
+must be verified at one exact release revision, followed by mirror, GitHub,
+npm (if selected), and ClawHub synchronization from that same commit.
 
 ## Directory Submissions
 
