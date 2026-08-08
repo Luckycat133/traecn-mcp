@@ -10,8 +10,13 @@
 verified adapter、queue/dialog/preflight、发现面、设置读取、Solo 列表和
 清理 dry-run，且没有删除会话。随后一次获得用户授权的独立运行发送了
 一条短 prompt，并以 `delegate-async: done` 完成；这是真实 TraeCN 输出，
-不是 mock。Codex 的本地 MCP 条目也已注册，但当前运行中的宿主尚未重连，
-因此宿主侧 durable task ID/完成通知仍需在重连后验证。对应的版本适配器是
+不是 mock。之后 Codex CLI 宿主通过本地 `traecn` MCP 条目真实调用
+`traecn_send_message`，创建 durable task
+`task_1_mskicgl7_1dr1vgws79`；网关最终状态为 `done`，TraeCN 实际结果为
+`TRAECNCLAW_MCP_HOST_OK`。另一个全新 Codex 客户端连接到保留该完成事件的
+网关时只输出 `BASELINE_READY`，没有收到历史任务内容，并将持久游标建立为
+`evt_1`。这同时验证了宿主协议兼容、真实任务身份和首次连接事件隔离。
+对应的版本适配器是
 `src/trae-adapters/traecn-1.107`；脱敏后的
 关键工作流状态保存在
 `src/trae-adapters/traecn-1.107/fixtures/workflow.json`，可通过

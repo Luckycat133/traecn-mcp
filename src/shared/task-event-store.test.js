@@ -40,6 +40,20 @@ test('TaskEventStore keeps acknowledgements independent for each IDE client', ()
   assert.deepStrictEqual(store.list({ clientId: 'ide-b' }).events.map(event => event.taskId), ['task-1', 'task-2']);
 });
 
+test('TaskEventStore identifies new clients without discarding durable resume cursors', () => {
+  const store = new TaskEventStore({ persistencePath: null });
+  const first = store.append({ type: 'task.completed', taskId: 'task-1', status: 'done' });
+
+  const newClient = store.list({ clientId: 'new-client' });
+  assert.strictEqual(newClient.clientKnown, false);
+  assert.strictEqual(newClient.acknowledgedCursor, null);
+
+  store.ack('returning-client', first.eventId);
+  const returningClient = store.list({ clientId: 'returning-client' });
+  assert.strictEqual(returningClient.clientKnown, true);
+  assert.strictEqual(returningClient.acknowledgedCursor, first.eventId);
+});
+
 test('TaskEventStore computes hasMore from the effective cursor', () => {
   const store = new TaskEventStore({ persistencePath: null });
   const first = store.append({ type: 'task.completed', taskId: 'task-1', status: 'done' });

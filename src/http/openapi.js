@@ -1040,6 +1040,15 @@ function generateOpenAPISpec() {
                     type: 'object',
                     properties: {
                       clientId: { type: 'string' },
+                      clientKnown: {
+                        type: 'boolean',
+                        description: 'Whether this client has a durable acknowledgement cursor.'
+                      },
+                      acknowledgedCursor: {
+                        type: 'string',
+                        nullable: true,
+                        description: 'The last event durably delivered to this client.'
+                      },
                       events: {
                         type: 'array',
                         items: {

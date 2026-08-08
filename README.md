@@ -397,9 +397,13 @@ accepted result and may use `traecn_get_task` for an intentional status or
 result read. Its optional `detailLevel` defaults to `result` (final answer
 only); use `trace` when the visible execution process is needed for diagnosis.
 Set a stable, unique `TRAECN_MCP_CLIENT_ID` for each IDE connection when the
-derived legacy MCP client name is not unique. Events are acknowledged only after the
-stdio write succeeds, survive gateway restarts, and contain only status plus a
-short summary; fetch the full result with `traecn_get_task` only when needed.
+derived legacy MCP client name is not unique. On first use of a client ID, the
+stdio server durably baselines already-retained events before enabling
+notifications, so a new host does not receive another client's history. A
+returning client ID resumes its unacknowledged events instead. Events are
+acknowledged only after the stdio write succeeds, survive gateway restarts, and
+contain only status plus a short summary; fetch the full result with
+`traecn_get_task` only when needed.
 Event cursors and acknowledgements are internal and never consume Agent tool
 calls. Tasks remains an independently versioned MCP extension whose upstream
 specification is still marked draft, so host support is capability-detected;

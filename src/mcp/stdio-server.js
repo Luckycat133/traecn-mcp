@@ -186,8 +186,49 @@ class TaskEventPump {
     this.limit = Number.isFinite(options.limit) ? options.limit : 20;
     this.retryMs = Number.isFinite(options.retryMs) ? options.retryMs : 1000;
     this.cursor = options.after || null;
+    this.historyPrimed = false;
     this.running = false;
     this.loopPromise = null;
+  }
+
+  async primeCursor() {
+    if (this.historyPrimed) return this.cursor;
+    let cursor = this.cursor;
+    while (true) {
+      const request = { limit: 100, waitMs: 0 };
+      if (cursor) request.after = cursor;
+      const response = await this.client.listTaskEvents(this.clientId, request);
+      if (response && Number(response.status) >= 400) {
+        throw new Error(`Task event request failed with HTTP ${response.status}`);
+      }
+      const payload = response && response.data !== undefined ? response.data : response;
+      if (payload?.clientKnown !== false) {
+        this.historyPrimed = true;
+        return this.cursor;
+      }
+      const events = payload && Array.isArray(payload.events) ? payload.events : [];
+      for (const event of events) {
+        if (!event.eventId) throw new Error('Task event is missing eventId');
+      }
+      const nextCursor = events.length > 0
+        ? events[events.length - 1].eventId
+        : (payload?.cursor || cursor);
+      const progressed = Boolean(nextCursor && nextCursor !== cursor);
+      if (nextCursor) cursor = nextCursor;
+      if (payload?.hasMore !== true) break;
+      if (!progressed) {
+        throw new Error('Task event cursor did not advance while priming MCP client');
+      }
+    }
+    if (cursor) {
+      const ack = await this.client.ackTaskEvent(this.clientId, cursor);
+      if (ack && Number(ack.status) >= 400) {
+        throw new Error(`Task event acknowledgement failed with HTTP ${ack.status}`);
+      }
+    }
+    this.cursor = cursor;
+    this.historyPrimed = true;
+    return this.cursor;
   }
 
   async pollOnce() {
@@ -217,6 +258,7 @@ class TaskEventPump {
     this.loopPromise = (async () => {
       while (this.running) {
         try {
+          await this.primeCursor();
           await this.pollOnce();
         } catch {
           if (this.running) await sleep(this.retryMs);

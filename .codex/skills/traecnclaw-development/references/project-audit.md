@@ -14,7 +14,8 @@ Observed on 2026-08-08:
 - The public MCP contract remains version 5 with exactly 20 ordered tools.
 - The runtime has durable active-task, terminal-idempotency, completion-event, and task-history stores; active and terminal replay across restart; modern Tasks/subscriptions; clean-room mock installation; release-manifest verification; a `TaskOrchestrator` ownership boundary; central route composition; and a tested MCP client-config generator.
 - A pre-publication push exposed Dependabot alert 6 / `GHSA-rgw5-rvv9-x895` in the transitive development dependency `brace-expansion@5.0.8`. The lock now resolves patched 5.0.9, `npm audit` reports zero vulnerabilities, and `test:release` enforces a full high/critical dependency audit before packaging.
-- Version-specific compatibility remains macOS TraeCN `1.107.x`, backed by sanitized fixture replay and a fresh 2026-08-08 strict readiness run against installed TraeCN `1.107.1`. A separate user-authorized run sent exactly one short live prompt and returned `delegate-async: done`; it was not mock output. The Codex MCP entry is registered, but this already-running host has not reloaded the new tool surface, so intended-host MCP task identity remains evidence to collect.
+- Version-specific compatibility remains macOS TraeCN `1.107.x`, backed by sanitized fixture replay and a fresh 2026-08-08 strict readiness run against installed TraeCN `1.107.1`. A separate user-authorized run sent exactly one short live prompt and returned `delegate-async: done`; it was not mock output. A real Codex CLI host then invoked the configured `traecn` MCP server, created task `task_1_mskicgl7_1dr1vgws79`, and the gateway collected `TRAECNCLAW_MCP_HOST_OK` with status `done`.
+- The first Codex host attempt exposed two local defects before that success: unrelated legacy `_meta.progressToken` metadata switched the stdio process to the modern era, and a brand-new legacy client replayed retained task summaries. The protocol check now requires the explicit version metadata key, and new client IDs baseline retained events while returning IDs preserve durable missed-event delivery. A fresh Codex client against the retained live result emitted no history and durably acknowledged `evt_1`.
 - PR #19 was closed as an obsolete 0.5.4-based Skill proposal. PR #20 merged the 0.5.5 audit/Skill refresh on 2026-08-08; there are currently no open pull requests or issues.
 
 Revalidate with:
@@ -40,8 +41,8 @@ gh api -H 'Accept: application/vnd.github.raw+json' repos/Luckycat133/traecnclaw
   additional unblocked local `confirmed-bug` or unconditional
   `missing-required` item is known.
 - **Repository evidence:** `npm run verify` passed on the current code and
-  documentation state on 2026-08-08. Coverage was 86.04% lines/statements,
-  76.38% branches, and 76.34% functions. Generated configuration, Skill
+  documentation state on 2026-08-08. Coverage was 86.07% lines/statements,
+  76.38% branches, and 76.40% functions. Generated configuration, Skill
   contracts, release scanning, lint, tests, mock system/UAT, and coverage all
   passed; `git diff --check` was also clean.
 - **Release-package evidence:** `npm run test:release` passes for the clean
@@ -53,14 +54,16 @@ gh api -H 'Accept: application/vnd.github.raw+json' repos/Luckycat133/traecnclaw
   artifact-byte record; `dist/` remains intentionally untracked.
 - **Live readiness:** strict no-delegation UAT passed against TraeCN 1.107.1
   with the verified `traecn-1.107` adapter. A subsequent authorized live
-  delegation completed with status `done`; no conversation was deleted. The
-  current Codex task still needs an MCP reconnect before the intended-host
-  task-ID/completion path is proven.
+  delegation completed with status `done`; no conversation was deleted. Codex
+  then created durable task `task_1_mskicgl7_1dr1vgws79` through the configured
+  MCP server, and the gateway collected terminal result
+  `TRAECNCLAW_MCP_HOST_OK`. A separate fresh client baselined the retained event
+  without replaying its summary.
 - **Release/product completion:** local source and package preparation are
   complete at 0.5.6, but public completion is not. Public server distribution
   remains version fragmented. The 0.5.6, I1, P1, and GitHub Release channel
-  decisions are settled locally; publication
-  access and real-host/live evidence remain external.
+  decisions are settled locally; publication access and post-publication
+  inspection remain external.
 
 ## 0.5.6 completion milestone
 
@@ -75,6 +78,7 @@ artifact revision is always the one recorded by the generated release manifest:
 | Task-history durability | `src/shared/task-history.js`, `src/shared/task-history.test.js`, `src/http/gateway.js`, `src/http/gateway.test.js`, `src/http/openapi.js`, `docs/MIGRATING-TO-0.5.md` | Checksummed schema 2 snapshots, atomic replacement, backup/quarantine/recovery, step-only persistence, zero-retention correctness, and status/OpenAPI health. |
 | Terminal idempotency | `src/http/task-store.js`, `src/http/task-queue-service.js`, `src/http/task-orchestrator.js`, `src/http/handlers/unified-agent.js`, `src/http/gateway.js`, `src/http/openapi.js`, `src/config/runtime-schema.js` and focused tests | TaskStore schema 3 retains fingerprinted terminal responses for a configurable 24-hour default TTL, replays across restart, rejects semantic collisions, and reports retention health. |
 | MCP-first onboarding | `skills/traecnclaw-mcp/scripts/setup-mcp.js`, its test, `package.json`, `README.md`, and MCP setup/distribution guides | Validates matching server discovery, prints resolved JSON, and safely creates a new mode-0600 configuration file without overwrite. |
+| Codex host interoperability | `src/mcp/protocol.js`, `src/mcp/stdio-server.js`, `src/shared/task-event-store.js`, `src/http/openapi.js`, focused tests, and MCP documentation | Ignores unrelated progress metadata during legacy negotiation, baselines retained events for a new client ID, preserves returning-client replay, and passes a real Codex-to-TraeCN task plus retained-event isolation check. |
 | Live contract and compatibility | `scripts/live-uat.js`, `scripts/uat-checklist.js`, `docs/COMPATIBILITY.md`, `docs/REAL-DOM-FINDINGS.md` | Live UAT follows the current MCP v5 surface and records fresh TraeCN 1.107.1 readiness evidence. |
 | Release dependency security | `package-lock.json`, `package.json`, `scripts/coverage-audit.js`, `CHANGELOG.md`, `docs/DISTRIBUTION.md` | Pins patched `brace-expansion@5.0.9`, clears the high Dependabot advisory, and requires a full high/critical dependency audit before release packaging. |
 | Maintainer and release truth | `.codex/skills/traecnclaw-development/SKILL.md`, this audit, `CHANGELOG.md`, `docs/DISTRIBUTION.md` | Closed defects, accepted 0.5.6/MCP/idempotency/Release decisions, version-channel inventory, and exact next actions are synchronized. |
@@ -93,6 +97,8 @@ Do not rebuild these without a failing regression:
 - Active-task and fingerprinted terminal-result idempotency replay after gateway restart, with collision rejection and configurable expiry.
 - Exact task/conversation result ownership and guarded response collection.
 - Modern MCP Tasks, exact-ID subscriptions, graceful cancellation, and official-client conformance coverage.
+- Legacy Codex request metadata compatibility plus new-client history
+  baselining and returning-client durable event resume.
 - Frozen MCP contract v5 with 20 focused tools and no profiles.
 - Clean-room Skill/server packaging and release-manifest verification.
 - `TaskOrchestrator` ownership of candidate construction, acceptance, rollback, history mirror, request fingerprints, and active/terminal idempotency lookup.
@@ -137,6 +143,27 @@ adapter. `scripts/uat-checklist.js` prevents the retired tool name from
 returning. The corrected no-delegation UAT passed against TraeCN 1.107.1 on
 2026-08-08.
 
+### C2 — Codex legacy metadata era misclassification
+
+Codex sends `_meta.progressToken` on legacy `tools/list`. The stdio server
+previously interpreted the presence of any `_meta` object as a modern request
+and rejected the connection for switching eras after `initialize`.
+`modernProtocolVersion` now recognizes only the explicit
+`io.modelcontextprotocol/protocolVersion` key. A transcript regression pins the
+Codex request shape, and the real Codex host subsequently discovered and called
+`traecn_send_message` successfully.
+
+### E1 — new legacy client replayed retained task history
+
+The durable event store previously exposed no distinction between a new client
+ID and a returning ID with a persisted acknowledgement. A first-time Codex
+connection therefore received every retained task summary. Event batches now
+include `clientKnown` and `acknowledgedCursor`; the legacy pump drains and
+durably acknowledges retained history only for a new ID, while a returning ID
+continues from its prior acknowledgement. Unit tests cover both branches. A
+fresh real Codex client connected after live task completion, emitted no
+historical notification, and established cursor `evt_1`.
+
 ## Settled product decisions and external scope
 
 ### I1 — terminal idempotency: closed locally
@@ -162,7 +189,8 @@ The MCP Skill is the product path. `npm run --silent setup:mcp` validates the
 matching server and emits a resolved host entry; `--output FILE` safely creates
 a new configuration artifact. The CLI is for developer/live validation, the
 built-in web UI is diagnostic, and OpenClaw is an ecosystem adapter. A real
-intended-host task is still evidence to collect, not a missing local feature.
+Codex intended-host task and first-connection history-baseline check now pass;
+no host-evidence item remains open for the selected 0.5.6 path.
 
 ### D1 — source, tag, and published artifacts are out of sync
 
@@ -184,7 +212,6 @@ only matching artifacts from that revision.
 - Publish a matching server artifact or package; the ClawHub Skill alone cannot run TRAECNclaw.
 - Synchronize the public mirror and every published Skill/server surface from that exact commit.
 - Publish the selected canonical GitHub Release through an explicitly public or otherwise intended access path.
-- Real-host verification for the intended MCP client, not only the protocol test client.
 
 ### Valuable next engineering work
 
@@ -282,6 +309,13 @@ On 2026-08-08 this exact command passed against installed TraeCN 1.107.1 with
 adapter `traecn-1.107`. No delegated task was sent and no conversation was
 deleted.
 
+The intended-host check also passed on 2026-08-08. Codex CLI negotiated the
+legacy MCP lifecycle, called `traecn_send_message` once, and received accepted
+task ID `task_1_mskicgl7_1dr1vgws79`; the live gateway later reported `done`
+with result `TRAECNCLAW_MCP_HOST_OK`. A second new Codex client connected after
+that event existed, received no historical content, and durably baselined
+cursor `evt_1`.
+
 ### 7. Live task experience
 
 Only when sending a real prompt is acceptable:
@@ -359,6 +393,11 @@ node scripts/traecn-cli.js delegate "请只回复 TRAECNCLAW_REAL_OK"
 5. Verify the same durable task ID in the host and gateway.
 6. With Tasks support, verify subscription completion; otherwise perform one intentional `traecn_get_task` read later.
 
+The selected Codex host path completed steps 1-5 on 2026-08-08. Codex is an
+initialization-based client in this run, so the accepted task was intentionally
+read from the gateway after completion rather than described as a Tasks
+subscription result.
+
 ### Release-package experience
 
 Use only a version with actual downloadable assets. Install the matching server and Skill archives, start the mock gateway, and repeat MCP discovery/task completion. `npm run test:release` is the automated local equivalent.
@@ -375,12 +414,8 @@ product:
 
 ## Recommended order
 
-1. When model quota and UI effects are authorized, run the live delegated task
-   and intended-host MCP completion path. Expected evidence is one owned task
-   ID, one terminal result, no duplicate submission, and the same identity in
-   the host and gateway.
-2. After explicit publication/visibility authorization, tag only the verified commit, publish matching server and Skill artifacts,
+1. After explicit publication/visibility authorization, tag only the verified commit, publish matching server and Skill artifacts,
    synchronize the public mirror to that full revision, and re-run GitHub,
    npm, and ClawHub inspection before announcing the version.
-3. Resume optional Gateway extraction or wider platform work only after this
+2. Resume optional Gateway extraction or wider platform work only after this
    product and distribution path is stable.

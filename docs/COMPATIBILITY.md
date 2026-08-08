@@ -5,7 +5,7 @@ after the stated test level has been rerun.
 
 | TraeCN version | Platform | Adapter | Repeatable evidence | Live evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1.107.x | macOS | `traecn-1.107` | Sanitized list/select/submit/queue/approval/response/review fixture replay | 1.107.1 DOM capture and 24/25 v0.4.0 UAT; strict readiness and a separate authorized one-prompt delegation both passed on 2026-08-08 | Verified adapter; current readiness and direct live delegation are checked, while the newly registered Codex MCP host still needs a reconnect for task-ID evidence |
+| 1.107.x | macOS | `traecn-1.107` | Sanitized list/select/submit/queue/approval/response/review fixture replay | 1.107.1 DOM capture and 24/25 v0.4.0 UAT; strict readiness, direct delegation, and Codex-hosted MCP task `task_1_mskicgl7_1dr1vgws79` returned `TRAECNCLAW_MCP_HOST_OK` on 2026-08-08 | Verified adapter and current source-checkout MCP host path |
 | Any other version/platform | Any | `traecn-unknown` | Generic mock/system coverage only | None | Degraded; no version-specific capabilities are claimed |
 
 The gateway detects the product version and structural mode through a read-only

@@ -17,6 +17,10 @@ the separately negotiated `io.modelcontextprotocol/tasks` extension. An
 opted-in `traecn_send_message` returns the durable gateway ID as a Task;
 `tasks/get`, `tasks/update`, and `tasks/cancel` operate that same identity, and
 `subscriptions/listen` can stream exact-ID `notifications/tasks` snapshots.
+For a legacy client ID's first connection, already-retained events are
+baselined without delivery; a returning ID resumes only events newer than its
+durable acknowledgement. Unrelated request metadata such as `progressToken`
+does not change the negotiated legacy protocol era.
 Modern retries derive a stable idempotency key from the request identity and
 arguments. The gateway retains the corresponding terminal fingerprint and
 response across restart for a configurable 24-hour default TTL, so the same

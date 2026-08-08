@@ -64,6 +64,10 @@ ID and receive a complete `notifications/tasks` snapshot; hosts without that
 extension call `traecn_get_task` only for an intentional later status/result
 read. If a modern task reports `input_required`, its elicitation and
 `tasks/update` response carry the same approval safeguards documented below.
+The first legacy connection for a client ID baselines retained history before
+notifications start. Reusing that stable ID later resumes only durably
+unacknowledged events; configure a distinct `TRAECN_MCP_CLIENT_ID` when the
+host-derived name is not unique.
 Use `traecn_cancel_task` for one known gateway task. Use
 `traecn_stop_generation` only when the user wants the
 generation currently visible in TraeCN stopped. First list conversations and

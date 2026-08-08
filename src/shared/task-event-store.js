@@ -175,6 +175,8 @@ class TaskEventStore {
 
   list(options = {}) {
     const clientId = normalizeClientId(options.clientId);
+    const clientKnown = Object.prototype.hasOwnProperty.call(this.acknowledged, clientId);
+    const acknowledgedCursor = clientKnown ? this.acknowledged[clientId] : null;
     const afterSequence = this._effectiveCursor(clientId, options.after);
     const limit = Math.min(parsePositiveInt(options.limit, 20), 100);
     const events = this.events
@@ -185,6 +187,8 @@ class TaskEventStore {
       : afterSequence;
     return {
       clientId,
+      clientKnown,
+      acknowledgedCursor,
       events,
       cursor: events.length > 0 ? events[events.length - 1].eventId : (afterSequence > 0 ? `evt_${afterSequence}` : null),
       hasMore: this.events.some(event => eventSequence(event.eventId) > lastReturnedSequence)

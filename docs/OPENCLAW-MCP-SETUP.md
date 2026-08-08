@@ -83,6 +83,11 @@ use `traecn_get_task` for an intentional later read. The caller does not need
 gateway wait, recovery, preflight, proof, cleanup, or review-gate tools, and
 should not busy-poll.
 
+For legacy notifications, a new `TRAECN_MCP_CLIENT_ID` baselines events retained
+before that client first connected. Reusing the same ID after a disconnect
+resumes its durably unacknowledged events. Assign different IDs to concurrent
+host installations.
+
 ## OpenClaw plugin
 
 The plugin under `integrations/openclaw-traecn-plugin` exposes existing
@@ -117,7 +122,7 @@ append-only audit log instead of adding a separate confirmation tool.
 | HTTP 401 | Client and gateway token values |
 | CDP unavailable | TraeCN remote-debugging process and configured port |
 | Workspace cannot switch | Requested absolute path and TraeCN binary discovery |
-| Legacy completion notification missing | MCP logging support and `TRAECN_MCP_CLIENT_ID` uniqueness |
+| Legacy completion notification missing | MCP logging support, a stable `TRAECN_MCP_CLIENT_ID`, and whether this is its first connection whose prior history was intentionally baselined |
 | Modern client shows no pushed completion | Confirm the host declares `io.modelcontextprotocol/tasks` and opens `subscriptions/listen`; otherwise read the known task intentionally with `traecn_get_task` |
 
 Run `npm run test:mcp-stdio-smoke` for protocol discovery and

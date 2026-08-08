@@ -112,6 +112,9 @@ With the current defaults the gateway will also:
   client for the 2024, 2025, and 2026 protocol eras, plus an independent raw
   transcript client for Content-Length framing, JSON-RPC errors, and era
   pinning. It does not reuse the server decoder.
+- `src/mcp/stdio-server.test.js` also covers Codex's legacy
+  `_meta.progressToken`, first-connection event baselining, and durable
+  missed-event replay for a returning client ID.
 - System tests start a real local gateway in mock mode and verify authentication, session creation, delegation, response headers, and route compatibility.
 - Contract audit checks verify release documentation, OpenAPI declarations,
   source-level requirements, and already-recorded evidence. They do not execute

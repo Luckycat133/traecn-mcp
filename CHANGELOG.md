@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
+- Kept initialization-based Codex clients in the legacy MCP era when
+  `tools/list` carries only the standard `_meta.progressToken`; unrelated
+  request metadata no longer looks like the modern per-request protocol marker.
+- Baselined retained task events for a newly identified legacy MCP client
+  before enabling notifications, preventing historical task summaries from
+  being replayed into a new host while preserving durable missed-event replay
+  for returning client IDs.
 - Rejected `Idempotency-Key` values longer than 256 characters on
   `POST /api/tasks/submit` with HTTP 400, and rejected reuse of an active or
   retained terminal task key for different semantic work with HTTP 409.

@@ -31,7 +31,9 @@ function requestMeta(message = {}) {
 
 function modernProtocolVersion(message = {}) {
   const meta = requestMeta(message);
-  return meta ? meta[PROTOCOL_VERSION_META_KEY] : null;
+  return meta && Object.prototype.hasOwnProperty.call(meta, PROTOCOL_VERSION_META_KEY)
+    ? meta[PROTOCOL_VERSION_META_KEY]
+    : null;
 }
 
 function isModernRequest(message = {}) {

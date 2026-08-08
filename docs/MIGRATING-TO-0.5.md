@@ -12,7 +12,10 @@ changes newer than the immutable `v0.5.5` tag. It hardens Quickstart CDP
 identity probing, applies the CLI's intended request timeout, upgrades
 TaskHistory to checksummed atomic schema 2 persistence with health reporting,
 repairs strict live UAT discovery against the frozen MCP v5 surface, and adds
-a tested MCP configuration generator.
+a tested MCP configuration generator. It also accepts Codex's legacy
+`_meta.progressToken` requests without changing protocol era and prevents a new
+legacy client ID from receiving retained task history that predates its first
+connection.
 
 TaskStore now migrates schema 2 snapshots to schema 3 and retains terminal
 idempotency records beside active tasks under the same checksum, atomic-write,
@@ -124,6 +127,11 @@ eligible request, handle `resultType: "task"`, and either respect
 `pollIntervalMs` on `tasks/get` or subscribe to exact task IDs with
 `subscriptions/listen`. Hosts without extension support intentionally read a
 known task with `traecn_get_task`; no ordinary wait or event tool was added.
+
+Legacy notification clients should keep a stable, installation-unique
+`TRAECN_MCP_CLIENT_ID`. On its first connection, the ID is advanced past
+already-retained events; on later connections, only events newer than its
+durable acknowledgement are delivered.
 
 ## Canonical environment names and defaults
 

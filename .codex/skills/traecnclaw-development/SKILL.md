@@ -61,6 +61,11 @@ high-severity transitive development dependency advisory
 threshold before packaging. Matching assets still need publication and
 post-publication inspection. Never move the old tag or publish current
 artifacts as if they came from it. Recheck before making any current claim.
+The same pre-publication host run found and closed two additional local MCP
+defects: Codex's legacy `_meta.progressToken` was misclassified as a modern
+request, and a newly identified legacy client replayed retained task history.
+Focused regressions now pin the legacy era and baseline history only for a new
+client ID while preserving durable resume for returning IDs.
 
 ## Architecture owners
 
@@ -105,14 +110,14 @@ probe, CLI timeout, task-history durability, stale live-UAT MCP discovery, and
 terminal retry gap with executable regressions. It also supplies the selected
 MCP-first setup command. A fresh strict no-delegation readiness run passes
 against TraeCN 1.107.1, and a separate user-authorized live delegation completed
-with status `done`. The Codex MCP entry is registered locally, but the running
-host must reconnect before its real 20-tool invocation can be counted as host
-evidence. Re-read `references/project-audit.md` and current source before
-creating another local defect item. Remaining work is publication and that
-real-host check,
-unselected platform/host scope, or optional work unless new failing evidence
-appears. The remaining normal release work is external publication, not another
-local implementation item.
+with status `done`. A real Codex CLI host then called
+`traecn_send_message`, created task `task_1_mskicgl7_1dr1vgws79`, and received
+the terminal TraeCN result `TRAECNCLAW_MCP_HOST_OK`; a second fresh client
+baselined that retained event without receiving its contents. Re-read
+`references/project-audit.md` and current source before creating another local
+defect item. Remaining normal work is publication and post-publication
+inspection. Unselected platform/host scope and further Gateway extraction are
+optional unless new failing evidence appears.
 
 ## Product decisions
 

@@ -66,6 +66,15 @@ test('stdio selects one protocol era and rejects missing modern metadata', () =>
   assert.throws(() => nextProtocolEra('legacy', modern), /cannot switch protocol era/);
 });
 
+test('legacy stdio ignores unrelated request metadata from Codex', () => {
+  assert.strictEqual(nextProtocolEra('legacy', {
+    method: 'tools/list',
+    params: {
+      _meta: { progressToken: 1 }
+    }
+  }), 'legacy');
+});
+
 test('taskEventNotification emits a compact standard MCP logging notification', () => {
   const notification = taskEventNotification({
     eventId: 'evt_2',
@@ -120,6 +129,94 @@ test('TaskEventPump writes before acknowledging and resumes after the last event
     ['list', 'codex-main', { limit: 20, waitMs: 25000 }],
     ['write', 'evt_8'],
     ['ack', 'codex-main', 'evt_8']
+  ]);
+});
+
+test('TaskEventPump baselines retained history for a new MCP client', async () => {
+  const calls = [];
+  let listCall = 0;
+  const client = {
+    async listTaskEvents(clientId, options) {
+      calls.push(['list', clientId, options]);
+      listCall += 1;
+      if (listCall === 1) {
+        return {
+          data: {
+            clientKnown: false,
+            acknowledgedCursor: null,
+            events: [{ eventId: 'evt_40', taskId: 'task-historical', status: 'done' }],
+            cursor: 'evt_40',
+            hasMore: false
+          }
+        };
+      }
+      return {
+        data: {
+          clientKnown: true,
+          acknowledgedCursor: 'evt_40',
+          events: [{ eventId: 'evt_41', taskId: 'task-current', status: 'done' }],
+          cursor: 'evt_41',
+          hasMore: false
+        }
+      };
+    },
+    async ackTaskEvent(clientId, eventId) {
+      calls.push(['ack', clientId, eventId]);
+      return { data: { acknowledged: true } };
+    }
+  };
+  const pump = new TaskEventPump({
+    client,
+    clientId: 'new-codex-client',
+    write: message => calls.push(['write', message.params.data.eventId]),
+    waitMs: 25000
+  });
+
+  assert.strictEqual(await pump.primeCursor(), 'evt_40');
+  assert.strictEqual(await pump.pollOnce(), 1);
+  assert.deepStrictEqual(calls, [
+    ['list', 'new-codex-client', { limit: 100, waitMs: 0 }],
+    ['ack', 'new-codex-client', 'evt_40'],
+    ['list', 'new-codex-client', { limit: 20, waitMs: 25000, after: 'evt_40' }],
+    ['write', 'evt_41'],
+    ['ack', 'new-codex-client', 'evt_41']
+  ]);
+});
+
+test('TaskEventPump preserves undelivered events for a returning MCP client', async () => {
+  const calls = [];
+  const client = {
+    async listTaskEvents(clientId, options) {
+      calls.push(['list', clientId, options]);
+      return {
+        data: {
+          clientKnown: true,
+          acknowledgedCursor: 'evt_50',
+          events: [{ eventId: 'evt_51', taskId: 'task-missed', status: 'done' }],
+          cursor: 'evt_51',
+          hasMore: false
+        }
+      };
+    },
+    async ackTaskEvent(clientId, eventId) {
+      calls.push(['ack', clientId, eventId]);
+      return { data: { acknowledged: true } };
+    }
+  };
+  const pump = new TaskEventPump({
+    client,
+    clientId: 'returning-codex-client',
+    write: message => calls.push(['write', message.params.data.eventId]),
+    waitMs: 25000
+  });
+
+  assert.strictEqual(await pump.primeCursor(), null);
+  assert.strictEqual(await pump.pollOnce(), 1);
+  assert.deepStrictEqual(calls, [
+    ['list', 'returning-codex-client', { limit: 100, waitMs: 0 }],
+    ['list', 'returning-codex-client', { limit: 20, waitMs: 25000 }],
+    ['write', 'evt_51'],
+    ['ack', 'returning-codex-client', 'evt_51']
   ]);
 });
 

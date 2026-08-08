@@ -102,6 +102,9 @@ Then verify with live TraeCN:
    and reconnect it.
 5. Confirm the host discovers exactly 20 tools, then send one short task only
    when model quota and UI effects are acceptable.
+6. Confirm a fresh `TRAECN_MCP_CLIENT_ID` does not receive retained historical
+   task notifications, while its cursor is durably established for later
+   reconnects.
 
 ## Security Controls
 

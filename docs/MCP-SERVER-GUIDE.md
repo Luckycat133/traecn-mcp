@@ -17,6 +17,9 @@ The current 0.5.x server is dual-era:
 Standard stdio framing is newline-delimited JSON-RPC. The server can still
 decode and answer the `Content-Length` framing used by older TRAECNclaw
 clients, but new integrations should send one compact JSON object per line.
+Metadata such as `_meta.progressToken` on a legacy request does not switch the
+connection to the modern era; only the explicit TRAECNclaw protocol-version
+metadata does so.
 MCP contract version 5 names the frozen TRAECNclaw tool surface; it is separate
 from the date-based MCP protocol revision.
 
@@ -109,6 +112,10 @@ status/result across restart for a configurable 24-hour default TTL. Reusing a
 key for different meaningful input is rejected before TraeCN is contacted.
 
 Legacy initialization-based clients receive compact MCP logging notifications.
+The first connection for a client ID baselines retained history before delivery
+starts; reconnecting with a previously acknowledged ID resumes only its
+undelivered events. Use a stable, unique `TRAECN_MCP_CLIENT_ID` when the host's
+derived name could collide with another connection.
 The `2026-07-28` protocol does not allow those free-floating notifications;
 modern clients use the separately negotiated Tasks extension described below,
 or make an intentional `traecn_get_task` read when their host does not support
