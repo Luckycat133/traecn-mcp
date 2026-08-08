@@ -8,7 +8,10 @@
 模型额度的实机任务 UAT。2026-08-08 已针对同一 TraeCN 1.107.1 构建
 重新通过 strict readiness UAT；该检查覆盖 product identity、readiness、
 verified adapter、queue/dialog/preflight、发现面、设置读取、Solo 列表和
-清理 dry-run，但没有发送 prompt 或删除会话。对应的版本适配器是
+清理 dry-run，且没有删除会话。随后一次获得用户授权的独立运行发送了
+一条短 prompt，并以 `delegate-async: done` 完成；这是真实 TraeCN 输出，
+不是 mock。Codex 的本地 MCP 条目也已注册，但当前运行中的宿主尚未重连，
+因此宿主侧 durable task ID/完成通知仍需在重连后验证。对应的版本适配器是
 `src/trae-adapters/traecn-1.107`；脱敏后的
 关键工作流状态保存在
 `src/trae-adapters/traecn-1.107/fixtures/workflow.json`，可通过

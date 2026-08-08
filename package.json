@@ -114,6 +114,7 @@
     "test:live": "node scripts/live-uat.js",
     "test:all": "npm run lint && npm run lint:eslint && npm test && npm run test:system && npm run test:uat && npm run test:coverage",
     "audit:prod": "npm audit --omit=dev",
+    "audit:all": "npm audit --audit-level=high",
     "mcp": "node mcp-server.js",
     "pack:skill": "node scripts/package-skill.js",
     "sync:skill-contracts": "node skills/traecnclaw-mcp/scripts/sync-mcp-contracts.js",
@@ -138,7 +139,7 @@
     "verify:static": "npm run check:versions && npm run check:config-docs && npm run check:skill-contracts && npm run check:release-scan",
     "verify": "npm run verify:static && npm run test:all",
     "verify:release-manifest": "node scripts/verify-release.js",
-    "test:release": "npm run verify && npm run pack:skill && npm run verify:release-manifest && npm run test:clean-room"
+    "test:release": "npm run verify && npm run audit:all && npm run pack:skill && npm run verify:release-manifest && npm run test:clean-room"
   },
   "dependencies": {
     "ws": "^8.21.1"

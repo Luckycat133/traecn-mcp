@@ -466,6 +466,7 @@ npm run verify
 npm run contract:audit -- --no-live
 npm run test:live
 npm run audit:prod
+npm run audit:all
 ```
 
 `npm run verify` is the default CI and local release gate. It checks versions,
@@ -476,9 +477,11 @@ and coverage. It never spends TraeCN quota.
 `npm run test:release` additionally builds both Skill and complete server
 artifacts, installs them under a temporary HOME, starts the mock gateway and
 stdio MCP server, verifies the exact 20 tools, and completes one mock task.
-It also runs `npm run verify:release-manifest`, which checks that every release
-artifact is built from the checked-out commit and matches its recorded size and
-SHA-256 checksum.
+It first rejects high or critical advisories across production and development
+dependencies, then runs `npm run verify:release-manifest`, which checks that
+every release artifact is built from the checked-out commit and matches its
+recorded size and SHA-256 checksum. Use `audit:prod` for the production-only
+view and `audit:all` for the release view.
 
 `npm run contract:audit` inventories contract declarations and already-recorded
 evidence. It does not execute the behaviors it lists, so a passing contract

@@ -13,7 +13,8 @@ Observed on 2026-08-08:
 - The public `Luckycat133/traecnclaw-mcp-skill` mirror is visible, but its `SOURCE_REVISION` still identifies canonical commit `8b97e37` / release `v0.5.3`; its latest GitHub Release is the older `v0.3.0-mcp-skill.1` bundle.
 - The public MCP contract remains version 5 with exactly 20 ordered tools.
 - The runtime has durable active-task, terminal-idempotency, completion-event, and task-history stores; active and terminal replay across restart; modern Tasks/subscriptions; clean-room mock installation; release-manifest verification; a `TaskOrchestrator` ownership boundary; central route composition; and a tested MCP client-config generator.
-- Version-specific compatibility remains macOS TraeCN `1.107.x`, backed by sanitized fixture replay and a fresh 2026-08-08 strict readiness run against installed TraeCN `1.107.1`. That run did not send a delegated task or spend model quota.
+- A pre-publication push exposed Dependabot alert 6 / `GHSA-rgw5-rvv9-x895` in the transitive development dependency `brace-expansion@5.0.8`. The lock now resolves patched 5.0.9, `npm audit` reports zero vulnerabilities, and `test:release` enforces a full high/critical dependency audit before packaging.
+- Version-specific compatibility remains macOS TraeCN `1.107.x`, backed by sanitized fixture replay and a fresh 2026-08-08 strict readiness run against installed TraeCN `1.107.1`. A separate user-authorized run sent exactly one short live prompt and returned `delegate-async: done`; it was not mock output. The Codex MCP entry is registered, but this already-running host has not reloaded the new tool surface, so intended-host MCP task identity remains evidence to collect.
 - PR #19 was closed as an obsolete 0.5.4-based Skill proposal. PR #20 merged the 0.5.5 audit/Skill refresh on 2026-08-08; there are currently no open pull requests or issues.
 
 Revalidate with:
@@ -45,13 +46,16 @@ gh api -H 'Accept: application/vnd.github.raw+json' repos/Luckycat133/traecnclaw
   passed; `git diff --check` was also clean.
 - **Release-package evidence:** `npm run test:release` passes for the clean
   0.5.6 revision. It builds both Skill and server archives, verifies the
-  manifest revision/sizes/SHA-256 values, installs under a temporary HOME,
-  discovers the exact 20 tools, and completes a mock task. The generated
+  full dependency audit and manifest revision/sizes/SHA-256 values, installs
+  under a temporary HOME, discovers the exact 20 tools, and completes a mock
+  task. The generated
   `dist/traecnclaw-mcp-release.json` is the authoritative exact revision and
   artifact-byte record; `dist/` remains intentionally untracked.
 - **Live readiness:** strict no-delegation UAT passed against TraeCN 1.107.1
-  with the verified `traecn-1.107` adapter. It sent no prompt and deleted no
-  conversation.
+  with the verified `traecn-1.107` adapter. A subsequent authorized live
+  delegation completed with status `done`; no conversation was deleted. The
+  current Codex task still needs an MCP reconnect before the intended-host
+  task-ID/completion path is proven.
 - **Release/product completion:** local source and package preparation are
   complete at 0.5.6, but public completion is not. Public server distribution
   remains version fragmented. The 0.5.6, I1, P1, and GitHub Release channel
@@ -72,6 +76,7 @@ artifact revision is always the one recorded by the generated release manifest:
 | Terminal idempotency | `src/http/task-store.js`, `src/http/task-queue-service.js`, `src/http/task-orchestrator.js`, `src/http/handlers/unified-agent.js`, `src/http/gateway.js`, `src/http/openapi.js`, `src/config/runtime-schema.js` and focused tests | TaskStore schema 3 retains fingerprinted terminal responses for a configurable 24-hour default TTL, replays across restart, rejects semantic collisions, and reports retention health. |
 | MCP-first onboarding | `skills/traecnclaw-mcp/scripts/setup-mcp.js`, its test, `package.json`, `README.md`, and MCP setup/distribution guides | Validates matching server discovery, prints resolved JSON, and safely creates a new mode-0600 configuration file without overwrite. |
 | Live contract and compatibility | `scripts/live-uat.js`, `scripts/uat-checklist.js`, `docs/COMPATIBILITY.md`, `docs/REAL-DOM-FINDINGS.md` | Live UAT follows the current MCP v5 surface and records fresh TraeCN 1.107.1 readiness evidence. |
+| Release dependency security | `package-lock.json`, `package.json`, `scripts/coverage-audit.js`, `CHANGELOG.md`, `docs/DISTRIBUTION.md` | Pins patched `brace-expansion@5.0.9`, clears the high Dependabot advisory, and requires a full high/critical dependency audit before release packaging. |
 | Maintainer and release truth | `.codex/skills/traecnclaw-development/SKILL.md`, this audit, `CHANGELOG.md`, `docs/DISTRIBUTION.md` | Closed defects, accepted 0.5.6/MCP/idempotency/Release decisions, version-channel inventory, and exact next actions are synchronized. |
 
 Do not move or rebuild `v0.5.5` with these changes: that immutable tag predates
@@ -246,7 +251,10 @@ Use before merging repository-wide reliability or refactor work.
 npm run test:release
 ```
 
-Builds Skill/server archives, verifies provenance and checksums, installs under a temporary HOME, discovers all 20 tools, submits a mock task, subscribes, and reads completion.
+Audits production and development dependencies at the high threshold, builds
+Skill/server archives, verifies provenance and checksums, installs under a
+temporary HOME, discovers all 20 tools, submits a mock task, subscribes, and
+reads completion.
 
 This does not prove a public asset exists or that a real TraeCN build works.
 The gate passes for the current clean 0.5.6 source; rerun it after any committed

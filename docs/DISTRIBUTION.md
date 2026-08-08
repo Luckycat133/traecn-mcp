@@ -257,13 +257,15 @@ Suggested listing fields:
 Before making the repository public or attaching release artifacts:
 
 1. Confirm `git status --short` contains only intended changes.
-2. Run `npm run verify`.
-3. Run `npm run check:skill-contracts` to validate the canonical Skill and generated MCP contract.
-4. Run `npm run test:release`; keep the generated checksums and require the
+2. Run `npm run audit:all` and require zero high or critical production or
+   development dependency advisories.
+3. Run `npm run verify`.
+4. Run `npm run check:skill-contracts` to validate the canonical Skill and generated MCP contract.
+5. Run `npm run test:release`; keep the generated checksums and require the
    clean-room install, 20-tool discovery, mock submission, result read, and
    release-manifest verification to pass. A pushed version tag repeats this
    gate in GitHub Actions before creating or updating the GitHub Release.
-5. Scan current files and git history for `.env`, tokens, cookies, auth headers,
+6. Scan current files and git history for `.env`, tokens, cookies, auth headers,
    raw TraeCN profiles, and local-only paths.
-6. Replace any credential-bearing git remote URL with a credential-free HTTPS or
+7. Replace any credential-bearing git remote URL with a credential-free HTTPS or
    SSH URL before showing setup commands publicly.

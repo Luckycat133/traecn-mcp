@@ -169,6 +169,15 @@ assert.strictEqual(
 );
 assert.ok(packageJson.scripts['test:all'].includes('test:uat'), 'test:all must include UAT gate');
 assert.ok(packageJson.scripts['audit:prod'], 'production audit script is required');
+assert.strictEqual(
+  packageJson.scripts['audit:all'],
+  'npm audit --audit-level=high',
+  'full high-severity dependency audit script is required'
+);
+assert.ok(
+  packageJson.scripts['test:release'].includes('audit:all'),
+  'test:release must audit production and development dependencies before packaging'
+);
 
 const docs = [
   read('README.md'),

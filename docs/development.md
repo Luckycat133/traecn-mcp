@@ -136,7 +136,12 @@ npm run proof:long-queue
 npm run test:live
 node scripts/live-uat.js --strict --require-ready --require-verified-adapter --cleanup-queue-probes
 npm run audit:prod
+npm run audit:all
 ```
+
+`audit:prod` is the production dependency view. The release gate uses
+`audit:all` and fails on high or critical advisories in either production or
+development dependencies.
 
 ## Coding Standards
 

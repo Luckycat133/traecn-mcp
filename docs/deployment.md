@@ -86,7 +86,12 @@ npm test
 npm run test:system
 npm run test:uat
 npm run audit:prod
+npm run audit:all
 ```
+
+`audit:prod` reports the shipped runtime dependency view. `audit:all` also
+checks development tooling and is enforced by `npm run test:release` for a
+public release.
 
 Then verify with live TraeCN:
 

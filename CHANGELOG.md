@@ -58,6 +58,15 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
   gateway-managed MCP v5 task surface instead of requiring a cleanup tool that
   was intentionally removed from the public MCP contract.
 
+### Security
+
+- Updated the locked development dependency `brace-expansion` from 5.0.8 to
+  5.0.9, fixing the high-severity denial-of-service advisory
+  [GHSA-rgw5-rvv9-x895](https://github.com/advisories/GHSA-rgw5-rvv9-x895).
+- Added a full high/critical dependency audit to `npm run test:release` so
+  release preparation checks development dependencies as well as the existing
+  production-only audit.
+
 ## [0.5.5] - 2026-08-05
 
 ### Added
