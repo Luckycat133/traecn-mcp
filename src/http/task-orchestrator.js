@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const { isGenericQueueProbeTask } = require('../shared/utils');
 const { TraeCNAutomationError } = require('../cdp/errors');
 
@@ -106,6 +107,10 @@ class TaskOrchestrator {
         typeof body.idempotencyKey === 'string' && body.idempotencyKey.trim()
           ? body.idempotencyKey.trim()
           : null,
+      idempotencyFingerprint:
+        typeof body.idempotencyFingerprint === 'string' && body.idempotencyFingerprint.trim()
+          ? body.idempotencyFingerprint.trim()
+          : this.fingerprintTaskRequest(body),
       chatId: body.chatId || null,
       soloChat: this.normalizeSoloChatTarget(
         body.soloChat ||
@@ -205,30 +210,115 @@ class TaskOrchestrator {
     return task;
   }
 
+  fingerprintTaskRequest(input = {}) {
+    const semantic = {
+      task: typeof input.task === 'string' ? input.task : '',
+      sessionId: typeof input.sessionId === 'string' && input.sessionId.trim()
+        ? input.sessionId.trim()
+        : null,
+      projectPath: typeof input.projectPath === 'string' && input.projectPath.trim()
+        ? input.projectPath.trim()
+        : null,
+      desiredModel: typeof input.desiredModel === 'string' && input.desiredModel.trim()
+        ? input.desiredModel.trim()
+        : null,
+      desiredMode: input.desiredMode === 'solo' || input.desiredMode === 'ide'
+        ? input.desiredMode
+        : null,
+      newConversation: input.newConversation !== false,
+      chatId: input.chatId || null,
+      soloChat: this.normalizeSoloChatTarget(input.soloChat || input.soloChatTarget || null),
+      includeProcessText: input.includeProcessText === true,
+      reviewRequired: input.reviewRequired === true,
+      autoContinue: input.autoContinue === true,
+      followupTasks: this.normalizeFollowupTasks(input.followupTasks),
+      completionChecks: this.normalizeCompletionChecks(input.completionChecks || input),
+      autoApproveDialog: this.normalizeAutoApproveDialog(input.autoApproveDialog),
+      notifyUrl: typeof input.notifyUrl === 'string' ? input.notifyUrl : null,
+      fallbackModels: this.normalizeFallbackModels(
+        input.fallbackModels,
+        input.autoModelFallback === true
+      )
+    };
+    return crypto.createHash('sha256').update(canonicalJson(semantic)).digest('hex');
+  }
+
+  recordTerminalTask(task) {
+    if (!task || !this.isTerminalStatus(task.status)) return true;
+    if (!task.idempotencyKey) return true;
+    if (!task.idempotencyFingerprint) {
+      task.idempotencyFingerprint = this.fingerprintTaskRequest(task);
+    }
+    if (!this.taskQueueService || typeof this.taskQueueService.recordTerminalReplay !== 'function') {
+      return false;
+    }
+    return this.taskQueueService.recordTerminalReplay(task, this.taskQueue);
+  }
+
   /**
    * Resolve an idempotency-key replay against the active task queue.
    *
    * Returns `{ taskId, status, statusCode }` when an owned task matches the
-   * key, or `null` when no owned task matches. The `status` field reports the
-   * real terminal status once the task has finished, otherwise `accepted`; the
-   * `statusCode` is always 202 so the HTTP/MCP adapters keep their existing
-   * response shape.
+   * key, or `null` when no owned task matches. Active ownership replays with
+   * status 202, retained terminal ownership replays with its result and status
+   * 200, and a semantic fingerprint mismatch reports status 409.
    *
    * This consolidates task-identity resolution in the same boundary that owns
    * acceptance, so restart, retry, and reconnect replays can be exercised
    * without the HTTP layer reaching into the queue directly.
    */
-  resolveIdempotentTask(idempotencyKey) {
+  resolveIdempotentTask(idempotencyKey, request = null) {
     if (!idempotencyKey || typeof idempotencyKey !== 'string') return null;
+    const requestedFingerprint = typeof request === 'string'
+      ? request
+      : (request && typeof request === 'object' ? this.fingerprintTaskRequest(request) : null);
     const ownedTask = Array.from(this.taskQueue.values())
       .find(task => task && task.idempotencyKey === idempotencyKey);
-    if (!ownedTask) return null;
+    if (ownedTask) {
+      if (requestedFingerprint && ownedTask.idempotencyFingerprint
+        && requestedFingerprint !== ownedTask.idempotencyFingerprint) {
+        return idempotencyConflict(ownedTask.taskId);
+      }
+      return {
+        taskId: ownedTask.taskId,
+        status: this.isTerminalStatus(ownedTask.status) ? ownedTask.status : 'accepted',
+        statusCode: 202
+      };
+    }
+    const replay = this.taskQueueService?.getTerminalReplay?.(idempotencyKey) || null;
+    if (!replay) return null;
+    if (requestedFingerprint && replay.fingerprint
+      && requestedFingerprint !== replay.fingerprint) {
+      return idempotencyConflict(replay.taskId);
+    }
     return {
-      taskId: ownedTask.taskId,
-      status: this.isTerminalStatus(ownedTask.status) ? ownedTask.status : 'accepted',
-      statusCode: 202
+      taskId: replay.taskId,
+      status: replay.status,
+      result: replay.result ?? null,
+      error: replay.error ?? null,
+      terminal: true,
+      statusCode: 200
     };
   }
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => (
+      `${JSON.stringify(key)}:${canonicalJson(value[key])}`
+    )).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function idempotencyConflict(taskId) {
+  return {
+    conflict: true,
+    taskId,
+    statusCode: 409,
+    error: 'idempotency_key_conflict'
+  };
 }
 
 module.exports = { TaskOrchestrator };

@@ -102,6 +102,23 @@ test('loadConfig uses environment variable for token when set', () => {
   delete process.env.TRAECN_GATEWAY_TOKEN;
 });
 
+test('apiRequest applies the CLI 60 second timeout to the HTTP client', () => {
+  const { TraeCNApiClient } = require('../src/client/traecnapi-client');
+  const originalRequest = TraeCNApiClient.prototype._request;
+  TraeCNApiClient.prototype._request = function captureTimeout() {
+    return this.timeout;
+  };
+
+  try {
+    clearModuleCache();
+    const { apiRequest } = require('./traecn-cli');
+    assert.strictEqual(apiRequest('GET', '/api/status'), 60000);
+  } finally {
+    TraeCNApiClient.prototype._request = originalRequest;
+    clearModuleCache();
+  }
+});
+
 test('buildProofCliArgs maps proof status without execute side effects', () => {
   clearModuleCache();
   const { buildProofCliArgs } = require('./traecn-cli');

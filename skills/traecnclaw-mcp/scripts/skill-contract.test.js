@@ -115,6 +115,7 @@ assert.ok(!docs.includes('batch.runTasks'), 'JS SDK batch.runTasks must not be d
 
 for (const testFile of [
   'skills/traecnclaw-mcp/scripts/start-mcp.test.js',
+  'skills/traecnclaw-mcp/scripts/setup-mcp.test.js',
   'skills/traecnclaw-mcp/scripts/mcp-stdio-smoke.test.js',
   'skills/traecnclaw-mcp/scripts/skill-contract.test.js'
 ]) {

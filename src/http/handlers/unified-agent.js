@@ -69,6 +69,12 @@ function normalizeSteps(steps) {
 async function handleSubmit(req, res, ctx) {
   const body = await parseBody(req);
   const idempotencyKey = String(req.headers?.['idempotency-key'] || '').trim();
+  if (idempotencyKey.length > 256) {
+    return ctx._json(req, res, {
+      error: 'Idempotency-Key exceeds 256 characters',
+      code: 'INVALID_IDEMPOTENCY_KEY'
+    }, 400);
+  }
   const message = typeof body.message === 'string' ? body.message.trim() : '';
   if (!message) return ctx._json(req, res, { error: 'message is required' }, 400);
   if (message.length > 100000) return ctx._json(req, res, { error: 'message exceeds 100000 characters' }, 400);
@@ -83,6 +89,29 @@ async function handleSubmit(req, res, ctx) {
   let desiredModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null;
   let projectPath = typeof body.workspace === 'string' && body.workspace.trim() ? body.workspace.trim() : null;
   let soloChat = parseConversationId(body.conversationId);
+  const followupTasks = normalizeSteps(body.steps);
+  const requestIntent = {
+    task: message,
+    ...(projectPath ? { projectPath } : {}),
+    ...(desiredModel ? { desiredModel } : {}),
+    ...(desiredMode ? { desiredMode } : {}),
+    ...(soloChat ? { soloChat } : {}),
+    newConversation: body.newConversation === true,
+    followupTasks,
+    ...(body.completionChecks ? { completionChecks: body.completionChecks } : {}),
+    autoContinue: true,
+    reviewRequired: false,
+    autoApproveDialog: 'auto'
+  };
+  const idempotencyFingerprint = idempotencyKey
+    ? ctx._fingerprintTaskRequest(requestIntent)
+    : null;
+  if (idempotencyKey) {
+    const replay = ctx._resolveTaskIdempotency(idempotencyKey, idempotencyFingerprint);
+    if (replay) {
+      return ctx._json(req, res, replay.data, replay.statusCode);
+    }
+  }
 
   await ctx._ensureConnection();
   if (projectPath) await ctx._ensureRequestedWorkspace(projectPath);
@@ -118,8 +147,9 @@ async function handleSubmit(req, res, ctx) {
     ...(desiredMode ? { desiredMode } : {}),
     ...(soloChat ? { soloChat } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(idempotencyFingerprint ? { idempotencyFingerprint } : {}),
     newConversation: body.newConversation === true,
-    followupTasks: normalizeSteps(body.steps),
+    followupTasks,
     ...(body.completionChecks ? { completionChecks: body.completionChecks } : {}),
     autoContinue: true,
     reviewRequired: false,
@@ -135,9 +165,6 @@ async function handleSubmit(req, res, ctx) {
   task.newConversation = queuedBody.newConversation;
   ctx._ensureBackgroundPolling();
   const response = { taskId: task.taskId, status: 'accepted' };
-  if (idempotencyKey) {
-    ctx._storeIdempotency(idempotencyKey, { data: response, statusCode: 202 });
-  }
   return ctx._json(req, res, response, 202);
 }
 

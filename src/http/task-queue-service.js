@@ -32,6 +32,8 @@ class TaskQueueService {
     isMockBridge = () => false,
     isTerminalStatus = () => false,
     onWritePhase = null,
+    terminalReplayTtlMs,
+    now,
   } = {}) {
     this.logger = logger;
     this.taskHistoryStore = taskHistoryStore;
@@ -45,6 +47,8 @@ class TaskQueueService {
       persistencePath,
       isTerminalStatus,
       onWritePhase,
+      terminalReplayTtlMs,
+      now,
     });
     this.recoveryHelper = new RecoveryHelper({
       logger,
@@ -71,6 +75,8 @@ class TaskQueueService {
   setPersistencePath(value) { return this.taskStore.setPersistencePath(value); }
   resolvePersistencePath(configuredPath = '') { return this.taskStore.resolvePersistencePath(configuredPath); }
   persist(taskQueue) { return this.recoveryHelper.persist(taskQueue); }
+  recordTerminalReplay(task, taskQueue) { return this.taskStore.recordTerminalReplay(task, taskQueue); }
+  getTerminalReplay(idempotencyKey) { return this.taskStore.getTerminalReplay(idempotencyKey); }
   getPersistenceHealth() { return this.taskStore.getHealth(); }
   close() { return this.taskStore.close(); }
   syncHistoryMirror(task) { return this.recoveryHelper.syncHistoryMirror(task); }

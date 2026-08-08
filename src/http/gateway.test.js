@@ -25,6 +25,7 @@ try {
 const { Gateway, RateLimiter, sanitizeLog } = require('./gateway');
 const { buildCapabilities } = require('../capabilities');
 const { buildConfirmationPlan } = require('../shared/operation-confirmation');
+const { generateOpenAPISpec } = require('./openapi');
 const requestContext = require('../shared/request-context');
 const { selectTraeAdapter } = require('../trae-adapters');
 
@@ -954,6 +955,53 @@ test('Gateway restores idempotency ownership with the active task after restart'
   }
 });
 
+asyncTest('Gateway persists terminal idempotency replay before restart', async () => {
+  const queueFile = path.join(os.tmpdir(), `traecnclaw-gateway-terminal-idempotency-${Date.now()}.json`);
+  const previousPath = process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH;
+  process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH = queueFile;
+  let gateway;
+  let restoredGateway;
+  const request = {
+    task: 'persist terminal idempotency through the gateway lifecycle',
+    idempotencyKey: 'gateway-terminal-replay-1'
+  };
+  try {
+    gateway = new Gateway();
+    gateway.taskQueue.clear();
+    gateway.driver = { config: {} };
+    gateway._emitTaskNotification = async () => {};
+    const task = gateway._createQueuedTask(request, { queued: true });
+
+    await gateway._finalizeBackgroundTask(task.taskId, task, 'done', {
+      result: { text: 'gateway terminal result', stable: true }
+    });
+    gateway.taskQueueService.close();
+
+    restoredGateway = new Gateway();
+    const replay = restoredGateway.taskOrchestrator.resolveIdempotentTask(
+      'gateway-terminal-replay-1',
+      request
+    );
+
+    assert.deepStrictEqual(replay, {
+      taskId: task.taskId,
+      status: 'done',
+      result: { text: 'gateway terminal result', stable: true },
+      error: null,
+      terminal: true,
+      statusCode: 200
+    });
+    assert.strictEqual(restoredGateway.taskQueue.size, 0);
+  } finally {
+    gateway?.taskQueueService.close();
+    restoredGateway?.taskQueueService.close();
+    for (const suffix of ['', '.bak', '.tmp', '.lock']) {
+      if (fs.existsSync(`${queueFile}${suffix}`)) fs.unlinkSync(`${queueFile}${suffix}`);
+    }
+    restoreEnv('TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH', previousPath);
+  }
+});
+
 test('Gateway restores queued tasks without adding a local queue deadline', () => {
   const queueFile = path.join(os.tmpdir(), `traecnclaw-gateway-no-deadline-test-${Date.now()}.json`);
   const previousPath = process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH;
@@ -1071,6 +1119,34 @@ asyncTest('Gateway returns 503 instead of accepted when unified task durability 
   assert.strictEqual(gateway.taskQueue.size, 0);
 });
 
+asyncTest('Gateway returns 409 when a task idempotency key is reused for different work', async () => {
+  const { MockDriver } = require('../cdp/mock-driver');
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.mockBridge = true;
+  gateway.driver = new MockDriver();
+  gateway._ensureConnection = async () => {};
+  gateway._ensureBackgroundPolling = () => {};
+  const headers = { 'idempotency-key': 'gateway-collision-key-1' };
+  const first = makeReqRes(headers, '/api/tasks/submit', 'POST', {
+    message: 'original gateway work'
+  });
+  const collision = makeReqRes(headers, '/api/tasks/submit', 'POST', {
+    message: 'different gateway work'
+  });
+
+  await gateway.handleRequest(first.req, first.res);
+  await gateway.handleRequest(collision.req, collision.res);
+
+  const firstBody = JSON.parse(first.res._body);
+  const collisionBody = JSON.parse(collision.res._body);
+  assert.strictEqual(first.res.statusCode, 202);
+  assert.strictEqual(collision.res.statusCode, 409);
+  assert.strictEqual(collisionBody.code, 'IDEMPOTENCY_KEY_CONFLICT');
+  assert.strictEqual(collisionBody.taskId, firstBody.taskId);
+  assert.strictEqual(gateway.taskQueue.size, 1);
+});
+
 test('Gateway does not restore persisted active queue while mock bridge is enabled', () => {
   const queueFile = path.join(os.tmpdir(), `traecnclaw-gateway-mock-test-${Date.now()}.json`);
   const previousQueuePath = process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH;
@@ -1180,6 +1256,17 @@ asyncTest('Gateway status snapshot exposes task-store durability health', async 
       durabilityDegraded: true
     })
   };
+  gateway.taskHistoryStore = {
+    getHealth: () => ({
+      persistenceEnabled: true,
+      historyStoreWritable: true,
+      lastSuccessfulPersistAt: '2026-08-01T00:00:00.000Z',
+      lastPersistError: null,
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: false
+    })
+  };
 
   const snapshot = await gateway._statusSnapshot();
 
@@ -1204,8 +1291,88 @@ asyncTest('Gateway status snapshot exposes task-store durability health', async 
       lastLoadError: null,
       lastRecovery: null,
       durabilityDegraded: true
+    },
+    taskHistory: {
+      persistenceEnabled: true,
+      historyStoreWritable: true,
+      lastSuccessfulPersistAt: '2026-08-01T00:00:00.000Z',
+      lastPersistError: null,
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: false
     }
   });
+});
+
+asyncTest('Gateway status snapshot includes task-history durability in aggregate health', async () => {
+  const gateway = new Gateway();
+  gateway.mockBridge = true;
+  gateway.taskQueueService.getPersistenceHealth = () => ({
+    taskStoreWritable: true,
+    lastSuccessfulPersistAt: '2026-08-08T00:00:00.000Z',
+    lastPersistError: null,
+    durabilityDegraded: false
+  });
+  gateway.taskEventStore = {
+    getHealth: () => ({
+      persistenceEnabled: true,
+      eventStoreWritable: true,
+      lastSuccessfulPersistAt: '2026-08-08T00:00:00.000Z',
+      lastPersistError: null,
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: false
+    })
+  };
+  gateway.taskHistoryStore = {
+    getHealth: () => ({
+      persistenceEnabled: true,
+      historyStoreWritable: false,
+      lastSuccessfulPersistAt: null,
+      lastPersistError: {
+        code: 'ENOSPC',
+        message: 'Task history persistence is unavailable',
+        at: '2026-08-08T00:01:00.000Z'
+      },
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: true
+    })
+  };
+
+  const snapshot = await gateway._statusSnapshot();
+
+  assert.strictEqual(snapshot.durability.durabilityDegraded, true);
+  assert.deepStrictEqual(snapshot.durability.taskHistory, {
+    persistenceEnabled: true,
+    historyStoreWritable: false,
+    lastSuccessfulPersistAt: null,
+    lastPersistError: {
+      code: 'ENOSPC',
+      message: 'Task history persistence is unavailable',
+      at: '2026-08-08T00:01:00.000Z'
+    },
+    lastLoadError: null,
+    lastRecovery: null,
+    durabilityDegraded: true
+  });
+});
+
+test('OpenAPI status schema describes task-history durability health', () => {
+  const spec = generateOpenAPISpec();
+  const durability = spec.paths['/api/status'].get.responses['200']
+    .content['application/json'].schema.properties.durability;
+  const taskHistory = durability.properties.taskHistory;
+  assert.strictEqual(taskHistory.type, 'object');
+  assert.strictEqual(taskHistory.nullable, true);
+  assert.strictEqual(taskHistory.properties.historyStoreWritable.nullable, true);
+  assert.strictEqual(taskHistory.properties.lastRecovery.nullable, true);
+  assert.strictEqual(taskHistory.properties.durabilityDegraded.type, 'boolean');
+  assert.strictEqual(durability.properties.terminalReplayCount.type, 'integer');
+  assert.strictEqual(durability.properties.terminalReplayTtlMs.type, 'number');
+  assert.ok(spec.paths['/api/tasks/submit'].post.responses['200']);
+  assert.ok(spec.paths['/api/tasks/submit'].post.responses['400']);
+  assert.ok(spec.paths['/api/tasks/submit'].post.responses['409']);
 });
 
 asyncTest('Gateway status snapshot exposes the selected Trae adapter handshake', async () => {

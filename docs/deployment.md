@@ -16,6 +16,7 @@ TRAECN_ALLOWED_ORIGINS=http://127.0.0.1:8788
 TRAECN_ENABLE_DEBUG_ENDPOINTS=0
 TRAECN_ENABLE_MOCK_BRIDGE=0
 TRAECN_REMOTE_DEBUGGING_PORT=9222
+TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS=86400000
 ```
 
 Set selector overrides only after validating them with `npm run inspect:traecn`.
@@ -32,6 +33,13 @@ Start the gateway:
 
 ```sh
 npm start
+```
+
+For the primary Agent path, validate the matching MCP server and generate the
+host entry before reconnecting the host:
+
+```sh
+npm run --silent setup:mcp
 ```
 
 For macOS and Windows desktop convenience, use `start-traecnapi.command` or `start-traecnapi.cmd` after reviewing the `.env` file.
@@ -54,6 +62,9 @@ npm run service:stop
 The LaunchAgent path is also the recommended production path for async queue work because it now:
 
 - reloads persisted active tasks from `~/Library/Application Support/TRAECNclaw/active-queue.json`
+- retains fingerprinted terminal idempotency responses in the same checksummed
+  TaskStore for 24 hours by default, preventing duplicate work after uncertain
+  retries and gateway restarts
 - avoids opening a fresh unauthenticated Trae profile by default
   (`TRAECN_QUICKSTART_PROFILE_MODE=existing`,
   `TRAECN_TRAE_RECOVERY_NEW_INSTANCE=0`)
@@ -82,8 +93,10 @@ Then verify with live TraeCN:
 1. Start TraeCN with the configured remote debugging port.
 2. Run `npm run inspect:traecn`.
 3. Call `GET /api/status`.
-4. Create a session with `POST /api/sessions`.
-5. Delegate a short task with `POST /api/sessions/{sessionId}/delegate`.
+4. Run `npm run --silent setup:mcp`, merge the entry into the intended host,
+   and reconnect it.
+5. Confirm the host discovers exactly 20 tools, then send one short task only
+   when model quota and UI effects are acceptable.
 
 ## Security Controls
 

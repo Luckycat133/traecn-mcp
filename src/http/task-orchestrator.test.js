@@ -146,6 +146,60 @@ test('TaskOrchestrator resolveIdempotentTask replays an accepted task as HTTP 20
   assert.strictEqual(dependencies.taskQueue.size, 1);
 });
 
+test('TaskOrchestrator rejects an idempotency key reused for different work', () => {
+  const dependencies = createDependencies();
+  const orchestrator = createOrchestrator(dependencies);
+  const task = orchestrator.createQueuedTask(
+    { task: 'original semantic work', idempotencyKey: 'collision-key' },
+    { queued: true }
+  );
+
+  const replay = orchestrator.resolveIdempotentTask('collision-key', {
+    task: 'different semantic work',
+    idempotencyKey: 'collision-key'
+  });
+
+  assert.deepStrictEqual(replay, {
+    conflict: true,
+    taskId: task.taskId,
+    statusCode: 409,
+    error: 'idempotency_key_conflict'
+  });
+  assert.strictEqual(dependencies.taskQueue.size, 1);
+});
+
+test('TaskOrchestrator rejects different work against a terminal replay', () => {
+  const dependencies = createDependencies();
+  const orchestrator = createOrchestrator(dependencies, {
+    isTerminalStatus: (status) => ['done', 'error', 'cancelled'].includes(status)
+  });
+  const task = orchestrator.createQueuedTask(
+    { task: 'original terminal work', idempotencyKey: 'terminal-collision-key' },
+    { queued: true }
+  );
+  dependencies.taskQueue.clear();
+  dependencies.queueService.getTerminalReplay = () => ({
+    idempotencyKey: 'terminal-collision-key',
+    fingerprint: task.idempotencyFingerprint,
+    taskId: task.taskId,
+    status: 'done',
+    result: { text: 'original result', stable: true },
+    error: null
+  });
+
+  const replay = orchestrator.resolveIdempotentTask('terminal-collision-key', {
+    task: 'different terminal work',
+    idempotencyKey: 'terminal-collision-key'
+  });
+
+  assert.deepStrictEqual(replay, {
+    conflict: true,
+    taskId: task.taskId,
+    statusCode: 409,
+    error: 'idempotency_key_conflict'
+  });
+});
+
 test('TaskOrchestrator resolveIdempotentTask reports the real terminal status once finished', () => {
   const dependencies = createDependencies();
   const orchestrator = createOrchestrator(dependencies, {

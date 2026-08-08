@@ -5,7 +5,7 @@ after the stated test level has been rerun.
 
 | TraeCN version | Platform | Adapter | Repeatable evidence | Live evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1.107.x | macOS | `traecn-1.107` | Sanitized list/select/submit/queue/approval/response/review fixture replay | 1.107.1 DOM capture and 24/25 v0.4.0 UAT; palette retry added afterward | Verified adapter, with the historical live-test limitation documented |
+| 1.107.x | macOS | `traecn-1.107` | Sanitized list/select/submit/queue/approval/response/review fixture replay | 1.107.1 DOM capture and 24/25 v0.4.0 UAT; strict readiness UAT passed again on 2026-08-08 without delegation | Verified adapter; current readiness is live-checked, while a fresh quota-consuming task run remains separate |
 | Any other version/platform | Any | `traecn-unknown` | Generic mock/system coverage only | None | Degraded; no version-specific capabilities are claimed |
 
 The gateway detects the product version and structural mode through a read-only

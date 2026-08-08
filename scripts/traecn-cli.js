@@ -107,7 +107,7 @@ function apiRequest(method, endpoint, body) {
     host: cfg.host,
     port: cfg.port,
     token: cfg.token,
-    timeoutMs: 60000
+    timeout: 60000
   });
   return client._request(method, endpoint, body);
 }

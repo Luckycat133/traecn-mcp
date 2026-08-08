@@ -101,6 +101,14 @@ const RUNTIME_ENV_SPECS = [
     description: 'Optional total local queue cap. Empty means external queues may wait indefinitely.'
   },
   {
+    name: 'TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS',
+    section: 'Task lifecycle',
+    default: '86400000',
+    aliases: ['TRAE_TERMINAL_IDEMPOTENCY_TTL_MS'],
+    type: 'milliseconds',
+    description: 'Retention window for terminal task idempotency replays (24 hours).'
+  },
+  {
     name: 'TRAECN_ENABLE_MOCK_BRIDGE',
     section: 'Task lifecycle',
     default: '0',
@@ -194,7 +202,13 @@ function renderConfigurationDocument() {
     '',
     'Queue semantics: `TRAECN_QUEUE_WAIT_TIMEOUT_MS` bounds one low-level UI wait, while an empty `TRAECN_QUEUE_MAX_WAIT_MS` leaves the gateway-managed task alive for an external model queue. These settings are not two competing total-task deadlines.',
     '',
-    'Startup semantics: `npm run quickstart` checks an existing TraeCN/CDP session and starts the gateway. It launches TraeCN only with `--launch-trae` or `TRAECN_AUTO_START_TRAE=1`. `npm run start:traecn` explicitly starts TraeCN.',
+    'Idempotency semantics: a stable `Idempotency-Key` owns an accepted task across',
+    'restart. After the task becomes terminal, its fingerprint and terminal response',
+    'remain replayable for `TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS` (24 hours by',
+    'default); a different request using the same key is rejected instead of being',
+    'submitted.',
+    '',
+    'Startup semantics: `npm run quickstart` performs a bounded TraeCN-identity CDP check before starting the gateway. It launches TraeCN only with `--launch-trae` or `TRAECN_AUTO_START_TRAE=1`. If TraeCN is already running without debug access, quit it and run `TRAECN_QUICKSTART_PROFILE_MODE=existing npm run start:traecn -- --force-new --use-existing-profile`.',
     '',
     'Security: the gateway refuses to bind a non-loopback address unless `TRAECN_GATEWAY_TOKEN` is non-empty.',
     ''

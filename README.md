@@ -4,7 +4,11 @@
 >
 > **TRAECNclaw is the canonical source repository.** Packages, the Agent Skill, OpenClaw metadata, and GitHub Releases are generated and versioned from this repository.
 
-Local HTTP bridge, OpenClaw tool integration, and AI Skill module for TraeCN desktop automation. TRAECNclaw connects OpenClaw to TraeCN through a local REST gateway, Chrome DevTools Protocol (CDP), and DOM automation so tools can create chats, delegate tasks, switch modes, inspect readiness, and read TraeCN responses.
+Focused MCP gateway and Agent Skill for TraeCN desktop automation. MCP is the
+primary Agent entry point; the CLI supports development and live validation,
+the built-in web UI provides diagnostics, and OpenClaw remains an ecosystem
+adapter. All paths share the local REST gateway, Chrome DevTools Protocol
+(CDP), durable task lifecycle, and TraeCN DOM automation.
 
 ## Table of Contents
 
@@ -40,6 +44,13 @@ Edit `.env` for your TraeCN installation path, CDP port, gateway token, and sele
 Upgrading from 0.3.x: read [the 0.5.0 migration guide](docs/MIGRATING-TO-0.5.md)
 before replacing MCP configuration.
 
+Release channels must match. As of the 2026-08-08 audit, ClawHub provides the
+standalone 0.5.5 Skill, while the latest canonical GitHub server Release is
+0.5.4, npm `traecnclaw` is 0.3.1, and the public mirror identifies canonical
+0.5.3. Use this source checkout for the current Unreleased behavior; do not pair
+the newer Skill with an older public server package. See the
+[distribution inventory](docs/DISTRIBUTION.md#current-publication-inventory).
+
 ## Configuration
 
 These defaults are generated from `src/config/runtime-schema.js`; `.env.example`,
@@ -60,6 +71,7 @@ the configuration API, doctor, and runtime consumers use the same source.
 | `TRAECN_QUEUE_WAIT_TIMEOUT_MS` | `60000` | Timeout for one low-level queue wait operation; it is not the total task lifetime. |
 | `TRAECN_QUEUE_PER_TASK_TIMEOUT_MS` | `600000` | Deadline-extension window while a task remains in an external model queue. |
 | `TRAECN_QUEUE_MAX_WAIT_MS` | empty (unlimited) | Optional total local queue cap. Empty means external queues may wait indefinitely. |
+| `TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS` | `86400000` | Retention window for terminal task idempotency replays (24 hours). |
 | `TRAECN_ENABLE_MOCK_BRIDGE` | `0` | Use the mock bridge for tests that do not require a live TraeCN instance. |
 <!-- END GENERATED: runtime defaults -->
 
@@ -83,20 +95,18 @@ npm run quickstart -- --launch-trae
 ```
 
 If CDP is unavailable because Trae CN is already running without a debug port,
-use the confirmed recovery command. It quits Trae CN, then starts it again with
-the existing logged-in profile and CDP enabled:
+Quickstart prints the confirmed recovery command. Quit Trae CN, then restart
+the existing logged-in profile with CDP enabled:
 
 ```sh
-curl -s -X POST http://127.0.0.1:8788/api/trae/restart-debug \
-  -H 'Content-Type: application/json' \
-  -d '{"confirmationPhrase":"restart-trae-cn-with-debug-existing-profile"}'
+TRAECN_QUICKSTART_PROFILE_MODE=existing npm run start:traecn -- --force-new --use-existing-profile
 ```
 
 For manual startup after quitting Trae CN yourself, start a debug-enabled
 instance against the existing logged-in profile:
 
 ```sh
-TRAECN_QUICKSTART_PROFILE_MODE=existing npm run start:traecn -- --use-existing-profile
+TRAECN_QUICKSTART_PROFILE_MODE=existing npm run start:traecn -- --force-new --use-existing-profile
 ```
 
 Start only the gateway:
@@ -160,7 +170,26 @@ const review = await reviewCode({
 
 Any MCP-capable agent can connect through the bundled stdio server. The
 recommended entry point is the skill launcher, which auto-locates
-`mcp-server.js` from the repo root:
+`mcp-server.js` from the repo root or a matching installed server package.
+
+From a source checkout, validate the launcher and render a client entry:
+
+```sh
+npm run --silent setup:mcp
+```
+
+The command prints JSON only when npm is run with `--silent`; diagnostics go
+to stderr. To create a new file atomically without overwriting an existing
+configuration, use:
+
+```sh
+npm run setup:mcp -- --output ./traecnclaw-mcp.json
+```
+
+Merge the resulting `mcpServers.traecn` entry into the intended host's MCP
+configuration, then restart or reconnect that host. The equivalent command
+inside a standalone Skill directory is `node scripts/setup-mcp.js`; it fails
+before writing anything when no matching TRAECNclaw server can be found.
 
 The server implements the stable MCP `2026-07-28` stateless protocol with
 per-request metadata and `server/discover`. It also operates as a dual-era
@@ -320,11 +349,19 @@ Operator integrations can still inspect `GET /api/capabilities`,
 in a durable active-queue snapshot. If the store is read-only, full, or owned
 by another gateway process, the request returns `503 TASK_STORE_UNAVAILABLE`
 and no task is accepted. Supply `Idempotency-Key` for safe retries after an
-uncertain response; ownership survives gateway restart while the task remains
-active. `GET /api/status` exposes `durability.taskStoreWritable`,
+uncertain response. Matching active retries return the existing task with
+`202`; after completion, the checksummed TaskStore keeps the task identity,
+semantic request fingerprint, status, result, and error for 24 hours by
+default and returns the terminal replay with `200`. Reusing a key for different
+meaningful input returns `409 IDEMPOTENCY_KEY_CONFLICT`, and keys longer than
+256 characters return `400 INVALID_IDEMPOTENCY_KEY`. Configure the retention
+with `TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS`. `GET /api/status` exposes
+`durability.taskStoreWritable`, `terminalReplayCount`, `terminalReplayTtlMs`,
 `lastSuccessfulPersistAt`, `lastPersistError`, and `durabilityDegraded`. Its
 `durability.taskEvents` object separately reports completion-event write/load
-health, recovery source, and the most recent persistence error.
+health, recovery source, and the most recent persistence error;
+`durability.taskHistory` reports the same health boundary for diagnostic task
+history and replay evidence.
 The same status response exposes `traeAdapter` with the detected Trae version,
 platform, mode, selected adapter, compatibility level, evidence, and verified
 capability flags.

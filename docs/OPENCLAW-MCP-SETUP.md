@@ -24,7 +24,27 @@ npm run start:gateway
 
 ## MCP client
 
-Use the skill launcher:
+Validate the matching server and render the Skill launcher entry from a source
+checkout:
+
+```sh
+npm run --silent setup:mcp
+```
+
+The `--silent` flag keeps stdout as pure JSON. To create a new mode-0600 file
+atomically, without replacing an existing file, run:
+
+```sh
+npm run setup:mcp -- --output ./traecnclaw-mcp.json
+```
+
+Merge the resulting `mcpServers.traecn` entry into the host configuration and
+restart or reconnect the host. A standalone Skill installation can run
+`node scripts/setup-mcp.js`; setup fails before writing when it cannot locate a
+matching repository server, installed `traecnclaw` package, or
+`traecnclaw-mcp` executable.
+
+The generated entry uses the skill launcher:
 
 ```json
 {
@@ -92,6 +112,7 @@ append-only audit log instead of adding a separate confirmation tool.
 | Symptom | Check |
 | --- | --- |
 | MCP initializes with no tools | Absolute launcher path and Node.js version |
+| `setup-mcp` says the server is not installed | Install the matching server archive/package or run setup from its source checkout |
 | Gateway request returns `ECONNREFUSED` | `npm run start:gateway` |
 | HTTP 401 | Client and gateway token values |
 | CDP unavailable | TraeCN remote-debugging process and configured port |

@@ -47,22 +47,31 @@ Before substantial work:
 5. Treat missing Actions visibility as missing evidence, not a code blocker. Run local equivalent gates.
 6. Treat live TraeCN, platform access, release credentials, and registry publication as external only when the task genuinely requires them.
 
-At the 2026-08-07 audit, source and tag were `0.5.5` while the latest GitHub Release remained `0.5.4`. Recheck before making any current claim.
+At the 2026-08-08 recheck, `package.json` still declared `0.5.5`, but tag
+`v0.5.5` pointed to the earlier release-preparation commit and the latest
+downloadable GitHub Release remained `v0.5.4`. ClawHub exposed a clean `0.5.5`
+Skill whose canonical files matched the tagged Skill, while npm `traecnclaw`
+remained `0.3.1` and the public mirror still declared canonical release
+`v0.5.3`. Current completion work is newer than all of those immutable
+surfaces. The maintainer selected `0.5.6` as the next compatible version, but
+that choice is not a release until the exact clean commit passes the release
+gate. Never move the old tag or publish current artifacts as if they came from
+it. Recheck before making any current claim.
 
 ## Architecture owners
 
 - `src/mcp/contract.js`: frozen MCP contract v5 and exact ordered 20-tool surface.
 - `src/mcp/protocol.js`, `src/mcp/stdio-server.js`, `src/mcp/task-extension.js`: protocol eras, framing, Tasks, subscriptions, cancellation, and request lifetime.
-- `src/http/task-orchestrator.js`: candidate construction, durable acceptance, rollback, history mirror, and active-task idempotency replay.
-- `src/http/task-store.js`: active-task persistence, checksums, atomic replacement, recovery, health, and writer ownership.
+- `src/http/task-orchestrator.js`: candidate construction, durable acceptance, rollback, history mirror, semantic request fingerprints, and active/terminal idempotency replay.
+- `src/http/task-store.js`: active tasks plus bounded terminal replay persistence, checksums, atomic replacement, recovery, health, and writer ownership.
 - `src/shared/task-event-store.js`: completion events, cursor persistence, acknowledgements, pruning, long-poll, and recovery.
-- `src/shared/task-history.js`: diagnostic task history and replay evidence; it is not as durable as the two core stores until hardened.
+- `src/shared/task-history.js`: checksummed diagnostic task history and replay evidence with atomic replacement, backup recovery, quarantine, migration, and health.
 - `src/http/completion-signal.js`: durable completion-event creation followed by external delivery.
 - `src/http/queue-state-machine.js`, `src/http/task-queue-service.js`, `src/http/recovery-helper.js`: queue state, claims, persistence composition, restore, and polling support.
 - `src/http/route-table.js` plus `src/http/handlers/*`: route composition and HTTP adapters.
 - `src/trae-adapters`: versioned TraeCN detection, capabilities, selectors, and sanitized fixtures.
 - `src/config/runtime-schema.js`: canonical runtime environment names and defaults.
-- `scripts/quickstart.js`, `scripts/doctor.js`, `scripts/traecn-cli.js`: first-run and operator experience.
+- `scripts/quickstart.js`, `scripts/doctor.js`, `scripts/traecn-cli.js`, `skills/traecnclaw-mcp/scripts/setup-mcp.js`: first-run and operator experience.
 - `scripts/package-skill.js`, `scripts/verify-release.js`, `scripts/clean-room-install.test.js`, `scripts/public-mirror.js`, `.github/workflows/release.yml`: packaging, provenance, installation, and publication.
 
 Extend the existing owner. Delete the previous path after moving callers; never leave two active implementations.
@@ -72,7 +81,7 @@ Extend the existing owner. Delete the previous path after moving callers; never 
 - MCP contract v5 remains exactly 20 ordered tools unless an explicit migration is requested.
 - Protocol revision and TRAECNclaw tool-contract version are separate.
 - A task is not accepted until the active queue snapshot persists successfully.
-- Active idempotent retries reuse the original task across restart; different semantic work must not collide.
+- Active and retained terminal idempotent retries reuse the original task across restart; different semantic work must not collide, and terminal ownership expires after the configured TTL.
 - A task is not submitted to TraeCN twice after retry, restart, timeout conversion, reconnect, or replay.
 - Results remain bound to the submitting task and conversation identity.
 - Core store failures remain observable and cannot produce false durability claims.
@@ -85,31 +94,32 @@ Extend the existing owner. Delete the previous path after moving callers; never 
 - Generated Skill mirrors and release artifacts come from the exact verified commit.
 - Keep Node.js 22, CommonJS, two-space formatting, and the plain-`assert` test style unless migration is explicitly requested.
 
-## Confirmed defects to revalidate first
+## Current local defect status
 
-Close these if current source already fixed them.
+The 2026-08-08 completion branch closes the previously confirmed Quickstart
+probe, CLI timeout, task-history durability, stale live-UAT MCP discovery, and
+terminal retry gap with executable regressions. It also supplies the selected
+MCP-first setup command. A fresh strict no-delegation readiness run passes
+against TraeCN 1.107.1. Re-read `references/project-audit.md` and current source
+before creating another local defect item. Remaining work is release
+preparation/publication, a user-authorized live task or real-host check,
+unselected platform/host scope, or optional work unless new failing evidence
+appears.
 
-### Q1 — quickstart CDP probing
+## Product decisions
 
-`scripts/quickstart.js` uses an unbounded raw HTTP probe and accepts any JSON `/json/version` response. Harden it with a timeout, HTTP and TraeCN identity validation, script-level tests, and an actionable “running without debug” recovery path.
+Settled for the 0.5.6 candidate:
 
-### C1 — CLI timeout option
+- **Version:** the compatible post-`v0.5.5` work becomes `0.5.6`.
+- **Terminal idempotency:** persist a semantic request fingerprint and terminal response for a configurable 24-hour default TTL.
+- **Primary entry point:** MCP Skill for product use, CLI for live validation, web UI for diagnostics, and OpenClaw as an adapter.
+- **Public server channel:** publish matching server and Skill archives through the canonical GitHub Release from one verified revision.
 
-`scripts/traecn-cli.js` passes `timeoutMs` to `TraeCNApiClient`, whose constructor reads `timeout`. Fix the canonical option and add a regression test.
+Still product-dependent; do not decide silently during an unrelated patch:
 
-### H1 — task-history durability
-
-`TaskHistoryStore.recordStep()` marks dirty state without scheduling persistence, and task-history JSON is directly overwritten. When history or replay is a product promise, schedule step persistence and add atomic recovery semantics plus fault tests.
-
-## Product decisions, not ordinary bugs
-
-Do not decide these silently during an unrelated patch:
-
-- **Terminal idempotency:** active-only ownership versus a persistent terminal replay ledger with request fingerprint and TTL.
-- **Primary entry point:** MCP Skill, CLI, web UI, or OpenClaw. Recommended: MCP for product use, CLI for live validation, web UI for diagnostics, OpenClaw as an adapter.
 - **Completion fallback:** whether a named host without the draft Tasks extension needs a dedicated wake-up adapter.
 - **Platform scope:** remain macOS and verified-version first, or invest in Windows or another TraeCN adapter.
-- **Publication:** public repository, package, and ClawHub versus invited source or Release users.
+- **Publication access:** the canonical repository is private, so a public GitHub Release requires an explicit visibility or public asset-hosting action.
 
 Ask only when a decision changes product semantics. Do not ask for implementation details resolvable from code and tests.
 

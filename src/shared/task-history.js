@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -13,6 +14,9 @@ const DEFAULT_RETENTION_HOURS = parsePositiveInt(
   getEnvWithFallback('TRAECN_TASK_HISTORY_RETENTION_HOURS', 'TRAE_TASK_HISTORY_RETENTION_HOURS', '168'),
   168
 );
+const TASK_HISTORY_SCHEMA_VERSION = 2;
+const CHECKSUM_ALGORITHM = 'sha256';
+
 function resolveDefaultPersistencePath() {
   const configured = getEnvWithFallback(
     'TRAECN_TASK_HISTORY_PERSISTENCE_PATH',
@@ -30,38 +34,60 @@ const DEFAULT_PERSISTENCE_PATH = resolveDefaultPersistencePath();
 
 class TaskHistoryStore {
   constructor(options = {}) {
-    this.maxSize = options.maxSize || DEFAULT_MAX_HISTORY_SIZE;
-    this.retentionHours = options.retentionHours || DEFAULT_RETENTION_HOURS;
+    this.maxSize = options.maxSize ?? DEFAULT_MAX_HISTORY_SIZE;
+    this.retentionHours = options.retentionHours ?? DEFAULT_RETENTION_HOURS;
     this.persistencePath = options.persistencePath || DEFAULT_PERSISTENCE_PATH;
+    this.logger = options.logger || console;
+    this.onWritePhase = typeof options.onWritePhase === 'function' ? options.onWritePhase : null;
     this.tasks = new Map();
     this.stepCounter = 0;
     this._dirty = false;
     this._cleanupTimer = null;
     this._persistTimer = null;
     this._persistDebounceMs = options.persistDebounceMs || 100;
+    this.historyStoreWritable = null;
+    this.lastSuccessfulPersistAt = null;
+    this.lastPersistError = null;
+    this.lastLoadError = null;
+    this.lastRecovery = null;
     this._initPersistence();
     this._scheduleCleanup();
   }
 
   _initPersistence() {
-    if (this.persistencePath) {
-      try {
-        const filePath = path.resolve(this.persistencePath);
-        if (fs.existsSync(filePath)) {
-          const data = fs.readFileSync(filePath, 'utf8');
-          const parsed = JSON.parse(data);
-          if (Array.isArray(parsed.tasks)) {
-            for (const task of parsed.tasks) {
-              if (task.taskId) {
-                this.tasks.set(task.taskId, task);
-              }
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('[TaskHistory] Failed to load persistence:', e.message);
-      }
+    if (!this.persistencePath) return;
+    const primaryPath = path.resolve(this.persistencePath);
+    const backupPath = `${primaryPath}.bak`;
+    const tempPath = `${primaryPath}.tmp`;
+
+    const primary = this._loadCandidate(primaryPath, 'primary');
+    if (primary) {
+      this._applyDocument(primary.document);
+      this._removeIfExists(tempPath);
+      this._removeIfExists(`${backupPath}.tmp`);
+      if (primary.legacy) this._rewriteRecoveredSnapshot('legacy');
+      return;
     }
+
+    const backup = this._loadCandidate(backupPath, 'backup');
+    if (backup) {
+      this._applyDocument(backup.document);
+      this._removeIfExists(tempPath);
+      this._removeIfExists(`${backupPath}.tmp`);
+      this._rewriteRecoveredSnapshot('backup');
+      return;
+    }
+
+    const temp = this._loadCandidate(tempPath, 'temp');
+    if (temp) {
+      this._applyDocument(temp.document);
+      this._removeIfExists(tempPath);
+      this._removeIfExists(`${backupPath}.tmp`);
+      this._rewriteRecoveredSnapshot('temp');
+      return;
+    }
+
+    this._removeIfExists(`${backupPath}.tmp`);
   }
 
   /**
@@ -88,23 +114,220 @@ class TaskHistoryStore {
    * changes. Called by the debounced timer and by {@link shutdown}.
    */
   _persistNow() {
-    if (!this.persistencePath || !this._dirty) return;
+    if (!this.persistencePath || !this._dirty) return true;
+    const primaryPath = path.resolve(this.persistencePath);
+    const tempPath = `${primaryPath}.tmp`;
+    const backupPath = `${primaryPath}.bak`;
+    const backupTempPath = `${backupPath}.tmp`;
+    const dirPath = path.dirname(primaryPath);
+
     try {
-      const filePath = path.resolve(this.persistencePath);
-      const dir = path.dirname(filePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      const serialized = `${JSON.stringify(this._createDocument(), null, 2)}\n`;
+      fs.mkdirSync(dirPath, { recursive: true });
+      this._removeIfExists(tempPath);
+      this._removeIfExists(backupTempPath);
+      this._writeDurableTemp(tempPath, serialized);
+
+      if (fs.existsSync(primaryPath)) {
+        const current = this._readCandidate(primaryPath);
+        if (current.ok) {
+          this._copyDurable(primaryPath, backupTempPath);
+          fs.renameSync(backupTempPath, backupPath);
+          this._fsyncDirectory(dirPath);
+          this._emitWritePhase('backup_committed');
+        } else {
+          this._quarantine(primaryPath, current.error);
+        }
       }
-      const data = {
-        version: 1,
-        savedAt: new Date().toISOString(),
-        tasks: Array.from(this.tasks.values())
-      };
-      fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+
+      fs.renameSync(tempPath, primaryPath);
+      this._emitWritePhase('primary_committed');
+      this._fsyncDirectory(dirPath);
+      this._emitWritePhase('directory_fsynced');
+      this._removeIfExists(backupTempPath);
       this._dirty = false;
-    } catch (e) {
-      console.error('[TaskHistory] Failed to persist:', e.message);
+      this.historyStoreWritable = true;
+      this.lastSuccessfulPersistAt = new Date().toISOString();
+      this.lastPersistError = null;
+      this.lastLoadError = null;
+      return true;
+    } catch (error) {
+      this.logger.error('[TaskHistory] Failed to persist:', error.message);
+      this._recordWriteFailure(error);
+      return false;
     }
+  }
+
+  getHealth() {
+    return {
+      persistenceEnabled: Boolean(this.persistencePath),
+      historyStoreWritable: this.historyStoreWritable,
+      lastSuccessfulPersistAt: this.lastSuccessfulPersistAt,
+      lastPersistError: this.lastPersistError ? { ...this.lastPersistError } : null,
+      lastLoadError: this.lastLoadError ? { ...this.lastLoadError } : null,
+      lastRecovery: this.lastRecovery ? { ...this.lastRecovery } : null,
+      durabilityDegraded: this.historyStoreWritable === false
+        || (this.lastLoadError !== null && this.lastRecovery === null)
+    };
+  }
+
+  _createDocument() {
+    const payload = {
+      schemaVersion: TASK_HISTORY_SCHEMA_VERSION,
+      savedAt: new Date().toISOString(),
+      tasks: Array.from(this.tasks.values())
+    };
+    return {
+      ...payload,
+      checksum: {
+        algorithm: CHECKSUM_ALGORITHM,
+        digest: this._checksum(payload)
+      }
+    };
+  }
+
+  _applyDocument(document = {}) {
+    this.tasks.clear();
+    for (const task of document.tasks || []) {
+      if (task && task.taskId) this.tasks.set(task.taskId, task);
+    }
+  }
+
+  _loadCandidate(filePath, source) {
+    if (!fs.existsSync(filePath)) return null;
+    const candidate = this._readCandidate(filePath);
+    if (candidate.ok) return candidate;
+    this.lastLoadError = {
+      source,
+      message: candidate.error,
+      at: new Date().toISOString()
+    };
+    this._quarantine(filePath, candidate.error);
+    return null;
+  }
+
+  _readCandidate(filePath) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (parsed && parsed.version === 1 && Array.isArray(parsed.tasks)) {
+        return { ok: true, document: parsed, legacy: true };
+      }
+      if (!parsed || parsed.schemaVersion !== TASK_HISTORY_SCHEMA_VERSION || !Array.isArray(parsed.tasks)) {
+        return { ok: false, error: `unsupported task-history schema in ${path.basename(filePath)}` };
+      }
+      if (parsed.checksum?.algorithm !== CHECKSUM_ALGORITHM || typeof parsed.checksum?.digest !== 'string') {
+        return { ok: false, error: `missing ${CHECKSUM_ALGORITHM} checksum in ${path.basename(filePath)}` };
+      }
+      const payload = {
+        schemaVersion: parsed.schemaVersion,
+        savedAt: parsed.savedAt,
+        tasks: parsed.tasks
+      };
+      const expected = this._checksum(payload);
+      const actual = parsed.checksum.digest.toLowerCase();
+      const validHex = /^[a-f0-9]{64}$/.test(actual);
+      const matches = validHex && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+      if (!matches) {
+        return { ok: false, error: `checksum mismatch in ${path.basename(filePath)}` };
+      }
+      return { ok: true, document: parsed, legacy: false };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  }
+
+  _checksum(payload) {
+    return crypto.createHash(CHECKSUM_ALGORITHM).update(JSON.stringify(payload)).digest('hex');
+  }
+
+  _rewriteRecoveredSnapshot(source) {
+    this._dirty = true;
+    const rewritten = this._persistNow();
+    this.lastRecovery = {
+      source,
+      rewritten,
+      at: new Date().toISOString()
+    };
+  }
+
+  _writeDurableTemp(filePath, serialized) {
+    const bytes = Buffer.from(serialized, 'utf8');
+    let fd;
+    try {
+      fd = fs.openSync(filePath, 'w', 0o600);
+      this._emitWritePhase('temp_opened');
+      let offset = 0;
+      while (offset < bytes.length) {
+        offset += fs.writeSync(fd, bytes, offset, bytes.length - offset);
+      }
+      this._emitWritePhase('temp_written');
+      fs.fsyncSync(fd);
+      this._emitWritePhase('temp_fsynced');
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+  }
+
+  _copyDurable(sourcePath, destinationPath) {
+    fs.copyFileSync(sourcePath, destinationPath);
+    const fd = fs.openSync(destinationPath, 'r');
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  _fsyncDirectory(dirPath) {
+    let fd;
+    try {
+      fd = fs.openSync(dirPath, 'r');
+      fs.fsyncSync(fd);
+    } catch (error) {
+      if (!['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR'].includes(error.code)) throw error;
+      this.logger.warn(`[TaskHistory] Directory fsync unavailable: ${error.message}`);
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+  }
+
+  _quarantine(filePath, reason) {
+    if (!fs.existsSync(filePath)) return null;
+    let quarantinePath = `${filePath}.corrupt-${Date.now()}-${process.pid}`;
+    let suffix = 0;
+    while (fs.existsSync(quarantinePath)) {
+      suffix += 1;
+      quarantinePath = `${filePath}.corrupt-${Date.now()}-${process.pid}-${suffix}`;
+    }
+    try {
+      fs.renameSync(filePath, quarantinePath);
+      this.logger.error(`[TaskHistory] Quarantined corrupt snapshot ${path.basename(filePath)}: ${reason}`);
+      return quarantinePath;
+    } catch (error) {
+      this.logger.error(`[TaskHistory] Failed to quarantine ${path.basename(filePath)}: ${error.message}`);
+      return null;
+    }
+  }
+
+  _removeIfExists(filePath) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+    }
+  }
+
+  _emitWritePhase(phase) {
+    if (this.onWritePhase) this.onWritePhase(phase);
+  }
+
+  _recordWriteFailure(error = {}) {
+    this.historyStoreWritable = false;
+    this.lastPersistError = {
+      code: typeof error.code === 'string' && error.code ? error.code : 'WRITE_FAILED',
+      message: 'Task history persistence is unavailable',
+      at: new Date().toISOString()
+    };
   }
 
   _scheduleCleanup() {
@@ -237,6 +460,7 @@ class TaskHistoryStore {
     };
     record.steps.push(step);
     this._dirty = true;
+    this._persist();
     return step;
   }
 

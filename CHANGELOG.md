@@ -7,7 +7,54 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
-<!-- Future changes go here. -->
+### Added
+
+- Added a checksummed terminal idempotency ledger to TaskStore schema 3. A
+  stable key now replays the original terminal status/result across gateway
+  restart for a configurable 24-hour default TTL, while semantic collisions
+  are rejected before reconnecting to TraeCN.
+- Added `setup:mcp` and the portable `scripts/setup-mcp.js` entry point to
+  validate server discovery and render a resolved MCP client configuration.
+  It can print pure JSON or atomically create a new mode-0600 file without
+  overwriting an existing configuration.
+- Added bounded, injectable Quickstart CDP probing with TraeCN identity
+  validation and script-level coverage for success, timeout, connection
+  refusal, non-success HTTP responses, invalid JSON, and wrong-product
+  endpoints.
+- Added checksummed TaskHistory schema 2 snapshots with durable temporary-file
+  replacement, last-known-good backups, corrupt-file quarantine, legacy and
+  interrupted-snapshot recovery, and persistence health reporting.
+
+### Changed
+
+- Established the MCP Skill as the primary Agent path, with the CLI for live
+  validation, the web UI for diagnostics, and OpenClaw as an ecosystem adapter.
+- Migrated valid TaskStore schema 2 snapshots to schema 3 while retaining the
+  existing checksum, atomic replacement, backup, quarantine, and single-writer
+  durability boundary.
+- Included task-history persistence and recovery health under
+  `GET /api/status` as `durability.taskHistory`; history degradation now
+  contributes to the aggregate `durabilityDegraded` flag.
+- Documented the separate publication state of the private canonical source,
+  immutable `v0.5.5` tag, `v0.5.4` GitHub Release, ClawHub 0.5.5 Skill, npm
+  0.3.1 server package, and v0.5.3 public mirror so unmatched surfaces are not
+  presented as one installable release.
+
+### Fixed
+
+- Rejected `Idempotency-Key` values longer than 256 characters with HTTP 400
+  and rejected reuse of an active or retained terminal key for different
+  semantic work with HTTP 409.
+- Applied the CLI's intended 60-second HTTP request timeout through the
+  client's canonical `timeout` constructor option.
+- Made Quickstart reject CDP endpoints that do not identify TraeCN and print
+  the confirmed logged-in-profile restart command when TraeCN is already
+  running without an available debug endpoint.
+- Scheduled persistence for step-only task-history updates and preserved an
+  explicit zero-hour retention option.
+- Updated strict live UAT discovery checks to validate the current
+  gateway-managed MCP v5 task surface instead of requiring a cleanup tool that
+  was intentionally removed from the public MCP contract.
 
 ## [0.5.5] - 2026-08-05
 

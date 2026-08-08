@@ -4,8 +4,12 @@
 > 采集时的工作目录已脱敏为：`<workspace>/TRAECNclaw`
 > CDP: 9222 · `~/Library/Application Support/Trae CN`（macOS 默认 user-data-dir，已登录态持久化）
 
-这份文档保存的是历史实机证据，不代表每次发布都重新执行了实机
-UAT。对应的版本适配器是 `src/trae-adapters/traecn-1.107`；脱敏后的
+这份文档保存的是历史实机证据，不代表每次发布都重新执行了会消耗
+模型额度的实机任务 UAT。2026-08-08 已针对同一 TraeCN 1.107.1 构建
+重新通过 strict readiness UAT；该检查覆盖 product identity、readiness、
+verified adapter、queue/dialog/preflight、发现面、设置读取、Solo 列表和
+清理 dry-run，但没有发送 prompt 或删除会话。对应的版本适配器是
+`src/trae-adapters/traecn-1.107`；脱敏后的
 关键工作流状态保存在
 `src/trae-adapters/traecn-1.107/fixtures/workflow.json`，可通过
 `npm run test:trae-adapters` 重放。当前实机检测结果以

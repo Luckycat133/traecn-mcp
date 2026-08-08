@@ -1055,6 +1055,14 @@ class Gateway {
     if (payload.reviewNotes !== undefined) task.reviewNotes = payload.reviewNotes;
     if (payload.nextTaskId !== undefined) task.nextTaskId = payload.nextTaskId;
 
+    const terminalReplayPersisted = this.taskOrchestrator.recordTerminalTask(task);
+    if (!terminalReplayPersisted) {
+      console.error(
+        '[Gateway] Failed to persist terminal idempotency replay for task',
+        taskId
+      );
+    }
+
     if (task.sessionId && !task.sessionResultRecorded && ['done', 'awaiting_review', 'approval_required', 'review_rejected', 'queue_timeout', 'error', 'cancelled'].includes(status)) {
       const resultText = typeof task.result?.text === 'string' ? task.result.text.trim() : '';
       const errorText = task.error ? `Error: ${task.error}` : '';
@@ -1272,16 +1280,39 @@ class Gateway {
     if (this.idempotencyKeys.has(key)) {
       return this.idempotencyKeys.get(key);
     }
+    return this._resolveTaskIdempotency(key);
+  }
+
+  _fingerprintTaskRequest(request) {
+    return this.taskOrchestrator.fingerprintTaskRequest(request);
+  }
+
+  _resolveTaskIdempotency(key, request = null) {
     // Delegate task-identity resolution to the orchestrator so the queue is
     // not reached into from the HTTP layer. Keep the orchestrator's queue
     // reference aligned the same way `_createQueuedTask` does, since tests
     // and embedders may replace these dependencies after startup.
     this.taskOrchestrator.taskQueue = this.taskQueue;
     this.taskOrchestrator.isTerminalStatus = (status) => this._isTerminalTaskStatus(status);
-    const owned = this.taskOrchestrator.resolveIdempotentTask(key);
+    const owned = this.taskOrchestrator.resolveIdempotentTask(key, request);
     if (owned) {
+      if (owned.conflict) {
+        return {
+          data: {
+            error: owned.error,
+            code: 'IDEMPOTENCY_KEY_CONFLICT',
+            taskId: owned.taskId
+          },
+          statusCode: owned.statusCode
+        };
+      }
+      const data = { taskId: owned.taskId, status: owned.status };
+      if (owned.terminal) {
+        data.result = owned.result;
+        data.error = owned.error;
+      }
       return {
-        data: { taskId: owned.taskId, status: owned.status },
+        data,
         statusCode: owned.statusCode
       };
     }
@@ -1585,7 +1616,7 @@ class Gateway {
 
     // Idempotency replay only applies to authenticated mutations; public
     // endpoints skip the idempotency cache so /metrics scrapes are cheap.
-    if (route.requiresAuth) {
+    if (route.requiresAuth && route.handler !== '_handleUnifiedSubmit') {
       const idempotencyResponse = this._checkIdempotency(req);
       if (idempotencyResponse) {
         this._finishRequestLog(req, res, idempotencyResponse.statusCode);
@@ -1721,6 +1752,9 @@ class Gateway {
     const taskEventDurability = this.taskEventStore && typeof this.taskEventStore.getHealth === 'function'
       ? this.taskEventStore.getHealth()
       : null;
+    const taskHistoryDurability = this.taskHistoryStore && typeof this.taskHistoryStore.getHealth === 'function'
+      ? this.taskHistoryStore.getHealth()
+      : null;
 
     return {
       status: (this.mockBridge || (this.client && this.client.isConnected)) ? 'connected' : 'disconnected',
@@ -1735,8 +1769,10 @@ class Gateway {
       durability: {
         ...taskStoreDurability,
         durabilityDegraded: taskStoreDurability.durabilityDegraded === true
-          || taskEventDurability?.durabilityDegraded === true,
-        taskEvents: taskEventDurability
+          || taskEventDurability?.durabilityDegraded === true
+          || taskHistoryDurability?.durabilityDegraded === true,
+        taskEvents: taskEventDurability,
+        taskHistory: taskHistoryDurability
       },
       uptime: process.uptime()
     };

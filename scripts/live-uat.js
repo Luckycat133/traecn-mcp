@@ -336,7 +336,7 @@ async function main() {
     checks.push({ name: 'openapi', ok: true, paths: Object.keys(openapi.data.paths).length });
 
     assert.ok(listCommands().some(command => command.command === 'cleanup_foreign_solo_queue'), 'command set must include cleanup_foreign_solo_queue');
-    assert.ok(MCP_TOOLS.some(tool => tool.name === 'traecn_cleanup_queue_probe_chats'), 'MCP tools must include traecn_cleanup_queue_probe_chats');
+    assert.ok(MCP_TOOLS.some(tool => tool.name === 'traecn_send_message'), 'MCP tools must include traecn_send_message');
     assert.ok(openClawTools.some(tool => tool.name === 'traecn_cleanup_queue'), 'OpenClaw runtime tools must include traecn_cleanup_queue');
     checks.push({ name: 'agent-discovery-surfaces', ok: true });
 

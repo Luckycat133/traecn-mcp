@@ -1,9 +1,35 @@
 # Migrating to 0.5.x
 
 This guide covers the 0.3.x to 0.5.0 migration and compatible patch updates
-through 0.5.5. TRAECNclaw 0.5.0 freezes MCP contract version 5 and repairs the
+through the selected 0.5.6 release candidate. TRAECNclaw 0.5.0 freezes MCP contract version 5 and repairs the
 distribution, configuration, persistence, and security boundaries that changed
 throughout the 0.4.x series.
+
+## Updating to 0.5.6
+
+The current 0.5.6 candidate contains compatible reliability and onboarding
+changes newer than the immutable `v0.5.5` tag. It hardens Quickstart CDP
+identity probing, applies the CLI's intended request timeout, upgrades
+TaskHistory to checksummed atomic schema 2 persistence with health reporting,
+repairs strict live UAT discovery against the frozen MCP v5 surface, and adds
+a tested MCP configuration generator.
+
+TaskStore now migrates schema 2 snapshots to schema 3 and retains terminal
+idempotency records beside active tasks under the same checksum, atomic-write,
+backup, quarantine, and single-writer boundary. A matching retry returns the
+original active task or the retained terminal result; a different semantic
+request using the same key returns HTTP 409. Terminal replays expire after
+`TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS`, which defaults to 24 hours.
+
+MCP is the primary Agent path in this release candidate. Generate a resolved
+client entry with `npm run --silent setup:mcp`, or create a new file with
+`npm run setup:mcp -- --output FILE`. The CLI remains the live-validation path,
+the web UI is diagnostic, and OpenClaw remains an ecosystem adapter.
+
+The compatible version decision is `0.5.6`, but it is not a public release
+until the exact clean version-preparation commit passes `npm run test:release`
+and matching GitHub Release server and Skill artifacts are published. Never
+move the historical `v0.5.5` tag.
 
 ## Updating from 0.5.4 to 0.5.5
 
@@ -14,8 +40,10 @@ replay, TaskStore rollback, and TaskEventStore cursor behavior. Idempotency-key
 replay resolution is owned by `TaskOrchestrator`; HTTP response status and the
 20-tool MCP contract are unchanged.
 
-Before publishing, run `npm run verify`, build the artifacts from the same clean
-0.5.5 commit, and verify the release manifest before creating the `v0.5.5` tag.
+The immutable `v0.5.5` tag already points to commit `4c01911`, but no matching
+GitHub Release assets were published. Do not move the tag to include later
+fixes. Any historical 0.5.5 artifact must be built from that exact commit; the
+current Unreleased work belongs to the next selected version.
 
 ## Updating from 0.5.3 to 0.5.4
 
@@ -46,13 +74,17 @@ version 5 and its ordered 20-tool surface are unchanged.
 
 ## Installation source
 
-Install the exact 0.5.5 GitHub Release artifact or the matching published
-package when using a registry. Until publication, use this source checkout and
-build its artifacts from the final clean commit. A source checkout can point
-the MCP client at
-`mcp-server.js` or use the bundled Skill launcher. Do not mix a 0.5.4 Skill with
-an older server package, or a 0.5.5 Skill with an older server, when validating
-release-specific behavior.
+As of 2026-08-08, there is no complete public 0.5.5 server + Skill installation
+pair: ClawHub has the 0.5.5 Skill, the latest downloadable canonical GitHub
+Release is 0.5.4, npm `traecnclaw` is 0.3.1, and the public mirror still
+identifies canonical 0.5.3. Use an authorized source checkout for current
+Unreleased behavior. A source checkout can point the MCP client at
+`mcp-server.js` or use the bundled Skill launcher. Never mix a newer Skill with
+an older server when validating version-specific behavior.
+
+For public installation, wait for one next-version source revision to provide
+both the server and Skill, then verify their version, source commit, manifest,
+and checksums before replacing an existing installation.
 
 ## MCP contract
 
@@ -105,6 +137,7 @@ The canonical defaults are:
 - `TRAECN_AUTO_START_TRAE=0`;
 - response collection timeout `1800000` ms;
 - no total local queue cap while `TRAECN_QUEUE_MAX_WAIT_MS` is empty.
+- terminal idempotency replay retention of `86400000` ms (24 hours).
 
 `npm run quickstart` checks an existing TraeCN/CDP session and starts the
 gateway. Use `npm run start:traecn` to launch TraeCN explicitly, or
@@ -112,9 +145,10 @@ gateway. Use `npm run start:traecn` to launch TraeCN explicitly, or
 
 ## Queue persistence
 
-Legacy active-queue documents with `version: 1` are read once and rewritten as
-checksummed schema version 2. The new store writes an atomic primary snapshot
-and keeps `.bak` as last-known-good. Invalid primary files are renamed with a
+Legacy active-queue documents with `version: 1` and checksummed schema version
+2 documents are read and rewritten as checksummed schema version 3. The store
+persists both active tasks and bounded terminal idempotency replays in one
+atomic primary snapshot and keeps `.bak` as last-known-good. Invalid primary files are renamed with a
 `.corrupt-<timestamp>-<pid>` suffix before backup recovery. Preserve these
 files when investigating storage or shutdown failures.
 
@@ -124,14 +158,23 @@ left by a dead process is reclaimed on the next write. Task submission now
 returns `202` only after its first snapshot is durable, and returns
 `503 TASK_STORE_UNAVAILABLE` without accepting the candidate when persistence
 fails. Retry uncertain submissions with a stable `Idempotency-Key`; active-task
-ownership is restored with the queue after restart. Inspect the `durability`
-object returned by `GET /api/status` before unattended delegation.
+ownership is restored with the queue after restart, and terminal ownership is
+retained for the configured TTL with the original status, result, or error.
+Keys longer than 256 characters are rejected, and a key cannot be reused for
+different meaningful input. Inspect the `durability` object returned by
+`GET /api/status` before unattended delegation; it includes the terminal replay
+count and configured TTL.
 
 Completion events and per-client acknowledgement cursors use their own
 checksummed schema version 2 snapshot with atomic replacement, `.bak` recovery,
 and corrupt-file quarantine. `durability.taskEvents` reports its health. A
 failed event write is not broadcast as a completed delivery, and a failed
 cursor write returns HTTP 503 without advancing that client's durable cursor.
+
+Task history and replay evidence also migrate legacy version 1 JSON into a
+checksummed schema version 2 snapshot with atomic replacement, `.bak` recovery,
+and corrupt-file quarantine. Step-only updates now schedule persistence, and
+`durability.taskHistory` reports write, load, and recovery health.
 
 ## Network security
 
@@ -143,7 +186,8 @@ when other local processes are not trusted.
 ## Upgrade checklist
 
 1. Stop the old gateway and back up its active queue file.
-2. Update the source checkout or unpack the 0.5.5 release artifacts.
+2. Update to the exact verified 0.5.6 source revision, or unpack matching
+   0.5.6 server and Skill artifacts after they are published.
 3. Remove MCP profile configuration and switch to canonical environment names.
 4. Run `npm install`, `npm run doctor`, and `npm run verify`.
 5. Start TraeCN with CDP on port 9222, then start the gateway and reconnect the

@@ -42,6 +42,8 @@ function request(body, headers = {}) {
     },
     _ensureBackgroundPolling: () => calls.push('poll'),
     _storeIdempotency: (key, response) => idempotencyWrites.push([key, response]),
+    _fingerprintTaskRequest: () => 'submit-fingerprint-1',
+    _resolveTaskIdempotency: () => null,
     _resumeApprovalRequiredTasksAfterInteraction: (action, dialog, result) => {
       calls.push(['resume-interaction', action, dialog.command, result.success]);
       return ['task_gateway_1'];
@@ -100,6 +102,7 @@ function request(body, headers = {}) {
     desiredMode: 'solo',
     soloChat: { titleIncludes: 'Review API' },
     idempotencyKey: 'submit-review-1',
+    idempotencyFingerprint: 'submit-fingerprint-1',
     newConversation: false,
     followupTasks: [{ task: 'Run tests', autoContinue: true, reviewRequired: false }],
     autoContinue: true,
@@ -107,10 +110,66 @@ function request(body, headers = {}) {
     autoApproveDialog: 'auto'
   }]);
   assert.strictEqual(calls[3], 'poll');
-  assert.deepStrictEqual(idempotencyWrites, [[
-    'submit-review-1',
-    { data: { taskId: 'task_gateway_1', status: 'accepted' }, statusCode: 202 }
-  ]]);
+  assert.deepStrictEqual(idempotencyWrites, []);
+
+  const replayRes = {};
+  let replayConnectionAttempted = false;
+  await handleSubmit(request({
+    message: 'Review the repository',
+    model: 'GLM-5.2',
+    mode: 'solo',
+    workspace: '/tmp/repo',
+    conversationId: 'solo:UmV2aWV3IEFQSQ',
+    steps: ['Run tests']
+  }, { 'idempotency-key': 'submit-review-1' }), replayRes, {
+    ...ctx,
+    _fingerprintTaskRequest: () => 'terminal-fingerprint-1',
+    _resolveTaskIdempotency: (key, fingerprint) => {
+      assert.strictEqual(key, 'submit-review-1');
+      assert.strictEqual(fingerprint, 'terminal-fingerprint-1');
+      return {
+        data: {
+          taskId: 'task_terminal_1',
+          status: 'done',
+          result: { text: 'original answer', stable: true },
+          error: null
+        },
+        statusCode: 200
+      };
+    },
+    _ensureConnection: async () => {
+      replayConnectionAttempted = true;
+      throw new Error('terminal replay must not connect to TraeCN');
+    },
+    _createQueuedTask: () => {
+      throw new Error('terminal replay must not enqueue duplicate work');
+    }
+  });
+  assert.strictEqual(replayConnectionAttempted, false);
+  assert.strictEqual(replayRes.status, 200);
+  assert.deepStrictEqual(replayRes.body, {
+    taskId: 'task_terminal_1',
+    status: 'done',
+    result: { text: 'original answer', stable: true },
+    error: null
+  });
+
+  const oversizedKeyRes = {};
+  let oversizedKeyConnected = false;
+  await handleSubmit(request({ message: 'must reject the oversized key' }, {
+    'idempotency-key': 'k'.repeat(257)
+  }), oversizedKeyRes, {
+    ...ctx,
+    _ensureConnection: async () => {
+      oversizedKeyConnected = true;
+    }
+  });
+  assert.strictEqual(oversizedKeyConnected, false);
+  assert.strictEqual(oversizedKeyRes.status, 400);
+  assert.deepStrictEqual(oversizedKeyRes.body, {
+    error: 'Idempotency-Key exceeds 256 characters',
+    code: 'INVALID_IDEMPOTENCY_KEY'
+  });
 
   calls.length = 0;
   const continueRes = {};

@@ -21,6 +21,7 @@ assert.strictEqual(runtimeDefault('TRAECN_QUICKSTART_PROFILE_MODE'), 'existing')
 assert.strictEqual(runtimeDefault('TRAECN_AUTO_START_TRAE'), '0');
 assert.strictEqual(runtimeDefault('TRAECN_RESPONSE_TIMEOUT_MS'), '1800000');
 assert.strictEqual(runtimeDefault('TRAECN_QUEUE_MAX_WAIT_MS'), '');
+assert.strictEqual(runtimeDefault('TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS'), '86400000');
 
 assert.strictEqual(
   readRuntimeEnv('TRAECN_GATEWAY_HOST', { TRAECN_GATEWAY_HOST: '10.0.0.1', HOST: '10.0.0.2' }),

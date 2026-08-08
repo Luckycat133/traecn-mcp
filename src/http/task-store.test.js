@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -51,10 +52,11 @@ asyncTest('TaskQueueService writes checksummed snapshots and preserves last-know
 
     const primary = readJson(persistencePath);
     const backup = readJson(`${persistencePath}.bak`);
-    assert.strictEqual(primary.schemaVersion, 2);
+    assert.strictEqual(primary.schemaVersion, 3);
     assert.strictEqual(primary.checksum.algorithm, 'sha256');
     assert.match(primary.checksum.digest, /^[a-f0-9]{64}$/);
     assert.strictEqual(primary.tasks[0].task, 'second durable snapshot');
+    assert.deepStrictEqual(primary.terminalReplays, []);
     assert.strictEqual(backup.tasks[0].task, 'first durable snapshot');
     assert.strictEqual(fs.existsSync(`${persistencePath}.tmp`), false);
   } finally {
@@ -74,7 +76,7 @@ asyncTest('TaskQueueService quarantines a corrupt primary and restores last-know
 
     assert.strictEqual(restored, 1);
     assert.strictEqual(restoredQueue.get('task-stable').task, 'first durable snapshot');
-    assert.strictEqual(readJson(persistencePath).schemaVersion, 2);
+    assert.strictEqual(readJson(persistencePath).schemaVersion, 3);
     assert.ok(
       fs.readdirSync(dir).some(name => /^active-queue\.json\.corrupt-/.test(name)),
       'corrupt primary should be retained in quarantine'
@@ -99,6 +101,69 @@ asyncTest('TaskQueueService rejects a checksum-mismatched primary', async () => 
     assert.strictEqual(restored, 1);
     assert.strictEqual(restoredQueue.get('task-stable').task, 'first durable snapshot');
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+asyncTest('TaskQueueService migrates a valid schema 2 snapshot to schema 3', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-task-store-schema-2-'));
+  const persistencePath = path.join(dir, 'active-queue.json');
+  const payload = {
+    schemaVersion: 2,
+    savedAt: '2026-08-08T00:00:00.000Z',
+    tasks: [{
+      taskId: 'task-schema-2',
+      status: 'queued',
+      task: 'restore the previous schema',
+      createdAt: 1000
+    }]
+  };
+  const document = {
+    ...payload,
+    checksum: {
+      algorithm: 'sha256',
+      digest: crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex')
+    }
+  };
+  fs.writeFileSync(persistencePath, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+
+  try {
+    const queue = new Map();
+    const service = createService(persistencePath);
+    assert.strictEqual(service.restore(queue), 1);
+    assert.strictEqual(queue.get('task-schema-2').task, 'restore the previous schema');
+    const rewritten = readJson(persistencePath);
+    assert.strictEqual(rewritten.schemaVersion, 3);
+    assert.deepStrictEqual(rewritten.terminalReplays, []);
+    service.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+asyncTest('TaskQueueService health excludes terminal replays at their exact expiry', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-task-store-expired-health-'));
+  const persistencePath = path.join(dir, 'active-queue.json');
+  let now = 1000;
+  const service = createService(persistencePath, {
+    terminalReplayTtlMs: 5000,
+    now: () => now
+  });
+  try {
+    assert.strictEqual(service.recordTerminalReplay({
+      taskId: 'task-terminal-health',
+      task: 'report only retained terminal replays',
+      status: 'done',
+      result: { text: 'done' },
+      idempotencyKey: 'terminal-health-key',
+      idempotencyFingerprint: 'terminal-health-fingerprint'
+    }, new Map()), true);
+    assert.strictEqual(service.getPersistenceHealth().terminalReplayCount, 1);
+
+    now = 6000;
+    assert.strictEqual(service.getPersistenceHealth().terminalReplayCount, 0);
+  } finally {
+    service.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

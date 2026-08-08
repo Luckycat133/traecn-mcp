@@ -17,6 +17,10 @@ the separately negotiated `io.modelcontextprotocol/tasks` extension. An
 opted-in `traecn_send_message` returns the durable gateway ID as a Task;
 `tasks/get`, `tasks/update`, and `tasks/cancel` operate that same identity, and
 `subscriptions/listen` can stream exact-ID `notifications/tasks` snapshots.
+Modern retries derive a stable idempotency key from the request identity and
+arguments. The gateway retains the corresponding terminal fingerprint and
+response across restart for a configurable 24-hour default TTL, so the same
+request reuses the original task while different work cannot collide.
 Clients that do not opt in retain the ordinary complete result and use
 `traecn_get_task` only for an intentional read. The extension is upstream-draft
 and does not change the 20-tool contract.

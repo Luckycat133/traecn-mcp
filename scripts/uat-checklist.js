@@ -47,6 +47,8 @@ assert.ok(liveUatSource.includes('queue-probe-guard'), 'scripts/live-uat.js must
 assert.ok(liveUatSource.includes('cleanup-dry-run'), 'scripts/live-uat.js must check cleanup dry-run');
 assert.ok(liveUatSource.includes('--cleanup-queue-probes'), 'scripts/live-uat.js must support queue-probe cleanup');
 assert.ok(liveUatSource.includes('Found ${matched} accidental queue-probe Solo chat'), 'scripts/live-uat.js must fail strict UAT when queue-probe chats remain');
+assert.ok(liveUatSource.includes("tool.name === 'traecn_send_message'"), 'scripts/live-uat.js must verify the current gateway-managed MCP task surface');
+assert.ok(!liveUatSource.includes('traecn_cleanup_queue_probe_chats'), 'scripts/live-uat.js must not require a cleanup tool removed from the gateway-managed MCP surface');
 assert.ok(cliSource.includes("case 'capabilities'"), 'CLI must expose capabilities command');
 assert.ok(cliSource.includes("case 'preflight'"), 'CLI must expose preflight command');
 assert.ok(cliSource.includes("case 'plan'"), 'CLI must expose operation plan command');

@@ -49,13 +49,20 @@ function newHistoryStore(persistencePath) {
   });
 }
 
-function newQueueService(persistencePath, { taskHistoryStore, onWritePhase } = {}) {
+function newQueueService(persistencePath, {
+  taskHistoryStore,
+  onWritePhase,
+  terminalReplayTtlMs,
+  now
+} = {}) {
   return new TaskQueueService({
     logger: { error() {}, warn() {}, log() {} },
     persistencePath,
     taskHistoryStore,
     isTerminalStatus,
-    onWritePhase
+    onWritePhase,
+    terminalReplayTtlMs,
+    now
   });
 }
 
@@ -76,6 +83,7 @@ function newOrchestrator({ taskHistoryStore, taskQueueService, taskQueue, now = 
     normalizeAutoApproveDialog: (value) => value || null,
     normalizeSoloChatTarget: (value) => value || null,
     syncTaskHistoryMirror: () => {},
+    isTerminalStatus,
     now
   });
 }
@@ -235,6 +243,118 @@ test('restart after a terminal event does not restore the finished task into the
     const restored = restoredService.restore(restoredQueue);
     assert.strictEqual(restored, 0, 'terminal task must not re-enter the active queue');
     assert.strictEqual(restoredQueue.size, 0);
+    restoredService.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('terminal idempotency replay survives restart with the original result', () => {
+  const dir = makeTempDir();
+  const queuePath = path.join(dir, 'active-queue.json');
+  const historyPath = path.join(dir, 'history.json');
+  const request = {
+    task: 'durable terminal replay task',
+    sessionId: 'session-terminal-replay',
+    idempotencyKey: 'terminal-durable-key'
+  };
+  try {
+    const history = newHistoryStore(historyPath);
+    const queue = new Map();
+    const service = newQueueService(queuePath, { taskHistoryStore: history });
+    const orchestrator = newOrchestrator({
+      taskHistoryStore: history,
+      taskQueueService: service,
+      taskQueue: queue
+    });
+    const task = orchestrator.createQueuedTask(request, {
+      queued: false,
+      running: false,
+      canSubmit: true
+    });
+    task.status = 'done';
+    task.result = { text: 'original terminal answer', stable: true };
+    task.completedAt = '2026-08-08T12:00:00.000Z';
+
+    assert.strictEqual(orchestrator.recordTerminalTask(task), true);
+    service.close();
+
+    const restoredQueue = new Map();
+    const restoredService = newQueueService(queuePath, { taskHistoryStore: history });
+    restoredService.restore(restoredQueue);
+    const restoredOrchestrator = newOrchestrator({
+      taskHistoryStore: history,
+      taskQueueService: restoredService,
+      taskQueue: restoredQueue
+    });
+    const replay = restoredOrchestrator.resolveIdempotentTask(
+      'terminal-durable-key',
+      request
+    );
+
+    assert.deepStrictEqual(replay, {
+      taskId: task.taskId,
+      status: 'done',
+      result: { text: 'original terminal answer', stable: true },
+      error: null,
+      terminal: true,
+      statusCode: 200
+    });
+    assert.strictEqual(restoredQueue.size, 0);
+    restoredService.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('terminal idempotency replay expires at the configured TTL after restart', () => {
+  const dir = makeTempDir();
+  const queuePath = path.join(dir, 'active-queue.json');
+  const historyPath = path.join(dir, 'history.json');
+  const request = {
+    task: 'work that may be deliberately repeated later',
+    idempotencyKey: 'expiring-terminal-key'
+  };
+  let now = 1000;
+  try {
+    const history = newHistoryStore(historyPath);
+    const queue = new Map();
+    const service = newQueueService(queuePath, {
+      taskHistoryStore: history,
+      terminalReplayTtlMs: 100,
+      now: () => now
+    });
+    const orchestrator = newOrchestrator({
+      taskHistoryStore: history,
+      taskQueueService: service,
+      taskQueue: queue,
+      now: () => now
+    });
+    const task = orchestrator.createQueuedTask(request, { queued: true });
+    task.status = 'done';
+    task.result = { text: 'expired answer', stable: true };
+    assert.strictEqual(orchestrator.recordTerminalTask(task), true);
+    service.close();
+
+    now = 1100;
+    const restoredQueue = new Map();
+    const restoredService = newQueueService(queuePath, {
+      taskHistoryStore: history,
+      terminalReplayTtlMs: 100,
+      now: () => now
+    });
+    restoredService.restore(restoredQueue);
+    const restoredOrchestrator = newOrchestrator({
+      taskHistoryStore: history,
+      taskQueueService: restoredService,
+      taskQueue: restoredQueue,
+      now: () => now
+    });
+
+    assert.strictEqual(
+      restoredOrchestrator.resolveIdempotentTask('expiring-terminal-key', request),
+      null
+    );
     restoredService.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

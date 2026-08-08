@@ -34,7 +34,7 @@ operations from the agent loop; the gateway owns those mechanics.
 ## Setup
 
 1. Install the matching TRAECNclaw server from its source checkout or release server archive. The launcher checks the repository, an installed `traecnclaw` package, then `traecnclaw-mcp` on `PATH`; it never executes a JavaScript path selected by an environment variable.
-2. Run `npm run doctor` in a source checkout, then configure the client from [assets/mcp-client-config.json](assets/mcp-client-config.json), replacing `SKILL_DIR` with this folder's absolute path. Use [assets/mcp-client-config.direct.json](assets/mcp-client-config.direct.json) when directly referencing the repository server.
+2. Run `npm run doctor` in a source checkout. Then run `npm run --silent setup:mcp` from the checkout, or `node scripts/setup-mcp.js` from this Skill directory, to validate the server and print a resolved client entry. Use `--output FILE` to create a new mode-0600 file atomically; the command never overwrites an existing file. The JSON templates under [assets](assets) remain manual fallbacks.
 3. Start the gateway with `npm run start:gateway`, then reconnect the MCP client.
 4. Use mock mode only for development; never cite mock output as live TraeCN evidence.
 

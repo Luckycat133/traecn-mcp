@@ -19,6 +19,7 @@ Canonical variables and defaults:
 | `TRAECN_QUEUE_WAIT_TIMEOUT_MS` | `60000` | Timeout for one low-level queue wait operation; it is not the total task lifetime. |
 | `TRAECN_QUEUE_PER_TASK_TIMEOUT_MS` | `600000` | Deadline-extension window while a task remains in an external model queue. |
 | `TRAECN_QUEUE_MAX_WAIT_MS` | empty (unlimited) | Optional total local queue cap. Empty means external queues may wait indefinitely. |
+| `TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS` | `86400000` | Retention window for terminal task idempotency replays (24 hours). |
 | `TRAECN_ENABLE_MOCK_BRIDGE` | `0` | Use the mock bridge for tests that do not require a live TraeCN instance. |
 <!-- END GENERATED: runtime defaults -->
 
@@ -38,10 +39,17 @@ Canonical names take precedence over compatibility aliases. New configuration sh
 | `TRAECN_QUEUE_WAIT_TIMEOUT_MS` | `TRAE_QUEUE_WAIT_TIMEOUT_MS` |
 | `TRAECN_QUEUE_PER_TASK_TIMEOUT_MS` | `TRAE_QUEUE_PER_TASK_TIMEOUT_MS` |
 | `TRAECN_QUEUE_MAX_WAIT_MS` | `TRAE_QUEUE_MAX_WAIT_MS` |
+| `TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS` | `TRAE_TERMINAL_IDEMPOTENCY_TTL_MS` |
 | `TRAECN_ENABLE_MOCK_BRIDGE` | `TRAE_ENABLE_MOCK_BRIDGE` |
 
 Queue semantics: `TRAECN_QUEUE_WAIT_TIMEOUT_MS` bounds one low-level UI wait, while an empty `TRAECN_QUEUE_MAX_WAIT_MS` leaves the gateway-managed task alive for an external model queue. These settings are not two competing total-task deadlines.
 
-Startup semantics: `npm run quickstart` checks an existing TraeCN/CDP session and starts the gateway. It launches TraeCN only with `--launch-trae` or `TRAECN_AUTO_START_TRAE=1`. `npm run start:traecn` explicitly starts TraeCN.
+Idempotency semantics: a stable `Idempotency-Key` owns an accepted task across
+restart. After the task becomes terminal, its fingerprint and terminal response
+remain replayable for `TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS` (24 hours by
+default); a different request using the same key is rejected instead of being
+submitted.
+
+Startup semantics: `npm run quickstart` performs a bounded TraeCN-identity CDP check before starting the gateway. It launches TraeCN only with `--launch-trae` or `TRAECN_AUTO_START_TRAE=1`. If TraeCN is already running without debug access, quit it and run `TRAECN_QUICKSTART_PROFILE_MODE=existing npm run start:traecn -- --force-new --use-existing-profile`.
 
 Security: the gateway refuses to bind a non-loopback address unless `TRAECN_GATEWAY_TOKEN` is non-empty.

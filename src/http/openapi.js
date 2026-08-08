@@ -78,12 +78,27 @@ function generateOpenAPISpec() {
                           lastSuccessfulPersistAt: { type: 'string', nullable: true },
                           lastPersistError: { type: 'object', nullable: true },
                           durabilityDegraded: { type: 'boolean' },
+                          terminalReplayCount: { type: 'integer', minimum: 0 },
+                          terminalReplayTtlMs: { type: 'number', minimum: 1 },
                           taskEvents: {
                             type: 'object',
                             nullable: true,
                             properties: {
                               persistenceEnabled: { type: 'boolean' },
                               eventStoreWritable: { type: 'boolean', nullable: true },
+                              lastSuccessfulPersistAt: { type: 'string', nullable: true },
+                              lastPersistError: { type: 'object', nullable: true },
+                              lastLoadError: { type: 'object', nullable: true },
+                              lastRecovery: { type: 'object', nullable: true },
+                              durabilityDegraded: { type: 'boolean' }
+                            }
+                          },
+                          taskHistory: {
+                            type: 'object',
+                            nullable: true,
+                            properties: {
+                              persistenceEnabled: { type: 'boolean' },
+                              historyStoreWritable: { type: 'boolean', nullable: true },
                               lastSuccessfulPersistAt: { type: 'string', nullable: true },
                               lastPersistError: { type: 'object', nullable: true },
                               lastLoadError: { type: 'object', nullable: true },
@@ -377,7 +392,7 @@ function generateOpenAPISpec() {
             name: 'Idempotency-Key',
             required: false,
             schema: { type: 'string', maxLength: 256 },
-            description: 'Stable retry key retained with the durable active task across gateway restarts.'
+            description: 'Stable retry key retained with active work and terminal results for the configured 24-hour default TTL.'
           }],
           requestBody: {
             required: true,
@@ -401,7 +416,10 @@ function generateOpenAPISpec() {
             }
           },
           responses: {
+            '200': { description: 'Terminal idempotency replay with the original task status and result' },
             '202': { description: 'Task accepted after its active-queue snapshot is durable', content: { 'application/json': { schema: { type: 'object', properties: { taskId: { type: 'string' }, status: { type: 'string', enum: ['accepted'] } } } } } },
+            '400': { description: 'Invalid task payload or Idempotency-Key longer than 256 characters' },
+            '409': { description: 'Idempotency-Key was already used for different semantic work' },
             '503': { description: 'TaskStore is unwritable or owned by another gateway; no task was accepted' }
           }
         }

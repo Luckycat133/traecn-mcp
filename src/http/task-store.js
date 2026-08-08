@@ -4,11 +4,20 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { getEnvWithFallback, isGenericQueueProbeTask } = require('../shared/utils');
+const { getEnvWithFallback, isGenericQueueProbeTask, parsePositiveInt } = require('../shared/utils');
+const { runtimeDefault } = require('../config/runtime-schema');
 
-const TASK_STORE_SCHEMA_VERSION = 2;
+const TASK_STORE_SCHEMA_VERSION = 3;
 const CHECKSUM_ALGORITHM = 'sha256';
 const TASK_STORE_LOCK_METADATA_GRACE_MS = 5000;
+const DEFAULT_TERMINAL_REPLAY_TTL_MS = parsePositiveInt(
+  getEnvWithFallback(
+    'TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS',
+    'TRAE_TERMINAL_IDEMPOTENCY_TTL_MS',
+    runtimeDefault('TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS')
+  ),
+  Number(runtimeDefault('TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS'))
+);
 const OWNED_TASK_STORE_LOCKS = new Map();
 
 function resolveTaskStorePath(configuredPath = '') {
@@ -29,7 +38,9 @@ class TaskStore {
     logger = console,
     persistencePath = null,
     isTerminalStatus = () => false,
-    onWritePhase = null
+    onWritePhase = null,
+    terminalReplayTtlMs = DEFAULT_TERMINAL_REPLAY_TTL_MS,
+    now = () => Date.now()
   } = {}) {
     this.logger = logger;
     this.persistencePath = resolveTaskStorePath(persistencePath || '');
@@ -37,6 +48,9 @@ class TaskStore {
       ? isTerminalStatus
       : () => Boolean(isTerminalStatus);
     this.onWritePhase = typeof onWritePhase === 'function' ? onWritePhase : null;
+    this.terminalReplayTtlMs = parsePositiveInt(terminalReplayTtlMs, DEFAULT_TERMINAL_REPLAY_TTL_MS);
+    this.now = typeof now === 'function' ? now : () => Date.now();
+    this.terminalReplays = new Map();
     this.taskStoreWritable = null;
     this.lastSuccessfulPersistAt = null;
     this.lastPersistError = null;
@@ -63,7 +77,35 @@ class TaskStore {
       .filter(([, task]) => !this.isTerminalStatus(task.status))
       .filter(([, task]) => !isGenericQueueProbeTask(task && task.task))
       .map(([taskId, task]) => ({ taskId, ...task }));
+    this._pruneTerminalReplays();
     return this.writeTasks(tasks);
+  }
+
+  recordTerminalReplay(task, taskQueue) {
+    const idempotencyKey = typeof task?.idempotencyKey === 'string'
+      ? task.idempotencyKey.trim()
+      : '';
+    if (!idempotencyKey) return true;
+    const now = this.now();
+    this.terminalReplays.set(idempotencyKey, {
+      idempotencyKey,
+      fingerprint: typeof task.idempotencyFingerprint === 'string'
+        ? task.idempotencyFingerprint
+        : null,
+      taskId: task.taskId,
+      status: task.status,
+      result: task.result ?? null,
+      error: task.error ?? null,
+      completedAt: task.completedAt || new Date(now).toISOString(),
+      expiresAt: now + this.terminalReplayTtlMs
+    });
+    return this.persist(taskQueue);
+  }
+
+  getTerminalReplay(idempotencyKey) {
+    this._pruneTerminalReplays();
+    const replay = this.terminalReplays.get(String(idempotencyKey || '').trim());
+    return replay ? { ...replay } : null;
   }
 
   writeTasks(tasks) {
@@ -112,11 +154,14 @@ class TaskStore {
   }
 
   getHealth() {
+    this._pruneTerminalReplays();
     return {
       taskStoreWritable: this.taskStoreWritable,
       lastSuccessfulPersistAt: this.lastSuccessfulPersistAt,
       lastPersistError: this.lastPersistError ? { ...this.lastPersistError } : null,
-      durabilityDegraded: this.taskStoreWritable === false || this.lastPersistError !== null
+      durabilityDegraded: this.taskStoreWritable === false || this.lastPersistError !== null,
+      terminalReplayCount: this.terminalReplays.size,
+      terminalReplayTtlMs: this.terminalReplayTtlMs
     };
   }
 
@@ -179,8 +224,10 @@ class TaskStore {
     if (!fs.existsSync(filePath)) return null;
     const candidate = this._readCandidate(filePath);
     if (candidate.ok) {
+      this._replaceTerminalReplays(candidate.document.terminalReplays || []);
       return {
         tasks: candidate.document.tasks,
+        terminalReplays: candidate.document.terminalReplays || [],
         source,
         legacy: candidate.legacy,
         needsRewrite: candidate.legacy
@@ -194,7 +241,8 @@ class TaskStore {
     const payload = {
       schemaVersion: TASK_STORE_SCHEMA_VERSION,
       savedAt: new Date().toISOString(),
-      tasks
+      tasks,
+      terminalReplays: Array.from(this.terminalReplays.values())
     };
     return {
       ...payload,
@@ -211,7 +259,11 @@ class TaskStore {
       if (parsed && parsed.version === 1 && Array.isArray(parsed.tasks)) {
         return { ok: true, document: parsed, legacy: true };
       }
-      if (!parsed || parsed.schemaVersion !== TASK_STORE_SCHEMA_VERSION || !Array.isArray(parsed.tasks)) {
+      const isPreviousSchema = parsed?.schemaVersion === 2 && Array.isArray(parsed.tasks);
+      const isCurrentSchema = parsed?.schemaVersion === TASK_STORE_SCHEMA_VERSION
+        && Array.isArray(parsed.tasks)
+        && Array.isArray(parsed.terminalReplays);
+      if (!isPreviousSchema && !isCurrentSchema) {
         return { ok: false, error: `unsupported task-store schema in ${path.basename(filePath)}` };
       }
       if (parsed.checksum?.algorithm !== CHECKSUM_ALGORITHM || typeof parsed.checksum?.digest !== 'string') {
@@ -220,7 +272,8 @@ class TaskStore {
       const payload = {
         schemaVersion: parsed.schemaVersion,
         savedAt: parsed.savedAt,
-        tasks: parsed.tasks
+        tasks: parsed.tasks,
+        ...(isCurrentSchema ? { terminalReplays: parsed.terminalReplays } : {})
       };
       const expected = this._checksum(payload);
       const actual = parsed.checksum.digest.toLowerCase();
@@ -229,7 +282,11 @@ class TaskStore {
       if (!matches) {
         return { ok: false, error: `checksum mismatch in ${path.basename(filePath)}` };
       }
-      return { ok: true, document: parsed, legacy: false };
+      return {
+        ok: true,
+        document: isPreviousSchema ? { ...parsed, terminalReplays: [] } : parsed,
+        legacy: isPreviousSchema
+      };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -237,6 +294,25 @@ class TaskStore {
 
   _checksum(payload) {
     return crypto.createHash(CHECKSUM_ALGORITHM).update(JSON.stringify(payload)).digest('hex');
+  }
+
+  _replaceTerminalReplays(replays) {
+    this.terminalReplays.clear();
+    const now = this.now();
+    for (const replay of replays) {
+      if (!replay || typeof replay.idempotencyKey !== 'string') continue;
+      if (!Number.isFinite(replay.expiresAt) || replay.expiresAt <= now) continue;
+      this.terminalReplays.set(replay.idempotencyKey, { ...replay });
+    }
+  }
+
+  _pruneTerminalReplays() {
+    const now = this.now();
+    for (const [key, replay] of this.terminalReplays) {
+      if (!Number.isFinite(replay.expiresAt) || replay.expiresAt <= now) {
+        this.terminalReplays.delete(key);
+      }
+    }
   }
 
   _writeDurableTemp(filePath, serialized) {
@@ -408,6 +484,7 @@ class TaskStore {
 
 module.exports = {
   CHECKSUM_ALGORITHM,
+  DEFAULT_TERMINAL_REPLAY_TTL_MS,
   TASK_STORE_LOCK_METADATA_GRACE_MS,
   TASK_STORE_SCHEMA_VERSION,
   TaskStore,

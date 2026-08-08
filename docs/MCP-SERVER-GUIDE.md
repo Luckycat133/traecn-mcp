@@ -6,7 +6,7 @@ maintenance operations remain gateway or operator facilities.
 
 ## Protocol compatibility
 
-Version 0.5.5 is a dual-era stdio server:
+The current 0.5.x server is dual-era:
 
 | MCP revision | Lifecycle | TRAECNclaw behavior |
 | --- | --- | --- |
@@ -21,6 +21,19 @@ MCP contract version 5 names the frozen TRAECNclaw tool surface; it is separate
 from the date-based MCP protocol revision.
 
 ## Configure
+
+From a source checkout, validate server discovery and render a resolved Skill
+launcher entry:
+
+```sh
+npm run --silent setup:mcp
+```
+
+Use `npm run setup:mcp -- --output ./traecnclaw-mcp.json` to atomically create
+a new mode-0600 file; it refuses to replace an existing configuration. A
+standalone Skill installation can run `node scripts/setup-mcp.js`. Merge the
+resulting `mcpServers.traecn` entry into the host and reconnect it. The direct
+server entry below remains a fallback:
 
 ```json
 {
@@ -89,6 +102,11 @@ The Agent does not preflight, choose sync versus background execution, wait,
 poll, acknowledge events, recover tasks, clean queues, or operate keep/revert
 controls. The gateway persists accepted tasks, maintains queues, resumes work,
 returns every command card for explicit review, and resolves file-review gates.
+
+HTTP task submissions may carry a stable `Idempotency-Key`. Active retries
+reuse the durable task, and terminal retries replay the original terminal
+status/result across restart for a configurable 24-hour default TTL. Reusing a
+key for different meaningful input is rejected before TraeCN is contacted.
 
 Legacy initialization-based clients receive compact MCP logging notifications.
 The `2026-07-28` protocol does not allow those free-floating notifications;

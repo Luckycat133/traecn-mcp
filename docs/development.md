@@ -16,7 +16,10 @@ TRAECNclaw is split into maintained components with explicit ownership:
 - `src/skill`: programmatic JavaScript and TypeScript-facing automation APIs.
 - `integrations/openclaw-traecn-plugin`: OpenClaw tool and slash command registration.
 
-The production path is `MCP/OpenClaw/CLI -> HTTP gateway -> CDP WebSocket -> TraeCN DOM`. The command-line entry point is `traecnclaw`.
+The production path is `MCP/CLI/web/OpenClaw -> HTTP gateway -> CDP WebSocket -> TraeCN DOM`.
+The MCP Skill is the primary Agent entry point; `traecnclaw` is the developer
+and live-validation CLI, the built-in web UI is diagnostic, and OpenClaw is an
+ecosystem adapter.
 
 ## Local Development
 
@@ -38,6 +41,15 @@ Run the doctor before debugging local setup issues:
 ```sh
 npm run doctor
 ```
+
+Validate MCP server discovery and render the primary client entry with:
+
+```sh
+npm run --silent setup:mcp
+```
+
+For a file artifact, use `npm run setup:mcp -- --output FILE`; the writer uses
+mode 0600, publishes atomically, and refuses to overwrite an existing file.
 
 The doctor reports PASS/WARN/FAIL checks for Node.js, npm, `.env`, gateway host and port, mock bridge mode, CDP remote debugging, `/api/status`, and the `/Applications/Trae CN.app` install path. Only critical setup failures, such as an unsupported Node.js version or invalid port configuration, return a non-zero exit code; missing live TraeCN/CDP state is a warning so mock-mode development can continue.
 
@@ -109,7 +121,10 @@ With the current defaults the gateway will also:
   on missing evidence, but use unit/integration/system or Live tests to prove
   behavior.
 - Live UAT checks a real Trae CN CDP endpoint with safe read-only gateway calls when available. It reports `SKIP` by default if CDP is not reachable; use `node scripts/live-uat.js --strict` when a real desktop instance is required. Add `--require-ready` to fail unless the logged-in Trae CN UI is automation-ready, and `--require-verified-adapter` to reject an unknown product version/platform. Add `--cleanup-queue-probes` to stop/delete accidental `wait for Trae queue` Solo chats and verify `matched: 0`; strict runs fail if those chats remain. Add `--delegate` only when sending a real prompt is acceptable. Use `traecnclaw cleanup-queue --status --json` to inspect the singleton cleanup watcher without contacting TraeCN.
-- `npm run proof:long-queue` prepares the remaining GLM-5.2 queue-drain proof without sending a prompt. It writes the marker, evidence log path, final JSON path, and readiness summary. Add `-- --execute --detach --allow-quota-spend` only for an explicitly approved quota-consuming proof run; the runner switches to GLM-5.2, submits an owned marker task, waits unattended, keeps queue-probe cleanup in the wait loop, and automatically stop/deletes accidental queue-probe Solo chats before submission. Execute mode requires consecutive clean dry-runs before submitting; tune it with `-- --cleanup-stabilize-checks <n> --cleanup-stabilize-delay-ms <ms> --cleanup-max-attempts <n>`. Re-running with the same marker resumes the existing task from the evidence log instead of submitting again; add `-- --force-new` only for an intentional new submission. Use `npm run proof:status`, CLI `traecnclaw proof status`, MCP `traecn_get_long_queue_proof_status`, or OpenClaw `traecn_long_queue_proof_status` for detached proof inspection; use `npm run proof:cancel -- --marker <id>`, CLI `traecnclaw proof cancel`, MCP `traecn_cancel_long_queue_proof`, or OpenClaw `traecn_long_queue_proof_cancel` for cancellation.
+- `npm run proof:long-queue` prepares the remaining GLM-5.2 queue-drain proof without sending a prompt. It writes the marker, evidence log path, final JSON path, and readiness summary. Add `-- --execute --detach --allow-quota-spend` only for an explicitly approved quota-consuming proof run; the runner switches to GLM-5.2, submits an owned marker task, waits unattended, keeps queue-probe cleanup in the wait loop, and automatically stop/deletes accidental queue-probe Solo chats before submission. Execute mode requires consecutive clean dry-runs before submitting; tune it with `-- --cleanup-stabilize-checks <n> --cleanup-stabilize-delay-ms <ms> --cleanup-max-attempts <n>`. Re-running with the same marker resumes the existing task from the evidence log instead of submitting again; add `-- --force-new` only for an intentional new submission. Use `npm run proof:status`, CLI `traecnclaw proof status`, or OpenClaw `traecn_long_queue_proof_status` for detached proof inspection; use `npm run proof:cancel -- --marker <id>`, CLI `traecnclaw proof cancel`, or OpenClaw `traecn_long_queue_proof_cancel` for cancellation. These proof operations are intentionally not part of the frozen MCP v5 tool surface.
+- `skills/traecnclaw-mcp/scripts/setup-mcp.test.js` executes config rendering,
+  server validation, stdout JSON, help, safe file creation, overwrite refusal,
+  and missing-server behavior.
 
 Executable non-quota release gate:
 
