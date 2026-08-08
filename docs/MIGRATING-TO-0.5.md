@@ -27,9 +27,11 @@ client entry with `npm run --silent setup:mcp`, or create a new file with
 the web UI is diagnostic, and OpenClaw remains an ecosystem adapter.
 
 The compatible version decision has been applied as source version `0.5.6`,
-but source metadata alone is not a public release. Publishing still requires
-`npm run test:release` on the exact clean revision plus matching GitHub Release
-server and Skill artifacts. Never move the historical `v0.5.5` tag.
+but source metadata alone is not a public release. The local
+`npm run test:release` gate passes, including artifact manifest verification
+and clean-room installation. Publishing still requires matching GitHub Release
+server and Skill assets from the manifest's exact revision. Never move the
+historical `v0.5.5` tag.
 
 ## Updating from 0.5.4 to 0.5.5
 

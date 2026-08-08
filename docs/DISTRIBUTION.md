@@ -10,7 +10,7 @@ Observed on 2026-08-08. Treat each row as a separate version surface:
 
 | Surface | Observed state | Usable for current 0.5.6 source? |
 | --- | --- | --- |
-| Canonical repository | Private `Luckycat133/TRAECNclaw`; the completed feature milestone is `ba53f06`, followed by generated 0.5.6 release preparation | Only for authorized source-checkout users |
+| Canonical repository | Private `Luckycat133/TRAECNclaw`; feature milestone `ba53f06`, release preparation beginning at `bc6aee7`, with the exact final artifact revision recorded in the generated manifest | Only for authorized source-checkout users |
 | Source version | `package.json`, lockfile, Skill, and OpenClaw manifests say `0.5.6` | Yes for the exact checkout; this is not publication evidence |
 | Canonical tag | `v0.5.5` at `4c01911` | Historical 0.5.5 source only; never move this tag |
 | Canonical GitHub Release | Latest downloadable assets are `v0.5.4` | No |
@@ -19,9 +19,10 @@ Observed on 2026-08-08. Treat each row as a separate version surface:
 | Public mirror | Public repository, but `SOURCE_REVISION` identifies canonical `v0.5.3` / `8b97e37`; latest mirror Release is `v0.3.0-mcp-skill.1` | No |
 
 There is therefore no complete public server + Skill pair for source version
-0.5.6. The accepted compatible version has been applied locally, but remains
-unpublished until `npm run test:release` passes from its exact clean revision
-and matching assets are attached. A release is
+0.5.6. The accepted compatible version has been applied locally and the full
+release/clean-room gate passes; the generated manifest records the exact clean
+revision, sizes, and checksums. It remains unpublished until matching assets
+are attached to the selected GitHub Release. A release is
 complete only when one exact commit supplies matching server and Skill
 artifacts and every advertised channel has been inspected afterward.
 

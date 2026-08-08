@@ -43,19 +43,26 @@ gh api -H 'Accept: application/vnd.github.raw+json' repos/Luckycat133/traecnclaw
   76.38% branches, and 76.34% functions. Generated configuration, Skill
   contracts, release scanning, lint, tests, mock system/UAT, and coverage all
   passed; `git diff --check` was also clean.
+- **Release-package evidence:** `npm run test:release` passes for the clean
+  0.5.6 revision. It builds both Skill and server archives, verifies the
+  manifest revision/sizes/SHA-256 values, installs under a temporary HOME,
+  discovers the exact 20 tools, and completes a mock task. The generated
+  `dist/traecnclaw-mcp-release.json` is the authoritative exact revision and
+  artifact-byte record; `dist/` remains intentionally untracked.
 - **Live readiness:** strict no-delegation UAT passed against TraeCN 1.107.1
   with the verified `traecn-1.107` adapter. It sent no prompt and deleted no
   conversation.
-- **Release/product completion:** source preparation is at 0.5.6, but public
-  completion is not. The exact clean revision must pass `npm run test:release`,
-  and public server distribution remains version fragmented. The 0.5.6, I1,
-  P1, and GitHub Release channel decisions are settled locally; publication
+- **Release/product completion:** local source and package preparation are
+  complete at 0.5.6, but public completion is not. Public server distribution
+  remains version fragmented. The 0.5.6, I1, P1, and GitHub Release channel
+  decisions are settled locally; publication
   access and real-host/live evidence remain external.
 
 ## 0.5.6 completion milestone
 
 The feature and documentation set is committed at `ba53f06`; generated version
-surfaces form the separate 0.5.6 release-preparation change:
+surfaces begin the separate 0.5.6 release preparation at `bc6aee7`. The final
+artifact revision is always the one recorded by the generated release manifest:
 
 | Area | Owning files | Outcome |
 | --- | --- | --- |
@@ -169,7 +176,6 @@ only matching artifacts from that revision.
 
 ### Required before broad public promotion
 
-- Verify source version 0.5.6 from one exact clean commit.
 - Publish a matching server artifact or package; the ClawHub Skill alone cannot run TRAECNclaw.
 - Synchronize the public mirror and every published Skill/server surface from that exact commit.
 - Publish the selected canonical GitHub Release through an explicitly public or otherwise intended access path.
@@ -243,6 +249,8 @@ npm run test:release
 Builds Skill/server archives, verifies provenance and checksums, installs under a temporary HOME, discovers all 20 tools, submits a mock task, subscribes, and reads completion.
 
 This does not prove a public asset exists or that a real TraeCN build works.
+The gate passes for the current clean 0.5.6 source; rerun it after any committed
+change before tagging or attaching assets.
 
 ### 6. Live readiness without sending a task
 
@@ -359,14 +367,12 @@ product:
 
 ## Recommended order
 
-1. Commit the generated 0.5.6 version synchronization, then run
-   `npm run test:release` from the resulting clean exact commit.
-2. When model quota and UI effects are authorized, run the live delegated task
+1. When model quota and UI effects are authorized, run the live delegated task
    and intended-host MCP completion path. Expected evidence is one owned task
    ID, one terminal result, no duplicate submission, and the same identity in
    the host and gateway.
-3. After explicit publication/visibility authorization, tag only the verified commit, publish matching server and Skill artifacts,
+2. After explicit publication/visibility authorization, tag only the verified commit, publish matching server and Skill artifacts,
    synchronize the public mirror to that full revision, and re-run GitHub,
    npm, and ClawHub inspection before announcing the version.
-4. Resume optional Gateway extraction or wider platform work only after this
+3. Resume optional Gateway extraction or wider platform work only after this
    product and distribution path is stable.

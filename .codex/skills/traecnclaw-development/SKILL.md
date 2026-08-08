@@ -54,9 +54,10 @@ Skill whose canonical files matched the tagged Skill, while npm `traecnclaw`
 remained `0.3.1` and the public mirror still declared canonical release
 `v0.5.3`. The `ba53f06` feature milestone and its 0.5.6 release preparation
 are newer than all of those immutable surfaces. The source version is not a
-release until the exact clean commit passes the release gate and matching
-assets are published. Never move the old tag or publish current artifacts as
-if they came from it. Recheck before making any current claim.
+public release even though its exact clean commit passes the local release and
+clean-room gate; matching assets still need publication and post-publication
+inspection. Never move the old tag or publish current artifacts as if they came
+from it. Recheck before making any current claim.
 
 ## Architecture owners
 
@@ -101,10 +102,11 @@ probe, CLI timeout, task-history durability, stale live-UAT MCP discovery, and
 terminal retry gap with executable regressions. It also supplies the selected
 MCP-first setup command. A fresh strict no-delegation readiness run passes
 against TraeCN 1.107.1. Re-read `references/project-audit.md` and current source
-before creating another local defect item. Remaining work is release
-preparation/publication, a user-authorized live task or real-host check,
+before creating another local defect item. Remaining work is publication, a
+user-authorized live task or real-host check,
 unselected platform/host scope, or optional work unless new failing evidence
-appears.
+appears. The remaining normal release work is external publication, not another
+local implementation item.
 
 ## Product decisions
 
