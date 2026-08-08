@@ -11,3 +11,4 @@ dist/
 # Local test-only skill install dirs (not the distributable skill under skills/)
 .codex/skills/
 .agents/skills/
+.workbuddy/
