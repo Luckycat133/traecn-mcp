@@ -47,25 +47,24 @@ Before substantial work:
 5. Treat missing Actions visibility as missing evidence, not a code blocker. Run local equivalent gates.
 6. Treat live TraeCN, platform access, release credentials, and registry publication as external only when the task genuinely requires them.
 
-At the 2026-08-08 recheck, source metadata now declares `0.5.6`, while tag
-`v0.5.5` still points to the earlier release-preparation commit and the latest
-downloadable GitHub Release remained `v0.5.4`. ClawHub exposed a clean `0.5.5`
-Skill whose canonical files matched the tagged Skill, while npm `traecnclaw`
-remained `0.3.1` and the public mirror still declared canonical release
-`v0.5.3`. The `ba53f06` feature milestone and its 0.5.6 release preparation
-are newer than all of those immutable surfaces. The source version is not a
-public release even though its exact clean commit passes the local release and
-clean-room gate. A pre-publication recheck also found and patched the
+At the completed 2026-08-08 release recheck, canonical tag `v0.5.6`, its
+private provenance Release, the public mirror's `v0.5.6` server/Skill Release,
+and the clean ClawHub 0.5.6 Skill identify one exact source revision. The
+canonical repository remains private so its full history was not disclosed;
+the generated public mirror is the selected public download channel. npm
+`traecnclaw` remains the independent older 0.3.1 surface and must not be
+presented as a matching server. A pre-publication recheck also found and patched the
 high-severity transitive development dependency advisory
 `GHSA-rgw5-rvv9-x895`; `test:release` now audits all dependencies at the high
-threshold before packaging. Matching assets still need publication and
-post-publication inspection. Never move the old tag or publish current
-artifacts as if they came from it. Recheck before making any current claim.
+threshold before packaging. The verified release and post-publication channel
+inspections passed. Never move a historical tag or rebuild its artifacts from a
+different source revision. Recheck before making any later current claim.
 The same pre-publication host run found and closed two additional local MCP
 defects: Codex's legacy `_meta.progressToken` was misclassified as a modern
 request, and a newly identified legacy client replayed retained task history.
 Focused regressions now pin the legacy era and baseline history only for a new
-client ID while preserving durable resume for returning IDs.
+client ID while preserving durable resume for returning IDs. Recheck every
+channel before making a later current claim.
 
 ## Architecture owners
 
@@ -115,9 +114,9 @@ with status `done`. A real Codex CLI host then called
 the terminal TraeCN result `TRAECNCLAW_MCP_HOST_OK`; a second fresh client
 baselined that retained event without receiving its contents. Re-read
 `references/project-audit.md` and current source before creating another local
-defect item. Remaining normal work is publication and post-publication
-inspection. Unselected platform/host scope and further Gateway extraction are
-optional unless new failing evidence appears.
+defect item. No normal 0.5.6 publication or local implementation item remains.
+Unselected platform/host scope, future catalogs, npm publication, and further
+Gateway extraction are optional unless new failing evidence appears.
 
 ## Product decisions
 
@@ -126,13 +125,15 @@ Settled for the 0.5.6 source line:
 - **Version:** the compatible post-`v0.5.5` work becomes `0.5.6`.
 - **Terminal idempotency:** persist a semantic request fingerprint and terminal response for a configurable 24-hour default TTL.
 - **Primary entry point:** MCP Skill for product use, CLI for live validation, web UI for diagnostics, and OpenClaw as an adapter.
-- **Public server channel:** publish matching server and Skill archives through the canonical GitHub Release from one verified revision.
+- **Release provenance:** publish matching server and Skill archives through the canonical GitHub Release from one verified revision.
+- **Public access without history disclosure:** retain the private canonical
+  provenance Release and mirror the exact verified archives to the generated
+  public repository's matching Release.
 
 Still product-dependent; do not decide silently during an unrelated patch:
 
 - **Completion fallback:** whether a named host without the draft Tasks extension needs a dedicated wake-up adapter.
 - **Platform scope:** remain macOS and verified-version first, or invest in Windows or another TraeCN adapter.
-- **Publication access:** the canonical repository is private, so a public GitHub Release requires an explicit visibility or public asset-hosting action.
 
 Ask only when a decision changes product semantics. Do not ask for implementation details resolvable from code and tests.
 

@@ -6,11 +6,11 @@ This file replaces the historical development guide and rolling roadmap. It is a
 
 Observed on 2026-08-08:
 
-- `package.json`, the lockfile, portable Skill, and OpenClaw manifests now identify source version `0.5.6`. The completed feature milestone is `ba53f06`; tag `v0.5.5` still points to `4c01911` and does not contain these changes.
-- The latest downloadable GitHub Release is still `v0.5.4`; do not tell users that a `0.5.6` Release archive is available until it actually exists.
-- The canonical GitHub repository is private. npm `traecnclaw` exists publicly but its `latest` tag is still `0.3.1`, sourced from the public mirror repository; it is not a matching server channel for current `0.5.x` behavior.
-- ClawHub `traecnclaw-mcp` publishes a clean `0.5.5` Skill. Its canonical Skill/config/contract/launcher file hashes match the local `v0.5.5` Skill, but ClawHub does not supply the matching server by itself.
-- The public `Luckycat133/traecnclaw-mcp-skill` mirror is visible, but its `SOURCE_REVISION` still identifies canonical commit `8b97e37` / release `v0.5.3`; its latest GitHub Release is the older `v0.3.0-mcp-skill.1` bundle.
+- `package.json`, the lockfile, portable Skill, and OpenClaw manifests identify source version `0.5.6`. Canonical tag `v0.5.6`, both Release manifests, and the public mirror `SOURCE_REVISION` identify the same immutable source commit.
+- The canonical GitHub repository and its matching `v0.5.6` provenance Release remain private. Its full history was not made public merely for distribution.
+- The public `Luckycat133/traecnclaw-mcp-skill` mirror exposes a matching `v0.5.6` Release containing the server archive, Skill archives, and release manifest from that canonical commit.
+- ClawHub `traecnclaw-mcp` publishes the matching clean 0.5.6 Skill. It pairs with the public mirror server archive; ClawHub does not carry the server by itself.
+- npm `traecnclaw` remains public at `latest=0.3.1`; it is a separate older channel and is not a matching 0.5.6 server.
 - The public MCP contract remains version 5 with exactly 20 ordered tools.
 - The runtime has durable active-task, terminal-idempotency, completion-event, and task-history stores; active and terminal replay across restart; modern Tasks/subscriptions; clean-room mock installation; release-manifest verification; a `TaskOrchestrator` ownership boundary; central route composition; and a tested MCP client-config generator.
 - A pre-publication push exposed Dependabot alert 6 / `GHSA-rgw5-rvv9-x895` in the transitive development dependency `brace-expansion@5.0.8`. The lock now resolves patched 5.0.9, `npm audit` reports zero vulnerabilities, and `test:release` enforces a full high/critical dependency audit before packaging.
@@ -59,11 +59,11 @@ gh api -H 'Accept: application/vnd.github.raw+json' repos/Luckycat133/traecnclaw
   MCP server, and the gateway collected terminal result
   `TRAECNCLAW_MCP_HOST_OK`. A separate fresh client baselined the retained event
   without replaying its summary.
-- **Release/product completion:** local source and package preparation are
-  complete at 0.5.6, but public completion is not. Public server distribution
-  remains version fragmented. The 0.5.6, I1, P1, and GitHub Release channel
-  decisions are settled locally; publication access and post-publication
-  inspection remain external.
+- **Release/product completion:** 0.5.6 is complete for the selected channels.
+  The private canonical Release and public mirror Release carry identical
+  verified server/Skill artifacts, and ClawHub carries the matching Skill.
+  Post-publication inspection passed. npm remains explicitly outside this
+  release rather than a fragmented current channel.
 
 ## 0.5.6 completion milestone
 
@@ -192,26 +192,24 @@ built-in web UI is diagnostic, and OpenClaw is an ecosystem adapter. A real
 Codex intended-host task and first-connection history-baseline check now pass;
 no host-evidence item remains open for the selected 0.5.6 path.
 
-### D1 — source, tag, and published artifacts are out of sync
+### D1 — release channel synchronization: closed for 0.5.6
 
-At this snapshot source is `0.5.6`, but the immutable `v0.5.5` tag is older
-than the `ba53f06` feature milestone and its release preparation. The latest downloadable
-GitHub Release is `v0.5.4`; npm is `0.3.1`; the public mirror identifies
-`v0.5.3`; and only the standalone ClawHub Skill is at `0.5.5`. Current fixes
-therefore have no exact published version or complete public server + Skill
-installation pair.
+The immutable canonical `v0.5.6` tag identifies the revision recorded by the
+release manifest. The private canonical Release preserves provenance; the
+public mirror's `v0.5.6` Release carries the same server, Skill, and manifest
+artifacts; and ClawHub publishes the matching 0.5.6 Skill. The mirror's
+`SOURCE_REVISION` records that canonical source rather than pretending the
+generated mirror commit is the implementation revision.
 
-Do not move or overwrite `v0.5.5`. Historical artifacts must come from that
-exact tag. Verify source version 0.5.6 at one exact release commit and publish
-only matching artifacts from that revision.
+npm remains at 0.3.1 by deliberate channel selection. Do not describe it as a
+current server, move historical tags, or rebuild an existing version from a
+different revision. Any future npm or catalog release needs its own exact
+provenance and post-publication inspection.
 
-## Features not completed
+## Work not selected for 0.5.6
 
-### Required before broad public promotion
-
-- Publish a matching server artifact or package; the ClawHub Skill alone cannot run TRAECNclaw.
-- Synchronize the public mirror and every published Skill/server surface from that exact commit.
-- Publish the selected canonical GitHub Release through an explicitly public or otherwise intended access path.
+No required local implementation or selected release-channel item remains for
+0.5.6. New work needs new failing evidence or an explicit product-scope choice.
 
 ### Valuable next engineering work
 
@@ -404,18 +402,17 @@ Use only a version with actual downloadable assets. Install the matching server 
 
 ## Questions for the maintainer
 
-The release version, product entry point, terminal-idempotency TTL, and GitHub
-Release server channel are settled. Discuss only scope that still changes the
-product:
+The release version, product entry point, terminal-idempotency TTL, canonical
+provenance Release, and public mirror server channel are settled. Discuss only
+scope that still changes the product:
 
 1. Is macOS-only support acceptable after 0.5.6, or is Windows near-term?
 2. Which non-Tasks host, if any, must receive an automatic completion wake-up?
-3. Will the canonical repository/Release become publicly downloadable, or must the selected GitHub Release assets be mirrored to another public host?
 
 ## Recommended order
 
-1. After explicit publication/visibility authorization, tag only the verified commit, publish matching server and Skill artifacts,
-   synchronize the public mirror to that full revision, and re-run GitHub,
-   npm, and ClawHub inspection before announcing the version.
-2. Resume optional Gateway extraction or wider platform work only after this
-   product and distribution path is stable.
+1. Preserve the 0.5.6 tag, manifest, public mirror, and ClawHub provenance. For
+   any later catalog or npm work, select the channel explicitly and inspect it
+   after publication before changing current-version claims.
+2. Resume optional Gateway extraction, a named non-Tasks host adapter, or wider
+   platform work only when that product scope is selected.

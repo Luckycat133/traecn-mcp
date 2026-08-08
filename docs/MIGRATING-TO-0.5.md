@@ -79,17 +79,18 @@ version 5 and its ordered 20-tool surface are unchanged.
 
 ## Installation source
 
-As of 2026-08-08, there is no complete public 0.5.6 server + Skill installation
-pair: source is 0.5.6, ClawHub has the 0.5.5 Skill, the latest downloadable
-canonical GitHub Release is 0.5.4, npm `traecnclaw` is 0.3.1, and the public
-mirror still identifies canonical 0.5.3. Use an authorized exact 0.5.6 source
-checkout for current behavior. A source checkout can point the MCP client at
-`mcp-server.js` or use the bundled Skill launcher. Never mix a newer Skill with
-an older server when validating version-specific behavior.
+Version 0.5.6 provides a complete public server + Skill pair through the public
+mirror's [`v0.5.6` Release](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v0.5.6).
+Its `SOURCE_REVISION`, release manifest, artifact sizes, and SHA-256 values bind
+both archives to the immutable canonical `v0.5.6` tag. ClawHub provides the
+matching 0.5.6 Skill. npm `traecnclaw` remains the older 0.3.1 channel and must
+not be used as the 0.5.6 server. An exact source checkout can still point the
+MCP client at `mcp-server.js` or use the bundled Skill launcher.
 
-For public installation, wait for one next-version source revision to provide
-both the server and Skill, then verify their version, source commit, manifest,
-and checksums before replacing an existing installation.
+Before replacing an existing installation, verify that the server archive,
+Skill archive, manifest, and Skill metadata all say 0.5.6 and identify the
+same source commit. Never mix a newer Skill with an older server when
+validating version-specific behavior.
 
 ## MCP contract
 

@@ -45,12 +45,13 @@ Upgrading from 0.3.x: read [the 0.5.0 migration guide](docs/MIGRATING-TO-0.5.md)
 before replacing MCP configuration.
 
 Release channels must match. This checkout now identifies source version
-0.5.6, but it is not yet a published tag or downloadable Release. As of the
-2026-08-08 audit, ClawHub provides the standalone 0.5.5 Skill, the latest
-canonical GitHub server Release is 0.5.4, npm `traecnclaw` is 0.3.1, and the
-public mirror identifies canonical 0.5.3. Use an exact authorized source
-checkout for 0.5.6 behavior; do not pair it with an older public Skill or
-server package. See the
+0.5.6. Matching public server and Skill archives are distributed together by
+the public mirror's
+[`v0.5.6` Release](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v0.5.6),
+whose `SOURCE_REVISION` identifies the same immutable canonical tag. ClawHub
+provides the matching 0.5.6 Skill, while npm `traecnclaw` remains the unrelated
+older 0.3.1 channel. The canonical source repository and its provenance
+Release remain private; do not mix versions across these channels. See the
 [distribution inventory](docs/DISTRIBUTION.md#current-publication-inventory).
 
 ## Configuration
@@ -520,9 +521,10 @@ must use the tagged `skills/traecnclaw-mcp` directory and record the same source
 commit; the exact command and post-publish inspection are in
 `docs/DISTRIBUTION.md`.
 
-Before public distribution, make the repository or release artifact public,
-run `npm run verify`, synchronize the public mirror to the exact tagged commit,
-and scan git history for secrets. Public catalog submissions
+For public distribution, keep the canonical repository private unless its full
+history has been separately approved for disclosure, publish the verified
+archives through the public mirror Release, synchronize that mirror to the
+exact tagged commit, and scan every exported file for secrets. Public catalog submissions
 should point to `skills/traecnclaw-mcp` for the skill and `mcp-server.js`
 or `traecnclaw-mcp` for the server entrypoint.
 
