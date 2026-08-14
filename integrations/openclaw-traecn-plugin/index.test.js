@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { toolDefinitions, formatResult, PLUGIN_ID } = require('./index');
-const { listCommands, mapSettingsAction } = require('./lib/command-set');
+const { listCommands, mapSettingsAction } = require('../../src/client/command-set');
 const { createRunner } = require('../../src/shared/test-runner');
 
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'openclaw.plugin.json'), 'utf8'));
@@ -53,6 +53,20 @@ test('required tools are present', () => {
   assert.ok(names.includes('traecn_long_queue_proof_cancel'), 'Missing traecn_long_queue_proof_cancel');
   assert.ok(names.includes('traecn_chat'), 'Missing traecn_chat');
   assert.ok(names.includes('traecn_open_project'), 'Missing traecn_open_project');
+});
+
+test('traecn_open_project exposes newInstance in runtime and manifest schemas', () => {
+  const runtimeTool = toolDefinitions.find(tool => tool.name === 'traecn_open_project');
+  const manifestTool = manifest.tools.find(tool => tool.name === 'traecn_open_project');
+
+  assert.deepStrictEqual(runtimeTool.parameters.properties.newInstance, {
+    type: 'boolean',
+    description: 'Open the project in a separate TraeCN window when TraeCN is already running'
+  });
+  assert.deepStrictEqual(manifestTool.parameters.properties.newInstance, {
+    type: 'boolean',
+    description: 'Open the project in a separate TraeCN window when TraeCN is already running'
+  });
 });
 
 test('preset command set includes core control commands', () => {

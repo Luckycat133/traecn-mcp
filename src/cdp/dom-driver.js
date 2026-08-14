@@ -1,8 +1,5 @@
 'use strict';
 
-const http = require('http');
-const { TraeCNAutomationError } = require('./errors');
-const { CDPClient } = require('./client');
 const { SettingsDriver } = require('./settings-driver');
 const { CommandPaletteDriver } = require('./command-palette-driver');
 const { EditorDriver } = require('./editor-driver');
@@ -27,15 +24,20 @@ const soloChatModule = require('./dom-handlers/solo-chat');
 const modelModule = require('./dom-handlers/model');
 
 class DomDriver {
-  constructor(client, config) {
+  constructor(client, config, options = {}) {
     this.client = client;
     this.config = config || getConfig();
+    this.traeAdapter = options.traeAdapter || null;
     this._lastTaskText = '';
     this._pendingUserTask = '';
     this._preSendSnapshot = ''; // body text snapshot before sending task
     this._cachedMode = null;    // cached mode detection result
     this._cachedModeTs = 0;
     this._modeCacheTtl = 5000;  // re-detect after 5s
+  }
+
+  getTraeAdapterCapabilities() {
+    return this.traeAdapter ? { ...this.traeAdapter.capabilities } : null;
   }
 
   // ── Mode detection ─────────────────────────────────────────────────────
@@ -79,6 +81,10 @@ class DomDriver {
   }
 
   // ── Sidebar / panel text capture ───────────────────────────────────────
+
+  async getWorkspaceContext() {
+    return panelModule.getWorkspaceContext(this);
+  }
 
   async _captureSidebarText() {
     return panelModule._captureSidebarText(this);
@@ -130,8 +136,8 @@ class DomDriver {
     return panelModule._queryIdeTaskPanel(this, skipText);
   }
 
-  _extractLatestIdeAssistantState(panelState, skipText) {
-    return panelModule._extractLatestIdeAssistantState(panelState, skipText);
+  _extractLatestIdeAssistantState(panelState, skipText, options) {
+    return panelModule._extractLatestIdeAssistantState(panelState, skipText, options);
   }
 
   _isIncompleteResponseText(text) {
@@ -145,12 +151,12 @@ class DomDriver {
   /**
    * Mode-aware version: tries sidebar in SOLO mode, chat panel in IDE mode.
    */
-  async _queryTaskSource(skipText) {
-    return panelModule._queryTaskSource(this, skipText);
+  async _queryTaskSource(skipText, options) {
+    return panelModule._queryTaskSource(this, skipText, options);
   }
 
-  async findTaskResponse() {
-    return panelModule.findTaskResponse(this);
+  async findTaskResponse(options) {
+    return panelModule.findTaskResponse(this, options);
   }
 
   // ── Element finders ────────────────────────────────────────────────────
@@ -223,6 +229,10 @@ class DomDriver {
 
   async checkForApprovalDialog() {
     return dialogsModule.checkForApprovalDialog(this);
+  }
+
+  _assessCommandApproval(command) {
+    return dialogsModule._assessCommandApproval(command);
   }
 
   // ── Delegation ─────────────────────────────────────────────────────────
@@ -336,6 +346,10 @@ class DomDriver {
     return modelModule.getCurrentModel(this);
   }
 
+  async listModels() {
+    return modelModule.listModels(this);
+  }
+
   _normalizeModelName(name) {
     return modelModule._normalizeModelName(name);
   }
@@ -431,11 +445,13 @@ const DEFAULT_ACTIVITY_SELECTORS = require('./driver-config').DEFAULT_ACTIVITY_S
 const DEFAULT_NEW_CHAT_SELECTORS = require('./driver-config').DEFAULT_NEW_CHAT_SELECTORS;
 const DEFAULT_MODE_TAB_SELECTORS = require('./driver-config').DEFAULT_MODE_TAB_SELECTORS;
 const sanitizeActivityText = require('./driver-config').sanitizeActivityText;
+const isTruncationSignal = require('./driver-config').isTruncationSignal;
 
 module.exports = {
   DomDriver,
   getConfig,
   sanitizeActivityText,
+  isTruncationSignal,
   DEFAULT_COMPOSER_SELECTORS,
   DEFAULT_SEND_BUTTON_SELECTORS,
   DEFAULT_RESPONSE_SELECTORS,

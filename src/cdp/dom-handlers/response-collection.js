@@ -34,6 +34,20 @@ function hasCompletionMarker(text) {
   return markers.some(m => text.includes(m));
 }
 
+function chooseReviewGateAction(state = {}) {
+  if (state.modelError === true) return 'revert_all';
+  const text = String(state.taskText || state.responseText || '').replace(/\s+/g, ' ').trim();
+  const fatalFailure = [
+    /\bfatal(?: error)?\b/i,
+    /repository (?:is |may be )?corrupt(?:ed|ion)/i,
+    /permission denied.{0,120}(?:writ|modif|apply)/i,
+    /(?:could not|unable to) apply (?:the )?changes safely/i,
+    /无法安全(?:应用|写入|保留)(?:这些)?(?:更改|修改)/i,
+    /仓库(?:可能)?(?:已)?损坏/i
+  ].some(pattern => pattern.test(text));
+  return fatalFailure ? 'revert_all' : 'keep_all';
+}
+
 const FINAL_ASSISTANT_RESULT_MARKERS = [
   /TRAECNclaw\s+Code\s+Review\s*[—-]\s*Findings\s+First/i,
   /Code\s+Review\s*[—-]\s*Findings\s+First/i,
@@ -117,7 +131,6 @@ function cleanAssistantResultText(text) {
  */
 async function _pollResponseState(driver) {
   const skipText = driver._lastTaskText;
-  const safeSkipText = safeJsValue(skipText);
   const safeResponseSelectors = driver.config.responseSelectors.map(s => safeJsValue(s));
   const safeActivitySelectors = driver.config.activitySelectors.map(s => safeJsValue(s));
   const safeIdeResponseSelectors = driver.config.ideResponseSelectors.map(s => safeJsValue(s));
@@ -260,13 +273,46 @@ async function _pollResponseState(driver) {
  * In SOLO mode: reads sidebar + heuristics (existing logic).
  * In IDE mode: reads chat panel messages + body text diff.
  */
-/**
- * Registers the CDP log/console listeners that accumulate streaming text
- * into `streamingBuffer` while the assistant reply is being collected.
- * Verbatim extraction of the listener-setup block from collectResponse.
- */
-async function setupResponseStreaming(driver, streamingBuffer) {
-  await driver.client.send('Log.enable', {});
+async function collectResponse(driver) {
+  const dialog = await driver.checkForApprovalDialog();
+  if (dialog.needsApproval) {
+    return {
+      text: '',
+      stable: false,
+      elapsedMs: 0,
+      needsApproval: true,
+      question: dialog.question,
+      dialogType: dialog.dialogType,
+      buttons: dialog.buttons || [],
+      options: dialog.options || [],
+      approvalDecision: dialog.approvalDecision || null,
+      commandRisk: dialog.commandRisk || null,
+      riskReasons: dialog.riskReasons || [],
+      command: dialog.command || null
+    };
+  }
+
+  const modeInfo = await driver.detectMode();
+  const isIdeMode = modeInfo.mode === 'ide';
+
+  const startTime = Date.now();
+  const warmupMs = 3000;
+  const requiredStable = 2;
+  const pollInterval = driver.config.pollIntervalMs || 350;
+  const queuePollInterval = driver.config.queuePollIntervalMs || 15000;
+  let stableCount = 0;
+  let warmingUp = true;
+  let lastText = '';
+  let initialText = null;
+  let inQueueSince = null;
+  let truncationSince = null;
+  const truncationTimeout = 20000;
+  let hasCheckedInitialSnapshot = false;
+
+  const streamingBuffer = [];
+  let streamingGrowthFrames = 0;
+  const STREAMING_GROWTH_THRESHOLD = 3;
+
   const logHandler = (params) => {
     if (params.entry && params.entry.type === 'log' && params.entry.text) {
       const text = params.entry.text.trim();
@@ -275,7 +321,6 @@ async function setupResponseStreaming(driver, streamingBuffer) {
       }
     }
   };
-  driver.client.on('Log.entryAdded', logHandler);
 
   const consoleHandler = (params) => {
     if (params.type === 'log' || params.type === 'debug') {
@@ -290,250 +335,24 @@ async function setupResponseStreaming(driver, streamingBuffer) {
       }
     }
   };
-  driver.client.on('Runtime.consoleAPICalled', consoleHandler);
 
-  await sleep(50);
-}
-
-/**
- * Periodic approval-dialog check performed mid-stream.
- * Verbatim extraction of the approval branch from collectResponse.
- * Returns:
- *  - { action: 'skip' }     -> no (actionable) dialog this tick
- *  - { action: 'continue' } -> command dialog auto-approved; loop should continue
- *  - { action: 'return', result } -> an early return object for collectResponse
- */
-async function resolveApprovalCheck(driver, currentText, startTime, cleanup) {
-  const approvalCheckInterval = driver.config.approvalPollIntervalMs || 3000;
-  if (driver._lastApprovalCheckAt === undefined || (Date.now() - driver._lastApprovalCheckAt) >= approvalCheckInterval) {
-    const approvalDialog = await driver.checkForApprovalDialog();
-    driver._lastApprovalCheckAt = Date.now();
-    if (approvalDialog.needsApproval) {
-      // Auto-approve command execution dialogs (e.g., "批准执行命令")
-      // Questions (dialog without command keywords) still get forwarded to the caller.
-      if (approvalDialog.isCommandExec) {
-        driver._approvalDialogFirstSeenAt = undefined;
-        driver._lastApprovalCheckAt = undefined;
-        const approveResult = await driver.approveDialog('trust');
-        if (approveResult.success) {
-          await sleep(500);
-          return { action: 'continue' };
-        }
-      }
-
-      const approvalDuration = Date.now() - (driver._approvalDialogFirstSeenAt || Date.now());
-      if (driver._approvalDialogFirstSeenAt === undefined) {
-        driver._approvalDialogFirstSeenAt = Date.now();
-      }
-      const approvalTimeoutMs = driver.config.approvalTimeoutMs || 120000;
-      if (approvalDuration >= approvalTimeoutMs) {
-        driver._approvalDialogFirstSeenAt = undefined;
-        driver._lastApprovalCheckAt = undefined;
-        cleanup();
-        return {
-          action: 'return',
-          result: {
-            text: currentText || '',
-            stable: false,
-            elapsedMs: Date.now() - startTime,
-            needsApproval: true,
-            question: approvalDialog.question,
-            dialogType: approvalDialog.dialogType,
-            approvalTimedOut: true
-          }
-        };
-      }
-      driver._approvalDialogFirstSeenAt = undefined;
-      driver._lastApprovalCheckAt = undefined;
-      cleanup();
-      return {
-        action: 'return',
-        result: {
-          text: currentText || '',
-          stable: false,
-          elapsedMs: Date.now() - startTime,
-          needsApproval: true,
-          question: approvalDialog.question,
-          dialogType: approvalDialog.dialogType,
-          buttons: approvalDialog.buttons
-        }
-      };
-    }
-  }
-  return { action: 'skip' };
-}
-
-/**
- * Early task-completion check (terminal/error response present in task text).
- * Verbatim extraction of the "hasTaskText" branch from collectResponse.
- * Returns { action: 'return', result } or { action: 'skip' }.
- */
-function resolveInitialTaskCompletion(driver, state, startTime, cleanup) {
-  const completionCandidate = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
-  const completionLooksStale = completionCandidate && (
-    (driver._preSendSnapshot && driver._preSendSnapshot.includes(completionCandidate)) ||
-    (driver._lastTaskText && driver._lastTaskText.includes(completionCandidate))
-  );
-  const hasTaskText = !!String(state.taskText || '').trim();
-  if (!completionLooksStale && hasTaskText && (state.taskComplete || !state.taskInProgress)) {
-    const text = cleanAssistantResultText(sanitizeActivityText(state.taskText || ''));
-    if (driver._isModelErrorResponseText(text)) {
-      cleanup();
-      return { action: 'return', result: { text, stable: false, elapsedMs: Date.now() - startTime, modelError: true, error: 'Trae model request failed' } };
-    }
-    if (text && !driver._isIncompleteResponseText(text)) { cleanup(); return { action: 'return', result: { text, stable: true, elapsedMs: Date.now() - startTime } }; }
-  }
-  return { action: 'skip' };
-}
-
-/**
- * Resolves the tail of a single poll iteration: queue detection, truncation
- * handling, streaming-growth detection, and stability evaluation.
- * Verbatim extraction of the queue/truncation/stable block from collectResponse.
- * Returns:
- *  - { action: 'return', result }   -> an early return object for collectResponse
- *  - { action: 'continue', ...vars } -> loop should continue; mutated loop
- *                                       variables are returned for re-binding
- */
-async function resolveResponseIteration(driver, ctx) {
-  const { currentText, pollInterval, queuePollInterval, startTime, truncationTimeout, cleanup } = ctx;
-  let { lastText, stableCount, inQueueSince, truncationSince, streamingGrowthFrames } = ctx;
-  const requiredStable = ctx.requiredStable;
-
-  let queuePosition = null;
-  const queueMatch = currentText && currentText.match(/排在第\s*(\d+)\s*位/);
-  if (queueMatch) queuePosition = parseInt(queueMatch[1], 10);
-
-  const isQueued = currentText && (
-    queuePosition !== null ||
-    currentText.includes('排队') ||
-    currentText.includes('等待') ||
-    currentText.includes('队列') ||
-    currentText.includes('等待中')
-  );
-
-  if (isQueued) {
-    if (!inQueueSince) inQueueSince = Date.now();
-    // Wait indefinitely until queue clears - no timeout on queue
-    // The point is to persist until the request goes through
-    lastText = currentText; await sleep(queuePollInterval);
-    return {
-      action: 'continue',
-      lastText, stableCount, inQueueSince, truncationSince, streamingGrowthFrames
-    };
-  }
-
-  inQueueSince = null;
-
-  if (isTruncationSignal(currentText)) {
-    if (!truncationSince) truncationSince = Date.now();
-    if (Date.now() - truncationSince > truncationTimeout) {
-      cleanup();
-      return { action: 'return', result: { text: currentText, stable: false, elapsedMs: Date.now() - startTime, truncated: true, timedOut: false } };
-    }
-    lastText = currentText; await sleep(pollInterval);
-    return {
-      action: 'continue',
-      lastText, stableCount, inQueueSince, truncationSince, streamingGrowthFrames
-    };
-  }
-
-  truncationSince = null;
-
-  const endMarkerDetected = hasCompletionMarker(currentText);
-  const effectiveRequiredStable = endMarkerDetected ? 1 : requiredStable;
-
-  const isGrowing = currentText && lastText &&
-    currentText.startsWith(lastText) &&
-    currentText.length > lastText.length;
-
-  if (isGrowing) {
-    streamingGrowthFrames++;
-    if (streamingGrowthFrames >= STREAMING_GROWTH_THRESHOLD && currentText.length >= 50) {
-      cleanup();
-      return {
-        action: 'return',
-        result: {
-          text: currentText,
-          stable: false,
-          streaming: true,
-          elapsedMs: Date.now() - startTime
-        }
-      };
-    }
-  } else {
-    streamingGrowthFrames = 0;
-  }
-
-  const isStable = currentText && currentText === lastText && currentText.length >= 1;
-  if (isStable) {
-    stableCount++;
-    if (stableCount >= effectiveRequiredStable && driver._isModelErrorResponseText(currentText)) {
-      cleanup();
-      return { action: 'return', result: { text: currentText, stable: false, elapsedMs: Date.now() - startTime, modelError: true, error: 'Trae model request failed' } };
-    }
-    if (stableCount >= effectiveRequiredStable && !driver._isIncompleteResponseText(currentText)) {
-      cleanup();
-      return { action: 'return', result: { text: currentText, stable: true, elapsedMs: Date.now() - startTime } };
-    }
-  } else {
-    stableCount = 0;
-  }
-  lastText = currentText;
-  await sleep(pollInterval);
-  return {
-    action: 'continue',
-    lastText, stableCount, inQueueSince, truncationSince, streamingGrowthFrames
-  };
-}
-
-async function collectResponse(driver) {
-  const dialog = await driver.checkForApprovalDialog();
-  if (dialog.needsApproval) {
-    return {
-      text: '',
-      stable: false,
-      elapsedMs: 0,
-      needsApproval: true,
-      question: dialog.question,
-      dialogType: dialog.dialogType,
-      buttons: dialog.buttons || [],
-      options: dialog.options || []
-    };
-  }
-
-  const modeInfo = await driver.detectMode();
-  const isIdeMode = modeInfo.mode === 'ide';
-
-  const startTime = Date.now();
-  const warmupMs = 3000;
-  const requiredStable = 2;
-  const pollInterval = driver.config.pollIntervalMs || 350;
-  const queuePollInterval = driver.config.queuePollIntervalMs || 15000;
-  const queueWaitTimeout = driver.config.queueWaitTimeoutMs || 60000;
-  let stableCount = 0;
-  let warmingUp = true;
-  let lastText = '';
-  let initialText = null;
-  let inQueueSince = null;
-  let truncationSince = null;
-  const truncationTimeout = 20000;
-  let hasCheckedInitialSnapshot = false;
-
-  const streamingBuffer = [];
-  let streamingGrowthFrames = 0;
-  const STREAMING_GROWTH_THRESHOLD = 3;
-
+  let listenersRegistered = false;
   try {
-    await setupResponseStreaming(driver, streamingBuffer);
-  } catch (err) {
+    await driver.client.send('Log.enable', {});
+    driver.client.on('Log.entryAdded', logHandler);
+    driver.client.on('Runtime.consoleAPICalled', consoleHandler);
+    listenersRegistered = true;
+    await sleep(50);
+  } catch {
     // Log enable failed
   }
 
   const cleanup = () => {
+    if (!listenersRegistered) return;
     try {
-      driver.client.off('Log.entryAdded', () => {});
-      driver.client.off('Runtime.consoleAPICalled', () => {});
+      driver.client.off('Log.entryAdded', logHandler);
+      driver.client.off('Runtime.consoleAPICalled', consoleHandler);
+      listenersRegistered = false;
     } catch {
       // Listener cleanup is best-effort across CDP client implementations.
     }
@@ -550,19 +369,78 @@ async function collectResponse(driver) {
       }
       const reviewGate = await driver.checkTaskReviewGate();
       if (reviewGate.awaitingReview && reviewGate.taskCompleted) {
-        const gateResolution = await driver.resolveTaskReviewGate('keep_all');
+        const gateResolution = await driver.resolveTaskReviewGate(chooseReviewGateAction(state));
         if (gateResolution.success) {
           await sleep(Math.max(driver.config.postActionDelayMs * 2, 500));
         }
       }
+      const completionCandidate = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
+      const completionLooksStale = completionCandidate && (
+        (driver._preSendSnapshot && driver._preSendSnapshot.includes(completionCandidate)) ||
+        (driver._lastTaskText && driver._lastTaskText.includes(completionCandidate))
+      );
       let currentText = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
+      // Periodic dialog check during streaming - detect dialogs that appear mid-execution
+      const approvalCheckInterval = driver.config.approvalPollIntervalMs || 3000;
+      if (driver._lastApprovalCheckAt === undefined || (Date.now() - driver._lastApprovalCheckAt) >= approvalCheckInterval) {
+        const approvalDialog = await driver.checkForApprovalDialog();
+        driver._lastApprovalCheckAt = Date.now();
+        if (approvalDialog.transient) {
+          continue;
+        }
+        if (approvalDialog.needsApproval) {
+          const approvalDuration = Date.now() - (driver._approvalDialogFirstSeenAt || Date.now());
+          if (driver._approvalDialogFirstSeenAt === undefined) {
+            driver._approvalDialogFirstSeenAt = Date.now();
+          }
+          const approvalTimeoutMs = driver.config.approvalTimeoutMs || 120000;
+          if (approvalDuration >= approvalTimeoutMs) {
+            driver._approvalDialogFirstSeenAt = undefined;
+            driver._lastApprovalCheckAt = undefined;
+            cleanup();
+            return {
+              text: currentText || '',
+              stable: false,
+              elapsedMs: Date.now() - startTime,
+              needsApproval: true,
+              question: approvalDialog.question,
+              dialogType: approvalDialog.dialogType,
+              approvalDecision: approvalDialog.approvalDecision || null,
+              commandRisk: approvalDialog.commandRisk || null,
+              riskReasons: approvalDialog.riskReasons || [],
+              command: approvalDialog.command || null,
+              approvalTimedOut: true
+            };
+          }
+          driver._approvalDialogFirstSeenAt = undefined;
+          driver._lastApprovalCheckAt = undefined;
+          cleanup();
+          return {
+            text: currentText || '',
+            stable: false,
+            elapsedMs: Date.now() - startTime,
+            needsApproval: true,
+            question: approvalDialog.question,
+            dialogType: approvalDialog.dialogType,
+            buttons: approvalDialog.buttons,
+            approvalDecision: approvalDialog.approvalDecision || null,
+            commandRisk: approvalDialog.commandRisk || null,
+            riskReasons: approvalDialog.riskReasons || [],
+            command: approvalDialog.command || null
+          };
+        }
+      }
 
-      const approvalDecision = await resolveApprovalCheck(driver, currentText, startTime, cleanup);
-      if (approvalDecision.action === 'continue') continue;
-      if (approvalDecision.action === 'return') return approvalDecision.result;
 
-      const completionDecision = resolveInitialTaskCompletion(driver, state, startTime, cleanup);
-      if (completionDecision.action === 'return') return completionDecision.result;
+      const hasTaskText = !!String(state.taskText || '').trim();
+      if (!completionLooksStale && hasTaskText && (state.taskComplete || !state.taskInProgress)) {
+        const text = cleanAssistantResultText(sanitizeActivityText(state.taskText || ''));
+        if (driver._isModelErrorResponseText(text)) {
+          cleanup();
+          return { text, stable: false, elapsedMs: Date.now() - startTime, modelError: true, error: 'Trae model request failed' };
+        }
+        if (text && !driver._isIncompleteResponseText(text)) { cleanup(); return { text, stable: true, elapsedMs: Date.now() - startTime }; }
+      }
 
       const pendingTask = String(driver._pendingUserTask || '').replace(/\s+/g, ' ').trim();
       const normalizedCurrent = String(currentText || '').replace(/\s+/g, ' ').trim();
@@ -614,27 +492,76 @@ async function collectResponse(driver) {
         }
       }
 
-      const iter = await resolveResponseIteration(driver, {
-        currentText,
-        lastText,
-        stableCount,
-        inQueueSince,
-        truncationSince,
-        streamingGrowthFrames,
-        requiredStable,
-        startTime,
-        pollInterval,
-        queuePollInterval,
-        truncationTimeout,
-        cleanup
-      });
-      if (iter.action === 'return') return iter.result;
-      lastText = iter.lastText;
-      stableCount = iter.stableCount;
-      inQueueSince = iter.inQueueSince;
-      truncationSince = iter.truncationSince;
-      streamingGrowthFrames = iter.streamingGrowthFrames;
-      continue;
+      let queuePosition = null;
+      const queueMatch = currentText && currentText.match(/排在第\s*(\d+)\s*位/);
+      if (queueMatch) queuePosition = parseInt(queueMatch[1], 10);
+
+      const isQueued = currentText && (
+        queuePosition !== null ||
+        currentText.includes('排队') ||
+        currentText.includes('等待') ||
+        currentText.includes('队列') ||
+        currentText.includes('等待中')
+      );
+
+      if (isQueued) {
+        if (!inQueueSince) inQueueSince = Date.now();
+        // Wait indefinitely until queue clears - no timeout on queue
+        // The point is to persist until the request goes through
+        lastText = currentText; await sleep(queuePollInterval); continue;
+      }
+
+      inQueueSince = null;
+
+      if (isTruncationSignal(currentText)) {
+        if (!truncationSince) truncationSince = Date.now();
+        if (Date.now() - truncationSince > truncationTimeout) {
+          cleanup();
+          return { text: currentText, stable: false, elapsedMs: Date.now() - startTime, truncated: true, timedOut: false };
+        }
+        lastText = currentText; await sleep(pollInterval); continue;
+      }
+
+      truncationSince = null;
+
+      const endMarkerDetected = hasCompletionMarker(currentText);
+      const effectiveRequiredStable = endMarkerDetected ? 1 : requiredStable;
+
+      const isGrowing = currentText && lastText &&
+        currentText.startsWith(lastText) &&
+        currentText.length > lastText.length;
+
+      if (isGrowing) {
+        streamingGrowthFrames++;
+        if (streamingGrowthFrames >= STREAMING_GROWTH_THRESHOLD && currentText.length >= 50) {
+          cleanup();
+          return {
+            text: currentText,
+            stable: false,
+            streaming: true,
+            elapsedMs: Date.now() - startTime
+          };
+        }
+      } else {
+        streamingGrowthFrames = 0;
+      }
+
+      const isStable = currentText && currentText === lastText && currentText.length >= 1;
+      if (isStable) {
+        stableCount++;
+        if (stableCount >= effectiveRequiredStable && driver._isModelErrorResponseText(currentText)) {
+          cleanup();
+          return { text: currentText, stable: false, elapsedMs: Date.now() - startTime, modelError: true, error: 'Trae model request failed' };
+        }
+        if (stableCount >= effectiveRequiredStable && !driver._isIncompleteResponseText(currentText)) {
+          cleanup();
+          return { text: currentText, stable: true, elapsedMs: Date.now() - startTime };
+        }
+      } else {
+        stableCount = 0;
+      }
+      lastText = currentText;
+      await sleep(pollInterval);
     }
 
     const finalText = lastText || (streamingBuffer.length > 0 ? streamingBuffer.join(' ') : '');
@@ -650,6 +577,7 @@ async function collectResponse(driver) {
 
 module.exports = {
   hasCompletionMarker,
+  chooseReviewGateAction,
   extractFinalAssistantResultText,
   cleanAssistantResultText,
   _pollResponseState,

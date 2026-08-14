@@ -41,7 +41,7 @@ function tryQuit(appName) {
 function forceKill(pid) {
   try {
     process.kill(pid, 'SIGKILL');
-  } catch (e) {
+  } catch {
     // process already gone
   }
 }

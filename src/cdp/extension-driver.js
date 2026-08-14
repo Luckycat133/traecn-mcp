@@ -122,7 +122,7 @@ class ExtensionDriver {
         }`,
         [max]
       );
-    } catch (err) {
+    } catch {
       return { ok: false, count: 0, items: [] };
     }
   }

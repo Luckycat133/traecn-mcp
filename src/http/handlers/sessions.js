@@ -62,6 +62,7 @@ async function handleCreateSession(req, res, ctx) {
   const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   await ctx._ensureConnection();
+  await ctx._assertProjectWorkspace(body.projectPath);
 
   const session = {
     id: sessionId,
@@ -109,6 +110,7 @@ async function handleDelegate(req, res, ctx, sessionId) {
   await ctx._ensureConnection();
 
   const session = ctx.sessions.get(sessionId);
+  await ctx._assertProjectWorkspace(body.projectPath || session?.projectPath);
   if (session) {
     ctx._appendSessionMessage(sessionId, { role: 'user', content: body.task });
   }
@@ -164,7 +166,7 @@ async function handleDelegate(req, res, ctx, sessionId) {
     }, 202);
   }
 
-  const result = await ctx.driver.delegate(ctx._taskWithProjectContext(body.task, body.projectPath));
+  const result = await ctx.driver.delegate(body.task);
 
   if (session) {
     ctx._appendSessionMessage(sessionId, { role: 'assistant', content: result.text });

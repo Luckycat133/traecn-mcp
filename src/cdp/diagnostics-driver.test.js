@@ -67,6 +67,32 @@ test('readModelMarkers parses Monaco markers', () => {
   });
 });
 
+asyncTest('readModelMarkers maps the real Monaco MarkerSeverity values', async () => {
+  const client = {
+    async send(method, params) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      assert.ok(params.expression.includes('getModelMarkers'));
+      return {
+        result: {
+          value: {
+            ok: true,
+            count: 5,
+            items: [1, 2, 4, 8, 99].map(severity => ({ severity }))
+          }
+        }
+      };
+    }
+  };
+  const d = new DiagnosticsDriver(client, {});
+
+  const result = await d.readModelMarkers();
+
+  assert.deepStrictEqual(
+    result.items.map(item => item.severity),
+    ['hint', 'info', 'warning', 'error', 'unknown']
+  );
+});
+
 test('count tallies by severity', () => {
   const d = new DiagnosticsDriver(mockClient(), {});
   return d.count().then(r => {

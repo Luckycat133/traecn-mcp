@@ -1,6 +1,9 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { AuditLogger } = require('../shared/audit-logger');
 const { createRunner } = require('./test-runner');
 const runner = createRunner('audit-logger.test.js');
@@ -291,6 +294,19 @@ test('AuditLogger disabled does not log', () => {
 
   assert.strictEqual(entry, undefined);
   assert.strictEqual(logger.logs.length, 0);
+});
+
+test('AuditLogger persists security-sensitive Trae actions', () => {
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecnclaw-audit-test-'));
+  const logger = new AuditLogger({ enabled: true, logDir });
+  logger.log({
+    action: 'conversation.delete',
+    params: { conversationId: 'solo:old-chat' }
+  });
+  const files = fs.readdirSync(logDir);
+  assert.strictEqual(files.length, 1);
+  const persisted = fs.readFileSync(path.join(logDir, files[0]), 'utf8');
+  assert.match(persisted, /"action":"conversation\.delete"/);
 });
 
 test('AuditLogger logKeyCreate records correct action', () => {

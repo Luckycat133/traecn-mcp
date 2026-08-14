@@ -2,7 +2,7 @@
  * TraeCN Skill Module Type Definitions
  */
 
-import { TraeCNApiClient } from '../../integrations/openclaw-traecn-plugin/lib/traecnapi-client';
+import { TraeCNApiClient } from '../client/traecnapi-client';
 
 // 已知模型列表
 export declare const KNOWN_MODELS: string[];
@@ -39,6 +39,10 @@ export interface RunTaskOptions {
   modelProbeIntervalMs?: number;
   maxQueueWaitMs?: number;
   queueMaxWaitMs?: number;
+  /** _delegateWithPoll 最大轮询次数（默认 40） */
+  pollMaxAttempts?: number;
+  /** _delegateWithPoll 轮询间隔毫秒（默认 5000） */
+  pollIntervalMs?: number;
   soloChat?: { index?: number; titleIncludes?: string; textIncludes?: string };
   soloChatIndex?: number;
   soloChatTitleIncludes?: string;
@@ -170,6 +174,10 @@ export interface ApproveResult {
   success: boolean;
   action: string;
   clicked: string | null;
+  requiresAgentReview?: boolean;
+  risk?: 'low' | 'high' | 'unknown' | null;
+  reasonCodes?: string[];
+  command?: string | null;
 }
 
 // 对话框状态
@@ -179,6 +187,11 @@ export interface DialogStatus {
   type: string | null;
   question: string | null;
   buttons: string[];
+  canAutoApprove?: boolean;
+  approvalDecision?: 'agent_review' | null;
+  risk?: 'low' | 'high' | 'unknown' | null;
+  reasonCodes?: string[];
+  command?: string | null;
 }
 
 // 队列状态
@@ -301,7 +314,8 @@ export declare class TraeCNSkill {
 
   /**
    * 切换模式
-   * @param mode - 模式名称 ('solo' 或 'ide')
+   * @param mode - 模式名称 ('solo' 或 'ide')，忽略大小写
+   * @throws {TraeCNSkillError} 当 mode 不是 'solo' 或 'ide' 时抛出 INVALID_MODE
    */
   switchMode(mode: string): Promise<any>;
 
@@ -346,7 +360,7 @@ export declare class TraeCNSkill {
    * 打开项目
    * @param projectPath - 项目路径
    */
-  openProject(projectPath: string): Promise<any>;
+  openProject(projectPath: string, options?: { newInstance?: boolean }): Promise<any>;
 
   /**
    * 代码审查辅助

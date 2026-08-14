@@ -164,6 +164,13 @@ test('QueueStateMachine: isIncompleteReviewText rejects "let me check"', () => {
   assert.strictEqual(sm.isIncompleteReviewText('Let me check the implementation now'), true);
 });
 
+test('QueueStateMachine: percentage progress is incomplete even with completion wording', () => {
+  const sm = new QueueStateMachine();
+  const text = `${'正在检查仓库中的实现与测试覆盖。'.repeat(12)} 任务完成 16%`;
+  assert.strictEqual(sm.isIncompleteReviewText(text), true);
+  assert.strictEqual(sm.isSuccessfulResult({ text, stable: true }), false);
+});
+
 console.log(`\n[queue-state-machine.test.js] Results: ${passed} passed, ${failed} failed\n`);
 
 process.exit(failed > 0 ? 1 : 0);

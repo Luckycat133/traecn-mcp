@@ -25,12 +25,22 @@ class MockSettingsDriver {
           currentValue: this.values.get('Mock setting') || 'enabled',
           hasToggle: true,
           hasDropdown: false,
+          hasTextInput: false,
+          controlType: 'toggle',
           toggleChecked: this.values.get('Mock setting') !== false,
           visible: true
         }
       ],
       raw: { count: 1, type: 'mock' }
     };
+  }
+
+  async listSections() {
+    return SETTINGS_SECTIONS.slice();
+  }
+
+  async listOptions() {
+    return ['enabled', 'disabled'];
   }
 
   async readAll() {
@@ -45,6 +55,8 @@ class MockSettingsDriver {
             currentValue: 'enabled',
             hasToggle: true,
             hasDropdown: false,
+            hasTextInput: false,
+            controlType: 'toggle',
             toggleChecked: true,
             visible: true
           }
@@ -57,6 +69,18 @@ class MockSettingsDriver {
   async set(label, value) {
     this.values.set(label, value);
     return { success: true, label, value, mode: 'mock' };
+  }
+
+  async setToggle(label, enabled) {
+    return this.set(label, enabled);
+  }
+
+  async setDropdown(label, value) {
+    return this.set(label, value);
+  }
+
+  async typeText(label, text) {
+    return this.set(label, text);
   }
 
   async backToChat() {
@@ -99,6 +123,17 @@ class MockDriver extends DomDriver {
     ];
   }
 
+  async listModels() {
+    return {
+      current: this.model,
+      models: Array.from(new Set([this.model, 'mock-model']))
+    };
+  }
+
+  async getCurrentModel() {
+    return this.model;
+  }
+
   async typeMessage(text) {
     this.sentMessages.push(text);
   }
@@ -139,6 +174,14 @@ class MockDriver extends DomDriver {
       mode: this.mode,
       confidence: 1,
       indicators: ['mock-driver']
+    };
+  }
+
+  async listSoloChats() {
+    return {
+      mode: this.mode === 'solo' ? 'solo' : 'not_solo',
+      chats: [],
+      count: 0
     };
   }
 

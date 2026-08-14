@@ -1,0 +1,4 @@
+interface:
+  display_name: "TRAECNclaw Development"
+  short_description: "Audit, test, experience, and finish TRAECNclaw"
+  default_prompt: "Use $traecnclaw-development to re-audit the current source, tag, downloadable release, runtime tests, and live compatibility evidence; classify implemented capabilities, confirmed bugs, required gaps, optional scope, and external blockers; then implement every safe local change with focused tests and an actual user experience path. Do not rely on deleted historical roadmaps."

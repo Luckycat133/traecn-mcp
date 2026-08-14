@@ -176,16 +176,43 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('openProject forwards newInstance to the gateway', async () => {
+    const port = await createMockServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ opened: true }));
+    });
+    const client = new TraeCNApiClient({ port, timeout: 3000 });
+
+    await client.openProject('/tmp/second-project', { newInstance: true });
+
+    assert.strictEqual(lastRequest.method, 'POST');
+    assert.strictEqual(lastRequest.url, '/api/open-project');
+    assert.deepStrictEqual(lastRequest.body, {
+      projectPath: '/tmp/second-project',
+      newInstance: true
+    });
+    server.close();
+  });
+
   await asyncTest('stopGeneration sends POST to /api/trae/stop-generation', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true }));
     });
     const client = new TraeCNApiClient({ port, timeout: 3000 });
-    const result = await client.stopGeneration();
+    const result = await client.stopGeneration({
+      conversationId: 'solo:Q3VycmVudCB0YXNr',
+      acknowledgeUntrackedWork: true,
+      reason: 'Stop requested by user'
+    });
     assert.strictEqual(result.data.success, true);
     assert.strictEqual(lastRequest.method, 'POST');
     assert.strictEqual(lastRequest.url, '/api/trae/stop-generation');
+    assert.deepStrictEqual(lastRequest.body, {
+      conversationId: 'solo:Q3VycmVudCB0YXNr',
+      acknowledgeUntrackedWork: true,
+      reason: 'Stop requested by user'
+    });
     server.close();
   });
 

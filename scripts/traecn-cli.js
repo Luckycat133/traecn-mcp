@@ -1,17 +1,15 @@
 #!/usr/bin/env node
 'use strict';
 
-const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
 const os = require('os');
 const { spawnSync } = require('child_process');
 const {
   TraeCNApiClient,
   DEFAULT_TASK_POLL_MS,
   isTerminalTaskStatus
-} = require('../integrations/openclaw-traecn-plugin/lib/traecnapi-client');
+} = require('../src/client/traecnapi-client');
 const { DEFAULT_HOST, DEFAULT_PORT, resolveGatewayToken } = require('./lib/cli-config');
 
 const COLORS = {
@@ -75,8 +73,16 @@ function loadConfig() {
     config = defaults;
   }
 
-  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_HOST')) config.host = process.env.TRAECN_HOST;
-  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_PORT')) config.port = parseInt(process.env.TRAECN_PORT, 10);
+  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_GATEWAY_HOST')) {
+    config.host = process.env.TRAECN_GATEWAY_HOST;
+  } else if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_HOST')) {
+    config.host = process.env.TRAECN_HOST;
+  }
+  if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_GATEWAY_PORT')) {
+    config.port = parseInt(process.env.TRAECN_GATEWAY_PORT, 10);
+  } else if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_PORT')) {
+    config.port = parseInt(process.env.TRAECN_PORT, 10);
+  }
   if (Object.prototype.hasOwnProperty.call(process.env, 'TRAECN_GATEWAY_TOKEN')) config.token = process.env.TRAECN_GATEWAY_TOKEN;
 
   return config;
@@ -101,7 +107,7 @@ function apiRequest(method, endpoint, body) {
     host: cfg.host,
     port: cfg.port,
     token: cfg.token,
-    timeoutMs: 60000
+    timeout: 60000
   });
   return client._request(method, endpoint, body);
 }
@@ -166,7 +172,7 @@ ${color('bold', 'OPTIONS:')}
   --detach                Wait: run locally in a detached screen session
   --session <name>        Wait: screen session name for --detach
   --quiet                 Wait: only print final result
-  --auto-approve-dialog [action] Wait: approve task dialog if one appears
+  --auto-approve-dialog [action] Wait: handle an eligible non-command dialog
 
 ${color('bold', 'EXAMPLES:')}
   traecn delegate "Write a hello world program"
@@ -199,7 +205,7 @@ ${color('bold', 'CONFIG FILE:')}
   Supported keys: host, port, token
 
 ${color('bold', 'ENVIRONMENT:')}
-  TRAECN_HOST, TRAECN_PORT, TRAECN_GATEWAY_TOKEN
+  TRAECN_GATEWAY_HOST, TRAECN_GATEWAY_PORT, TRAECN_GATEWAY_TOKEN
 `);
 }
 
@@ -701,7 +707,6 @@ async function runCleanupWatchAttempt(cleanupOnce, options = {}) {
 }
 
 async function cmdDelegate(args) {
-  const cfg = loadConfig();
   let task = '';
   let waitForResult = true;
   let outputFormat = 'text';
@@ -1185,7 +1190,6 @@ function cleanupQueueDetach({
   outputFormat,
   lockFile,
   execute,
-  dryRun,
   maxPasses,
   watchMs,
   stableMs,
@@ -1419,8 +1423,6 @@ async function cleanupQueueWatch({
 }
 
 async function cleanupQueueDryRun({
-  outputFormat,
-  lockFile,
   execute,
   dryRun,
   maxPasses
@@ -1470,7 +1472,7 @@ async function cmdModels() {
         ? settings.data.options
         : [settings.data.options];
 
-      models.forEach((model, index) => {
+      models.forEach((model, _index) => {
         const isActive = readiness.data.currentModel === model ||
                         (typeof model === 'object' && readiness.data.currentModel === model.id);
         const marker = isActive ? color('green', ' ● ') : '   ';
@@ -1689,7 +1691,7 @@ async function cmdBatch(args) {
       console.log(`  ${color('cyan', 'Running:')}    ${batch.executingCount || 0}`);
 
       console.log(`\n${color('bold', 'Tasks:')}`);
-      batch.tasks.forEach((task, i) => {
+      batch.tasks.forEach((task, _i) => {
         const statusIcon = task.status === 'done' ? color('green', '✓') : task.status === 'error' ? color('red', '✗') : task.status === 'executing' ? color('yellow', '▶') : color('dim', '○');
         const priorityLabel = task.priority ? color('dim', `[P${task.priority}]`) : '';
         console.log(`  ${statusIcon} ${priorityLabel} ${task.taskId}`);

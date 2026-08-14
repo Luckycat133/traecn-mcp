@@ -4,7 +4,9 @@ const { execFile, execSync, spawn } = require('child_process');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { getEnvWithFallback } = require('../shared/utils');
+const http = require('http');
+const { getEnvWithFallback, sleep } = require('../shared/utils');
+const { readRuntimeEnv } = require('./runtime-schema');
 
 function findTraeCNBinary() {
   const envBin = getEnvWithFallback('TRAECN_BIN', 'TRAE_BIN', '');
@@ -72,10 +74,6 @@ function execFilePromise(command, args = [], options = {}) {
   });
 }
 
-async function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function waitForTraeCNExit(timeoutMs = 15000, pollMs = 500) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -128,14 +126,64 @@ function buildStartCommand(binPath, args, options = {}) {
   return { command: binPath, commandArgs: args };
 }
 
-function startTraeCN(options = {}) {
+function buildReuseWindowCommand(binPath, projectPath, options = {}) {
+  const platform = options.platform || process.platform;
+  const pathExists = options.pathExists || fs.existsSync;
+
+  if (platform === 'darwin' && /\.app\/?$/.test(binPath)) {
+    const candidates = [
+      path.join(binPath, 'Contents', 'Resources', 'app', 'bin', 'trae-cn'),
+      path.join(binPath, 'Contents', 'Resources', 'app', 'bin', 'code')
+    ];
+    const cliPath = candidates.find(candidate => pathExists(candidate));
+    if (!cliPath) {
+      throw new Error(`TraeCN CLI not found inside ${binPath}`);
+    }
+    return { command: cliPath, commandArgs: ['--reuse-window', projectPath] };
+  }
+
+  return { command: binPath, commandArgs: ['--reuse-window', projectPath] };
+}
+
+async function openProjectInExistingWindow(options = {}) {
+  const binPath = options.binPath || findTraeCNBinary();
+  if (!binPath) {
+    throw new Error('TraeCN binary not found. Set TRAECN_BIN environment variable.');
+  }
+
+  const projectPath = path.resolve(String(options.projectPath || ''));
+  let projectStat;
+  try {
+    projectStat = fs.statSync(projectPath);
+  } catch {
+    throw new Error(`Project path does not exist: ${projectPath}`);
+  }
+  if (!projectStat.isDirectory()) {
+    throw new Error(`Project path is not a directory: ${projectPath}`);
+  }
+
+  const { command, commandArgs } = buildReuseWindowCommand(binPath, projectPath);
+  const { stdout, stderr } = await execFilePromise(command, commandArgs, {
+    encoding: 'utf8',
+    timeout: options.timeoutMs || 30000,
+    maxBuffer: 1024 * 1024
+  });
+  return {
+    command,
+    args: commandArgs,
+    stdout: String(stdout || '').trim(),
+    stderr: String(stderr || '').trim()
+  };
+}
+
+async function startTraeCN(options = {}) {
   const binPath = options.binPath || findTraeCNBinary();
   if (!binPath) {
     throw new Error('TraeCN binary not found. Set TRAECN_BIN environment variable.');
   }
 
   const args = [];
-  const remotePort = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const remotePort = readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT');
   args.push(`--remote-debugging-port=${remotePort}`);
 
   const extraArgs = getEnvWithFallback('TRAECN_ARGS', 'TRAE_ARGS', '');
@@ -158,13 +206,45 @@ function startTraeCN(options = {}) {
 
   const { command, commandArgs } = buildStartCommand(binPath, args, options);
 
+  // Capture child stderr so launch failures (e.g. "bad option: --remote-debugging-port")
+  // surface instead of being swallowed by stdio:'ignore'. Cap the buffer to avoid
+  // unbounded growth for long-lived Trae instances.
+  let stderrTail = '';
   const child = spawn(command, commandArgs, {
     detached: true,
-    stdio: 'ignore'
+    stdio: ['ignore', 'ignore', 'pipe']
   });
+  if (child.stderr) {
+    child.stderr.on('data', (chunk) => {
+      stderrTail += chunk.toString();
+      if (stderrTail.length > 4096) stderrTail = stderrTail.slice(-4096);
+    });
+  }
   child.unref();
 
-  return { pid: child.pid, command, args: commandArgs };
+  // The process can start fine while CDP never comes up — e.g. a TraeCN build
+  // that rejects --remote-debugging-port (see launchError), or the port being
+  // blocked. Report readiness honestly instead of assuming the debug endpoint is listening.
+  const cdpReady = await verifyTraeCNCDP(remotePort, options.cdpTimeoutMs || 20000, 500);
+
+  return { pid: child.pid, command, args: commandArgs, remotePort, cdpReady, launchError: cdpReady ? null : stderrTail.trim() };
+}
+
+async function verifyTraeCNCDP(port, timeoutMs = 20000, pollMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const up = await new Promise((resolve) => {
+      const req = http.get({ host: '127.0.0.1', port, path: '/json/version', timeout: 2000 }, (res) => {
+        res.resume();
+        resolve(res.statusCode === 200);
+      });
+      req.on('error', () => { req.destroy(); resolve(false); });
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+    });
+    if (up) return true;
+    await sleep(pollMs);
+  }
+  return false;
 }
 
 async function restartTraeCNWithDebug(options = {}) {
@@ -178,17 +258,18 @@ async function restartTraeCNWithDebug(options = {}) {
     timeoutMs: options.quitTimeoutMs,
     pollMs: options.pollMs
   });
-  const launched = startTraeCN({
+  const launched = await startTraeCN({
     binPath,
     projectPath: options.projectPath,
     newInstance: quickstart.profileMode === 'isolated',
-    useIsolatedProfile: quickstart.useIsolatedProfile
+    useIsolatedProfile: quickstart.useIsolatedProfile,
+    cdpTimeoutMs: options.cdpTimeoutMs
   });
-  return { ok: true, quit, launched, profileMode: quickstart.profileMode };
+  return { ok: launched.cdpReady, quit, launched, profileMode: quickstart.profileMode, launchError: launched.launchError };
 }
 
 function getQuickstartConfig() {
-  const profileModeRaw = getEnvWithFallback('TRAECN_QUICKSTART_PROFILE_MODE', 'TRAE_QUICKSTART_PROFILE_MODE', 'existing');
+  const profileModeRaw = readRuntimeEnv('TRAECN_QUICKSTART_PROFILE_MODE');
   const profileMode = String(profileModeRaw || '').trim().toLowerCase();
   const isolatedProfilePreferred = profileMode === 'isolated';
   const existingProfilePreferred = !isolatedProfilePreferred;
@@ -197,19 +278,22 @@ function getQuickstartConfig() {
       ? false
       : getEnvWithFallback('TRAECN_QUICKSTART_USE_ISOLATED_PROFILE', 'TRAE_QUICKSTART_USE_ISOLATED_PROFILE', '1') === '1',
     profileMode: existingProfilePreferred ? 'existing' : 'isolated',
-    remoteDebuggingPort: getEnvWithFallback('TRAECN_QUICKSTART_REMOTE_DEBUGGING_PORT', 'TRAE_QUICKSTART_REMOTE_DEBUGGING_PORT', '9334'),
-    gatewayPort: getEnvWithFallback('PORT', 'PORT', '8788'),
-    gatewayHost: getEnvWithFallback('HOST', 'HOST', '127.0.0.1')
+    remoteDebuggingPort: readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT'),
+    gatewayPort: readRuntimeEnv('TRAECN_GATEWAY_PORT'),
+    gatewayHost: readRuntimeEnv('TRAECN_GATEWAY_HOST')
   };
 }
 
 module.exports = {
   buildStartCommand,
+  buildReuseWindowCommand,
   findTraeCNBinary,
   isTraeCNMainProcessCommand,
   isTraeCNRunning,
   quitTraeCN,
   restartTraeCNWithDebug,
+  openProjectInExistingWindow,
   startTraeCN,
+  verifyTraeCNCDP,
   getQuickstartConfig
 };

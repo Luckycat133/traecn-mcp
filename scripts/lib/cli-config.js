@@ -6,8 +6,10 @@
 // between scripts. Importing from here keeps connection settings consistent
 // while preserving each script's original resolution priority.
 
-const DEFAULT_HOST = '127.0.0.1';
-const DEFAULT_PORT = 8788;
+const { runtimeDefault } = require('../../src/config/runtime-schema');
+
+const DEFAULT_HOST = runtimeDefault('TRAECN_GATEWAY_HOST');
+const DEFAULT_PORT = Number(runtimeDefault('TRAECN_GATEWAY_PORT'));
 
 // Reads `--name value`, `--name=value`, or returns fallback.
 // Superset of every script-local readArg variant: acceptance-audit and

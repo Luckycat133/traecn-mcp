@@ -1,36 +1,58 @@
-name: Release
+name: Release verification
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to verify (for example v0.5.5)'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  verify-and-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
           cache: npm
-      - run: npm ci
-      - name: Verify tag and distribution versions
-        run: npm run check:versions
-      - run: npm run lint
-      - run: npm test
-      - run: npm run test:system
-      - name: Build release artifacts
+
+      - name: Verify the tag is the checked-out commit
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          npm run pack:skill
-          npm pack --pack-destination dist
-          find dist -maxdepth 1 -type f ! -name SHA256SUMS -print0 |
-            sort -z |
-            xargs -0 sha256sum > dist/SHA256SUMS
-      - name: Publish GitHub Release
+          test "$(git rev-list -n1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then test "$(git rev-parse HEAD)" = "$GITHUB_SHA"; fi
+          test -z "$(git status --porcelain)"
+
+      - run: npm ci
+      - run: npm run test:release
+
+      - name: Verify release version and manifest provenance
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          test "${RELEASE_TAG#v}" = "$(node -p "require('./package.json').version")"
+          npm run verify:release-manifest
+
+      - name: Create or update the GitHub release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
+          mapfile -t ARTIFACTS < <(node -e "const m=require('./dist/traecnclaw-mcp-release.json'); console.log(m.artifacts.map(a=>a.path).concat(m.serverPackage.artifact.path, 'dist/traecnclaw-mcp-release.json').join('\\n'))")
+          gh release upload "$RELEASE_TAG" "${ARTIFACTS[@]}" --clobber

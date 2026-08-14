@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { readRuntimeEnv } = require('../config/runtime-schema');
 
 // Queue-probe logic lives in ./queue-probe; re-exported below so the public
 // surface of this module stays unchanged for existing callers.
@@ -63,23 +64,23 @@ function sleep(ms) {
 function safeJsValue(value) {
   try {
     if (typeof value === 'undefined') return 'undefined';
-    if (typeof value === 'string' && hasUnsafeJsValueChars(value)) return '';
+    if (typeof value === 'string') {
+      value = stripControlChars(value);
+    }
     const encoded = JSON.stringify(value);
     if (typeof encoded === 'undefined') return 'undefined';
     return encoded;
   } catch {
-    return '';
+    return '""';
   }
 }
 
-function hasUnsafeJsValueChars(value) {
-  for (let index = 0; index < value.length; index++) {
-    const code = value.charCodeAt(index);
-    if (value[index] === '<' || value[index] === '>' || code <= 31) {
-      return true;
-    }
+function stripControlChars(value) {
+  let result = '';
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 31) result += value[i];
   }
-  return false;
+  return result;
 }
 
 async function safeClose(resource) {
@@ -141,16 +142,36 @@ function sanitizeLog(obj) {
 }
 
 function getGatewayContext(env = process.env) {
-  const portStr = env.TRAECN_GATEWAY_PORT ?? env.TRAE_GATEWAY_PORT ?? '8787';
-  const host = env.TRAECN_GATEWAY_HOST ?? env.TRAE_GATEWAY_HOST ?? '127.0.0.1';
-  const token = env.TRAECN_GATEWAY_TOKEN ?? env.TRAE_GATEWAY_TOKEN ?? '';
-  const timeoutStr = env.TRAECN_GATEWAY_TIMEOUT_MS ?? env.TRAE_GATEWAY_TIMEOUT_MS ?? '30000';
+  const portStr = readRuntimeEnv('TRAECN_GATEWAY_PORT', env);
+  const host = readRuntimeEnv('TRAECN_GATEWAY_HOST', env);
+  const token = readRuntimeEnv('TRAECN_GATEWAY_TOKEN', env);
+  const timeoutStr = readRuntimeEnv('TRAECN_GATEWAY_TIMEOUT_MS', env);
   return {
     host,
-    port: parsePositiveInt(portStr, 8787),
+    port: parsePositiveInt(portStr, 8788),
     token,
     timeout: parsePositiveInt(timeoutStr, 30000)
   };
+}
+
+/**
+ * Return true only for host values that are unambiguously local. Unknown
+ * hostnames fail closed because DNS may resolve them to a remote interface.
+ */
+function isLoopbackHost(host) {
+  const normalized = String(host || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '');
+  if (normalized === 'localhost' || normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') {
+    return true;
+  }
+  if (/^127(?:\.\d{1,3}){3}$/.test(normalized)) {
+    return normalized.split('.').every(part => Number(part) <= 255);
+  }
+  const mappedIpv4 = normalized.match(/^::ffff:(127(?:\.\d{1,3}){3})$/);
+  return Boolean(mappedIpv4 && mappedIpv4[1].split('.').every(part => Number(part) <= 255));
 }
 
 module.exports = {
@@ -166,6 +187,7 @@ module.exports = {
   isForeignQueueProbeText,
   safeClose,
   sanitizeLog,
+  isLoopbackHost,
   getGatewayContext,
   SENSITIVE_LOG_KEYS
 };

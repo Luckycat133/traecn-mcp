@@ -1,0 +1,43 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.luckycat133/traecnclaw",
+  "description": "Local persistent TraeCN coding-task gateway with a focused MCP Agent surface.",
+  "repository": {
+    "url": "https://github.com/Luckycat133/TRAECNclaw",
+    "source": "github"
+  },
+  "version": "{{VERSION}}",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "traecnclaw",
+      "version": "{{VERSION}}",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Gateway host; keep loopback unless remote access is authenticated.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "TRAECN_GATEWAY_HOST"
+        },
+        {
+          "description": "Gateway port.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "TRAECN_GATEWAY_PORT"
+        },
+        {
+          "description": "Gateway bearer token.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "TRAECN_GATEWAY_TOKEN"
+        }
+      ]
+    }
+  ]
+}

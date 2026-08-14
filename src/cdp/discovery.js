@@ -1,9 +1,14 @@
 'use strict';
 
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const WebSocket = require('ws');
 const { TraeCNAutomationError } = require('./errors');
 const { CDPClient } = require('./client');
 const { getEnvWithFallback, safeClose } = require('../shared/utils');
+const { runtimeDefault } = require('../config/runtime-schema');
 
 const DEFAULT_DISCOVERY_PORTS = ['9222', '9223', '9224', '9225', '9226', '9230', '9333', '9334'];
 
@@ -67,7 +72,49 @@ function describeCDPSurface(targets = []) {
   };
 }
 
-async function fetchCDPTargets(host, port) {
+/**
+ * WebSocket fallback for listing CDP targets via Target.getTargets.
+ * `wsPath` comes from App Support/<App>/DevToolsActivePort.
+ */
+function fetchCDPTargetsWS(host, port, wsPath) {
+  return new Promise((resolve, reject) => {
+    const wsUrl = `ws://${host}:${port}${wsPath}`;
+    let ws;
+    try { ws = new WebSocket(wsUrl); } catch (e) { return reject(e); }
+    const to = setTimeout(() => {
+      try { ws.close(); } catch { /* best-effort close */ }
+      reject(new Error('CDP WS /list timed out'));
+    }, 5000);
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ id: 1, method: 'Target.getTargets' }));
+    });
+    ws.on('message', (data) => {
+      let msg;
+      try { msg = JSON.parse(data.toString()); } catch { return; }
+      if (msg.id === 1) {
+        clearTimeout(to);
+        try { ws.close(); } catch { /* best-effort close */ }
+        if (msg.error) return reject(new Error('CDP WS error: ' + (msg.error.message || JSON.stringify(msg.error))));
+        resolve((msg.result && msg.result.targetInfos) || []);
+      }
+    });
+    ws.on('error', (e) => { clearTimeout(to); reject(e); });
+  });
+}
+
+async function fetchCDPTargets(host, port, wsPath) {
+  try {
+    return await fetchCDPTargetsHTTP(host, port);
+  } catch (httpErr) {
+    if (wsPath) {
+      try { return await fetchCDPTargetsWS(host, port, wsPath); }
+      catch { /* fall through */ }
+    }
+    throw httpErr;
+  }
+}
+
+async function fetchCDPTargetsHTTP(host, port) {
   return new Promise((resolve, reject) => {
     const url = `http://${host}:${port}/json/list`;
     const req = http.get(url, (res) => {
@@ -93,7 +140,51 @@ async function fetchCDPTargets(host, port) {
   });
 }
 
-async function fetchCDPVersion(host, port) {
+/**
+ * WebSocket fallback for fetching CDP version. Used when the HTTP
+ * /json/version endpoint is unreachable (e.g. sandboxed runtimes
+ * where localhost HTTP is proxied but the raw CDP WebSocket is not).
+ * `wsPath` comes from the App Support/<App>/DevToolsActivePort file.
+ */
+function fetchCDPVersionWS(host, port, wsPath) {
+  return new Promise((resolve, reject) => {
+    const wsUrl = `ws://${host}:${port}${wsPath}`;
+    let ws;
+    try { ws = new WebSocket(wsUrl); } catch (e) { return reject(e); }
+    const to = setTimeout(() => {
+      try { ws.close(); } catch { /* best-effort close */ }
+      reject(new Error('CDP WS /version timed out'));
+    }, 5000);
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ id: 1, method: 'Browser.getVersion' }));
+    });
+    ws.on('message', (data) => {
+      let msg;
+      try { msg = JSON.parse(data.toString()); } catch { return; }
+      if (msg.id === 1) {
+        clearTimeout(to);
+        try { ws.close(); } catch { /* best-effort close */ }
+        if (msg.error) return reject(new Error('CDP WS error: ' + (msg.error.message || JSON.stringify(msg.error))));
+        resolve(msg.result || {});
+      }
+    });
+    ws.on('error', (e) => { clearTimeout(to); reject(e); });
+  });
+}
+
+async function fetchCDPVersion(host, port, wsPath) {
+  try {
+    return await fetchCDPVersionHTTP(host, port);
+  } catch (httpErr) {
+    if (wsPath) {
+      try { return await fetchCDPVersionWS(host, port, wsPath); }
+      catch { /* fall through to original error */ }
+    }
+    throw httpErr;
+  }
+}
+
+async function fetchCDPVersionHTTP(host, port) {
   return new Promise((resolve, reject) => {
     const url = `http://${host}:${port}/json/version`;
     const req = http.get(url, (res) => {
@@ -122,7 +213,51 @@ async function fetchCDPVersion(host, port) {
 function isTraeCNVersion(version) {
   const browser = String(version?.Browser || '').toLowerCase();
   const userAgent = String(version?.['User-Agent'] || '').toLowerCase();
-  return browser.includes('trae') || userAgent.includes('traecn') || userAgent.includes('trae cn');
+  return (
+    browser.includes('trae') ||
+    userAgent.includes('traecn') ||
+    userAgent.includes('trae cn') ||
+    // Trae CN's agent runtime ("Antigravity") exposes its own Chromium
+    // DevTools port on a dynamic port; treat it as a valid TraeCN surface.
+    userAgent.includes('antigravity')
+  );
+}
+
+/**
+ * Trae CN (IDE) and sibling apps (Antigravity agent runtime, Qoder) each
+ * persist a Chromium DevTools (CDP) endpoint on a per-session port in
+ *   ~/Library/Application Support/<App>/DevToolsActivePort
+ * where line 1 is the port and line 2 is the browser WebSocket path
+ * (e.g. /devtools/browser/<uuid>). Builds that no longer forward
+ * --remote-debugging-port to the IDE process expose their working CDP
+ * surface only through these files, so we must scan all of them.
+ *
+ * @returns {{port:string, wsPath:string}|null}
+ */
+const DEVTOOLS_APPS = ['Antigravity', 'Trae CN', 'Qoder'];
+
+function readDevToolsActivePort(appName) {
+  try {
+    const file = path.join(os.homedir(), 'Library', 'Application Support', appName, 'DevToolsActivePort');
+    const lines = fs.readFileSync(file, 'utf8').split('\n').map(l => l.trim()).filter(Boolean);
+    const port = Number(lines[0]);
+    const wsPath = lines[1] || '';
+    if (Number.isInteger(port) && port > 0 && port < 65536) {
+      return { port: String(port), wsPath };
+    }
+  } catch {
+    // File absent for this app — not fatal.
+  }
+  return null;
+}
+
+function getDevToolsPorts() {
+  const out = [];
+  for (const app of DEVTOOLS_APPS) {
+    const info = readDevToolsActivePort(app);
+    if (info && !out.some(o => o.port === info.port)) out.push(info);
+  }
+  return out;
 }
 
 function uniquePorts(...groups) {
@@ -137,23 +272,45 @@ function uniquePorts(...groups) {
 }
 
 async function resolveCDPEndpoint(options = {}) {
-  const host = options.host || getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
-  const configuredPort = options.port || getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const host = options.host || getEnvWithFallback(
+    'TRAECN_CDP_HOST',
+    'TRAE_CDP_HOST',
+    runtimeDefault('TRAECN_CDP_HOST')
+  );
+  const configuredPort = options.port || getEnvWithFallback(
+    'TRAECN_REMOTE_DEBUGGING_PORT',
+    'TRAE_REMOTE_DEBUGGING_PORT',
+    runtimeDefault('TRAECN_REMOTE_DEBUGGING_PORT')
+  );
   const quickstartPort = getEnvWithFallback('TRAECN_QUICKSTART_REMOTE_DEBUGGING_PORT', 'TRAE_QUICKSTART_REMOTE_DEBUGGING_PORT', '');
   const extraPorts = String(getEnvWithFallback('TRAECN_DISCOVERY_PORTS', 'TRAE_DISCOVERY_PORTS', '') || '')
     .split(',')
     .map(p => p.trim())
     .filter(Boolean);
 
-  const ports = uniquePorts([configuredPort], [quickstartPort], extraPorts, DEFAULT_DISCOVERY_PORTS);
+  const devtools = getDevToolsPorts();
+  const devtoolsPorts = devtools.map(d => d.port);
+  const wsPathByPort = {};
+  for (const d of devtools) {
+    if (d.wsPath) wsPathByPort[d.port] = d.wsPath;
+  }
+
+  const ports = uniquePorts(
+    [configuredPort],
+    [quickstartPort],
+    extraPorts,
+    devtoolsPorts,
+    DEFAULT_DISCOVERY_PORTS
+  );
   let lastError = null;
   let configuredPortError = null;
   let firstReachable = null;
 
   for (const port of ports) {
+    const wsPath = wsPathByPort[String(port)] || '';
     try {
-      const version = await fetchCDPVersion(host, port);
-      const endpoint = { host, port, version, isTraeCN: isTraeCNVersion(version) };
+      const version = await fetchCDPVersion(host, port, wsPath);
+      const endpoint = { host, port, version, isTraeCN: isTraeCNVersion(version), wsPathByPort };
       if (!firstReachable) firstReachable = endpoint;
       if (endpoint.isTraeCN) return endpoint;
     } catch (err) {
@@ -214,23 +371,13 @@ function scoreTarget(target, titleKeywords) {
   return score;
 }
 
-async function validateTargetHasContent(client, readiness) {
-  if (!readiness.responseRegion) return false;
-  try {
-    const sel = readiness.responseRegion.matchedSelector.replace(/'/g, "\\'");
-    const r = await client.send('Runtime.evaluate', {
-      expression: `document.querySelector('${sel}')?.textContent?.trim() || ''`,
-      returnByValue: true
-    });
-    return !!(r.result?.value && r.result.value.length > 0);
-  } catch {
-    return false;
-  }
-}
-
 async function discoverTarget(options = {}) {
-  const host = getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
-  const port = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const host = getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', runtimeDefault('TRAECN_CDP_HOST'));
+  const port = getEnvWithFallback(
+    'TRAECN_REMOTE_DEBUGGING_PORT',
+    'TRAE_REMOTE_DEBUGGING_PORT',
+    runtimeDefault('TRAECN_REMOTE_DEBUGGING_PORT')
+  );
   const titleContains = getEnvWithFallback('TRAECN_CDP_TARGET_TITLE_CONTAINS', 'TRAE_CDP_TARGET_TITLE_CONTAINS', 'Trae');
   const urlContains = getEnvWithFallback('TRAECN_CDP_TARGET_URL_CONTAINS', 'TRAE_CDP_TARGET_URL_CONTAINS', '');
 
@@ -242,7 +389,7 @@ async function discoverTarget(options = {}) {
 
   let targets;
   try {
-    targets = await fetchCDPTargets(effectiveHost, effectivePort);
+    targets = await fetchCDPTargets(effectiveHost, effectivePort, (endpoint.wsPathByPort && endpoint.wsPathByPort[String(effectivePort)]) || '');
   } catch (err) {
     throw TraeCNAutomationError.connectionFailed(effectiveHost, effectivePort, err.message);
   }
@@ -346,7 +493,10 @@ async function discoverTarget(options = {}) {
   function buildTarget(p) {
     return {
       id: p.candidate.id, title: p.candidate.title, url: p.candidate.url,
-      webSocketDebuggerUrl: p.candidate.webSocketDebuggerUrl, score: p.candidate.score
+      webSocketDebuggerUrl: p.candidate.webSocketDebuggerUrl, score: p.candidate.score,
+      cdpVersion: endpoint.version,
+      cdpHost: endpoint.host,
+      cdpPort: endpoint.port
     };
   }
 
@@ -370,7 +520,17 @@ async function discoverTarget(options = {}) {
     return target;
   }
 
-  return bestCandidate;
+  if (bestCandidate) {
+    throw TraeCNAutomationError.connectionFailed(
+      effectiveHost, effectivePort,
+      `No valid Trae CN workbench target found (${candidates.length} candidates probed but none had composer)`
+    );
+  }
+
+  throw TraeCNAutomationError.connectionFailed(
+    effectiveHost, effectivePort,
+    `No Trae CN targets found on CDP endpoint`
+  );
 }
 
 async function connectToTarget(targetInfo) {
@@ -380,9 +540,14 @@ async function connectToTarget(targetInfo) {
   }
 
   const client = new CDPClient(wsUrl);
-  await client.connect();
-  await client.send('DOM.enable');
-  await client.send('Runtime.enable');
+  try {
+    await client.connect();
+    await client.send('DOM.enable');
+    await client.send('Runtime.enable');
+  } catch (err) {
+    await client.close();
+    throw err;
+  }
 
   return client;
 }

@@ -74,6 +74,25 @@ test('loadConfig uses environment variable for port when set', () => {
   delete process.env.TRAECN_PORT;
 });
 
+test('loadConfig prefers canonical gateway variables over legacy aliases', () => {
+  process.env.TRAECN_GATEWAY_HOST = '127.0.0.9';
+  process.env.TRAECN_GATEWAY_PORT = '8899';
+  process.env.TRAECN_HOST = '127.0.0.8';
+  process.env.TRAECN_PORT = '8888';
+  try {
+    clearModuleCache();
+    const { loadConfig } = require('./traecn-cli');
+    const cfg = loadConfig();
+    assert.strictEqual(cfg.host, '127.0.0.9');
+    assert.strictEqual(cfg.port, 8899);
+  } finally {
+    delete process.env.TRAECN_GATEWAY_HOST;
+    delete process.env.TRAECN_GATEWAY_PORT;
+    delete process.env.TRAECN_HOST;
+    delete process.env.TRAECN_PORT;
+  }
+});
+
 test('loadConfig uses environment variable for token when set', () => {
   process.env.TRAECN_GATEWAY_TOKEN = 'test-token-456';
   clearModuleCache();
@@ -81,6 +100,23 @@ test('loadConfig uses environment variable for token when set', () => {
   const cfg = loadConfig();
   assert.strictEqual(cfg.token, 'test-token-456');
   delete process.env.TRAECN_GATEWAY_TOKEN;
+});
+
+test('apiRequest applies the CLI 60 second timeout to the HTTP client', () => {
+  const { TraeCNApiClient } = require('../src/client/traecnapi-client');
+  const originalRequest = TraeCNApiClient.prototype._request;
+  TraeCNApiClient.prototype._request = function captureTimeout() {
+    return this.timeout;
+  };
+
+  try {
+    clearModuleCache();
+    const { apiRequest } = require('./traecn-cli');
+    assert.strictEqual(apiRequest('GET', '/api/status'), 60000);
+  } finally {
+    TraeCNApiClient.prototype._request = originalRequest;
+    clearModuleCache();
+  }
 });
 
 test('buildProofCliArgs maps proof status without execute side effects', () => {

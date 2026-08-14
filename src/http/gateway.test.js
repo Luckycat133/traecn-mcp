@@ -8,19 +8,26 @@ const { Readable } = require('stream');
 
 const TEST_QUEUE_PERSISTENCE_PATH = path.join(os.tmpdir(), 'traecnclaw-gateway-test-active-queue.json');
 const TEST_HISTORY_PERSISTENCE_PATH = path.join(os.tmpdir(), 'traecnclaw-gateway-test-history.json');
+const TEST_EVENT_PERSISTENCE_PATH = path.join(os.tmpdir(), 'traecnclaw-gateway-test-events.json');
 process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH = TEST_QUEUE_PERSISTENCE_PATH;
 process.env.TRAECN_TASK_HISTORY_PERSISTENCE_PATH = TEST_HISTORY_PERSISTENCE_PATH;
+process.env.TRAECN_TASK_EVENT_PERSISTENCE_PATH = TEST_EVENT_PERSISTENCE_PATH;
 try {
   fs.unlinkSync(TEST_QUEUE_PERSISTENCE_PATH);
 } catch {}
 try {
   fs.unlinkSync(TEST_HISTORY_PERSISTENCE_PATH);
 } catch {}
+try {
+  fs.unlinkSync(TEST_EVENT_PERSISTENCE_PATH);
+} catch {}
 
 const { Gateway, RateLimiter, sanitizeLog } = require('./gateway');
-const { buildCapabilities } = require('../shared/capabilities');
+const { buildCapabilities } = require('../capabilities');
 const { buildConfirmationPlan } = require('../shared/operation-confirmation');
+const { generateOpenAPISpec } = require('./openapi');
 const requestContext = require('../shared/request-context');
+const { selectTraeAdapter } = require('../trae-adapters');
 
 let passed = 0;
 let failed = 0;
@@ -56,6 +63,53 @@ test('RateLimiter allows requests within limit', () => {
   const limiter = new RateLimiter(60000, 5);
   for (let i = 0; i < 5; i++) {
     assert.strictEqual(limiter.check('key1'), true);
+  }
+});
+
+test('Gateway owns a security audit logger and accepts an injected logger', () => {
+  const auditLogger = { log: () => {} };
+  const gateway = new Gateway({ auditLogger });
+  assert.strictEqual(gateway.auditLogger, auditLogger);
+});
+
+test('Gateway refuses a non-loopback bind without an authentication token', () => {
+  const previousToken = process.env.TRAECN_GATEWAY_TOKEN;
+  const previousLegacyToken = process.env.TRAE_GATEWAY_TOKEN;
+  delete process.env.TRAECN_GATEWAY_TOKEN;
+  delete process.env.TRAE_GATEWAY_TOKEN;
+  try {
+    assert.throws(
+      () => new Gateway({ host: '0.0.0.0' }),
+      /non-loopback.*TRAECN_GATEWAY_TOKEN/i
+    );
+  } finally {
+    restoreEnv('TRAECN_GATEWAY_TOKEN', previousToken);
+    restoreEnv('TRAE_GATEWAY_TOKEN', previousLegacyToken);
+  }
+});
+
+test('Gateway permits loopback binds without a token', () => {
+  const previousToken = process.env.TRAECN_GATEWAY_TOKEN;
+  const previousLegacyToken = process.env.TRAE_GATEWAY_TOKEN;
+  delete process.env.TRAECN_GATEWAY_TOKEN;
+  delete process.env.TRAE_GATEWAY_TOKEN;
+  try {
+    for (const host of ['localhost', '127.0.0.1', '127.0.0.2', '::1', '[::1]']) {
+      assert.strictEqual(new Gateway({ host }).host, host);
+    }
+  } finally {
+    restoreEnv('TRAECN_GATEWAY_TOKEN', previousToken);
+    restoreEnv('TRAE_GATEWAY_TOKEN', previousLegacyToken);
+  }
+});
+
+test('Gateway permits a non-loopback bind when a token is configured', () => {
+  const previousToken = process.env.TRAECN_GATEWAY_TOKEN;
+  process.env.TRAECN_GATEWAY_TOKEN = 'test-non-loopback-token';
+  try {
+    assert.strictEqual(new Gateway({ host: '0.0.0.0' }).host, '0.0.0.0');
+  } finally {
+    restoreEnv('TRAECN_GATEWAY_TOKEN', previousToken);
   }
 });
 
@@ -296,6 +350,19 @@ test('Gateway honors documented HOST and PORT fallbacks', () => {
   }
 });
 
+test('Gateway config schema exposes complete defaults and generated runtime environment schema', () => {
+  const gateway = new Gateway();
+  const { req, res } = makeReqRes({}, '/api/config/schema', 'GET');
+  gateway._handleGetConfigSchema(req, res);
+  const payload = JSON.parse(res._body);
+  assert.strictEqual(payload.defaults.server.host, '127.0.0.1');
+  assert.strictEqual(payload.defaults.server.port, 8788);
+  assert.strictEqual(payload.defaults.timeout.response, 1800000);
+  assert.strictEqual(payload.defaults.traeControl.autoStart, false);
+  assert.strictEqual(payload.environment.TRAECN_REMOTE_DEBUGGING_PORT.default, '9222');
+  assert.strictEqual(payload.environment.TRAECN_QUEUE_MAX_WAIT_MS.default, '');
+});
+
 test('buildCapabilities returns compact command and token strategy metadata', () => {
   const capabilities = buildCapabilities({
     commands: [{ command: 'delegate_async', summary: 'Async delegate', required: ['task'], optional: ['waitForQueue'] }],
@@ -303,12 +370,20 @@ test('buildCapabilities returns compact command and token strategy metadata', ()
   });
   assert.strictEqual(capabilities.name, 'traecnclaw');
   assert.strictEqual(capabilities.coverage.queueManagement, true);
-  assert.ok(capabilities.tokenStrategy.prefer.includes('traecn_preflight'));
-  assert.ok(capabilities.tokenStrategy.prefer.includes('traecn_queue_task'));
+  assert.deepStrictEqual(capabilities.tokenStrategy.prefer, ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task']);
+  assert.strictEqual(capabilities.tokenStrategy.gatewayManaged, true);
+  assert.strictEqual(capabilities.mcp.contractVersion, 5);
+  assert.strictEqual(capabilities.mcp.toolCount, 1);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(capabilities.mcp, 'toolProfile'), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(capabilities.mcp, 'toolProfiles'), false);
   assert.ok(capabilities.commands.some(command => command.command === 'delegate_async'));
   assert.ok(capabilities.mcp.tools.some(tool => tool.name === 'queue_task'));
   assert.ok(capabilities.http.some(operation => operation.path === '/api/capabilities'));
   assert.ok(capabilities.http.some(operation => operation.path === '/api/preflight'));
+  assert.deepStrictEqual(
+    capabilities.traeCN.adapters.map(adapter => adapter.id),
+    ['traecn-1.107', 'traecn-unknown']
+  );
 });
 
 test('buildConfirmationPlan marks settings writes as high-risk confirmation operations', () => {
@@ -319,6 +394,20 @@ test('buildConfirmationPlan marks settings writes as high-risk confirmation oper
   assert.strictEqual(plan.risk, 'high');
   assert.strictEqual(plan.requiresConfirmation, true);
   assert.ok(plan.preflight.some(item => item.includes('Read the target settings section')));
+  assert.ok(plan.recommendedFlow.includes('user_confirmation'));
+});
+
+test('buildConfirmationPlan treats gateway task review decisions as high risk', () => {
+  const plan = buildConfirmationPlan({
+    command: 'review_task',
+    params: { taskId: 'task_review_1', decision: 'approve' }
+  });
+
+  assert.strictEqual(plan.risk, 'high');
+  assert.strictEqual(plan.requiresConfirmation, true);
+  assert.ok(plan.sideEffects.some(item => item.includes('continue')));
+  assert.ok(plan.preflight.some(item => item.includes('task_review_1')));
+  assert.ok(plan.recommendedFlow.includes('task_status'));
   assert.ok(plan.recommendedFlow.includes('user_confirmation'));
 });
 
@@ -360,7 +449,7 @@ test('Gateway normalizes followup tasks from strings and objects', () => {
 test('Gateway creates queued task with review workflow metadata', () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1234, queueMaxWaitMs: 5678 } };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway.taskHistoryStore = {
     createTask: () => 'task_test_1',
     recordStep: () => {}
@@ -394,7 +483,7 @@ test('Gateway rejects generic queue-probe task creation', () => {
 asyncTest('Gateway auto-continues reviewable workflow followups without human review', async () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1234 } };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway._ensureBackgroundPolling = () => {};
   gateway.taskHistoryStore = {
     createTask: (() => {
@@ -531,7 +620,104 @@ asyncTest('Gateway submits Solo chat task and captures chat target for result co
   assert.strictEqual(task.submittedToTrae, true);
   assert.strictEqual(task.soloChat.titleIncludes, 'Solo queued task');
   assert.ok(calls.some(call => call[0] === 'newChat'));
-  assert.ok(calls.some(call => call[0] === 'sendMessage' && call[1].includes('/tmp/solo-project')));
+  assert.ok(calls.some(call => call[0] === 'sendMessage' && call[1] === 'Implement isolated feature'));
+});
+
+asyncTest('Gateway rejects Solo submission when the requested project folder is not open', async () => {
+  const gateway = new Gateway();
+  let sent = false;
+  gateway._ensureConnection = async () => {};
+  gateway._ensureBackgroundPolling = () => {};
+  gateway.driver = {
+    config: { queuePerTaskTimeoutMs: 1000 },
+    switchMode: async () => {},
+    switchSoloChat: async () => ({ success: true, index: 0, title: 'Existing review' }),
+    getWorkspaceContext: async () => ({ title: 'gemini-web-mcp', folderName: 'gemini-web-mcp' }),
+    sendMessage: async () => { sent = true; }
+  };
+  const { req, res } = makeReqRes({}, '/api/solo/chats/submit', 'POST', {
+    task: 'Continue the review',
+    projectPath: '/Users/jack/Documents/gh-repos/TRAECNclaw',
+    soloChat: { index: 0 }
+  });
+
+  await gateway.handleRequest(req, res);
+
+  const payload = JSON.parse(res._body);
+  assert.strictEqual(res.statusCode, 409);
+  assert.strictEqual(payload.code, 'PROJECT_NOT_OPEN');
+  assert.strictEqual(payload.details.requestedFolder, 'TRAECNclaw');
+  assert.strictEqual(payload.details.currentFolder, 'gemini-web-mcp');
+  assert.strictEqual(sent, false);
+});
+
+asyncTest('Gateway uses projectPath as a workspace guard without injecting it into the Solo prompt', async () => {
+  const gateway = new Gateway();
+  let sentMessage = null;
+  gateway._ensureConnection = async () => {};
+  gateway._ensureBackgroundPolling = () => {};
+  gateway.taskHistoryStore = {
+    createTask: () => 'task_workspace_guard',
+    recordStep: () => {},
+    ensureTask: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway.driver = {
+    config: { queuePerTaskTimeoutMs: 1000 },
+    switchMode: async () => {},
+    switchSoloChat: async () => ({ success: true, index: 0, title: 'Existing review' }),
+    getWorkspaceContext: async () => ({ title: 'TRAECNclaw', folderName: 'TRAECNclaw' }),
+    sendMessage: async (message) => { sentMessage = message; },
+    checkQueueStatus: async () => ({ queued: true, running: false }),
+    getActiveSoloChat: async () => ({
+      mode: 'solo',
+      active: { index: 0, title: 'Existing review', text: 'Existing review' },
+      count: 1
+    })
+  };
+  const { req, res } = makeReqRes({}, '/api/solo/chats/submit', 'POST', {
+    task: 'Continue the review',
+    projectPath: '/Users/jack/Documents/gh-repos/TRAECNclaw',
+    soloChat: { index: 0 }
+  });
+
+  await gateway.handleRequest(req, res);
+
+  assert.strictEqual(res.statusCode, 202);
+  assert.strictEqual(sentMessage, 'Continue the review');
+});
+
+asyncTest('Gateway refuses guarded submission when the open workspace cannot be identified', async () => {
+  const gateway = new Gateway();
+  gateway.driver = {
+    getWorkspaceContext: async () => ({ title: '', folderName: null, hasExplorer: false })
+  };
+
+  await assert.rejects(
+    () => gateway._assertProjectWorkspace('/Users/jack/Documents/gh-repos/TRAECNclaw'),
+    error => error && error.code === 'WORKSPACE_CONTEXT_UNAVAILABLE'
+  );
+});
+
+asyncTest('Gateway rejects a different workspace path even when the folder name matches', async () => {
+  const gateway = new Gateway();
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: 'TRAECNclaw',
+      folderName: 'TRAECNclaw',
+      rootPath: '/Users/jack/other/TRAECNclaw',
+      hasExplorer: true
+    })
+  };
+
+  await assert.rejects(
+    () => gateway._assertProjectWorkspace('/Users/jack/Documents/gh-repos/TRAECNclaw'),
+    error => error &&
+      error.code === 'PROJECT_NOT_OPEN' &&
+      error.details.currentPath === '/Users/jack/other/TRAECNclaw'
+  );
 });
 
 asyncTest('Gateway cleanup endpoint repeats passes for queue probes revealed after deletion', async () => {
@@ -573,7 +759,7 @@ asyncTest('Gateway cleanup endpoint repeats passes for queue probes revealed aft
 
 asyncTest('Gateway keeps parallel queued session Solo results isolated when completion is out of order', async () => {
   const gateway = new Gateway();
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
   gateway._emitTaskNotification = async () => {};
   gateway.taskHistoryStore = {
@@ -631,7 +817,7 @@ asyncTest('Gateway keeps parallel queued session Solo results isolated when comp
 test('Gateway queued tasks wait indefinitely by default for external model queues', () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1234 } };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway.taskHistoryStore = {
     createTask: () => 'task_wait_forever_1',
     recordStep: () => {}
@@ -732,6 +918,90 @@ test('Gateway persists active tasks and restores submitted executing tasks witho
   }
 });
 
+test('Gateway restores idempotency ownership with the active task after restart', () => {
+  const queueFile = path.join(os.tmpdir(), `traecnclaw-gateway-idempotency-${Date.now()}.json`);
+  const previousPath = process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH;
+  process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH = queueFile;
+  let gateway;
+  let restoredGateway;
+  try {
+    gateway = new Gateway();
+    gateway.taskQueue.clear();
+    gateway.driver = { config: {} };
+    const task = gateway._createQueuedTask({
+      task: 'persist one idempotent submission',
+      idempotencyKey: 'restart-safe-submit-1'
+    });
+    gateway.taskQueueService.close();
+
+    restoredGateway = new Gateway();
+    const replay = restoredGateway._checkIdempotency({
+      headers: { 'idempotency-key': 'restart-safe-submit-1' }
+    });
+
+    assert.ok(replay, 'restored active task must retain its idempotency ownership');
+    assert.deepStrictEqual(replay, {
+      data: { taskId: task.taskId, status: 'accepted' },
+      statusCode: 202
+    });
+    assert.strictEqual(restoredGateway.taskQueue.size, 1);
+  } finally {
+    gateway?.taskQueueService.close();
+    restoredGateway?.taskQueueService.close();
+    if (fs.existsSync(queueFile)) fs.unlinkSync(queueFile);
+    if (fs.existsSync(`${queueFile}.bak`)) fs.unlinkSync(`${queueFile}.bak`);
+    if (fs.existsSync(`${queueFile}.lock`)) fs.unlinkSync(`${queueFile}.lock`);
+    restoreEnv('TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH', previousPath);
+  }
+});
+
+asyncTest('Gateway persists terminal idempotency replay before restart', async () => {
+  const queueFile = path.join(os.tmpdir(), `traecnclaw-gateway-terminal-idempotency-${Date.now()}.json`);
+  const previousPath = process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH;
+  process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH = queueFile;
+  let gateway;
+  let restoredGateway;
+  const request = {
+    task: 'persist terminal idempotency through the gateway lifecycle',
+    idempotencyKey: 'gateway-terminal-replay-1'
+  };
+  try {
+    gateway = new Gateway();
+    gateway.taskQueue.clear();
+    gateway.driver = { config: {} };
+    gateway._emitTaskNotification = async () => {};
+    const task = gateway._createQueuedTask(request, { queued: true });
+
+    await gateway._finalizeBackgroundTask(task.taskId, task, 'done', {
+      result: { text: 'gateway terminal result', stable: true }
+    });
+    gateway.taskQueueService.close();
+
+    restoredGateway = new Gateway();
+    const replay = restoredGateway.taskOrchestrator.resolveIdempotentTask(
+      'gateway-terminal-replay-1',
+      request
+    );
+
+    assert.deepStrictEqual(replay, {
+      taskId: task.taskId,
+      status: 'done',
+      result: { text: 'gateway terminal result', stable: true },
+      error: null,
+      terminal: true,
+      statusCode: 200
+    });
+    assert.strictEqual(restoredGateway.taskQueue.size, 0);
+  } finally {
+    gateway?.taskQueueService.close();
+    restoredGateway?.taskQueueService.close();
+    for (const suffix of ['', '.bak', '.tmp', '.lock']) {
+      if (fs.existsSync(`${queueFile}${suffix}`)) fs.unlinkSync(`${queueFile}${suffix}`);
+    }
+    restoreEnv('TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH', previousPath);
+  }
+});
+
 test('Gateway restores queued tasks without adding a local queue deadline', () => {
   const queueFile = path.join(os.tmpdir(), `traecnclaw-gateway-no-deadline-test-${Date.now()}.json`);
   const previousPath = process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH;
@@ -788,6 +1058,93 @@ test('Gateway does not persist generic queue-probe tasks', () => {
     if (fs.existsSync(queueFile)) fs.unlinkSync(queueFile);
     restoreEnv('TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH', previousPath);
   }
+});
+
+test('Gateway rejects and rolls back a task when its first durable snapshot fails', () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = { config: {} };
+  gateway.taskQueueService.persist = () => false;
+  gateway.taskQueueService.getPersistenceHealth = () => ({
+    taskStoreWritable: false,
+    lastSuccessfulPersistAt: null,
+    lastPersistError: {
+      code: 'ENOSPC',
+      message: 'Active task queue persistence is unavailable',
+      at: '2026-08-01T00:00:00.000Z'
+    },
+    durabilityDegraded: true
+  });
+
+  let thrown = null;
+  try {
+    gateway._createQueuedTask({ task: 'must not be accepted without durability' });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.ok(thrown, 'task creation must fail when persistence fails');
+  assert.strictEqual(thrown.code, 'TASK_STORE_UNAVAILABLE');
+  assert.strictEqual(gateway.taskQueue.size, 0);
+});
+
+asyncTest('Gateway returns 503 instead of accepted when unified task durability is unavailable', async () => {
+  const { MockDriver } = require('../cdp/mock-driver');
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.mockBridge = true;
+  gateway.driver = new MockDriver();
+  gateway._ensureConnection = async () => {};
+  gateway.taskQueueService.persist = () => false;
+  gateway.taskQueueService.getPersistenceHealth = () => ({
+    taskStoreWritable: false,
+    lastSuccessfulPersistAt: null,
+    lastPersistError: {
+      code: 'EROFS',
+      message: 'Active task queue persistence is unavailable',
+      at: '2026-08-01T00:00:00.000Z'
+    },
+    durabilityDegraded: true
+  });
+  const { req, res } = makeReqRes({}, '/api/tasks/submit', 'POST', {
+    message: 'must not be reported as accepted'
+  });
+
+  await gateway.handleRequest(req, res);
+
+  const body = JSON.parse(res._body);
+  assert.strictEqual(res.statusCode, 503);
+  assert.strictEqual(body.code, 'TASK_STORE_UNAVAILABLE');
+  assert.strictEqual(body.details.taskStoreWritable, false);
+  assert.strictEqual(gateway.taskQueue.size, 0);
+});
+
+asyncTest('Gateway returns 409 when a task idempotency key is reused for different work', async () => {
+  const { MockDriver } = require('../cdp/mock-driver');
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.mockBridge = true;
+  gateway.driver = new MockDriver();
+  gateway._ensureConnection = async () => {};
+  gateway._ensureBackgroundPolling = () => {};
+  const headers = { 'idempotency-key': 'gateway-collision-key-1' };
+  const first = makeReqRes(headers, '/api/tasks/submit', 'POST', {
+    message: 'original gateway work'
+  });
+  const collision = makeReqRes(headers, '/api/tasks/submit', 'POST', {
+    message: 'different gateway work'
+  });
+
+  await gateway.handleRequest(first.req, first.res);
+  await gateway.handleRequest(collision.req, collision.res);
+
+  const firstBody = JSON.parse(first.res._body);
+  const collisionBody = JSON.parse(collision.res._body);
+  assert.strictEqual(first.res.statusCode, 202);
+  assert.strictEqual(collision.res.statusCode, 409);
+  assert.strictEqual(collisionBody.code, 'IDEMPOTENCY_KEY_CONFLICT');
+  assert.strictEqual(collisionBody.taskId, firstBody.taskId);
+  assert.strictEqual(gateway.taskQueue.size, 1);
 });
 
 test('Gateway does not restore persisted active queue while mock bridge is enabled', () => {
@@ -869,6 +1226,171 @@ test('Gateway queue runtime summary excludes terminal tasks', () => {
   assert.strictEqual(summary.tasks.byStatus.queued, 1);
   assert.strictEqual(summary.tasks.byStatus.awaiting_review, 1);
   assert.strictEqual(summary.tasks.byStatus.done, undefined);
+});
+
+asyncTest('Gateway status snapshot exposes task-store durability health', async () => {
+  const gateway = new Gateway();
+  gateway.mockBridge = true;
+  gateway.taskQueueService.getPersistenceHealth = () => ({
+    taskStoreWritable: false,
+    lastSuccessfulPersistAt: '2026-08-01T00:00:00.000Z',
+    lastPersistError: {
+      code: 'ENOSPC',
+      message: 'Active task queue persistence is unavailable',
+      at: '2026-08-01T00:01:00.000Z'
+    },
+    durabilityDegraded: true
+  });
+  gateway.taskEventStore = {
+    getHealth: () => ({
+      persistenceEnabled: true,
+      eventStoreWritable: false,
+      lastSuccessfulPersistAt: null,
+      lastPersistError: {
+        code: 'ENOSPC',
+        message: 'Task completion-event persistence is unavailable',
+        at: '2026-08-01T00:02:00.000Z'
+      },
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: true
+    })
+  };
+  gateway.taskHistoryStore = {
+    getHealth: () => ({
+      persistenceEnabled: true,
+      historyStoreWritable: true,
+      lastSuccessfulPersistAt: '2026-08-01T00:00:00.000Z',
+      lastPersistError: null,
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: false
+    })
+  };
+
+  const snapshot = await gateway._statusSnapshot();
+
+  assert.deepStrictEqual(snapshot.durability, {
+    taskStoreWritable: false,
+    lastSuccessfulPersistAt: '2026-08-01T00:00:00.000Z',
+    lastPersistError: {
+      code: 'ENOSPC',
+      message: 'Active task queue persistence is unavailable',
+      at: '2026-08-01T00:01:00.000Z'
+    },
+    durabilityDegraded: true,
+    taskEvents: {
+      persistenceEnabled: true,
+      eventStoreWritable: false,
+      lastSuccessfulPersistAt: null,
+      lastPersistError: {
+        code: 'ENOSPC',
+        message: 'Task completion-event persistence is unavailable',
+        at: '2026-08-01T00:02:00.000Z'
+      },
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: true
+    },
+    taskHistory: {
+      persistenceEnabled: true,
+      historyStoreWritable: true,
+      lastSuccessfulPersistAt: '2026-08-01T00:00:00.000Z',
+      lastPersistError: null,
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: false
+    }
+  });
+});
+
+asyncTest('Gateway status snapshot includes task-history durability in aggregate health', async () => {
+  const gateway = new Gateway();
+  gateway.mockBridge = true;
+  gateway.taskQueueService.getPersistenceHealth = () => ({
+    taskStoreWritable: true,
+    lastSuccessfulPersistAt: '2026-08-08T00:00:00.000Z',
+    lastPersistError: null,
+    durabilityDegraded: false
+  });
+  gateway.taskEventStore = {
+    getHealth: () => ({
+      persistenceEnabled: true,
+      eventStoreWritable: true,
+      lastSuccessfulPersistAt: '2026-08-08T00:00:00.000Z',
+      lastPersistError: null,
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: false
+    })
+  };
+  gateway.taskHistoryStore = {
+    getHealth: () => ({
+      persistenceEnabled: true,
+      historyStoreWritable: false,
+      lastSuccessfulPersistAt: null,
+      lastPersistError: {
+        code: 'ENOSPC',
+        message: 'Task history persistence is unavailable',
+        at: '2026-08-08T00:01:00.000Z'
+      },
+      lastLoadError: null,
+      lastRecovery: null,
+      durabilityDegraded: true
+    })
+  };
+
+  const snapshot = await gateway._statusSnapshot();
+
+  assert.strictEqual(snapshot.durability.durabilityDegraded, true);
+  assert.deepStrictEqual(snapshot.durability.taskHistory, {
+    persistenceEnabled: true,
+    historyStoreWritable: false,
+    lastSuccessfulPersistAt: null,
+    lastPersistError: {
+      code: 'ENOSPC',
+      message: 'Task history persistence is unavailable',
+      at: '2026-08-08T00:01:00.000Z'
+    },
+    lastLoadError: null,
+    lastRecovery: null,
+    durabilityDegraded: true
+  });
+});
+
+test('OpenAPI status schema describes task-history durability health', () => {
+  const spec = generateOpenAPISpec();
+  const durability = spec.paths['/api/status'].get.responses['200']
+    .content['application/json'].schema.properties.durability;
+  const taskHistory = durability.properties.taskHistory;
+  assert.strictEqual(taskHistory.type, 'object');
+  assert.strictEqual(taskHistory.nullable, true);
+  assert.strictEqual(taskHistory.properties.historyStoreWritable.nullable, true);
+  assert.strictEqual(taskHistory.properties.lastRecovery.nullable, true);
+  assert.strictEqual(taskHistory.properties.durabilityDegraded.type, 'boolean');
+  assert.strictEqual(durability.properties.terminalReplayCount.type, 'integer');
+  assert.strictEqual(durability.properties.terminalReplayTtlMs.type, 'number');
+  assert.ok(spec.paths['/api/tasks/submit'].post.responses['200']);
+  assert.ok(spec.paths['/api/tasks/submit'].post.responses['400']);
+  assert.ok(spec.paths['/api/tasks/submit'].post.responses['409']);
+});
+
+asyncTest('Gateway status snapshot exposes the selected Trae adapter handshake', async () => {
+  const gateway = new Gateway();
+  gateway.mockBridge = true;
+  gateway.traeAdapter = selectTraeAdapter({
+    product: 'Trae CN',
+    traeVersion: '1.107.1',
+    platform: 'darwin',
+    mode: 'solo',
+    versionSource: 'product'
+  });
+
+  const snapshot = await gateway._statusSnapshot();
+  assert.strictEqual(snapshot.traeAdapter.adapter, 'traecn-1.107');
+  assert.strictEqual(snapshot.traeAdapter.traeVersion, '1.107.1');
+  assert.strictEqual(snapshot.traeAdapter.compatibility, 'verified');
+  assert.strictEqual(snapshot.traeAdapter.capabilities.fixtureReplay, true);
 });
 
 test('Gateway compactReadiness preserves blocker and workspace guide hints', () => {
@@ -1000,6 +1522,72 @@ asyncTest('Gateway task status refreshes queued snapshot before responding', asy
   assert.strictEqual(responseData.queueDetails.queueMessage, '排在第 21 位');
 });
 
+asyncTest('Gateway task status exposes the exact command interaction for MCP task input', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.set('task_command_input', {
+    taskId: 'task_command_input',
+    status: 'approval_required',
+    createdAt: Date.now() - 1000,
+    interactionRequestId: 'interaction-command-visible',
+    result: {
+      text: 'TraeCN requires command approval',
+      needsApproval: true,
+      question: 'Run the command?',
+      dialogType: 'command_execution',
+      command: 'git push origin main',
+      approvalDecision: 'agent_review',
+      commandRisk: 'high',
+      riskReasons: ['git_write_or_remote']
+    }
+  });
+  let responseData = null;
+  gateway._json = (req, res, data) => {
+    responseData = data;
+  };
+
+  await gateway._handleTaskStatus({}, {}, 'task_command_input');
+  assert.strictEqual(responseData.interactionRequestId, 'interaction-command-visible');
+  assert.strictEqual(responseData.result.command, 'git push origin main');
+  assert.strictEqual(responseData.result.commandRisk, 'high');
+  assert.deepStrictEqual(responseData.result.riskReasons, ['git_write_or_remote']);
+  assert.strictEqual(responseData.result.approvalDecision, 'agent_review');
+});
+
+asyncTest('Gateway assigns a durable interaction request id while a task awaits input', async () => {
+  const gateway = new Gateway();
+  gateway.taskHistoryStore = {
+    recordStep: () => {},
+    completeTask: () => {},
+    cancelTask: () => {},
+    failTask: () => {}
+  };
+  gateway._emitTaskNotification = async () => {};
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway._persistActiveQueue = () => true;
+  const task = {
+    taskId: 'task_interaction_identity',
+    status: 'executing',
+    createdAt: Date.now(),
+    result: null
+  };
+
+  await gateway._finalizeBackgroundTask(task.taskId, task, 'approval_required', {
+    result: { needsApproval: true, command: 'npm publish' }
+  });
+  assert.match(task.interactionRequestId, /^interaction-/);
+  const firstId = task.interactionRequestId;
+
+  await gateway._finalizeBackgroundTask(task.taskId, task, 'approval_required', {
+    result: task.result
+  });
+  assert.strictEqual(task.interactionRequestId, firstId);
+
+  await gateway._finalizeBackgroundTask(task.taskId, task, 'done', {
+    result: { text: 'complete', stable: true }
+  });
+  assert.strictEqual(task.interactionRequestId, undefined);
+});
+
 asyncTest('Gateway collects submitted executing task without resending prompt', async () => {
   const gateway = new Gateway();
   let sendCalled = false;
@@ -1128,7 +1716,7 @@ asyncTest('Gateway captures task-specific Solo chat candidates before generic pr
     status: 'executing',
     followupTasks: []
   };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway._syncTaskHistoryMirror = () => {};
   gateway.driver = {
     getActiveSoloChat: async () => ({
@@ -1146,6 +1734,85 @@ asyncTest('Gateway captures task-specific Solo chat candidates before generic pr
   assert.ok(soloChat.candidates.includes('src/cdp/settings-driver.js'));
   assert.ok(!soloChat.candidates.includes('Project'));
   assert.ok(soloChat.candidates.indexOf('settings/read-all') < soloChat.candidates.findIndex(item => item.startsWith('Project path:')));
+  assert.strictEqual(soloChat.titleIncludes, 'settings/read-all');
+  assert.strictEqual(soloChat.textIncludes, 'settings/read-all');
+});
+
+test('Gateway keeps the prompt lead phrase as a Solo chat rename candidate', () => {
+  const gateway = new Gateway();
+
+  const candidates = gateway._soloChatCandidateTexts(
+    '实机回归验收。请只运行只读命令 pwd，然后回复 LIVE-UAT-COMPLETION-PASS。'
+  );
+
+  assert.ok(candidates.includes('实机回归验收'));
+});
+
+asyncTest('Gateway never falls back to a stale Solo chat index when textual identity exists', async () => {
+  const gateway = new Gateway();
+  const attempts = [];
+  const task = {
+    taskId: 'task_stale_solo_index',
+    task: '审查 src/http/gateway.js 的任务隔离',
+    status: 'executing',
+    soloChat: {
+      index: 0,
+      titleIncludes: 'src/http/gateway.js',
+      textIncludes: 'src/http/gateway.js',
+      candidates: ['src/http/gateway.js', '任务隔离']
+    }
+  };
+  gateway._persistActiveQueue = () => true;
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.driver = {
+    switchSoloChat: async (criteria) => {
+      attempts.push(criteria);
+      if (Number.isInteger(criteria.index)) {
+        return { success: true, index: 0, title: '另一个新建任务 任务完成' };
+      }
+      return { success: false, reason: 'chat_not_found' };
+    }
+  };
+
+  await assert.rejects(
+    () => gateway._switchToTaskSoloChat(task, 'collect_result'),
+    /Solo chat|chat_not_found/i
+  );
+  assert.ok(attempts.length > 0);
+  assert.ok(!attempts.some(criteria => Number.isInteger(criteria.index)));
+});
+
+asyncTest('Gateway accepts the unchanged active index for the sole submitted task after a total title rename', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  const task = {
+    taskId: 'task_auto_renamed_solo',
+    task: '实机拒绝终态验收',
+    status: 'executing',
+    submittedToTrae: true,
+    soloChat: {
+      index: 0,
+      titleIncludes: '实机拒绝终态验收',
+      textIncludes: '实机拒绝终态验收',
+      candidates: ['实机拒绝终态验收']
+    }
+  };
+  gateway.taskQueue.set(task.taskId, task);
+  gateway._persistActiveQueue = () => true;
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.taskHistoryStore = { recordStep: () => {}, ensureTask: () => {} };
+  gateway.driver = {
+    switchSoloChat: async () => ({ success: false, reason: 'chat_not_found' }),
+    getActiveSoloChat: async () => ({
+      active: { index: 0, title: '执行删除文件命令 任务完成', active: true }
+    })
+  };
+
+  const result = await gateway._switchToTaskSoloChat(task, 'collect_result');
+
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.reason, 'sole_submitted_task_active_index');
+  assert.strictEqual(result.title, '执行删除文件命令 任务完成');
 });
 
 asyncTest('Gateway skips collectResponse while submitted Solo chat is still queued', async () => {
@@ -1322,7 +1989,7 @@ asyncTest('Gateway background polling cancels generic queue probes before sendin
     return { id: 'timer' };
   };
   gateway._clearInterval = () => {};
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway._ensureConnection = async () => {
     ensuredConnection = true;
   };
@@ -1431,7 +2098,7 @@ asyncTest('Gateway keeps long submitted queue waits alive without consuming retr
     recordStep: (taskId, action, details) => steps.push({ taskId, action, ...details }),
     ensureTask: () => {}
   };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   const task = {
     taskId: 'task_long_queue_collect',
     status: 'executing',
@@ -1468,7 +2135,7 @@ asyncTest('Gateway does not fail exhausted submitted tasks when collected result
     recordStep: () => {},
     ensureTask: () => {}
   };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   const task = {
     taskId: 'task_long_queue_exhausted',
     status: 'executing',
@@ -1502,7 +2169,7 @@ asyncTest('Gateway auto-answers code-answerable dialogs for unattended backgroun
     recordStep: (taskId, action, details) => steps.push({ taskId, action, ...details }),
     ensureTask: () => {}
   };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway.driver = {
     answerQuestionDialog: async answer => ({
       success: true,
@@ -1542,6 +2209,207 @@ asyncTest('Gateway auto-answers code-answerable dialogs for unattended backgroun
   assert.strictEqual(steps.at(-1).action, 'dialog_auto_approved');
 });
 
+asyncTest('Gateway auto mode refuses command cards even when an adapter marks them safe', async () => {
+  const auditEntries = [];
+  const gateway = new Gateway({ auditLogger: { log: entry => auditEntries.push(entry) } });
+  let approveCalls = 0;
+  gateway._persistActiveQueue = () => true;
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.taskHistoryStore = {
+    recordStep: () => {},
+    ensureTask: () => {}
+  };
+  gateway.driver = {
+    checkForApprovalDialog: async () => ({
+      needsApproval: true,
+      dialogType: 'command_execution',
+      isCommandExec: true,
+      canAutoApprove: true,
+      approvalDecision: 'auto_approve',
+      commandRisk: 'low',
+      riskReasons: ['legacy_read_only_allowlist'],
+      command: 'git status && git diff --stat'
+    }),
+    approveDialog: async action => {
+      approveCalls++;
+      return { success: true, action, buttonClicked: '运行' };
+    }
+  };
+  const task = {
+    taskId: 'task_safe_command_dialog',
+    status: 'approval_required',
+    submittedToTrae: true,
+    autoApproveDialog: 'auto'
+  };
+
+  const approved = await gateway._tryAutoApproveTaskDialog(task.taskId, task, {
+    needsApproval: true,
+    dialogType: 'command_execution'
+  });
+
+  assert.strictEqual(approved, false);
+  assert.strictEqual(approveCalls, 0);
+  assert.strictEqual(task.answeredDialog, undefined);
+  assert.deepStrictEqual(auditEntries, []);
+});
+
+asyncTest('Gateway auto mode leaves risky command cards for calling-agent review', async () => {
+  const gateway = new Gateway();
+  let approveCalls = 0;
+  gateway._persistActiveQueue = () => true;
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.taskHistoryStore = {
+    recordStep: () => {},
+    ensureTask: () => {}
+  };
+  gateway.driver = {
+    checkForApprovalDialog: async () => ({
+      needsApproval: true,
+      dialogType: 'command_execution',
+      isCommandExec: true,
+      canAutoApprove: false,
+      approvalDecision: 'agent_review',
+      commandRisk: 'high',
+      riskReasons: ['git_write_or_remote'],
+      command: 'git push origin main'
+    }),
+    approveDialog: async () => {
+      approveCalls++;
+      return { success: true };
+    }
+  };
+  const task = {
+    taskId: 'task_risky_command_dialog',
+    status: 'approval_required',
+    submittedToTrae: true,
+    autoApproveDialog: 'auto'
+  };
+
+  const approved = await gateway._tryAutoApproveTaskDialog(task.taskId, task, {
+    needsApproval: true,
+    dialogType: 'command_execution'
+  });
+
+  assert.strictEqual(approved, false);
+  assert.strictEqual(approveCalls, 0);
+});
+
+asyncTest('Gateway records a compact durable event before delivering task notifications', async () => {
+  const gateway = new Gateway();
+  const recorded = [];
+  gateway.taskEventStore = {
+    append: event => {
+      recorded.push(event);
+      return { eventId: 'evt_1', ...event };
+    }
+  };
+
+  await gateway._emitTaskNotification('task-event-1', {
+    taskId: 'task-event-1',
+    status: 'done',
+    sessionId: 'session-1',
+    result: { text: 'Review complete. No high-severity findings were found.' }
+  }, 'task.completed');
+
+  assert.deepStrictEqual(recorded, [{
+    type: 'task.completed',
+    taskId: 'task-event-1',
+    status: 'done',
+    terminal: true,
+    attentionRequired: false,
+    resultAvailable: true,
+    sessionId: 'session-1',
+    summary: 'Review complete. No high-severity findings were found.'
+  }]);
+});
+
+asyncTest('Gateway task-event API lists pending events and acknowledges a client cursor', async () => {
+  const gateway = new Gateway({
+    taskEventStore: new (require('../shared/task-event-store').TaskEventStore)({ persistencePath: null })
+  });
+  const event = gateway.taskEventStore.append({
+    type: 'task.completed',
+    taskId: 'task-api-event',
+    status: 'done',
+    terminal: true,
+    resultAvailable: true
+  });
+
+  let listed = null;
+  gateway._json = (req, res, data) => {
+    listed = data;
+    return data;
+  };
+  const listReq = new Readable({ read() {} });
+  listReq.url = '/api/task-events?clientId=codex-test&waitMs=0';
+  listReq.headers = { host: '127.0.0.1:8788' };
+  await gateway._handleListTaskEvents(listReq, {});
+  assert.deepStrictEqual(listed.events.map(item => item.taskId), ['task-api-event']);
+
+  let acknowledged = null;
+  gateway._json = (req, res, data) => {
+    acknowledged = data;
+    return data;
+  };
+  const ackReq = new Readable({ read() {} });
+  ackReq.url = '/api/task-events/ack';
+  ackReq.headers = { host: '127.0.0.1:8788', 'content-type': 'application/json' };
+  ackReq.push(JSON.stringify({ clientId: 'codex-test', eventId: event.eventId }));
+  ackReq.push(null);
+  await gateway._handleAckTaskEvent(ackReq, {});
+  assert.strictEqual(acknowledged.acknowledged, true);
+  assert.deepStrictEqual(gateway.taskEventStore.list({ clientId: 'codex-test' }).events, []);
+});
+
+asyncTest('Gateway task-event API returns 503 when acknowledgement persistence fails', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecnclaw-event-ack-failure-'));
+  let failWrites = false;
+  try {
+    const { TaskEventStore } = require('../shared/task-event-store');
+    const eventStore = new TaskEventStore({
+      persistencePath: path.join(dir, 'events.json'),
+      logger: { error() {}, warn() {} },
+      onWritePhase(phase) {
+        if (failWrites && phase === 'temp_written') {
+          const error = new Error('simulated full event store');
+          error.code = 'ENOSPC';
+          throw error;
+        }
+      }
+    });
+    const event = eventStore.append({
+      type: 'task.completed',
+      taskId: 'task-ack-failure',
+      status: 'done',
+      terminal: true
+    });
+    failWrites = true;
+    const gateway = new Gateway({ taskEventStore: eventStore });
+    let response = null;
+    gateway._json = (req, res, data, status = 200) => {
+      response = { data, status };
+      return data;
+    };
+    const ackReq = new Readable({ read() {} });
+    ackReq.url = '/api/task-events/ack';
+    ackReq.headers = { host: '127.0.0.1:8788', 'content-type': 'application/json' };
+    ackReq.push(JSON.stringify({ clientId: 'codex-failure', eventId: event.eventId }));
+    ackReq.push(null);
+
+    await gateway._handleAckTaskEvent(ackReq, {});
+
+    assert.strictEqual(response.status, 503);
+    assert.strictEqual(response.data.acknowledged, false);
+    assert.strictEqual(response.data.error, 'TASK_EVENT_STORE_UNAVAILABLE');
+    assert.deepStrictEqual(
+      eventStore.list({ clientId: 'codex-failure' }).events.map(item => item.taskId),
+      ['task-ack-failure']
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 asyncTest('Gateway continues workflow without mutating parent followup list', async () => {
   const gateway = new Gateway();
   let idCounter = 0;
@@ -1554,7 +2422,7 @@ asyncTest('Gateway continues workflow without mutating parent followup list', as
     cancelTask: () => {},
     failTask: () => {}
   };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway._ensureBackgroundPolling = () => {};
 
   const parent = {
@@ -1583,13 +2451,14 @@ asyncTest('Gateway continues workflow without mutating parent followup list', as
 
 asyncTest('Gateway background cleanup preserves old paused tasks', async () => {
   const gateway = new Gateway();
+  gateway.taskQueue.clear();
   let pollOnce = null;
   gateway._setInterval = (fn) => {
     pollOnce = fn;
     return { id: 'timer' };
   };
   gateway._clearInterval = () => {};
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
 
   const oldCreatedAt = Date.now() - 7200000;
   gateway.taskQueue.set('task_old_approval', {
@@ -1926,7 +2795,7 @@ asyncTest('Gateway ignores collected result after submitted task is cancelled', 
   };
   gateway._ensureConnection = async () => {};
   gateway._syncTaskHistoryMirror = () => {};
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway.driver = {
     checkQueueStatus: async () => ({ queued: false, running: false }),
     collectResponse: async () => {
@@ -2027,7 +2896,7 @@ asyncTest('Gateway adopt-current returns existing submitted Solo task for the sa
     recordStep: () => {},
     ensureTask: () => {}
   };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway._syncTaskHistoryMirror = () => {};
   gateway.taskQueue.clear();
   gateway.taskQueue.set('task_existing_adopt', {
@@ -2270,6 +3139,213 @@ asyncTest('Gateway task status falls back to history for cleaned terminal tasks'
   assert.strictEqual(responseData.lastStep.action, 'error');
 });
 
+asyncTest('Gateway reports an unavailable historical result instead of returning a stale page snapshot', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = {
+    findTaskResponse: async () => ({
+      text: '新任务⌃⌘N任务0和智能体对话，开始你的第一个任务吧',
+      inProgress: false,
+      isComplete: false,
+      hasResponse: false
+    })
+  };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_stale_result',
+      task: 'update MCP support',
+      status: 'completed',
+      createdAt: new Date(Date.now() - 5000).toISOString(),
+      createdAtMs: Date.now() - 5000,
+      completedAt: new Date().toISOString(),
+      elapsedMs: 5000,
+      result: {
+        text: '新任务 任务 3 Agent 一切就绪，只等你动手。资源管理器 文件',
+        stable: true
+      },
+      metadata: {},
+      steps: [{ action: 'done', timestamp: new Date().toISOString(), success: true, details: {} }]
+    })
+  };
+
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({}, {}, 'task_stale_result');
+
+  assert.strictEqual(responseData.status, 'done');
+  assert.strictEqual(responseData.errorCode, 'TASK_RESULT_UNAVAILABLE');
+  assert.match(responseData.error, /Agent response is no longer available/);
+  assert.strictEqual(responseData.result, undefined);
+});
+
+asyncTest('Gateway rejects a stale historical page snapshot when no CDP driver is connected', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = null;
+  gateway._ensureConnection = async () => { throw new Error('Trae unavailable'); };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_stale_without_driver',
+      status: 'completed',
+      createdAtMs: Date.now() - 1000,
+      completedAt: new Date().toISOString(),
+      result: { text: 'Agent 一切就绪，只等你动手。资源管理器 文件', stable: true },
+      metadata: {},
+      steps: []
+    })
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({}, {}, 'task_stale_without_driver');
+
+  assert.strictEqual(responseData.status, 'done');
+  assert.strictEqual(responseData.errorCode, 'TASK_RESULT_UNAVAILABLE');
+  assert.strictEqual(responseData.result, undefined);
+});
+
+asyncTest('Gateway connects to Trae before recovering an unavailable historical result', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = null;
+  gateway._ensureConnection = async () => {
+    gateway.driver = {
+      findTaskResponse: async () => ({
+        text: 'Agent\n完成总结\n直接任务查询已恢复\n任务完成',
+        inProgress: false,
+        isComplete: true,
+        hasResponse: true
+      })
+    };
+  };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_connect_then_recover',
+      status: 'completed',
+      createdAtMs: Date.now() - 1000,
+      completedAt: new Date().toISOString(),
+      result: {
+        code: 'TASK_RESULT_UNAVAILABLE',
+        error: 'Agent response is no longer available in the bound TraeCN conversation'
+      },
+      metadata: {},
+      steps: []
+    })
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({}, {}, 'task_connect_then_recover');
+
+  assert.strictEqual(responseData.errorCode, undefined);
+  assert.ok(responseData.result.text.includes('直接任务查询已恢复'));
+});
+
+asyncTest('Gateway recovers an unavailable historical result after its Trae conversation returns', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = {
+    findTaskResponse: async () => ({
+      text: 'Agent\n完成总结\nMCP 更新完成\n任务完成',
+      inProgress: false,
+      isComplete: true,
+      hasResponse: true
+    })
+  };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_recovered_result',
+      status: 'completed',
+      createdAtMs: Date.now() - 1000,
+      completedAt: new Date().toISOString(),
+      result: {
+        code: 'TASK_RESULT_UNAVAILABLE',
+        error: 'Agent response is no longer available in the bound TraeCN conversation'
+      },
+      metadata: {},
+      steps: []
+    })
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({}, {}, 'task_recovered_result');
+
+  assert.strictEqual(responseData.errorCode, undefined);
+  assert.ok(responseData.result.text.includes('MCP 更新完成'));
+  assert.strictEqual(responseData.result.stable, true);
+});
+
+asyncTest('Gateway compacts a persisted Solo process transcript to its final summary', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  gateway.driver = {
+    findTaskResponse: async () => ({
+      text: '完成总结\n最终改动和测试结果',
+      inProgress: false,
+      isComplete: true,
+      hasResponse: true
+    })
+  };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_uncompacted_transcript',
+      status: 'completed',
+      createdAtMs: Date.now() - 1000,
+      completedAt: new Date().toISOString(),
+      result: {
+        text: 'Agent\n思考过程\n大量工具调用和中间步骤\n完成总结\n最终改动和测试结果\n任务完成',
+        stable: true
+      },
+      metadata: {},
+      steps: []
+    })
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({}, {}, 'task_uncompacted_transcript');
+
+  assert.strictEqual(responseData.result.text, '完成总结\n最终改动和测试结果');
+});
+
+asyncTest('Gateway returns the full live trace when task detailLevel is trace', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  let requestedOptions = null;
+  gateway.driver = {
+    findTaskResponse: async options => {
+      requestedOptions = options;
+      return {
+        text: 'Agent\n思考过程\n工具调用\n完成总结\n最终结果\n任务完成',
+        inProgress: false,
+        isComplete: true,
+        hasResponse: true
+      };
+    }
+  };
+  gateway.taskHistoryStore = {
+    getTask: () => ({
+      taskId: 'task_trace_result',
+      status: 'completed',
+      createdAtMs: Date.now() - 1000,
+      completedAt: new Date().toISOString(),
+      result: { text: '完成总结\n最终结果', stable: true },
+      metadata: {},
+      steps: []
+    })
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; };
+
+  await gateway._handleTaskStatus({ url: '/api/task/task_trace_result?detailLevel=trace' }, {}, 'task_trace_result');
+
+  assert.deepStrictEqual(requestedOptions, { detailLevel: 'trace' });
+  assert.ok(responseData.result.text.includes('思考过程'));
+  assert.strictEqual(responseData.detailLevel, 'trace');
+});
+
 asyncTest('Gateway recovers review-gate persistence into awaiting_review result', async () => {
   const gateway = new Gateway();
   gateway.driver = {
@@ -2296,6 +3372,7 @@ asyncTest('Gateway recovers review-gate persistence into awaiting_review result'
 
 asyncTest('Gateway sync delegate_async recovers review gate into awaiting_review task', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   gateway.driver = {
     config: { queuePerTaskTimeoutMs: 1234 },
     checkQueueStatus: async () => ({ queued: false, running: false, canSubmit: false }),
@@ -2541,6 +3618,7 @@ asyncTest('Gateway probes fallback models and selects first ready candidate', as
 
 asyncTest('Gateway delegate-async queues with fallback model probe evidence when all candidates are queued', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   gateway.driver = {
     config: { queuePerTaskTimeoutMs: 1000 },
     checkQueueStatus: async () => ({
@@ -2589,6 +3667,7 @@ asyncTest('Gateway delegate-async queues with fallback model probe evidence when
 
 asyncTest('Gateway delegate-async executes immediately when fallback probe finds ready model', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   const statusByModel = {
     'GLM-5.1': { queued: true, running: false, canSubmit: false, currentModel: 'GLM-5.1' },
     'Kimi-K2.6': { queued: false, running: false, canSubmit: true, currentModel: 'Kimi-K2.6' }
@@ -2653,7 +3732,7 @@ asyncTest('Gateway sync delegate returns background task immediately when model 
     recordStep: () => {},
     ensureTask: () => {}
   };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
 
   let responseData = null;
   let responseStatus = null;
@@ -2681,6 +3760,7 @@ asyncTest('Gateway sync delegate returns background task immediately when model 
 
 asyncTest('Gateway sync delegate timeout converts submitted request to tracked background task', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   let resolveDelegate;
   let delegatedPrompt = '';
   const delegatePromise = new Promise((resolve) => {
@@ -2727,7 +3807,7 @@ asyncTest('Gateway sync delegate timeout converts submitted request to tracked b
   assert.strictEqual(responseData.status, 'executing');
   assert.strictEqual(responseData.submittedToTrae, true);
   assert.strictEqual(responseData.taskId, 'task_timeout_background');
-  assert.match(delegatedPrompt, /Project path: \/tmp\/sync-project/);
+  assert.strictEqual(delegatedPrompt, 'review repo');
   assert.strictEqual(gateway.taskQueue.get('task_timeout_background').submittedToTrae, true);
   assert.strictEqual(gateway.taskQueue.get('task_timeout_background').projectPath, '/tmp/sync-project');
 
@@ -2742,6 +3822,7 @@ asyncTest('Gateway sync delegate timeout converts submitted request to tracked b
 
 asyncTest('Gateway sync delegate keeps collecting incomplete review output in background', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   gateway.driver = {
     config: { queuePerTaskTimeoutMs: 1000 },
     checkQueueStatus: async () => ({ queued: false, running: false, canSubmit: true, currentModel: 'DeepSeek-V4-Pro' }),
@@ -2784,7 +3865,7 @@ asyncTest('Gateway sync delegate keeps collecting incomplete review output in ba
 asyncTest('Gateway keeps collecting echoed task text instead of marking it done', async () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway.taskHistoryStore = {
     createTask: () => 'task_echo_guard',
     recordStep: () => {},
@@ -2813,7 +3894,7 @@ asyncTest('Gateway keeps collecting echoed task text instead of marking it done'
 asyncTest('Gateway accepts timed-out text when it contains strong completion evidence', async () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway.taskHistoryStore = {
     createTask: () => 'task_strong_completion',
     recordStep: () => {},
@@ -2842,7 +3923,7 @@ asyncTest('Gateway accepts timed-out text when it contains strong completion evi
 asyncTest('Gateway finalizes restored executing task when persisted result is complete', async () => {
   const gateway = new Gateway();
   gateway.driver = { config: { queuePerTaskTimeoutMs: 1000 } };
-  gateway._persistActiveQueue = () => {};
+  gateway._persistActiveQueue = () => true;
   gateway.taskHistoryStore = {
     createTask: () => 'task_restored_complete',
     recordStep: () => {},
@@ -3135,6 +4216,7 @@ asyncTest('Gateway dialog status exposes Trae question options and answer action
 
 asyncTest('Gateway delegate-async keeps advisory queue in local background queue when waitForQueue=true', async () => {
   const gateway = new Gateway();
+  gateway.mockBridge = true;
   gateway.driver = {
     checkQueueStatus: async () => ({
       queued: true,
@@ -3175,6 +4257,42 @@ asyncTest('Gateway delegate-async keeps advisory queue in local background queue
   assert.strictEqual(responseData.status, 'queued');
   assert.strictEqual(responseData.taskId, 'task_bg_1');
   assert.strictEqual(responseData.queueDetails.currentModel, 'DeepSeek-V4-Pro');
+});
+
+asyncTest('Gateway delegate returns 503 CDP_NOT_CONNECTED when CDP endpoint unreachable (honest failure)', async () => {
+  const gateway = new Gateway();
+  gateway.mockBridge = false;
+  gateway._ensureConnection = async () => {};
+  gateway._json = (req, res, data, status = 200) => {
+    gateway.__respData = data;
+    gateway.__respStatus = status;
+    return data;
+  };
+
+  const discovery = require('../cdp/discovery');
+  const origResolve = discovery.resolveCDPEndpoint;
+  discovery.resolveCDPEndpoint = async () => {
+    throw new Error('simulated CDP unreachable');
+  };
+
+  const req = new Readable({
+    read() {
+      this.push(JSON.stringify({ task: 'drive TraeCN for real', mode: 'ide', autoWait: false }));
+      this.push(null);
+    }
+  });
+  req.headers = { 'content-type': 'application/json' };
+
+  try {
+    await gateway._handleDelegateAsync(req, {});
+  } finally {
+    discovery.resolveCDPEndpoint = origResolve;
+  }
+
+  assert.strictEqual(gateway.__respStatus, 503, 'unreachable CDP must fail with 503, not a false ok');
+  assert.strictEqual(gateway.__respData.error, 'CONNECTION_FAILED');
+  assert.strictEqual(gateway.__respData.code, 'CDP_NOT_CONNECTED');
+  assert.ok(/CDP is not reachable/i.test(gateway.__respData.message), 'message must explain CDP unreachable');
 });
 
 asyncTest('Gateway continues reviewed task into queued followup task', async () => {
@@ -3237,25 +4355,33 @@ asyncTest('Gateway open-project returns 400 when projectPath is missing', async 
   assert.ok(responseData.error.includes('projectPath'));
 });
 
-asyncTest('Gateway open-project refuses to spawn when TraeCN is already running', async () => {
+asyncTest('Gateway open-project reuses the active TraeCN window when it is already running', async () => {
   const gateway = new Gateway();
-  // Stub quickstart to simulate TraeCN already running with a live CDP target.
   const quickstart = require('../config/quickstart');
   const origIsRunning = quickstart.isTraeCNRunning;
-  const origFind = quickstart.findTraeCNBinary;
   const origStart = quickstart.startTraeCN;
+  const origOpenExisting = quickstart.openProjectInExistingWindow;
   quickstart.isTraeCNRunning = () => true;
-  // Should never be called in this branch, but be defensive.
   quickstart.startTraeCN = () => {
     throw new Error('startTraeCN must not be invoked when TraeCN is already running');
   };
-
-  // Stub the CDP discovery used inside the handler to report a stable surface.
-  const discovery = require('../cdp/discovery');
-  const origFetch = discovery.fetchCDPTargets;
-  discovery.fetchCDPTargets = async () => ([
-    { type: 'page', id: 'page-1', title: 'hello.py — TraeCNClaw', webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/page-1' }
-  ]);
+  let openedWith = null;
+  quickstart.openProjectInExistingWindow = async options => {
+    openedWith = options;
+    return {
+      command: '/Applications/Trae CN.app/Contents/Resources/app/bin/trae-cn',
+      args: ['--reuse-window', '/tmp/some-project']
+    };
+  };
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: openedWith ? 'some-project' : 'old-project',
+      folderName: openedWith ? 'some-project' : 'old-project',
+      rootPath: openedWith ? '/tmp/some-project' : '/tmp/old-project',
+      hasExplorer: true
+    })
+  };
 
   let responseData = null;
   let responseStatus = null;
@@ -3272,19 +4398,63 @@ asyncTest('Gateway open-project refuses to spawn when TraeCN is already running'
     req.push(null);
 
     await gateway._handleOpenProject(req, {});
-    assert.strictEqual(responseStatus, 409);
-    assert.strictEqual(responseData.success, false);
-    assert.strictEqual(responseData.alreadyRunning, true);
+    assert.strictEqual(responseStatus, 200);
+    assert.strictEqual(responseData.success, true);
+    assert.strictEqual(responseData.reusedWindow, true);
     assert.strictEqual(responseData.projectPath, '/tmp/some-project');
-    assert.ok(responseData.currentSurface);
-    assert.strictEqual(responseData.currentSurface.title, 'hello.py — TraeCNClaw');
-    assert.ok(/already running/i.test(responseData.error));
-    assert.ok(/newInstance/.test(responseData.hint));
+    assert.strictEqual(gateway._selectedWorkspacePath, '/tmp/some-project');
+    assert.strictEqual(openedWith.projectPath, '/tmp/some-project');
+    assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/some-project');
   } finally {
     quickstart.isTraeCNRunning = origIsRunning;
-    quickstart.findTraeCNBinary = origFind;
     quickstart.startTraeCN = origStart;
-    discovery.fetchCDPTargets = origFetch;
+    quickstart.openProjectInExistingWindow = origOpenExisting;
+  }
+});
+
+asyncTest('Gateway open-project does not reload an already-open workspace', async () => {
+  const gateway = new Gateway();
+  const quickstart = require('../config/quickstart');
+  const origIsRunning = quickstart.isTraeCNRunning;
+  const origOpenExisting = quickstart.openProjectInExistingWindow;
+  quickstart.isTraeCNRunning = () => true;
+  quickstart.openProjectInExistingWindow = async () => {
+    throw new Error('workspace switch must not run for the already-open path');
+  };
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: 'some-project',
+      folderName: 'some-project',
+      rootPath: '/tmp/some-project',
+      hasExplorer: true
+    })
+  };
+
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+
+  try {
+    const req = new Readable({ read() {} });
+    req.headers = { 'content-type': 'application/json' };
+    req.push(JSON.stringify({ projectPath: '/tmp/some-project' }));
+    req.push(null);
+
+    await gateway._handleOpenProject(req, {});
+    assert.strictEqual(responseStatus, 200);
+    assert.strictEqual(responseData.success, true);
+    assert.strictEqual(responseData.alreadyOpen, true);
+    assert.strictEqual(responseData.reusedWindow, false);
+    assert.strictEqual(gateway._selectedWorkspacePath, '/tmp/some-project');
+    assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/some-project');
+  } finally {
+    quickstart.isTraeCNRunning = origIsRunning;
+    quickstart.openProjectInExistingWindow = origOpenExisting;
   }
 });
 
@@ -3405,6 +4575,268 @@ asyncTest('Gateway auto-recovery bails early when mockBridge is on', async () =>
   gateway.autoStartTrae = true;
   const result = await gateway._attemptTraeRecovery(new Error('cdp gone'));
   assert.strictEqual(result, false, 'mockBridge should suppress recovery');
+});
+
+asyncTest('Gateway lists settings sections from Trae UI and restores chat', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      listSections: async () => { calls.push('open-settings'); return ['通用', '模型', 'MCP']; },
+      backToChat: async () => calls.push('back-to-chat')
+    }
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; return data; };
+
+  await gateway._handleSettingsListSections({ headers: { host: '127.0.0.1' }, url: '/api/settings/sections?restoreChat=true' }, {});
+
+  assert.deepStrictEqual(responseData.sections, ['通用', '模型', 'MCP']);
+  assert.deepStrictEqual(calls, ['open-settings', 'back-to-chat']);
+});
+
+asyncTest('Gateway reads one settings section from Trae UI and restores chat', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      switchTab: async section => calls.push(`section:${section}`),
+      getContent: async () => ({ sections: [], items: [{ label: 'Auto Save', hasToggle: true }] }),
+      backToChat: async () => calls.push('back-to-chat')
+    }
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; return data; };
+  const { req } = makeReqRes({}, '/api/settings/read?section=%E9%80%9A%E7%94%A8&restoreChat=true');
+
+  await gateway._handleSettingsRead(req, {});
+
+  assert.strictEqual(responseData.section, '通用');
+  assert.strictEqual(responseData.items[0].label, 'Auto Save');
+  assert.deepStrictEqual(calls, ['section:通用', 'back-to-chat']);
+});
+
+asyncTest('Gateway retries one lazy settings page when its first read is empty', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  let readCount = 0;
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      switchTab: async section => calls.push(`section:${section}`),
+      getContent: async () => {
+        calls.push('read');
+        readCount++;
+        return readCount === 1
+          ? { sections: [], items: [] }
+          : { sections: [], items: [{ label: 'Tab-Cue', controlType: 'toggle' }] };
+      },
+      backToChat: async () => calls.push('back-to-chat')
+    }
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; return data; };
+  const { req } = makeReqRes({}, '/api/settings/read?section=CUE&restoreChat=true');
+
+  await gateway._handleSettingsRead(req, {});
+
+  assert.deepStrictEqual(responseData.items.map(item => item.label), ['Tab-Cue']);
+  assert.deepStrictEqual(calls, ['section:CUE', 'read', 'section:CUE', 'read', 'back-to-chat']);
+});
+
+asyncTest('Gateway reports an error when an activated settings page stays unreadable', async () => {
+  const gateway = new Gateway();
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      switchTab: async () => {},
+      getContent: async () => ({ sections: [], items: [] }),
+      backToChat: async () => {}
+    }
+  };
+  let responseData = null;
+  let responseStatus = null;
+  gateway._json = (req, res, data, status) => {
+    responseData = data;
+    responseStatus = status;
+    return data;
+  };
+  const { req } = makeReqRes({}, '/api/settings/read?section=CUE&restoreChat=true');
+
+  await gateway._handleSettingsRead(req, {});
+
+  assert.strictEqual(responseStatus, 500);
+  assert.match(responseData.error, /Settings section "CUE" did not expose readable content/);
+});
+
+asyncTest('Gateway lists one setting dropdown options from Trae UI and restores chat', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      switchTab: async section => calls.push(`section:${section}`),
+      listOptions: async label => { calls.push(`options:${label}`); return ['简体中文', 'English']; },
+      backToChat: async () => calls.push('back-to-chat')
+    }
+  };
+  let responseData = null;
+  gateway._json = (req, res, data) => { responseData = data; return data; };
+  const { req } = makeReqRes({}, '/api/settings/options?section=%E9%80%9A%E7%94%A8&label=%E8%AF%AD%E8%A8%80&restoreChat=true');
+
+  await gateway._handleSettingsListOptions(req, {});
+
+  assert.deepStrictEqual(responseData.options, ['简体中文', 'English']);
+  assert.deepStrictEqual(calls, ['section:通用', 'options:语言', 'back-to-chat']);
+});
+
+asyncTest('Gateway dispatches each settings control kind to its exact Trae UI action', async () => {
+  const gateway = new Gateway();
+  const calls = [];
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    settings: {
+      switchTab: async section => calls.push(['section', section]),
+      setToggle: async (label, enabled) => calls.push(['toggle', label, enabled]),
+      setDropdown: async (label, value) => calls.push(['option', label, value]),
+      typeText: async (label, text) => calls.push(['text', label, text]),
+      backToChat: async () => calls.push(['back'])
+    }
+  };
+  gateway._json = (req, res, data) => data;
+  const cases = [
+    { kind: 'toggle', section: '通用', label: 'Auto Save', value: true },
+    { kind: 'option', section: '通用', label: '语言', value: 'English' },
+    { kind: 'text', section: 'MCP', label: '服务器地址', value: 'http://127.0.0.1' }
+  ];
+
+  for (const body of cases) {
+    const { req } = makeReqRes({}, '/api/settings/set', 'POST', { ...body, restoreChat: true });
+    await gateway._handleSettingsSet(req, {});
+  }
+
+  assert.deepStrictEqual(calls, [
+    ['section', '通用'], ['toggle', 'Auto Save', true], ['back'],
+    ['section', '通用'], ['option', '语言', 'English'], ['back'],
+    ['section', 'MCP'], ['text', '服务器地址', 'http://127.0.0.1'], ['back']
+  ]);
+});
+
+asyncTest('Gateway rejects a settings value that does not match its UI control kind', async () => {
+  const gateway = new Gateway();
+  gateway._ensureConnection = async () => {};
+  gateway.driver = { settings: { setToggle: async () => { throw new Error('must not mutate'); } } };
+  let responseStatus = null;
+  let responseData = null;
+  gateway._json = (req, res, data, status = 200) => {
+    responseStatus = status;
+    responseData = data;
+    return data;
+  };
+  const { req } = makeReqRes({}, '/api/settings/set', 'POST', {
+    section: '通用', label: 'Auto Save', value: 'yes', kind: 'toggle'
+  });
+
+  await gateway._handleSettingsSet(req, {});
+
+  assert.strictEqual(responseStatus, 400);
+  assert.match(responseData.error, /boolean/);
+});
+
+test('Gateway resumes only the approval-required task matching the visible command', () => {
+  const gateway = new Gateway();
+  const steps = [];
+  gateway._persistActiveQueue = () => true;
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway._ensureBackgroundPolling = () => {};
+  gateway.taskHistoryStore = {
+    recordStep: (taskId, step) => steps.push([taskId, step]),
+    ensureTask: () => {}
+  };
+  gateway.taskQueue = new Map([
+    ['older', {
+      status: 'approval_required',
+      createdAt: 1,
+      result: { question: '运行 git push origin main？' }
+    }],
+    ['matching', {
+      status: 'approval_required',
+      createdAt: 2,
+      result: { question: '运行 find /tmp/live-uat -delete？' }
+    }]
+  ]);
+
+  const resumed = gateway._resumeApprovalRequiredTasksAfterInteraction(
+    'deny',
+    { command: 'find /tmp/live-uat -delete' },
+    { success: true, buttonClicked: '跳过' }
+  );
+
+  assert.deepStrictEqual(resumed, ['matching']);
+  assert.strictEqual(gateway.taskQueue.get('matching').status, 'executing');
+  assert.strictEqual(gateway.taskQueue.get('older').status, 'approval_required');
+  assert.deepStrictEqual(steps, [['matching', 'dialog_resolved']]);
+});
+
+asyncTest('Gateway ignores a stale approval result after the visible card was resolved', async () => {
+  const gateway = new Gateway();
+  const steps = [];
+  gateway._persistActiveQueue = () => true;
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway._isQueuedTaskResult = () => false;
+  gateway._resultBelongsToSubmittedTask = () => true;
+  gateway.taskHistoryStore = {
+    recordStep: (taskId, step) => steps.push([taskId, step]),
+    ensureTask: () => {}
+  };
+  gateway.driver = {
+    checkForApprovalDialog: async () => ({ needsApproval: false })
+  };
+  const task = {
+    taskId: 'stale-card',
+    task: 'run a command',
+    status: 'executing',
+    submittedToTrae: true,
+    queueState: 'running'
+  };
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    needsApproval: true,
+    question: 'stale card text'
+  });
+
+  assert.strictEqual(task.status, 'executing');
+  assert.ok(steps.some(([, step]) => step === 'submitted_task_result_not_owned'));
+});
+
+asyncTest('Gateway terminalizes a task when Trae confirms its command was denied', async () => {
+  const gateway = new Gateway();
+  gateway._isQueuedTaskResult = () => false;
+  gateway._resultBelongsToSubmittedTask = () => true;
+  gateway._finalizeBackgroundTask = async (_taskId, task, status, payload) => {
+    task.status = status;
+    task.result = payload.result;
+    task.error = payload.error;
+  };
+  const task = {
+    taskId: 'denied-command',
+    task: 'run a destructive command',
+    status: 'executing',
+    submittedToTrae: true,
+    answeredDialog: { action: 'deny', buttonClicked: '跳过' }
+  };
+
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, {
+    text: '命令已取消 find /tmp/live-uat -delete Thought 命令已跳过执行。还有其他需要协助的吗？',
+    stable: true,
+    elapsedMs: 100
+  });
+
+  assert.strictEqual(task.status, 'cancelled');
+  assert.strictEqual(task.error, null);
+  assert.ok(task.result.text.includes('命令已跳过执行'));
 });
 
 (async () => {
@@ -3621,6 +5053,9 @@ asyncTest('Gateway auto-recovery bails early when mockBridge is on', async () =>
   try {
     fs.unlinkSync(TEST_HISTORY_PERSISTENCE_PATH);
   } catch {}
+  try {
+    fs.unlinkSync(TEST_EVENT_PERSISTENCE_PATH);
+  } catch {}
   process.exit(failed > 0 ? 1 : 0);
 })().catch(err => {
   console.error(err);
@@ -3629,6 +5064,9 @@ asyncTest('Gateway auto-recovery bails early when mockBridge is on', async () =>
   } catch {}
   try {
     fs.unlinkSync(TEST_HISTORY_PERSISTENCE_PATH);
+  } catch {}
+  try {
+    fs.unlinkSync(TEST_EVENT_PERSISTENCE_PATH);
   } catch {}
   process.exit(1);
 });

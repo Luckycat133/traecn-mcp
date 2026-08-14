@@ -54,7 +54,60 @@ function generateOpenAPISpec() {
                       version: { type: 'string' },
                       mockBridge: { type: 'boolean' },
                       cdp: { type: 'object' },
+                      traeAdapter: {
+                        type: 'object',
+                        nullable: true,
+                        properties: {
+                          traeVersion: { type: 'string', nullable: true },
+                          platform: { type: 'string' },
+                          adapter: { type: 'string' },
+                          mode: { type: 'string', nullable: true },
+                          compatibility: { type: 'string', enum: ['verified', 'degraded'] },
+                          verified: { type: 'boolean' },
+                          capabilities: { type: 'object' },
+                          warnings: { type: 'array', items: { type: 'string' } },
+                          evidence: { type: 'string', nullable: true },
+                          versionSource: { type: 'string' }
+                        }
+                      },
                       surface: { type: 'object' },
+                      durability: {
+                        type: 'object',
+                        properties: {
+                          taskStoreWritable: { type: 'boolean', nullable: true },
+                          lastSuccessfulPersistAt: { type: 'string', nullable: true },
+                          lastPersistError: { type: 'object', nullable: true },
+                          durabilityDegraded: { type: 'boolean' },
+                          terminalReplayCount: { type: 'integer', minimum: 0 },
+                          terminalReplayTtlMs: { type: 'number', minimum: 1 },
+                          taskEvents: {
+                            type: 'object',
+                            nullable: true,
+                            properties: {
+                              persistenceEnabled: { type: 'boolean' },
+                              eventStoreWritable: { type: 'boolean', nullable: true },
+                              lastSuccessfulPersistAt: { type: 'string', nullable: true },
+                              lastPersistError: { type: 'object', nullable: true },
+                              lastLoadError: { type: 'object', nullable: true },
+                              lastRecovery: { type: 'object', nullable: true },
+                              durabilityDegraded: { type: 'boolean' }
+                            }
+                          },
+                          taskHistory: {
+                            type: 'object',
+                            nullable: true,
+                            properties: {
+                              persistenceEnabled: { type: 'boolean' },
+                              historyStoreWritable: { type: 'boolean', nullable: true },
+                              lastSuccessfulPersistAt: { type: 'string', nullable: true },
+                              lastPersistError: { type: 'object', nullable: true },
+                              lastLoadError: { type: 'object', nullable: true },
+                              lastRecovery: { type: 'object', nullable: true },
+                              durabilityDegraded: { type: 'boolean' }
+                            }
+                          }
+                        }
+                      },
                       uptime: { type: 'number' }
                     }
                   }
@@ -198,7 +251,10 @@ function generateOpenAPISpec() {
                 schema: {
                   type: 'object',
                   properties: {
-                    projectPath: { type: 'string' }
+                    projectPath: {
+                      type: 'string',
+                      description: 'Optional workspace guard. The path must match the project open in TraeCN.'
+                    }
                   }
                 }
               }
@@ -283,7 +339,10 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string', description: 'The task to delegate' },
-                    projectPath: { type: 'string' },
+                    projectPath: {
+                      type: 'string',
+                      description: 'Optional workspace guard. The path must match the project open in TraeCN; it is never added to the model prompt.'
+                    },
                     includeProcessText: { type: 'boolean', description: 'Include process information in response' },
                     waitForQueue: { type: 'boolean', default: true },
                     autoApproveDialog: {
@@ -323,6 +382,108 @@ function generateOpenAPISpec() {
           }
         }
       },
+      '/api/tasks/submit': {
+        post: {
+          summary: 'Submit gateway-managed work for TraeCN',
+          operationId: 'submitManagedTask',
+          security: [{ bearerAuth: [] }],
+          parameters: [{
+            in: 'header',
+            name: 'Idempotency-Key',
+            required: false,
+            schema: { type: 'string', maxLength: 256 },
+            description: 'Stable retry key retained with active work and terminal results for the configured 24-hour default TTL.'
+          }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['message'],
+                  properties: {
+                    message: { type: 'string', maxLength: 100000 },
+                    model: { type: 'string' },
+                    mode: { type: 'string', enum: ['solo', 'ide'] },
+                    workspace: { type: 'string', description: 'Folder opened and verified by the gateway; never inserted into the message.' },
+                    conversationId: { type: 'string' },
+                    newConversation: { type: 'boolean' },
+                    steps: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object' }] } },
+                    completionChecks: completionChecksSchema
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Terminal idempotency replay with the original task status and result' },
+            '202': { description: 'Task accepted after its active-queue snapshot is durable', content: { 'application/json': { schema: { type: 'object', properties: { taskId: { type: 'string' }, status: { type: 'string', enum: ['accepted'] } } } } } },
+            '400': { description: 'Invalid task payload or Idempotency-Key longer than 256 characters' },
+            '409': { description: 'Idempotency-Key was already used for different semantic work' },
+            '503': { description: 'TaskStore is unwritable or owned by another gateway; no task was accepted' }
+          }
+        }
+      },
+      '/api/conversations': {
+        get: {
+          summary: 'List conversations for the current TraeCN mode',
+          operationId: 'listConversations',
+          security: [{ bearerAuth: [] }],
+          responses: { '200': { description: 'Conversation list' } }
+        }
+      },
+      '/api/models': {
+        get: {
+          summary: 'List currently offered TraeCN models',
+          operationId: 'listModels',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': {
+              description: 'Current and available models',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      current: { type: 'string' },
+                      models: { type: 'array', items: { type: 'string' } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/conversations/manage': {
+        post: {
+          summary: 'Create, select, or permanently delete a TraeCN conversation',
+          operationId: 'manageConversation',
+          security: [{ bearerAuth: [] }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['action'], properties: {
+            action: { type: 'string', enum: ['create', 'select', 'delete'] },
+            conversationId: { type: 'string' },
+            expectedTitle: { type: 'string', description: 'Required for delete; exact title returned by the conversation list.' },
+            acknowledgePermanentDeletion: { type: 'boolean', description: 'Required true for delete; the gateway has no recovery path.' }
+          } } } } },
+          responses: { '200': { description: 'Conversation operation result' } }
+        }
+      },
+      '/api/interactions/resolve': {
+        post: {
+          summary: 'Resolve an exceptional TraeCN question or unsafe approval',
+          operationId: 'resolveInteraction',
+          security: [{ bearerAuth: [] }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['action'], properties: {
+            action: { type: 'string', enum: ['approve', 'deny', 'answer', 'dismiss'] },
+            answer: { type: 'string' },
+            expectedCommand: { type: 'string', description: 'Required for approve; must exactly match the currently visible exceptional command.' },
+            acknowledgeRisk: { type: 'boolean', description: 'Required true for approve after checking user-authorized scope.' },
+            reason: { type: 'string', maxLength: 500, description: 'Required for approve and recorded in the local security audit log.' }
+          } } } } },
+          responses: { '200': { description: 'Interaction resolution result' } }
+        }
+      },
       '/api/delegate': {
         post: {
           summary: 'Delegate a task (auto-creates session)',
@@ -337,7 +498,10 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string', description: 'The task to delegate', maxLength: 100000 },
-                    projectPath: { type: 'string' },
+                    projectPath: {
+                      type: 'string',
+                      description: 'Optional workspace guard. The folder name must match the project open in TraeCN; it is never added to the model prompt.'
+                    },
                     sessionId: { type: 'string' },
                     includeProcessText: { type: 'boolean', default: false },
                     waitForQueue: { type: 'boolean', default: true },
@@ -392,7 +556,7 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string', description: 'The task to delegate', maxLength: 100000 },
-                    projectPath: { type: 'string', description: 'Optional local project path TraeCN should work in' },
+                    projectPath: { type: 'string', description: 'Optional workspace-path guard; rejected on mismatch and never inserted into the model prompt' },
                     sessionId: { type: 'string', description: 'Logical session to append the user prompt and eventual assistant result to' },
                     chatId: { type: 'string', description: 'Optional chat ID for notification callback' },
                     soloChat: {
@@ -625,7 +789,10 @@ function generateOpenAPISpec() {
                   required: ['task'],
                   properties: {
                     task: { type: 'string' },
-                    projectPath: { type: 'string' },
+                    projectPath: {
+                      type: 'string',
+                      description: 'Optional workspace guard. The path must match the project open in TraeCN; it is never added to the model prompt.'
+                    },
                     soloChat: {
                       type: 'object',
                       properties: {
@@ -658,7 +825,9 @@ function generateOpenAPISpec() {
           responses: {
             '202': { description: 'Submitted task tracking result' },
             '400': { description: 'Invalid task payload' },
-            '404': { description: 'Requested Solo chat not found' }
+            '404': { description: 'Requested Solo chat not found' },
+            '409': { description: 'projectPath does not match the project folder open in TraeCN' },
+            '503': { description: 'The open TraeCN workspace could not be identified' }
           }
         }
       },
@@ -836,11 +1005,103 @@ function generateOpenAPISpec() {
           operationId: 'getTaskStatus',
           security: [{ bearerAuth: [] }],
           parameters: [
-            { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }
+            { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } },
+            {
+              name: 'detailLevel',
+              in: 'query',
+              required: false,
+              description: 'Return only the final result (default) or the full visible execution trace.',
+              schema: { type: 'string', enum: ['result', 'trace'], default: 'result' }
+            }
           ],
           responses: {
             '200': { description: 'Task status' },
             '404': { description: 'Task not found' }
+          }
+        }
+      },
+      '/api/task-events': {
+        get: {
+          summary: 'Long-poll compact durable task events for one IDE client cursor',
+          operationId: 'listTaskEvents',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'clientId', in: 'query', required: true, schema: { type: 'string' } },
+            { name: 'after', in: 'query', required: false, schema: { type: 'string' } },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100 } },
+            { name: 'waitMs', in: 'query', required: false, schema: { type: 'integer', minimum: 0, maximum: 30000 } }
+          ],
+          responses: {
+            '200': {
+              description: 'Client-scoped event batch and replay cursor',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      clientId: { type: 'string' },
+                      clientKnown: {
+                        type: 'boolean',
+                        description: 'Whether this client has a durable acknowledgement cursor.'
+                      },
+                      acknowledgedCursor: {
+                        type: 'string',
+                        nullable: true,
+                        description: 'The last event durably delivered to this client.'
+                      },
+                      events: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            eventId: { type: 'string' },
+                            type: { type: 'string' },
+                            taskId: { type: 'string' },
+                            status: { type: 'string' },
+                            createdAt: { type: 'string', format: 'date-time' },
+                            terminal: { type: 'boolean' },
+                            attentionRequired: { type: 'boolean' },
+                            resultAvailable: { type: 'boolean' },
+                            sessionId: { type: 'string', nullable: true },
+                            summary: { type: 'string', maxLength: 240 }
+                          }
+                        }
+                      },
+                      cursor: { type: 'string', nullable: true },
+                      hasMore: { type: 'boolean' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/task-events/ack': {
+        post: {
+          summary: 'Advance one IDE client task-event cursor after successful delivery',
+          operationId: 'ackTaskEvent',
+          security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['clientId', 'eventId'],
+                  properties: {
+                    clientId: { type: 'string' },
+                    eventId: { type: 'string' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Event cursor acknowledged' },
+            '400': { description: 'Missing clientId or eventId' },
+            '404': { description: 'Event no longer exists' },
+            '503': { description: 'Event cursor could not be durably acknowledged' }
           }
         }
       },
@@ -891,12 +1152,28 @@ function generateOpenAPISpec() {
       },
       '/api/trae/stop-generation': {
         post: {
-          summary: 'Stop the current Trae generation or queued model request in the visible UI',
+          summary: 'Stop the visible generation only in a verified active Solo conversation',
           operationId: 'stopTraeGeneration',
           security: [{ bearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['conversationId', 'acknowledgeUntrackedWork', 'reason'],
+                  properties: {
+                    conversationId: { type: 'string', description: 'Active ID returned by the conversation list.' },
+                    acknowledgeUntrackedWork: { type: 'boolean', description: 'Must be true because visible work may not belong to the gateway.' },
+                    reason: { type: 'string', minLength: 1, maxLength: 500, description: 'Security audit reason.' }
+                  }
+                }
+              }
+            }
+          },
           responses: {
-            '200': { description: 'Stop button clicked or no generation is active' },
-            '409': { description: 'Stop generation action is not currently available' }
+            '200': { description: 'The verified active conversation generation was stopped' },
+            '409': { description: 'Conversation scope mismatch or stop action unavailable' }
           }
         }
       },
@@ -1163,7 +1440,7 @@ function generateOpenAPISpec() {
       },
       '/api/open-project': {
         post: {
-          summary: 'Open a project in TraeCN',
+          summary: 'Open or switch the active TraeCN project',
           operationId: 'openProject',
           security: [{ bearerAuth: [] }],
           requestBody: {
@@ -1174,14 +1451,16 @@ function generateOpenAPISpec() {
                   type: 'object',
                   required: ['projectPath'],
                   properties: {
-                    projectPath: { type: 'string' }
+                    projectPath: { type: 'string', description: 'Absolute local project directory' },
+                    newInstance: { type: 'boolean', description: 'Open a separate window instead of reusing the active TraeCN window', default: false }
                   }
                 }
               }
             }
           },
           responses: {
-            '200': { description: 'Project open result' }
+            '200': { description: 'Project opened and exact workspace path verified' },
+            '404': { description: 'TraeCN binary or bundled CLI was not found' }
           }
         }
       },
@@ -1253,7 +1532,8 @@ function generateOpenAPISpec() {
           operationId: 'settingsRead',
           security: [{ bearerAuth: [] }],
           parameters: [
-            { name: 'section', in: 'query', required: false, schema: { type: 'string' }, description: 'Settings sidebar section to navigate to first (e.g. 通用, 模型, Beta)' }
+            { name: 'section', in: 'query', required: false, schema: { type: 'string' }, description: 'Settings sidebar section to navigate to first (e.g. 通用, 模型, Beta)' },
+            { name: 'restoreChat', in: 'query', required: false, schema: { type: 'boolean' }, description: 'Return to the chat UI after reading settings' }
           ],
           responses: {
             '200': {
@@ -1274,9 +1554,61 @@ function generateOpenAPISpec() {
           }
         }
       },
+      '/api/settings/sections': {
+        get: {
+          summary: 'List settings sections visible in the TraeCN UI',
+          operationId: 'settingsListSections',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'restoreChat', in: 'query', required: false, schema: { type: 'boolean' } }
+          ],
+          responses: {
+            '200': {
+              description: 'Visible settings sections',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: { sections: { type: 'array', items: { type: 'string' } } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/settings/options': {
+        get: {
+          summary: 'List visible options for one dropdown setting',
+          operationId: 'settingsListOptions',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'section', in: 'query', required: true, schema: { type: 'string' } },
+            { name: 'label', in: 'query', required: true, schema: { type: 'string' } },
+            { name: 'restoreChat', in: 'query', required: false, schema: { type: 'boolean' } }
+          ],
+          responses: {
+            '200': {
+              description: 'Dropdown choices read from the TraeCN UI',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      section: { type: 'string' },
+                      label: { type: 'string' },
+                      options: { type: 'array', items: { type: 'string' } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       '/api/settings/set': {
         post: {
-          summary: 'Set a settings value (dropdown or toggle)',
+          summary: 'Set one TraeCN UI setting using its exact control type',
           operationId: 'settingsSet',
           security: [{ bearerAuth: [] }],
           requestBody: {
@@ -1289,10 +1621,13 @@ function generateOpenAPISpec() {
                   properties: {
                     section: { type: 'string', description: 'Sidebar section to navigate to first' },
                     label: { type: 'string', description: 'Exact label text of the setting item' },
+                    kind: { type: 'string', enum: ['auto', 'toggle', 'option', 'text'] },
+                    restoreChat: { type: 'boolean' },
                     value: {
                       oneOf: [
                         { type: 'string', description: 'For dropdowns: exact option text to select' },
-                        { type: 'boolean', description: 'For toggles: true=on, false=off' }
+                        { type: 'boolean', description: 'For toggles: true=on, false=off' },
+                        { type: 'number', description: 'For numeric text inputs' }
                       ]
                     }
                   }
@@ -1349,6 +1684,8 @@ function generateOpenAPISpec() {
                                   currentValue: { type: 'string' },
                                   hasToggle: { type: 'boolean' },
                                   hasDropdown: { type: 'boolean' },
+                                  hasTextInput: { type: 'boolean' },
+                                  controlType: { type: 'string', enum: ['toggle', 'option', 'text', 'display'] },
                                   toggleChecked: { type: 'boolean' }
                                 }
                               }
@@ -1438,7 +1775,11 @@ function generateOpenAPISpec() {
                       dialogType: { type: 'string', nullable: true },
                       question: { type: 'string', nullable: true },
                       buttons: { type: 'array', items: { type: 'string' } },
-                      canAutoApprove: { type: 'boolean' }
+                      canAutoApprove: { type: 'boolean' },
+                      approvalDecision: { type: 'string', enum: ['agent_review'], nullable: true },
+                      commandRisk: { type: 'string', enum: ['low', 'high', 'unknown'], nullable: true },
+                      riskReasons: { type: 'array', items: { type: 'string' } },
+                      command: { type: 'string', nullable: true }
                     }
                   }
                 }

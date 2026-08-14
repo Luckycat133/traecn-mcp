@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { readArg, resolveGatewayHostPort } = require('./lib/cli-config');
+const { sleep } = require('../src/shared/utils');
 
 const { host: DEFAULT_HOST, port: DEFAULT_PORT } = resolveGatewayHostPort({ useCliArgs: false, useLegacyEnv: true });
 const DEFAULT_MODEL = 'GLM-5.2';
@@ -423,10 +424,6 @@ async function requestWithRetry(options, method, route, body = null, timeoutMs =
     if (delayMs > 0) await sleep(delayMs);
   }
   return last;
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function buildTask(marker, model) {

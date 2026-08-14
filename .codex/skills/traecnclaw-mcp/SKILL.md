@@ -1,81 +1,38 @@
 ---
 name: traecnclaw-mcp
-description: Use when any MCP-capable AI agent needs to connect, configure, operate, test, or document TRAECNclaw's stdio MCP server for TraeCN automation, OpenClaw integration, unattended vibe workflows, settings/model/dialog control, code review delegation, or long-queue proof runs. Prefer this skill when an agent needs the real MCP tool surface rather than direct browser or GUI control.
+description: Use when an MCP-capable agent must operate TRAECNclaw or TraeCN. Send or stop work, select a workspace/model/mode/conversation, inspect or change Trae settings through its UI, manage conversations, or resolve an exceptional question or command approval through focused MCP tools. The gateway owns preflight, queues, waiting, polling, recovery, notifications, routine non-command questions, and keep/revert decisions.
 ---
 
 # TRAECNclaw MCP
 
-## Overview
+Use the real stdio MCP server. Do not replace it with browser or GUI control.
 
-Use TRAECNclaw through its real stdio MCP server, backed by the local HTTP gateway and TraeCN CDP automation. Keep this skill portable across agents: discover current capabilities from the server, call compact readiness tools before side effects, and verify claims with repo scripts or MCP responses.
+## Workflow
 
-## Agent Contract
+1. Change context only when needed with `traecn_open_workspace`, `traecn_list_models` plus `traecn_select_model`, `traecn_select_mode`, and the focused conversation tools.
+2. Call `traecn_send_message` with the exact message and optional stable `conversationId`.
+3. Return after receiving `taskId`. Do not wait, poll, acknowledge events, recover tasks, or probe queues; the gateway persists work and pushes completion notifications. Modern hosts that negotiate `io.modelcontextprotocol/tasks` receive the same durable ID as a Task and can subscribe to it without adding an Agent tool.
+4. Call `traecn_get_task` only for an explicit query. Its default `detailLevel: "result"` returns the final answer; use `detailLevel: "trace"` only when the visible execution process is needed for diagnosis or traceability. Cancel a known task with `traecn_cancel_task`. For untracked visible work, list conversations and call `traecn_stop_generation` with the active conversation ID, explicit untracked-work acknowledgement, and an audit reason; the gateway rejects a mismatched conversation.
+5. For settings, list sections, list one section's items, optionally list a dropdown's choices, then call the matching toggle, option, or text tool. The gateway operates the Trae UI and restores chat.
+6. Use `traecn_answer_question` or `traecn_decide_approval` only for an exceptional interaction returned by the gateway. Approve only with the exact visible command, a risk acknowledgement, and an audit reason; the gateway rejects stale command cards.
 
-- Treat this as a client-neutral skill for any agent that can read instructions and call stdio MCP tools.
-- Do not depend on Codex-only tools, browser automation, Computer Use, or manual UI control when the MCP server can perform the operation.
-- Use the MCP tool names returned by `tools/list`; the stdio MCP surface uses `traecn_*` names that may differ from OpenClaw wrapper names and stable command IDs.
-- Prefer machine-readable outputs (`traecn_get_capabilities`, `traecn_preflight`, task status, proof status) over prose screenshots or manual observation.
-- Keep generated client config examples editable by the caller: always use absolute paths for local checkouts and documented env vars for host, port, and token.
-- Treat `tools/list` as profile-scoped. Default `public` exposes the common 20 tools; `TRAECN_MCP_TOOL_PROFILE=ops` exposes operational tools; `TRAECN_MCP_TOOL_PROFILE=full` exposes every explicit tool.
+The gateway maintains queues, recovers persisted work, returns every shell
+command for explicit Agent review, and resolves file-review gates with keep by
+default or revert for clear fatal automation failures. High-impact approvals,
+stops, and permanent inactive-conversation deletions are scoped and written to
+the local append-only security audit log. Delete only when the current user
+request explicitly names or unambiguously identifies the inactive conversation;
+re-read its listed ID and exact title because deletion cannot be restored. This
+does not add a separate confirmation round trip. Never put a workspace path
+into the model message.
 
-## Operating Workflow
+Read [references/mcp-surface.md](references/mcp-surface.md) for exact ownership
+boundaries. The distributable skill and generated schemas live under
+`skills/traecnclaw-mcp/`.
 
-1. Confirm Node 22+ is available and the gateway host can reach TraeCN.
-2. For a source checkout, configure the MCP client with an absolute `mcp-server.js` path:
+## Safety
 
-```json
-{
-  "mcpServers": {
-    "traecn": {
-      "command": "node",
-      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
-      "env": {
-        "TRAECN_HOST": "127.0.0.1",
-        "TRAECN_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": "",
-        "TRAECN_MCP_TOOL_PROFILE": "public"
-      }
-    }
-  }
-}
-```
-
-3. For a published package install, use the package-provided `traecnclaw-mcp` bin when it is on the agent host `PATH`; keep the same environment variables.
-4. Choose a tool profile deliberately: `public` for general agents, `ops` for recovery/proof workflows, `full` for compatibility audits and low-level diagnostics.
-5. Start the gateway separately when needed with `npm run start:gateway`; use `TRAECN_ENABLE_MOCK_BRIDGE=1 npm run start:gateway` only for mock-mode development.
-6. Discover before acting: list MCP tools, call `traecn_get_capabilities`, then call `traecn_preflight` with the intended command and params.
-7. For side-effecting operations, call `traecn_plan_operation` or `traecn_preflight` first and honor any confirmation, readiness, queue, or dialog result.
-8. Use `traecn_list_commands` plus `traecn_run_command` when a client needs the stable command catalog rather than individual MCP tool names.
-
-## Tool Selection
-
-- Short tasks: use `traecn_run_task` after a clean `traecn_preflight`.
-- Long or queued tasks: use `traecn_queue_task`, `traecn_wait_task`, and `traecn_poll_task`; use `traecn_preflight` for queue state in `public`, or `traecn_get_queue_status` only in `full`.
-- Code review: use `traecn_review_code` as the first-class review action.
-- Model and mode control: use `traecn_switch_model`, `traecn_switch_mode`, and `traecn_create_chat`.
-- Settings through stdio MCP: use `traecn_get_settings` and `traecn_set_setting`.
-- Dialogs: use `traecn_get_dialog_status` and `traecn_respond_dialog` in `public`; use `traecn_dismiss_dialog` only when running the `full` compatibility profile.
-- Review gates, cleanup, and recovery: use the `ops` profile tools such as `traecn_get_review_gate_status`, `traecn_resolve_review_gate`, `traecn_restart_debug_session`, cleanup tools, and long-queue proof tools.
-- Unattended workflows: use `traecn_run_unattended_workflow` in `public`; use direct Solo/proof/cleanup tools only from the profile that exposes them.
-- Full current catalog and cross-agent config notes: read [references/mcp-surface.md](references/mcp-surface.md) when choosing an exact MCP tool or configuring a client.
-
-## Profile Scale
-
-- `public`: 20 tools. Use for default published agent integrations.
-- `ops`: 32 tools. Use for recovery, cleanup, Solo conversation control, and long-queue proof work.
-- `full`: 36 tools. Use for audits, compatibility checks, and clients that intentionally want every explicit shortcut.
-
-## Validation
-
-- Run `node -e "console.log(require('./mcp-server').MCP_TOOLS.map(t => t.name).join('\n'))"` to verify the live tool list from code.
-- Run `npm run doctor` for local environment readiness.
-- Run `npm test` for the maintained in-repo test sequence after behavior changes.
-- Run `npm run acceptance:audit -- --require-complete` before claiming unattended end-to-end TraeCN workflow readiness.
-- For release-style changes, run `npm run test:all` when practical.
-
-## Safety Rules
-
-- Keep the gateway bound to `127.0.0.1` unless remote access is intentionally required.
-- Never commit `.env`, tokens, authorization headers, raw TraeCN profile data, `audit-logs`, `demo-output`, `logs`, or `node_modules`.
-- Prefer MCP/HTTP/CLI surfaces over GUI-control paths when the MCP server can perform the operation.
-- Treat live TraeCN dialog text, gateway health, cleanup state, and external model queue behavior as environment-specific until revalidated.
+- Keep the gateway on loopback unless remote access is secured.
+- Never expose `.env`, tokens, authorization headers, or TraeCN profile data.
+- Treat mock and non-terminal results as incomplete.
+- Do not recreate removed low-level MCP tools through generic commands.

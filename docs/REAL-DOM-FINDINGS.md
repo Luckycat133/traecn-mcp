@@ -1,8 +1,27 @@
 # TraeCN 真实 DOM 发现（v0.4.0 起点）
 
 > 来自 `npm run start:traecn` + CDP probe 抓的**真实** TraeCN 1.107.1 DOM
-> 实际工作目录：`/Volumes/My Shared Files/共享/projects/TRAECNclaw`
+> 采集时的工作目录已脱敏为：`<workspace>/TRAECNclaw`
 > CDP: 9222 · `~/Library/Application Support/Trae CN`（macOS 默认 user-data-dir，已登录态持久化）
+
+这份文档保存的是历史实机证据，不代表每次发布都重新执行了会消耗
+模型额度的实机任务 UAT。2026-08-08 已针对同一 TraeCN 1.107.1 构建
+重新通过 strict readiness UAT；该检查覆盖 product identity、readiness、
+verified adapter、queue/dialog/preflight、发现面、设置读取、Solo 列表和
+清理 dry-run，且没有删除会话。随后一次获得用户授权的独立运行发送了
+一条短 prompt，并以 `delegate-async: done` 完成；这是真实 TraeCN 输出，
+不是 mock。之后 Codex CLI 宿主通过本地 `traecn` MCP 条目真实调用
+`traecn_send_message`，创建 durable task
+`task_1_mskicgl7_1dr1vgws79`；网关最终状态为 `done`，TraeCN 实际结果为
+`TRAECNCLAW_MCP_HOST_OK`。另一个全新 Codex 客户端连接到保留该完成事件的
+网关时只输出 `BASELINE_READY`，没有收到历史任务内容，并将持久游标建立为
+`evt_1`。这同时验证了宿主协议兼容、真实任务身份和首次连接事件隔离。
+对应的版本适配器是
+`src/trae-adapters/traecn-1.107`；脱敏后的
+关键工作流状态保存在
+`src/trae-adapters/traecn-1.107/fixtures/workflow.json`，可通过
+`npm run test:trae-adapters` 重放。当前实机检测结果以
+`GET /api/status` 的 `traeAdapter` 握手和 `npm run inspect:verify` 为准。
 
 ---
 
@@ -12,7 +31,7 @@
 |---|---|---|
 | 启动 | ✅ | `node scripts/start-traecn.js` → Electron `--remote-debugging-port=9222` |
 | CDP | ✅ | `curl http://127.0.0.1:9222/json/version` 返回 TraeCN 1.107.1 / Chrome 142 / Electron 39 |
-| user-data-dir | ✅ | `/Users/lobster/Library/Application Support/Trae CN`（cookie 持久化） |
+| user-data-dir | ✅ | `~/Library/Application Support/Trae CN`（cookie 持久化） |
 | 登录态 | ⚠️ | **首次 cookie 过期时**会进入未登录态（`ai-ng-welcome-nologin`），需人类登录一次 |
 | 模式 | SOLO/IDE 切换可见 | `.icube-mode-tab-item-solo` / `.icube-mode-tab-item-ide` |
 
@@ -164,26 +183,3 @@ TRAECN_NEW_CHAT_SELECTORS=[class*="new-task"],[class*='new-task-button'],[class*
 TRAECN_MODE_TAB_SELECTORS=.icube-mode-tab-item,.icube-mode-tab-item,[class*='icube-mode-tab-item'],...
 TRAECN_ACTIVITY_SELECTORS=.chat-list-wrapper,[class*="activity"],[class*="chat-list"]
 ```
-
----
-
-## 5. 接下来要写的 driver（v0.4.0 scope）
-
-按依赖顺序：
-
-1. `editor-driver.js` — accept/reject edit（走 `.icube-apply-action-container`）+ 文本操作
-2. `file-driver.js` — open/close/save/rename/delete/list
-3. `terminal-driver.js` — open/send/read/clear
-4. `git-driver.js` — status/commit/push/pull/branch
-5. `search-driver.js` — find/search
-6. `command-palette-driver.js` — open/run(commandId)
-7. `diagnostics-driver.js` — readProblems
-8. `snapshot-driver.js` — snapshot DOM + screenshot
-9. `extension-driver.js` — list/install/enable
-
-每个 driver 配对应：
-- HTTP endpoint
-- command-set entry
-- MCP tool
-- OpenClaw plugin tool
-- Unit + integration test

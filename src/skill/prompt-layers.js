@@ -190,7 +190,8 @@ function normalizeTaskText(command, params = {}) {
 }
 
 function compactJson(value) {
-  return JSON.stringify(value, null, 2);
+  // 紧凑序列化以节约 token；该模块的目标是 token 高效的提示词。
+  return JSON.stringify(value);
 }
 
 function createLayers(command, params = {}, options = {}) {
@@ -270,25 +271,29 @@ function renderLayer(layer) {
 
 function composeTraeCNPrompt(command, params = {}, options = {}) {
   const requestedLayers = options.layers || PROMPT_LAYER_ORDER;
+  const profile = getCommandProfile(command);
   const layers = createLayers(command, params, options)
     .filter(layer => requestedLayers.includes(layer.id))
     .sort((a, b) => PROMPT_LAYER_ORDER.indexOf(a.id) - PROMPT_LAYER_ORDER.indexOf(b.id));
 
+  // 每层只渲染一次，prompt 与 messages 共用结果
+  const rendered = layers.map(layer => ({ id: layer.id, text: renderLayer(layer) }));
+
   return {
     command,
-    layerOrder: layers.map(layer => layer.id),
-    prompt: layers.map(renderLayer).join('\n\n'),
-    messages: layers.map(layer => ({
+    layerOrder: rendered.map(layer => layer.id),
+    prompt: rendered.map(layer => layer.text).join('\n\n'),
+    messages: rendered.map(layer => ({
       role: 'user',
       content: {
         type: 'text',
-        text: renderLayer(layer)
+        text: layer.text
       }
     })),
     metadata: {
       mcpCompatible: true,
       promptName: 'traecn_layered_command',
-      capabilities: getCommandProfile(command).capabilities,
+      capabilities: profile.capabilities,
       generatedAt: new Date(0).toISOString()
     }
   };
@@ -370,12 +375,14 @@ function readMcpResource(uri) {
   throw new Error(`Unknown MCP resource: ${uri}`);
 }
 
-function getMcpCapabilities() {
-  return {
-    prompts: { listChanged: true },
-    resources: { listChanged: true },
-    tools: { listChanged: true }
+function getMcpCapabilities(options = {}) {
+  const capabilities = {
+    prompts: { listChanged: false },
+    resources: { listChanged: false },
+    tools: { listChanged: false }
   };
+  if (options.modern !== true) capabilities.logging = {};
+  return capabilities;
 }
 
 module.exports = {

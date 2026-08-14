@@ -1,6 +1,6 @@
 'use strict';
 
-const { sleep, safeJsValue } = require('../shared/utils');
+const { sleep } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
 const { evaluate, evaluateJSON } = require('./browser-dom');
 

@@ -180,10 +180,8 @@ class Histogram {
     const data = this.get(labels);
     if (data.count === 0) return 0;
     const targetCount = Math.ceil(data.count * percentile);
-    let accumulated = 0;
     for (const [bucket, count] of Object.entries(data.buckets)) {
-      accumulated += count;
-      if (accumulated >= targetCount) {
+      if (count >= targetCount) {
         return parseFloat(bucket);
       }
     }
@@ -211,13 +209,12 @@ class Histogram {
     lines.push(`# TYPE ${this.name} histogram`);
 
     for (const [key, bucketMap] of this.counts) {
-      let cumulative = 0;
+      let lastCount = 0;
       for (const bucket of this.buckets) {
-        cumulative += bucketMap.get(bucket) || 0;
-        const labelPart = key === '_total' ? '' : `{${key}}`;
-        lines.push(`${this.name}_bucket{le="${bucket}"${key !== '_total' ? ',' + key : ''}} ${cumulative}`);
+        lastCount = bucketMap.get(bucket) || 0;
+        lines.push(`${this.name}_bucket{le="${bucket}"${key !== '_total' ? ',' + key : ''}} ${lastCount}`);
       }
-      lines.push(`${this.name}_bucket{le="+Inf"${key !== '_total' ? ',' + key : ''}} ${cumulative}`);
+      lines.push(`${this.name}_bucket{le="+Inf"${key !== '_total' ? ',' + key : ''}} ${lastCount}`);
     }
 
     for (const [key, sum] of this.sums) {

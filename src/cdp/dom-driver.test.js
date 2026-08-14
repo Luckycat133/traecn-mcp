@@ -1,7 +1,8 @@
 'use strict';
 
 const assert = require('assert');
-const { DomDriver, getConfig, sanitizeActivityText, DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS, DEFAULT_RESPONSE_SELECTORS } = require('./dom-driver');
+const vm = require('vm');
+const { DomDriver, getConfig, sanitizeActivityText, isTruncationSignal, DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS, DEFAULT_RESPONSE_SELECTORS } = require('./dom-driver');
 const { cleanAssistantResultText } = require('./dom-handlers/response-collection');
 const { createRunner } = require('../shared/test-runner');
 
@@ -11,21 +12,24 @@ const { test, asyncTest, pendingAsyncTests, summary } = r;
 console.log('\n[dom-driver.test.js] Running tests...\n');
 
 test('getConfig returns default composer selectors', () => {
+  delete process.env.TRAECN_COMPOSER_SELECTORS;
+  delete process.env.TRAE_COMPOSER_SELECTORS;
   const config = getConfig();
-  assert.ok(Array.isArray(config.composerSelectors));
-  assert.ok(config.composerSelectors.length > 0);
+  assert.deepStrictEqual(config.composerSelectors, DEFAULT_COMPOSER_SELECTORS);
 });
 
 test('getConfig returns default send button selectors', () => {
+  delete process.env.TRAECN_SEND_BUTTON_SELECTORS;
+  delete process.env.TRAE_SEND_BUTTON_SELECTORS;
   const config = getConfig();
-  assert.ok(Array.isArray(config.sendButtonSelectors));
-  assert.ok(config.sendButtonSelectors.length > 0);
+  assert.deepStrictEqual(config.sendButtonSelectors, DEFAULT_SEND_BUTTON_SELECTORS);
 });
 
 test('getConfig returns default response selectors', () => {
+  delete process.env.TRAECN_RESPONSE_SELECTORS;
+  delete process.env.TRAE_RESPONSE_SELECTORS;
   const config = getConfig();
-  assert.ok(Array.isArray(config.responseSelectors));
-  assert.ok(config.responseSelectors.length > 0);
+  assert.deepStrictEqual(config.responseSelectors, DEFAULT_RESPONSE_SELECTORS);
 });
 
 test('getConfig returns numeric poll interval', () => {
@@ -40,25 +44,94 @@ test('getConfig returns numeric timeout', () => {
   assert.ok(config.timeoutMs > 0);
 });
 
+asyncTest('getWorkspaceContext reports the open Trae folder from the workspace surface', async () => {
+  const fakeClient = {
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      assert.ok(payload.expression.includes('.explorer-folders-view'));
+      return {
+        result: {
+          value: {
+            title: 'gemini-web-mcp',
+            folderName: 'gemini-web-mcp',
+            rootPath: '~/Documents/gh-repos/gemini-web-mcp',
+            hasExplorer: true
+          }
+        }
+      };
+    }
+  };
+  const driver = new DomDriver(fakeClient, getConfig());
+
+  const workspace = await driver.getWorkspaceContext();
+
+  assert.deepStrictEqual(workspace, {
+    title: 'gemini-web-mcp',
+    folderName: 'gemini-web-mcp',
+    rootPath: '~/Documents/gh-repos/gemini-web-mcp',
+    hasExplorer: true
+  });
+});
+
+asyncTest('getWorkspaceContext uses the workspace title when Solo hides the explorer', async () => {
+  const fakeClient = {
+    async send() {
+      return {
+        result: {
+          value: {
+            title: 'TRAECNclaw',
+            folderName: null,
+            rootPath: null,
+            hasExplorer: false
+          }
+        }
+      };
+    }
+  };
+  const driver = new DomDriver(fakeClient, getConfig());
+
+  const workspace = await driver.getWorkspaceContext();
+
+  assert.deepStrictEqual(workspace, {
+    title: 'TRAECNclaw',
+    folderName: 'TRAECNclaw',
+    rootPath: null,
+    hasExplorer: false
+  });
+});
+
 test('getConfig leaves queueMaxWaitMs unset by default', () => {
   delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
   delete process.env.TRAE_QUEUE_MAX_WAIT_MS;
-  const config = getConfig();
-  assert.strictEqual(config.queueMaxWaitMs, null);
+  try {
+    const config = getConfig();
+    assert.strictEqual(config.queueMaxWaitMs, null);
+  } finally {
+    delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
+    delete process.env.TRAE_QUEUE_MAX_WAIT_MS;
+  }
 });
 
 test('getConfig parses explicit queueMaxWaitMs', () => {
   process.env.TRAECN_QUEUE_MAX_WAIT_MS = '12345';
-  const config = getConfig();
-  assert.strictEqual(config.queueMaxWaitMs, 12345);
-  delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
+  try {
+    const config = getConfig();
+    assert.strictEqual(config.queueMaxWaitMs, 12345);
+  } finally {
+    delete process.env.TRAECN_QUEUE_MAX_WAIT_MS;
+  }
 });
 
 test('getConfig sendTrigger defaults to button', () => {
   delete process.env.TRAECN_SEND_TRIGGER;
   delete process.env.TRAE_SEND_TRIGGER;
-  const config = getConfig();
-  assert.strictEqual(config.sendTrigger, 'button');
+  try {
+    const config = getConfig();
+    assert.strictEqual(config.sendTrigger, 'button');
+  } finally {
+    delete process.env.TRAECN_SEND_TRIGGER;
+    delete process.env.TRAE_SEND_TRIGGER;
+  }
 });
 
 asyncTest('sendMessage verifies debug prompts containing angle brackets and arrows', async () => {
@@ -103,6 +176,36 @@ asyncTest('sendMessage verifies debug prompts containing angle brackets and arro
   assert.deepStrictEqual(insertTexts, [text]);
 });
 
+asyncTest('sendMessage rejects a click that does not create a visible user message', async () => {
+  const text = 'Verify that this request is visible in the Solo conversation';
+  const fakeClient = {
+    async send(method, payload = {}) {
+      if (method === 'Runtime.evaluate') {
+        const expression = payload.expression || '';
+        if (expression.includes('el.focus()')) return { result: { value: { ok: true } } };
+        if (expression.includes('normalized ===')) {
+          return { result: { value: { ok: true, text, normalized: text } } };
+        }
+        if (expression.includes('button.chat-input-v2-send-button')) {
+          return { result: { value: 'send via mouse events' } };
+        }
+        return { result: { value: {} } };
+      }
+      if (method === 'Input.insertText' || method === 'Input.dispatchKeyEvent') return {};
+      throw new Error(`unexpected CDP method ${method}`);
+    }
+  };
+  const driver = new DomDriver(fakeClient, { ...getConfig(), postActionDelayMs: 0, sendTrigger: 'button' });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, reviewCount: 0 });
+  driver.findSendButton = async () => ({ nodeId: 1 });
+  driver._waitForExpression = async () => false;
+
+  await assert.rejects(
+    () => driver.sendMessage(text),
+    error => error && error.code === 'SEND_FAILED' && /did not appear/.test(error.message)
+  );
+});
+
 test('checkQueueStatus ignores historical queue text without visible queue notice', async () => {
   let expression = '';
   const fakeClient = {
@@ -126,10 +229,12 @@ test('checkQueueStatus ignores historical queue text without visible queue notic
   };
   const driver = new DomDriver(fakeClient, getConfig());
   const result = await driver.checkQueueStatus();
+  // Behavioral assertion: historical queue text must not be treated as active queue.
   assert.strictEqual(result.queued, false);
-  assert.ok(expression.includes('polling error'));
-  assert.ok(expression.includes('monaco-editor'));
+  // Regression guards: the probe expression must inspect the queue surface DOM
+  // (not just body text) and filter transient model/service status strings.
   assert.ok(expression.includes('queueSurface'));
+  assert.ok(expression.includes('monaco-editor'));
   assert.ok(expression.includes('model|request|server|service'));
 });
 
@@ -139,10 +244,22 @@ test('sanitizeActivityText removes Chinese thinking indicators', () => {
   assert.ok(result.includes('some text'));
 });
 
+test('sanitizeActivityText removes 思考中 indicator', () => {
+  const result = sanitizeActivityText('思考中… progress');
+  assert.ok(!result.includes('思考中'));
+  assert.ok(result.includes('progress'));
+});
+
 test('sanitizeActivityText removes English thinking indicators', () => {
   const result = sanitizeActivityText('Generating… some text');
   assert.ok(!result.includes('Generating'));
   assert.ok(result.includes('some text'));
+});
+
+test('sanitizeActivityText removes Thinking indicator', () => {
+  const result = sanitizeActivityText('Thinking… reasoning');
+  assert.ok(!result.includes('Thinking'));
+  assert.ok(result.includes('reasoning'));
 });
 
 test('sanitizeActivityText handles empty input', () => {
@@ -154,6 +271,48 @@ test('sanitizeActivityText handles empty input', () => {
 test('sanitizeActivityText collapses whitespace', () => {
   const result = sanitizeActivityText('hello   world');
   assert.strictEqual(result, 'hello world');
+});
+
+test('isTruncationSignal returns false for empty or null input', () => {
+  assert.strictEqual(isTruncationSignal(''), false);
+  assert.strictEqual(isTruncationSignal(null), false);
+  assert.strictEqual(isTruncationSignal(undefined), false);
+});
+
+test('isTruncationSignal returns false for non-truncation text', () => {
+  assert.strictEqual(isTruncationSignal('任务完成'), false);
+  assert.strictEqual(isTruncationSignal('normal response text'), false);
+});
+
+test('isTruncationSignal detects Builder manual termination', () => {
+  assert.strictEqual(isTruncationSignal('Builder手动终止输出'), true);
+  assert.strictEqual(isTruncationSignal('用户 Builder手动终止输出 已停止'), true);
+});
+
+test('isTruncationSignal detects manual termination', () => {
+  assert.strictEqual(isTruncationSignal('手动终止输出'), true);
+});
+
+test('isTruncationSignal detects output terminated', () => {
+  assert.strictEqual(isTruncationSignal('输出已终止'), true);
+});
+
+test('isTruncationSignal detects generation stopped', () => {
+  assert.strictEqual(isTruncationSignal('生成已停止'), true);
+});
+
+test('isTruncationSignal detects waiting ellipsis variants', () => {
+  assert.strictEqual(isTruncationSignal('等待中...'), true);
+  assert.strictEqual(isTruncationSignal('等待中…'), true);
+});
+
+test('isTruncationSignal detects queue reminder', () => {
+  assert.strictEqual(isTruncationSignal('排队提醒'), true);
+});
+
+test('isTruncationSignal detects analyzing problem variants', () => {
+  assert.strictEqual(isTruncationSignal('正在分析问题...'), true);
+  assert.strictEqual(isTruncationSignal('正在分析问题…'), true);
 });
 
 test('cleanAssistantResultText extracts Trae final bug report from process transcript', () => {
@@ -196,29 +355,208 @@ test('approveDialog approve labels include Monaco trust button text', () => {
   assert.ok(labels.includes('是，我信任此作者'));
 });
 
+test('approveDialog approve labels include inline command run button', () => {
+  const driver = new DomDriver(null, getConfig());
+  const labels = driver._getButtonLabelsForAction('approve');
+  assert.ok(labels.includes('运行'));
+});
+
+test('approveDialog deny labels include the Trae v2 command-card skip button', () => {
+  const driver = new DomDriver(null, getConfig());
+  const labels = driver._getButtonLabelsForAction('deny');
+  assert.ok(labels.includes('跳过'));
+});
+
+asyncTest('approveDialog searches every button inside the active Trae v2 command card', async () => {
+  let calls = 0;
+  const driver = new DomDriver({
+    send: async (_method, params) => {
+      calls++;
+      if (calls === 1) {
+        return {
+          result: {
+            value: {
+              found: true,
+              title: '检测到高风险命令',
+              buttons: ['跳过', '运行'],
+              type: 'command_execution',
+              isCommandExec: true,
+              canAutoApprove: false,
+              command: 'find /tmp/test -delete'
+            }
+          }
+        };
+      }
+      assert.ok(params.expression.includes('inlineCard.querySelectorAll'));
+      return { result: { value: { clicked: false, searchedLabels: ['跳过'] } } };
+    }
+  }, getConfig());
+
+  await driver.approveDialog('deny');
+  assert.strictEqual(calls, 2);
+});
+
+test('command approval assessment requires explicit review for an entirely read-only command chain', () => {
+  const driver = new DomDriver(null, getConfig());
+  const assessment = driver._assessCommandApproval(
+    'git status && git diff --stat HEAD'
+  );
+
+  assert.deepStrictEqual(assessment, {
+    decision: 'agent_review',
+    risk: 'low',
+    reasonCodes: ['explicit_command_review_required']
+  });
+});
+
+test('command approval assessment never auto-approves sensitive or cross-workspace reads', () => {
+  const driver = new DomDriver(null, getConfig());
+
+  for (const command of [
+    'cat .env',
+    'cat /etc/passwd',
+    'git -C /tmp/other-repository status',
+    'cd /tmp && git status'
+  ]) {
+    const assessment = driver._assessCommandApproval(command);
+    assert.notStrictEqual(assessment.decision, 'auto_approve', command);
+  }
+});
+
+test('command approval assessment sends write or network commands to the calling agent', () => {
+  const driver = new DomDriver(null, getConfig());
+
+  assert.deepStrictEqual(
+    driver._assessCommandApproval('git status && git push origin main'),
+    {
+      decision: 'agent_review',
+      risk: 'high',
+      reasonCodes: ['git_write_or_remote']
+    }
+  );
+  assert.deepStrictEqual(
+    driver._assessCommandApproval('curl https://example.com/upload --data @report.json'),
+    {
+      decision: 'agent_review',
+      risk: 'high',
+      reasonCodes: ['network_or_data_transfer']
+    }
+  );
+});
+
+test('command approval assessment rejects commands with hidden side effects from auto approval', () => {
+  const driver = new DomDriver();
+  for (const command of [
+    'find . -name "*.tmp" -delete',
+    'sed -n "1,20w /tmp/copied" README.md',
+    'npm test',
+    'node --test',
+    'rg --pre ./formatter secret .',
+    'git diff --ext-diff'
+  ]) {
+    const assessment = driver._assessCommandApproval(command);
+    assert.notStrictEqual(assessment.decision, 'auto_approve', command);
+  }
+});
+
+test('command approval assessment sends unknown commands to the calling agent', () => {
+  const driver = new DomDriver(null, getConfig());
+  assert.deepStrictEqual(driver._assessCommandApproval('custom-tool inspect repo'), {
+    decision: 'agent_review',
+    risk: 'unknown',
+    reasonCodes: ['unknown_command']
+  });
+});
+
+asyncTest('checkForApprovalDialog detects inline command approval cards', async () => {
+  let evaluatedExpression = '';
+  const driver = new DomDriver({
+    send: async (_method, params) => {
+      evaluatedExpression = params.expression;
+      const supportsInlineCommandApproval = evaluatedExpression.includes('icd-run-command-card-v2')
+        && evaluatedExpression.includes('\\u547d\\u4ee4\\u5728\\u6c99\\u7bb1\\u4e2d\\u8fd0\\u884c\\u4e0d\\u901a\\u8fc7');
+      return {
+        result: {
+          value: supportsInlineCommandApproval
+            ? {
+                found: true,
+                title: '命令在沙箱中运行不通过，是否仍然要在沙箱外运行？',
+                buttons: ['跳过', '添加 3 个命令到白名单', '运行'],
+                type: 'command_execution',
+                isCommandExec: true,
+                canAutoApprove: true,
+                command: 'git status && git diff --stat HEAD'
+              }
+            : { found: false }
+        }
+      };
+    }
+  }, getConfig());
+
+  const dialog = await driver.checkForApprovalDialog();
+
+  assert.strictEqual(dialog.needsApproval, true);
+  assert.strictEqual(dialog.dialogType, 'command_execution');
+  assert.strictEqual(dialog.isCommandExec, true);
+  assert.ok(dialog.buttons.includes('运行'));
+  assert.strictEqual(dialog.canAutoApprove, false);
+  assert.strictEqual(dialog.approvalDecision, 'agent_review');
+  assert.deepStrictEqual(dialog.riskReasons, ['explicit_command_review_required']);
+});
+
+asyncTest('checkForApprovalDialog detects Trae v2 high-risk command cards', async () => {
+  const driver = new DomDriver({
+    send: async (_method, params) => {
+      const supportsHighRiskV2 = params.expression.includes('\\u68c0\\u6d4b\\u5230\\u9ad8\\u98ce\\u9669\\u547d\\u4ee4');
+      return {
+        result: {
+          value: supportsHighRiskV2
+            ? {
+                found: true,
+                title: '检测到高风险命令，运行命令可能会带来严重后果，是否仍要在沙箱中运行？',
+                buttons: ['跳过', "添加 'find' 到白名单", '运行'],
+                type: 'command_execution',
+                isCommandExec: true,
+                canAutoApprove: false,
+                command: 'find /Users/jack/traecn-live-uat-safe -delete'
+              }
+            : { found: false }
+        }
+      };
+    }
+  }, getConfig());
+
+  const dialog = await driver.checkForApprovalDialog();
+
+  assert.strictEqual(dialog.needsApproval, true);
+  assert.strictEqual(dialog.canAutoApprove, false);
+  assert.strictEqual(dialog.approvalDecision, 'agent_review');
+  assert.deepStrictEqual(dialog.riskReasons, ['filesystem_write_via_find']);
+});
+
 test('restricted mode summary treats trusted workspace page as not restricted', () => {
   const driver = new DomDriver(null, getConfig());
-  const summary = driver._summarizeRestrictedModeState({
+  const modeSummary = driver._summarizeRestrictedModeState({
     bodyText: '工作区信任\n你信任此文件夹\n配置设置',
     buttonTexts: ['不信任', '配置设置'],
     hasOverlay: true
   });
-  assert.strictEqual(summary.restricted, false);
-  assert.strictEqual(summary.trusted, true);
-  assert.strictEqual(summary.panelOpen, true);
+  assert.strictEqual(modeSummary.restricted, false);
+  assert.strictEqual(modeSummary.trusted, true);
+  assert.strictEqual(modeSummary.panelOpen, true);
 });
 
 test('restricted mode summary detects actionable trust panel', () => {
   const driver = new DomDriver(null, getConfig());
-  const summary = driver._summarizeRestrictedModeState({
+  const modeSummary = driver._summarizeRestrictedModeState({
     bodyText: '工作区信任\n此文件夹中的功能受限，请信任此文件夹',
     buttonTexts: ['信任', '配置设置'],
     hasOverlay: true
   });
-  assert.strictEqual(summary.restricted, true);
-  assert.strictEqual(summary.trusted, false);
-  assert.strictEqual(summary.panelOpen, true);
-  assert.strictEqual(summary.trustButtonFound, true);
+  assert.strictEqual(modeSummary.restricted, true);
+  assert.strictEqual(modeSummary.trusted, false);
+  assert.strictEqual(modeSummary.panelOpen, true);
+  assert.strictEqual(modeSummary.trustButtonFound, true);
 });
 
 test('completeSetupIfPresent advances multi-step setup wizard and exits when workspace is ready', async () => {
@@ -270,15 +608,15 @@ test('completeSetupIfPresent advances multi-step setup wizard and exits when wor
           }
         };
       }
-      if (expression.includes('window.__enhancedClick("开始")')) {
+      if (expression.includes('window.__traeEnhancedClick_v1("开始")')) {
         clickCount += 1;
         return { result: { value: { clicked: true, text: '开始' } } };
       }
-      if (expression.includes('window.__enhancedClick("继续")')) {
+      if (expression.includes('window.__traeEnhancedClick_v1("继续")')) {
         clickCount += 1;
         return { result: { value: { clicked: true, text: '继续' } } };
       }
-      if (expression.includes('if (window.__enhancedClick) return')) {
+      if (expression.includes('if (window.__traeEnhancedClick_v1) return')) {
         return { result: { value: undefined } };
       }
       throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
@@ -310,7 +648,7 @@ test('completeSetupIfPresent returns no_actionable_setup_button when setup page 
           }
         };
       }
-      if (expression.includes('if (window.__enhancedClick) return')) {
+      if (expression.includes('if (window.__traeEnhancedClick_v1) return')) {
         return { result: { value: undefined } };
       }
       throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
@@ -357,11 +695,11 @@ test('completeSetupIfPresent can click setup skip links rendered as pointer divs
           }
         };
       }
-      if (expression.includes('window.__enhancedClick("跳过")')) {
+      if (expression.includes('window.__traeEnhancedClick_v1("跳过")')) {
         clicked = true;
         return { result: { value: { clicked: true, text: '跳过' } } };
       }
-      if (expression.includes('if (window.__enhancedClick) return')) {
+      if (expression.includes('if (window.__traeEnhancedClick_v1) return')) {
         return { result: { value: undefined } };
       }
       throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
@@ -379,11 +717,11 @@ test('dismissWorkspaceGuideIfPresent clears visible workspace onboarding overlay
     async send(method, payload) {
       if (method !== 'Runtime.evaluate') throw new Error(`unexpected method: ${method}`);
       const expression = payload.expression || '';
-      if (expression.includes('window.__enhancedClick("继续"')) {
+      if (expression.includes('window.__traeEnhancedClick_v1("继续"')) {
         clicked = true;
         return { result: { value: { clicked: true, text: '继续' } } };
       }
-      if (expression.includes('if (window.__enhancedClick) return')) {
+      if (expression.includes('if (window.__traeEnhancedClick_v1) return')) {
         return { result: { value: undefined } };
       }
       throw new Error(`unexpected expression: ${expression.slice(0, 80)}`);
@@ -658,6 +996,162 @@ test('extractLatestIdeAssistantState prefers assistant turn after latest user tu
   assert.ok(state.text.includes('正在分析问题'));
 });
 
+test('extractLatestIdeAssistantState does not mark percentage progress as complete', () => {
+  const driver = new DomDriver(null, getConfig());
+  const state = driver._extractLatestIdeAssistantState({
+    fullText: '用户新问题 Agent 正在处理 任务完成 16%',
+    turns: [
+      { className: 'chat-turn user', text: '用户新问题' },
+      { className: 'chat-turn assistant task', text: 'Agent\n任务完成 16%' }
+    ]
+  }, '');
+
+  assert.strictEqual(state.inProgress, true);
+  assert.strictEqual(state.isComplete, false);
+  assert.strictEqual(state.hasResponse, false);
+});
+
+test('extractLatestIdeAssistantState trusts the visible completed status over context usage percent', () => {
+  const driver = new DomDriver(null, getConfig());
+  const state = driver._extractLatestIdeAssistantState({
+    fullText: '用户问题 Agent 思考过程 LIVE-UAT-READONLY-PASS 任务完成 9%',
+    taskComplete: true,
+    taskInProgress: false,
+    turns: [
+      { className: 'chat-turn user', text: '用户问题' },
+      { className: 'chat-turn assistant task', text: 'Agent\n思考过程\nLIVE-UAT-READONLY-PASS\n任务完成\n9%' }
+    ]
+  }, '');
+
+  assert.strictEqual(state.inProgress, false);
+  assert.strictEqual(state.isComplete, true);
+  assert.strictEqual(state.hasResponse, true);
+});
+
+test('extractLatestIdeAssistantState can return the full trace on explicit request', () => {
+  const driver = new DomDriver(null, getConfig());
+  const state = driver._extractLatestIdeAssistantState({
+    fullText: '用户问题 Agent 思考过程 工具调用 完成总结 最终结果 任务完成',
+    taskComplete: true,
+    taskInProgress: false,
+    turns: [
+      { className: 'chat-turn user', text: '用户问题' },
+      {
+        className: 'chat-turn assistant task',
+        text: 'Agent\n思考过程\n工具调用\n完成总结\n最终结果\n任务完成',
+        finalText: '完成总结\n最终结果'
+      }
+    ]
+  }, '', { detailLevel: 'trace' });
+
+  assert.ok(state.text.includes('思考过程'));
+  assert.ok(state.text.includes('工具调用'));
+});
+
+asyncTest('queryTaskSource reads the current Solo assistant turn instead of an older sidebar row', async () => {
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (payload.expression.includes('var sels =')) {
+        return {
+          result: {
+            value: {
+              fullText: '当前验收 LIVE-UAT-READONLY-PASS 任务完成',
+              taskComplete: true,
+              taskInProgress: false,
+              turns: [
+                { className: 'chat-turn user', text: '当前验收' },
+                { className: 'chat-turn assistant task', text: 'LIVE-UAT-READONLY-PASS\n任务完成' }
+              ]
+            }
+          }
+        };
+      }
+      return {
+        result: {
+          value: {
+            text: '昨天的任务 任务完成',
+            inProgress: false,
+            isComplete: true,
+            hasResponse: true
+          }
+        }
+      };
+    }
+  }, getConfig());
+  driver.detectMode = async () => ({ mode: 'solo' });
+
+  const state = await driver._queryTaskSource('');
+
+  assert.ok(state.text.includes('LIVE-UAT-READONLY-PASS'));
+});
+
+asyncTest('queryTaskSource reads top-level Solo chat turns before panel fallbacks', async () => {
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (payload.expression.includes('soloTopLevelTurns')) {
+        return {
+          result: {
+            value: {
+              soloTopLevelTurns: true,
+              fullText: '当前用户请求 Agent MCP 更新完成 测试结果 任务完成',
+              taskComplete: true,
+              taskInProgress: false,
+              turns: [
+                { className: 'chat-turn user', text: '当前用户请求' },
+                { className: 'chat-turn assistant', text: 'Agent\nMCP 更新完成\n测试结果\n任务完成' }
+              ]
+            }
+          }
+        };
+      }
+      return { result: { value: null } };
+    }
+  }, getConfig());
+  driver.detectMode = async () => ({ mode: 'solo' });
+
+  const state = await driver._queryTaskSource('');
+
+  assert.ok(state.text.includes('MCP 更新完成'));
+  assert.strictEqual(state.hasResponse, true);
+  assert.strictEqual(state.isComplete, true);
+});
+
+asyncTest('queryTaskSource returns the final Solo markdown instead of the folded process transcript', async () => {
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (!payload.expression.includes('soloTopLevelTurns')) return { result: { value: null } };
+      assert.doesNotThrow(() => new Function(`return ${payload.expression}`));
+      return {
+        result: {
+          value: {
+            soloTopLevelTurns: true,
+            fullText: '当前请求 Agent 思考过程 大量工具调用 完成总结 最终结果 任务完成',
+            taskComplete: true,
+            taskInProgress: false,
+            turns: [
+              { className: 'chat-turn user', text: '当前请求' },
+              {
+                className: 'chat-turn assistant',
+                text: 'Agent\n思考过程\n大量工具调用\n完成总结\n最终结果\n任务完成',
+                finalText: '完成总结\n这是只包含最终结论、改动文件和测试结果的完整回复。'
+              }
+            ]
+          }
+        }
+      };
+    }
+  }, getConfig());
+  driver.detectMode = async () => ({ mode: 'solo' });
+
+  const state = await driver._queryTaskSource('');
+
+  assert.strictEqual(state.text, '完成总结\n这是只包含最终结论、改动文件和测试结果的完整回复。');
+  assert.strictEqual(state.hasResponse, true);
+});
+
 test('isIncompleteResponseText treats skill invocation preamble as incomplete', () => {
   const driver = new DomDriver(null, getConfig());
   assert.strictEqual(driver._isIncompleteResponseText('Agent'), true);
@@ -690,6 +1184,10 @@ test('isModelErrorResponseText detects Trae model provider failures', () => {
     driver._isModelErrorResponseText('Agent\n模型请求失败，点击右侧箭头展开模型服务商错误信息进行排查。\n异常打断'),
     true
   );
+  assert.strictEqual(
+    driver._isModelErrorResponseText('Agent\n今日对话额度已耗尽。你可以等待至 2026-07-24 凌晨 0 点（北京时间）额度重置。'),
+    true
+  );
   assert.strictEqual(driver._isModelErrorResponseText('Findings:\\n[P2] no model issue'), false);
 });
 
@@ -716,13 +1214,99 @@ test('collectResponse returns mid-stream approval without currentText initializa
     approvalChecks++;
     return approvalChecks === 1
       ? { needsApproval: false }
-      : { needsApproval: true, question: '批准执行命令?', dialogType: 'command', buttons: ['允许'] };
+      : {
+          needsApproval: true,
+          question: '批准执行命令?',
+          dialogType: 'command_execution',
+          buttons: ['运行'],
+          isCommandExec: true,
+          canAutoApprove: false,
+          approvalDecision: 'agent_review',
+          commandRisk: 'high',
+          riskReasons: ['git_write_or_remote'],
+          command: 'git push origin main'
+        };
   };
 
   const result = await driver.collectResponse();
   assert.strictEqual(result.needsApproval, true);
-  assert.strictEqual(result.dialogType, 'command');
+  assert.strictEqual(result.dialogType, 'command_execution');
+  assert.strictEqual(result.approvalDecision, 'agent_review');
+  assert.strictEqual(result.commandRisk, 'high');
+  assert.deepStrictEqual(result.riskReasons, ['git_write_or_remote']);
+  assert.strictEqual(result.command, 'git push origin main');
   assert.ok(typeof result.text === 'string');
+});
+
+test('collectResponse exposes command metadata when approval is already pending', async () => {
+  const driver = new DomDriver(null, getConfig());
+  driver.checkForApprovalDialog = async () => ({
+    needsApproval: true,
+    question: '批准执行命令?',
+    dialogType: 'command_execution',
+    buttons: ['运行'],
+    isCommandExec: true,
+    canAutoApprove: false,
+    approvalDecision: 'agent_review',
+    commandRisk: 'low',
+    riskReasons: ['explicit_command_review_required'],
+    command: 'git status'
+  });
+
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.approvalDecision, 'agent_review');
+  assert.strictEqual(result.commandRisk, 'low');
+  assert.deepStrictEqual(result.riskReasons, ['explicit_command_review_required']);
+  assert.strictEqual(result.command, 'git status');
+});
+
+test('collectResponse never auto-approves a command card from legacy adapter metadata', async () => {
+  const config = getConfig();
+  config.timeoutMs = 200;
+  config.pollIntervalMs = 10;
+  config.approvalPollIntervalMs = 1;
+  config.approvalTimeoutMs = 1;
+  const driver = new DomDriver({
+    send: async () => {},
+    on: () => {},
+    off: () => {}
+  }, config);
+  let approveCalls = 0;
+  let approvalChecks = 0;
+  driver.detectMode = async () => ({ mode: 'solo', confidence: 0.9, indicators: [] });
+  driver._pollResponseState = async () => ({
+    taskComplete: false,
+    taskText: '等待命令审批',
+    taskInProgress: false,
+    responseText: ''
+  });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, taskCompleted: false });
+  driver.checkForApprovalDialog = async () => {
+    approvalChecks++;
+    return approvalChecks === 1
+      ? { needsApproval: false }
+      : {
+          needsApproval: true,
+          question: '批准执行命令?',
+          dialogType: 'command_execution',
+          buttons: ['运行'],
+          isCommandExec: true,
+          canAutoApprove: true,
+          approvalDecision: 'auto_approve',
+          commandRisk: 'low',
+          riskReasons: ['legacy_read_only_allowlist'],
+          command: 'cat .env'
+        };
+  };
+  driver.approveDialog = async () => {
+    approveCalls++;
+    return { success: false };
+  };
+
+  const result = await driver.collectResponse();
+  assert.strictEqual(approveCalls, 0);
+  assert.strictEqual(result.needsApproval, true);
+  assert.strictEqual(result.command, 'cat .env');
 });
 
 test('collectResponse strips IDE role and completion wrappers', async () => {
@@ -864,6 +1448,9 @@ test('switchModel busy guard ignores stale body-only generating text', async () 
       if (params.expression.includes('targetName')) {
         return { result: { value: 'clicked: GLM-5.2 at index 0' } };
       }
+      if (params.expression.includes('[role="alert"]')) {
+        return { result: { value: '' } };
+      }
       throw new Error('Unexpected Runtime.evaluate expression');
     }
   }, { ...getConfig(), postActionDelayMs: 0 });
@@ -892,6 +1479,99 @@ test('switchModel busy guard blocks when live stop state is visible', async () =
   assert.strictEqual(result.success, false);
   assert.strictEqual(result.switchResult, 'model_switch_blocked: generating');
   assert.strictEqual(result.error, 'generating');
+});
+
+test('switchModel ignores unrelated upgrade prompts elsewhere on the page', async () => {
+  let currentModelCalls = 0;
+  const driver = new DomDriver({
+    send: async (method, params) => {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (params.expression.includes('stopIcon')) return { result: { value: { busy: false } } };
+      if (params.expression.includes('var all = Array.from')) return { result: { value: 1 } };
+      if (params.expression.includes('modeItem')) return { result: { value: 'auto mode already off' } };
+      if (params.expression.includes('targetName')) return { result: { value: 'clicked: GLM-5.2 at index 0' } };
+      if (params.expression.includes('[role="alert"]')) {
+        return {
+          result: {
+            value: vm.runInNewContext(params.expression, {
+              document: {
+                body: { innerText: '排队提醒 当前模型请求量较高 升级权益' },
+                querySelectorAll: () => []
+              },
+              getComputedStyle: () => ({ visibility: 'visible', display: 'block' })
+            })
+          }
+        };
+      }
+      throw new Error('Unexpected Runtime.evaluate expression');
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+  driver.getCurrentModel = async () => (++currentModelCalls === 1 ? 'Doubao-1.5' : 'GLM-5.2');
+
+  const result = await driver.switchModel('GLM-5.2');
+
+  assert.strictEqual(result.success, true);
+});
+
+test('switchModel surfaces a membership notice containing whitespace', async () => {
+  const driver = new DomDriver({
+    send: async (method, params) => {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (params.expression.includes('stopIcon')) return { result: { value: { busy: false } } };
+      if (params.expression.includes('var all = Array.from')) return { result: { value: 1 } };
+      if (params.expression.includes('modeItem')) return { result: { value: 'auto mode already off' } };
+      if (params.expression.includes('targetName')) return { result: { value: 'clicked: Kimi-K3 at index 0' } };
+      if (params.expression.includes('[role="alert"]')) {
+        const notice = {
+          innerText: '仅   会员 Pro 用户可用',
+          getBoundingClientRect: () => ({ width: 240, height: 80 })
+        };
+        return {
+          result: {
+            value: vm.runInNewContext(params.expression, {
+              document: { querySelectorAll: () => [notice] },
+              getComputedStyle: () => ({ visibility: 'visible', display: 'block' })
+            })
+          }
+        };
+      }
+      throw new Error('Unexpected Runtime.evaluate expression');
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+  driver.getCurrentModel = async () => 'GLM-5.2';
+
+  const result = await driver.switchModel('Kimi-K3');
+
+  assert.strictEqual(result.code, 'MODEL_ACCESS_DENIED');
+  assert.match(result.error, /仅\s+会员/);
+});
+
+asyncTest('listModels returns the currently offered TraeCN models', async () => {
+  let expression = '';
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      assert.strictEqual(payload.awaitPromise, true);
+      expression = payload.expression || '';
+      return {
+        result: {
+          value: {
+            current: 'GLM-5.2',
+            models: ['GLM-5.2', '0.40x', 'DeepSeek-V3.2']
+          }
+        }
+      };
+    }
+  }, getConfig());
+
+  const result = await driver.listModels();
+
+  assert.deepStrictEqual(result, {
+    current: 'GLM-5.2',
+    models: ['GLM-5.2', 'DeepSeek-V3.2']
+  });
+  assert.ok(expression.includes('.chat-model-label'));
+  assert.ok(expression.includes('modelPicker'));
 });
 
 test('checkReadiness reports login blocker when composer is unavailable', async () => {
@@ -1023,7 +1703,10 @@ test('switchSoloChat requires a selection criterion', async () => {
   await assert.rejects(() => driver.switchSoloChat({}), /requires index, textIncludes, or titleIncludes/);
 });
 
-test('deleteSoloChats deletes matched Solo queue probe and verifies by title', async () => {
+// Shared fake client factory for the deleteSoloChats happy path.
+// Returns { driver, mouseEvents, runtimeExpressions } so each focused
+// test can assert on one aspect without duplicating the ~80-line setup.
+function createDeleteHappyPathDriver() {
   const mouseEvents = [];
   const runtimeExpressions = [];
   const driver = new DomDriver({
@@ -1035,11 +1718,12 @@ test('deleteSoloChats deletes matched Solo queue probe and verifies by title', a
       assert.strictEqual(method, 'Runtime.evaluate');
       const expression = payload.expression || '';
       runtimeExpressions.push(expression);
-      if (expression.includes("MouseEvent('contextmenu'") || expression.includes('MouseEvent("contextmenu"')) {
+      if (expression.includes('openRowActionMenu')) {
         return {
           result: {
             value: {
               success: true,
+              domClicked: true,
               x: 169,
               y: 150,
               title: 'Wait for Trae Queue 进行中 14:07'
@@ -1107,29 +1791,44 @@ test('deleteSoloChats deletes matched Solo queue probe and verifies by title', a
       throw new Error(`unexpected expression: ${expression.slice(0, 120)}`);
     }
   }, { ...getConfig(), postActionDelayMs: 0 });
+  return { driver, mouseEvents, runtimeExpressions };
+}
 
-  const result = await driver.deleteSoloChats({
-    candidates: [
-      {
-        index: 0,
-        title: 'Wait for Trae Queue 进行中 14:07',
-        text: 'Wait for Trae Queue 进行中 14:07'
-      }
-    ]
-  });
+const DELETE_CANDIDATE = {
+  index: 0,
+  title: 'Wait for Trae Queue 进行中 14:07',
+  text: 'Wait for Trae Queue 进行中 14:07'
+};
 
+test('deleteSoloChats reports successful deletion with correct delete and confirm points', async () => {
+  const { driver } = createDeleteHappyPathDriver();
+  const result = await driver.deleteSoloChats({ candidates: [DELETE_CANDIDATE] });
   assert.strictEqual(result.deleted, 1);
   assert.strictEqual(result.attempts[0].success, true);
   assert.strictEqual(result.attempts[0].deletePoint.nodeText, '删除任务');
   assert.strictEqual(result.attempts[0].confirmPoint.nodeText, '删除');
+});
+
+test('deleteSoloChats opens the Trae v2 row action menu through its dedicated DOM control', async () => {
+  const { driver, runtimeExpressions } = createDeleteHappyPathDriver();
+  await driver.deleteSoloChats({ candidates: [DELETE_CANDIDATE] });
   assert.ok(
-    runtimeExpressions.some(expression =>
-      expression.includes("MouseEvent('contextmenu'") || expression.includes('MouseEvent("contextmenu"')
-    ),
-    'should open row context menu via contextmenu event, not left-click'
+    runtimeExpressions.some(expression => expression.includes('task-item-action___')
+      && expression.includes('actionButton.click()')),
+    'should click the dedicated row action control'
   );
+});
+
+test('deleteSoloChats clicks delete and confirm buttons at computed coordinates', async () => {
+  const { driver, mouseEvents } = createDeleteHappyPathDriver();
+  await driver.deleteSoloChats({ candidates: [DELETE_CANDIDATE] });
   assert.ok(mouseEvents.some(event => event.type === 'mousePressed' && event.x === 99 && event.y === 273));
   assert.ok(mouseEvents.some(event => event.type === 'mousePressed' && event.x === 879 && event.y === 488));
+});
+
+test('deleteSoloChats re-queries sidebar to verify deletion by title', async () => {
+  const { driver, runtimeExpressions } = createDeleteHappyPathDriver();
+  await driver.deleteSoloChats({ candidates: [DELETE_CANDIDATE] });
   assert.ok(runtimeExpressions.some(expression => expression.includes('.soloaisidebar')));
 });
 
@@ -1139,10 +1838,10 @@ test('deleteSoloChats does not treat menu text insertion as deletion success', a
       if (method === 'Input.dispatchMouseEvent') return {};
       assert.strictEqual(method, 'Runtime.evaluate');
       const expression = payload.expression || '';
-      if (expression.includes("MouseEvent('contextmenu'") || expression.includes('MouseEvent("contextmenu"')) {
+      if (expression.includes('openRowActionMenu')) {
         return {
           result: {
-            value: { success: true, x: 169, y: 150, title: 'Wait for Trae Queue 进行中 14:11' }
+            value: { success: true, domClicked: true, x: 169, y: 150, title: 'Wait for Trae Queue 进行中 14:11' }
           }
         };
       }
@@ -1213,17 +1912,23 @@ test('deleteSoloChats does not treat menu text insertion as deletion success', a
 
 test('getConfig respects TRAECN_COMPOSER_SELECTORS env var', () => {
   process.env.TRAECN_COMPOSER_SELECTORS = '.custom-input,textarea';
-  const config = getConfig();
-  assert.deepStrictEqual(config.composerSelectors, ['.custom-input', 'textarea']);
-  delete process.env.TRAECN_COMPOSER_SELECTORS;
+  try {
+    const config = getConfig();
+    assert.deepStrictEqual(config.composerSelectors, ['.custom-input', 'textarea']);
+  } finally {
+    delete process.env.TRAECN_COMPOSER_SELECTORS;
+  }
 });
 
 test('getConfig falls back to TRAE_COMPOSER_SELECTORS', () => {
   delete process.env.TRAECN_COMPOSER_SELECTORS;
   process.env.TRAE_COMPOSER_SELECTORS = '.trae-input';
-  const config = getConfig();
-  assert.deepStrictEqual(config.composerSelectors, ['.trae-input']);
-  delete process.env.TRAE_COMPOSER_SELECTORS;
+  try {
+    const config = getConfig();
+    assert.deepStrictEqual(config.composerSelectors, ['.trae-input']);
+  } finally {
+    delete process.env.TRAE_COMPOSER_SELECTORS;
+  }
 });
 
 (async () => {

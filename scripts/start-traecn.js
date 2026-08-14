@@ -1,6 +1,6 @@
 'use strict';
 
-const { findTraeCNBinary, isTraeCNRunning, startTraeCN } = require('../src/config/quickstart');
+const { findTraeCNBinary, isTraeCNRunning, startTraeCN, getQuickstartConfig } = require('../src/config/quickstart');
 const { getEnvWithFallback } = require('../src/shared/utils');
 
 async function main() {
@@ -17,16 +17,6 @@ async function main() {
     return;
   }
 
-  // Guard: if the user explicitly closed Trae and is now running this
-  // script indirectly (e.g. via a CI job or post-checkout hook), don't
-  // relaunch it. They can opt in with --force-new or TRAECN_AUTOSTART=1.
-  if (!isTraeCNRunning() && !forceNew && process.env.TRAECN_AUTOSTART !== '1') {
-    console.log('[TRAECNclaw] TraeCN is not running. Refusing to relaunch (opt-in).');
-    console.log('[TRAECNclaw] To start it anyway, run: npm run start:traecn -- --force-new');
-    console.log('[TRAECNclaw] Or set TRAECN_AUTOSTART=1 to restore the old always-launch behavior.');
-    return;
-  }
-
   const binPath = findTraeCNBinary();
   if (!binPath) {
     console.error('[TRAECNclaw] TraeCN binary not found. Set TRAECN_BIN environment variable.');
@@ -34,16 +24,17 @@ async function main() {
   }
 
   try {
-    const result = startTraeCN({
+    const quickstart = getQuickstartConfig();
+    const resolvedIsolatedProfile = useExistingProfile
+      ? false
+      : (useIsolatedProfile ? true : quickstart.useIsolatedProfile);
+    const result = await startTraeCN({
       binPath,
       projectPath,
-      newInstance: forceNew,
-      useIsolatedProfile: useExistingProfile ? false : (useIsolatedProfile ? true : undefined)
+      newInstance: forceNew || resolvedIsolatedProfile,
+      useIsolatedProfile: resolvedIsolatedProfile
     });
     console.log(`[TRAECNclaw] TraeCN started (PID: ${result.pid})`);
-    if (forceNew) {
-      console.log('[TRAECNclaw] Started a new TraeCN instance for remote debugging.');
-    }
     if (useExistingProfile) {
       console.log('[TRAECNclaw] Reused the existing Trae CN profile (no isolated user-data-dir).');
     }
@@ -52,6 +43,23 @@ async function main() {
     }
     if (projectPath) {
       console.log(`[TRAECNclaw] Project: ${projectPath}`);
+    }
+
+    if (result.cdpReady) {
+      console.log(`[TRAECNclaw] CDP remote debugging is available on port ${result.remotePort}.`);
+      if (forceNew) {
+        console.log('[TRAECNclaw] Started a new TraeCN instance for remote debugging.');
+      }
+    } else {
+      console.error(`[TRAECNclaw] TraeCN launched, but CDP remote debugging did NOT come up on port ${result.remotePort}.`);
+      if (result.launchError) {
+        console.error('[TRAECNclaw] Trae CN launch output (root cause):');
+        console.error(result.launchError);
+      }
+      console.error('[TRAECNclaw] The running Trae CN build is not forwarding --remote-debugging-port.');
+      console.error(`[TRAECNclaw] The skill requires a TraeCN instance with CDP on ${result.remotePort} before it can expose traecn_* tools.`);
+      console.error('[TRAECNclaw] Verify Trae CN is the expected build and that no other process holds the port.');
+      process.exit(1);
     }
   } catch (err) {
     console.error(`[TRAECNclaw] Failed to start TraeCN: ${err.message}`);

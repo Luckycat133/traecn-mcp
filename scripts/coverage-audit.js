@@ -2,14 +2,15 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
 const root = path.resolve(__dirname, '..');
 const packageJson = require('../package.json');
 const { generateOpenAPISpec } = require('../src/http/openapi');
-const { buildCapabilities } = require('../src/shared/capabilities');
-const { listCommands } = require('../integrations/openclaw-traecn-plugin/lib/command-set');
+const { buildCapabilities } = require('../src/capabilities');
+const { listCommands } = require('../src/client/command-set');
 const { MCP_TOOLS } = require('../mcp-server');
 const openClawManifest = require('../integrations/openclaw-traecn-plugin/openclaw.plugin.json');
 
@@ -51,18 +52,18 @@ function commandEnumFromOpenClawManifest() {
   return commandTool?.parameters?.properties?.command?.enum || [];
 }
 
-function commandEnumFromMcpTool() {
-  const commandTool = findTool(MCP_TOOLS, 'traecn_run_command');
-  return commandTool?.inputSchema?.properties?.command?.enum || [];
-}
-
 function packedFiles() {
-  const output = execFileSync('npm', ['pack', '--dry-run', '--json'], {
-    cwd: root,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  return JSON.parse(output)[0].files.map(file => file.path);
+  const cachePath = fs.mkdtempSync(path.join(os.tmpdir(), 'traecnclaw-npm-cache-'));
+  try {
+    const output = execFileSync('npm', ['pack', '--dry-run', '--json', '--cache', cachePath], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    return JSON.parse(output)[0].files.map(file => file.path);
+  } finally {
+    fs.rmSync(cachePath, { recursive: true, force: true });
+  }
 }
 
 assert.strictEqual(spec.info.version, packageJson.version, 'OpenAPI version must match package version');
@@ -74,7 +75,6 @@ assert.deepStrictEqual(
   'Capabilities command catalog must match command-set'
 );
 assert.deepStrictEqual(commandEnumFromOpenClawManifest(), commandNames, 'OpenClaw command enum must match command-set');
-assert.deepStrictEqual(commandEnumFromMcpTool(), commandNames, 'MCP command enum must match command-set');
 
 assert.strictEqual(capabilities.coverage.connection, true);
 assert.strictEqual(capabilities.coverage.taskDelegation, true);
@@ -86,23 +86,31 @@ assert.strictEqual(capabilities.coverage.settingsAutomation, true);
 assert.strictEqual(capabilities.coverage.modelAndModeControl, true);
 assert.strictEqual(capabilities.coverage.projectOpening, true);
 assert.strictEqual(capabilities.coverage.historyReplay, true);
-assertArrayIncludesAll(capabilities.tokenStrategy.prefer, ['traecn_get_capabilities', 'traecn_preflight', 'traecn_queue_task', 'traecn_wait_task'], 'tokenStrategy.prefer');
+assert.deepStrictEqual(capabilities.tokenStrategy.prefer, ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task']);
+assert.strictEqual(capabilities.tokenStrategy.gatewayManaged, true);
 
-assertArrayIncludesAll(MCP_TOOLS.map(tool => tool.name), [
-  'traecn_get_capabilities',
-  'traecn_list_commands',
-  'traecn_run_command',
-  'traecn_preflight',
-  'traecn_plan_operation',
-  'traecn_run_task',
-  'traecn_queue_task',
-  'traecn_poll_task',
-  'traecn_cleanup_queue_probe_chats',
-  'traecn_get_cleanup_watch_status',
-  'traecn_review_code',
-  'traecn_get_queue_status',
-  'traecn_get_dialog_status'
-], 'MCP tools');
+assert.deepStrictEqual(MCP_TOOLS.map(tool => tool.name), [
+  'traecn_send_message',
+  'traecn_get_task',
+  'traecn_cancel_task',
+  'traecn_stop_generation',
+  'traecn_open_workspace',
+  'traecn_list_models',
+  'traecn_select_model',
+  'traecn_select_mode',
+  'traecn_list_setting_sections',
+  'traecn_list_settings',
+  'traecn_list_setting_options',
+  'traecn_set_setting_toggle',
+  'traecn_select_setting_option',
+  'traecn_set_setting_text',
+  'traecn_list_conversations',
+  'traecn_create_conversation',
+  'traecn_select_conversation',
+  'traecn_delete_conversation',
+  'traecn_answer_question',
+  'traecn_decide_approval'
+]);
 
 assertArrayIncludesAll(openClawManifest.tools.map(tool => tool.name), [
   'traecn_capabilities',
@@ -153,18 +161,30 @@ assertArrayIncludesAll(cliSource, [
 
 assert.ok(packageJson.scripts.test.includes('scripts/traecn-cli.test.js'), 'npm test must include CLI tests');
 assert.ok(packageJson.scripts['test:uat'].includes('coverage-audit'), 'test:uat must include coverage audit');
-assert.ok(packageJson.scripts['test:uat'].includes('acceptance-audit'), 'test:uat must include acceptance audit');
+assert.ok(packageJson.scripts['test:uat'].includes('contract:audit'), 'test:uat must include contract audit');
+assert.strictEqual(
+  packageJson.scripts['acceptance:audit'],
+  packageJson.scripts['contract:audit'],
+  'acceptance:audit must remain a compatibility alias for contract:audit'
+);
 assert.ok(packageJson.scripts['test:all'].includes('test:uat'), 'test:all must include UAT gate');
 assert.ok(packageJson.scripts['audit:prod'], 'production audit script is required');
+assert.strictEqual(
+  packageJson.scripts['audit:all'],
+  'npm audit --audit-level=high',
+  'full high-severity dependency audit script is required'
+);
+assert.ok(
+  packageJson.scripts['test:release'].includes('audit:all'),
+  'test:release must audit production and development dependencies before packaging'
+);
 
 const docs = [
   read('README.md'),
-  read('docs/AI-USAGE-GUIDE.md'),
   read('docs/MCP-SERVER-GUIDE.md'),
-  read('docs/QUICK-REFERENCE.md'),
   read('docs/openclaw-command-set.md')
 ].join('\n');
-assertArrayIncludesAll(docs, ['traecn_preflight', 'reviewCode', 'queueTask', 'traecn_plan_operation', 'traecn_run_command'], 'docs');
+assertArrayIncludesAll(docs, ['traecn_send_message', 'traecn_get_task', 'traecn_list_conversations', 'gateway'], 'docs');
 assert.ok(commandNames.includes('cleanup_foreign_solo_queue'), 'command-set must include cleanup_foreign_solo_queue');
 assert.ok(commandNames.includes('cleanup_queue_watch_status'), 'command-set must include cleanup_queue_watch_status');
 assert.ok(specPaths.includes('/api/solo/chats/cleanup-foreign-queue'), 'OpenAPI must include Solo cleanup route');
@@ -176,11 +196,11 @@ assertArrayIncludesAll(files, [
   'scripts/coverage-audit.js',
   'scripts/live-uat.js',
   'scripts/traecn-cli.js',
-  'src/shared/capabilities.js',
+  'src/capabilities.js',
   'src/shared/operation-confirmation.js',
   'src/skill/review.js',
   'src/skill/simple-api.d.ts',
-  'integrations/openclaw-traecn-plugin/lib/command-set.js'
+  'src/client/command-set.js'
 ], 'npm package');
 
 console.log('[coverage-audit] PASS', JSON.stringify({

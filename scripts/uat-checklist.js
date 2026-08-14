@@ -3,6 +3,7 @@
 const assert = require('assert');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { generateOpenAPISpec } = require('../src/http/openapi');
 const packageJson = require('../package.json');
@@ -11,7 +12,7 @@ const openClawManifest = require('../integrations/openclaw-traecn-plugin/opencla
 const root = path.resolve(__dirname, '..');
 const requiredDocs = [
   'README.md',
-  'docs/user-manual.md',
+  'docs/MCP-SERVER-GUIDE.md',
   'docs/development.md',
   'docs/deployment.md',
   'CHANGELOG.md',
@@ -46,17 +47,21 @@ assert.ok(liveUatSource.includes('queue-probe-guard'), 'scripts/live-uat.js must
 assert.ok(liveUatSource.includes('cleanup-dry-run'), 'scripts/live-uat.js must check cleanup dry-run');
 assert.ok(liveUatSource.includes('--cleanup-queue-probes'), 'scripts/live-uat.js must support queue-probe cleanup');
 assert.ok(liveUatSource.includes('Found ${matched} accidental queue-probe Solo chat'), 'scripts/live-uat.js must fail strict UAT when queue-probe chats remain');
+assert.ok(liveUatSource.includes("tool.name === 'traecn_send_message'"), 'scripts/live-uat.js must verify the current gateway-managed MCP task surface');
+assert.ok(!liveUatSource.includes('traecn_cleanup_queue_probe_chats'), 'scripts/live-uat.js must not require a cleanup tool removed from the gateway-managed MCP surface');
 assert.ok(cliSource.includes("case 'capabilities'"), 'CLI must expose capabilities command');
 assert.ok(cliSource.includes("case 'preflight'"), 'CLI must expose preflight command');
 assert.ok(cliSource.includes("case 'plan'"), 'CLI must expose operation plan command');
 assert.strictEqual(packageJson.scripts.doctor, 'node scripts/doctor.js');
 assert.strictEqual(packageJson.scripts['acceptance:audit'], 'node scripts/acceptance-audit.js');
+assert.strictEqual(packageJson.scripts['contract:audit'], 'node scripts/acceptance-audit.js');
 assert.strictEqual(packageJson.scripts['proof:long-queue'], 'node scripts/long-queue-proof.js');
 assert.strictEqual(packageJson.scripts['proof:status'], 'node scripts/long-queue-proof.js --status');
 assert.strictEqual(packageJson.scripts['proof:cancel'], 'node scripts/long-queue-proof.js --cancel');
 assert.strictEqual(packageJson.scripts['test:coverage:audit'], 'node scripts/coverage-audit.js');
 assert.ok(packageJson.scripts['test:uat'].includes('coverage-audit'), 'test:uat must include coverage audit');
-assert.ok(packageJson.scripts['test:uat'].includes('acceptance-audit'), 'test:uat must include acceptance audit');
+assert.ok(packageJson.scripts['test:uat'].includes('contract:audit'), 'test:uat must include contract audit');
+assert.ok(packageJson.scripts.verify.includes('test:all'), 'verify must execute the behavior test gate');
 assert.strictEqual(packageJson.scripts['inspect:verify'], 'node scripts/inspect-traecn.js --verify');
 assert.strictEqual(packageJson.scripts['test:live'], 'node scripts/live-uat.js');
 assert.strictEqual(packageJson.bin['traecnclaw-mcp'], './mcp-server.js');
@@ -106,10 +111,17 @@ for (const apiPath of [
 
 assert.ok(!spec.paths['/api/settings/action'], '/api/settings/action is documented but not implemented');
 assert.strictEqual(spec.info.version, packageJson.version);
-const { buildCapabilities } = require('../src/shared/capabilities');
-const { listCommands } = require('../integrations/openclaw-traecn-plugin/lib/command-set');
+const { buildCapabilities } = require('../src/capabilities');
+const { listCommands } = require('../src/client/command-set');
 const capabilities = buildCapabilities({ commands: listCommands() });
-assert.strictEqual(capabilities.contractVersion, 1);
+assert.strictEqual(capabilities.contractVersion, 5);
+assert.deepStrictEqual(capabilities.tokenStrategy.prefer, [
+  'traecn_send_message',
+  'traecn_list_conversations',
+  'traecn_get_task'
+]);
+assert.strictEqual(capabilities.tokenStrategy.gatewayManaged, true);
+assert.strictEqual(capabilities.tokenStrategy.asyncPolling, false);
 assert.ok(capabilities.commands.some(command => command.command === 'capabilities'), 'capabilities command is missing');
 assert.ok(capabilities.commands.some(command => command.command === 'preflight'), 'preflight command is missing');
 assert.ok(capabilities.commands.some(command => command.command === 'review_code'), 'review_code command is missing from capabilities');
@@ -122,6 +134,9 @@ assert.ok(cliSource.includes('runCleanupWatchAttempt') && cliSource.includes('tr
 assert.ok(capabilities.http.some(operation => operation.path === '/api/capabilities'), '/api/capabilities operation is missing');
 assert.ok(capabilities.http.some(operation => operation.path === '/api/preflight'), '/api/preflight operation is missing');
 assert.ok(capabilities.http.some(operation => operation.path === '/api/solo/chats/cleanup-foreign-queue'), '/api/solo/chats/cleanup-foreign-queue operation is missing');
+for (const unifiedPath of ['/api/tasks/submit', '/api/models', '/api/conversations', '/api/conversations/manage', '/api/interactions/resolve']) {
+  assert.ok(capabilities.http.some(operation => operation.path === unifiedPath), `${unifiedPath} operation is missing`);
+}
 assert.ok(capabilities.apiFamilies.confirmationPlan.includes('/api/confirm/plan'), 'confirmation plan route is missing from capabilities');
 assert.ok(capabilities.apiFamilies.settings.includes('/api/settings/switch-tab'), 'settings switch-tab route is missing from capabilities');
 assert.ok(capabilities.apiFamilies.settings.includes('/api/settings/back-to-chat'), 'settings back-to-chat route is missing from capabilities');
@@ -149,7 +164,7 @@ assert.ok(acceptanceAuditSource.includes('multi_session_result_isolation'), 'acc
 assert.ok(gatewayTestSource.includes('keeps parallel queued session Solo results isolated when completion is out of order'), 'gateway tests must prove out-of-order queued session result isolation');
 assert.ok(gatewayTestSource.includes('TRAECN_SESSION_A_001') && gatewayTestSource.includes('TRAECN_SESSION_B_001'), 'gateway multi-session isolation test must use distinct ownership tokens');
 assert.ok(acceptanceAuditSource.includes('unattended_vibe_workflow_contract'), 'acceptance audit must track the unattended vibe workflow contract');
-assert.ok(mcpTestSource.includes('MCP workflow tools expose completion checks'), 'MCP tests must prove workflow completion-check schema exposure');
+assert.ok(mcpTestSource.includes('MCP contract v5 exposes exactly one 20-tool surface'), 'MCP tests must lock contract v5 and the focused Agent tool surface');
 assert.ok(skillTestSource.includes('vibeWorkflow queues unattended follow-up workflow'), 'Skill tests must prove vibe workflow queues follow-up steps');
 assert.ok(gatewayTestSource.includes('Gateway auto-continues reviewable workflow followups without human review'), 'Gateway tests must prove auto-continued workflow followups');
 assert.ok(acceptanceAuditSource.includes('proofLockEvidence'), 'acceptance audit must track proof lock acquisition evidence');
@@ -181,13 +196,19 @@ assert.ok(longQueueProofSource.includes('gateway_transient_retry'), 'long-queue 
 assert.ok(longQueueProofSource.includes('--gateway-retry-attempts'), 'long-queue proof must expose retry-attempt tuning for gateway restarts');
 assert.ok(longQueueProofSource.includes('--gateway-retry-delay-ms'), 'long-queue proof must expose retry-delay tuning for gateway restarts');
 
-const packOutput = execFileSync('npm', ['pack', '--dry-run', '--json'], {
-  cwd: root,
-  encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'pipe']
-});
-const packInfo = JSON.parse(packOutput)[0];
-const packedFiles = packInfo.files.map(file => file.path);
+const npmCachePath = fs.mkdtempSync(path.join(os.tmpdir(), 'traecnclaw-npm-cache-'));
+let packedFiles;
+try {
+  const packOutput = execFileSync('npm', ['pack', '--dry-run', '--json', '--cache', npmCachePath], {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  const packInfo = JSON.parse(packOutput)[0];
+  packedFiles = packInfo.files.map(file => file.path);
+} finally {
+  fs.rmSync(npmCachePath, { recursive: true, force: true });
+}
 for (const requiredFile of [
   'mcp-server.js',
   'scripts/acceptance-audit.js',
@@ -197,7 +218,7 @@ for (const requiredFile of [
   'src/shared/operation-confirmation.js',
   'src/skill/review.js',
   'src/skill/simple-api.d.ts',
-  'integrations/openclaw-traecn-plugin/lib/command-set.js'
+  'src/client/command-set.js'
 ]) {
   assert.ok(packedFiles.includes(requiredFile), `${requiredFile} is missing from npm package`);
 }

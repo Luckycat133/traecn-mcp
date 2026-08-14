@@ -9,13 +9,14 @@ const { resolveCDPEndpoint } = require('../src/cdp/discovery');
 const { startGateway } = require('../src/http/gateway');
 const { MCP_TOOLS } = require('../mcp-server');
 const { toolDefinitions: openClawTools } = require('../integrations/openclaw-traecn-plugin');
-const { listCommands } = require('../integrations/openclaw-traecn-plugin/lib/command-set');
+const { listCommands } = require('../src/client/command-set');
 const { readArg, resolveGatewayToken } = require('./lib/cli-config');
 
 loadEnv(path.resolve(__dirname, '..', '.env'));
 
 const strict = process.argv.includes('--strict');
 const requireReady = process.argv.includes('--require-ready');
+const requireVerifiedAdapter = process.argv.includes('--require-verified-adapter');
 const allowDelegate = process.argv.includes('--delegate');
 const cleanupQueueProbes = process.argv.includes('--cleanup-queue-probes') || process.env.TRAECN_LIVE_UAT_CLEANUP_QUEUE_PROBES === '1';
 const exerciseBackgroundWorkflow = process.argv.includes('--exercise-background-workflow');
@@ -102,7 +103,8 @@ function buildDiagnostics(endpoint, statusData, readinessData) {
     },
     gateway: {
       connected: statusData?.status || 'unknown',
-      mockBridge: statusData?.mockBridge === true
+      mockBridge: statusData?.mockBridge === true,
+      traeAdapter: statusData?.traeAdapter || null
     },
     surface,
     readiness,
@@ -231,6 +233,21 @@ async function main() {
     assert.strictEqual(connectedStatus.status, 200, 'post-readiness status endpoint should return 200');
     lastStatusData = connectedStatus.data;
     checks.push({ name: 'post-readiness-status', ok: true, connected: connectedStatus.data.status });
+    assert.ok(connectedStatus.data.traeAdapter, 'connected status must include a Trae adapter handshake');
+    checks.push({
+      name: 'trae-adapter',
+      ok: connectedStatus.data.traeAdapter.verified === true,
+      adapter: connectedStatus.data.traeAdapter.adapter,
+      traeVersion: connectedStatus.data.traeAdapter.traeVersion,
+      compatibility: connectedStatus.data.traeAdapter.compatibility
+    });
+    if (requireVerifiedAdapter) {
+      assert.strictEqual(
+        connectedStatus.data.traeAdapter.verified,
+        true,
+        `--require-verified-adapter rejected ${connectedStatus.data.traeAdapter.adapter}`
+      );
+    }
 
     const queue = await request(port, 'GET', '/api/queue-status', null, token);
     assert.strictEqual(queue.status, 200, 'queue-status endpoint should return 200');
@@ -319,7 +336,7 @@ async function main() {
     checks.push({ name: 'openapi', ok: true, paths: Object.keys(openapi.data.paths).length });
 
     assert.ok(listCommands().some(command => command.command === 'cleanup_foreign_solo_queue'), 'command set must include cleanup_foreign_solo_queue');
-    assert.ok(MCP_TOOLS.some(tool => tool.name === 'traecn_cleanup_queue_probe_chats'), 'MCP tools must include traecn_cleanup_queue_probe_chats');
+    assert.ok(MCP_TOOLS.some(tool => tool.name === 'traecn_send_message'), 'MCP tools must include traecn_send_message');
     assert.ok(openClawTools.some(tool => tool.name === 'traecn_cleanup_queue'), 'OpenClaw runtime tools must include traecn_cleanup_queue');
     checks.push({ name: 'agent-discovery-surfaces', ok: true });
 

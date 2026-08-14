@@ -1,69 +1,130 @@
 ---
 name: traecnclaw-mcp
-description: Use when an MCP-capable agent must connect, configure, operate, test, or document TRAECNclaw's stdio MCP server for TraeCN automation, OpenClaw integration, unattended vibe workflows, settings/model/dialog control, code review delegation, or long-queue proof runs. Prefer this skill whenever the agent needs the real MCP tool surface instead of direct browser/GUI control.
-license: MIT
-compatibility: Requires Node.js 22+, a running TraeCN IDE instance with CDP remote debugging on port 9222, and the local TRAECNclaw HTTP gateway on 127.0.0.1:8788. Use `npm run doctor` to verify readiness.
+description: Operate TraeCN through TRAECNclaw's focused stdio MCP tools. Use when an MCP-capable agent must send or stop work, choose a workspace/model/mode/conversation, inspect or change Trae settings through its UI, manage conversations, or resolve an exceptional question or command approval. Queueing, waiting, recovery, notifications, routine non-command questions, and keep/revert gates are gateway-managed.
+license: MIT-0
 metadata:
   author: TRAECNclaw
-  version: "0.4.0"
+  version: "0.5.6"
+  openclaw:
+    requires:
+      bins:
+        - node
+    primaryEnv: TRAECN_GATEWAY_TOKEN
+    envVars:
+      - name: TRAECN_GATEWAY_HOST
+        required: false
+        description: Optional gateway host override; keep loopback unless remote access is secured.
+      - name: TRAECN_GATEWAY_PORT
+        required: false
+        description: Optional gateway port override.
+      - name: TRAECN_GATEWAY_TOKEN
+        required: false
+        description: Optional gateway secret; never print, log, or persist it.
+      - name: TRAECN_MCP_CLIENT_ID
+        required: false
+        description: Stable client identifier for legacy MCP task notifications.
 ---
 
 # TRAECNclaw MCP
 
-Drive TraeCN through its real stdio MCP server, backed by the local HTTP gateway and CDP automation. Client-neutral: works for any agent that can call stdio MCP tools.
+Compose focused tools around user intent. Do not call preflight, wait, poll,
+event acknowledgement, recovery, cleanup, proof, process, or generic command
+operations from the agent loop; the gateway owns those mechanics.
 
-## When to use
+## Setup
 
-- Need to run, queue, poll, or cancel TraeCN tasks
-- Switch model or Solo/IDE mode, read/write TraeCN settings
-- Handle confirm dialogs or review gates
-- Run unattended vibe workflows or long-queue proofs
-- Configure any MCP client (Cursor, Claude Desktop, Cline, Windsurf, Codex)
+1. Install the matching TRAECNclaw server from its source checkout or release server archive. The launcher checks the repository, an installed `traecnclaw` package, then `traecnclaw-mcp` on `PATH`; it never executes a JavaScript path selected by an environment variable.
+2. Run `npm run doctor` in a source checkout. Then run `npm run --silent setup:mcp` from the checkout, or `node scripts/setup-mcp.js` from this Skill directory, to validate the server and print a resolved client entry. Use `--output FILE` to create a new mode-0600 file atomically; the command never overwrites an existing file. The JSON templates under [assets](assets) remain manual fallbacks.
+3. Start the gateway with `npm run start:gateway`, then reconnect the MCP client.
+4. Use mock mode only for development; never cite mock output as live TraeCN evidence.
 
-Do NOT use this skill for direct browser automation or GUI clicking when an MCP tool exists.
+## Choose only necessary context
 
-## Workflow
+- Call `traecn_open_workspace` only when the requested folder is not already open.
+- Call `traecn_list_models` when the available choices matter; then call `traecn_select_model` once.
+- Call `traecn_select_mode` only when the task requires a different Solo/IDE mode.
+- Call `traecn_list_conversations` to read the current mode and stable conversation IDs.
+- Use `traecn_create_conversation`, `traecn_select_conversation`, or `traecn_delete_conversation` for exactly one conversation operation.
 
-1. Confirm Node 22+ and the gateway can reach TraeCN.
-2. Discover before acting: `tools/list` → `traecn_get_capabilities` → `traecn_preflight` with the intended command/params.
-3. For side effects, honor the `traecn_preflight` or `traecn_plan_operation` result (confirmation, readiness, queue, dialog) before operating.
-4. Use `traecn_list_commands` + `traecn_run_command` only when a client needs the stable command catalog rather than per-tool MCP names.
-5. Start the gateway separately: `npm run start:gateway` (or `TRAECN_ENABLE_MOCK_BRIDGE=1 npm run start:gateway` for mock mode).
-6. For exact tool names, profiles, and MCP client config JSON, read [references/mcp-surface.md](references/mcp-surface.md).
+These tools change TraeCN context. Never repeat workspace paths in the model
+message.
 
-## Start the MCP server
+## Send and track work
 
-Use the bundled launcher so the server inherits stdio for JSON-RPC:
+Call `traecn_send_message` with the exact message and, when concurrency makes
+the target ambiguous, an explicit `conversationId`. Clients without the Tasks
+extension receive the accepted `taskId` and status. When the host declares
+`io.modelcontextprotocol/tasks` on the request, the same call returns that
+durable gateway identity as `resultType: "task"`.
 
-```bash
-node scripts/start-mcp.js
-```
+Do not wait or busy-poll after sending. Legacy initialization-based clients
+receive compact task notifications that the stdio server acknowledges
+internally. Modern hosts can open `subscriptions/listen` for the returned task
+ID and receive a complete `notifications/tasks` snapshot; hosts without that
+extension call `traecn_get_task` only for an intentional later status/result
+read. If a modern task reports `input_required`, its elicitation and
+`tasks/update` response carry the same approval safeguards documented below.
+The first legacy connection for a client ID baselines retained history before
+notifications start. Reusing that stable ID later resumes only durably
+unacknowledged events; configure a distinct `TRAECN_MCP_CLIENT_ID` when the
+host-derived name is not unique.
+Use `traecn_cancel_task` for one known gateway task. Use
+`traecn_stop_generation` only when the user wants the
+generation currently visible in TraeCN stopped. First list conversations and
+pass the active `conversationId`; the gateway rejects a stale or different
+conversation. Because visible work may belong to the user or another agent,
+set `acknowledgeUntrackedWork:true` and include a short audit `reason`. Use
+`traecn_cancel_task` instead when the work has a gateway task ID.
 
-The launcher auto-locates `mcp-server.js` from the repo root. Set `TRAECN_MCP_SERVER_PATH` to override. For MCP client config templates (Cursor, Claude Desktop, Cline, Windsurf), copy [assets/mcp-client-config.json](assets/mcp-client-config.json) and replace `SKILL_DIR` with the absolute path to this skill folder.
+For a completed task, omit `detailLevel` or pass `"result"` to retrieve only
+the final answer. Pass `detailLevel: "trace"` only when the detailed visible
+execution process is needed to diagnose or trace an unexpected outcome.
 
-## Profile choice
+## Inspect or change Trae settings
 
-`TRAECN_MCP_TOOL_PROFILE` scopes `tools/list`:
+Treat settings as a second-level capability. Call
+`traecn_list_setting_sections`, then `traecn_list_settings` for only the needed
+section. For dropdowns, call `traecn_list_setting_options` instead of guessing.
+Use exactly one matching mutation tool:
 
-| Profile | Tools | Use |
-| --- | ---: | --- |
-| `public` | 20 | Default for published agent integrations |
-| `ops` | 32 | Recovery, cleanup, Solo control, long-queue proof |
-| `full` | 36 | Audits, compatibility checks, every explicit shortcut |
+- `traecn_set_setting_toggle` for a boolean switch.
+- `traecn_select_setting_option` for a dropdown choice.
+- `traecn_set_setting_text` for a text or numeric input.
 
-The full command catalog stays reachable via `traecn_list_commands` / `traecn_run_command` regardless of profile.
+These commands make the change through Trae's visible settings UI. The gateway
+serializes UI access and returns to chat automatically; do not navigate back
+manually or repeat reads after a successful write.
 
-## Safety rules
+## Resolve exceptional interactions
 
-- Keep the gateway bound to `127.0.0.1` unless remote access is intentionally required.
-- Never commit `.env`, tokens, auth headers, raw TraeCN profile data, `audit-logs/`, `demo-output/`, `logs/`, or `node_modules/`.
-- Prefer MCP/HTTP/CLI surfaces over GUI-control paths whenever the MCP server can perform the operation.
-- Treat live dialog text, gateway health, cleanup state, and external model queue behavior as environment-specific until revalidated.
+The gateway never approves shell commands automatically, including commands
+classified as read-only. Command text alone cannot establish workspace scope,
+exclude sensitive-file reads, or account for Git configuration and external
+hooks. Every command is returned to the Agent with its risk classification.
 
-## Validation
+If a task reports an unresolved interaction:
 
-- `npm run doctor` — local environment readiness.
-- `npm test` — maintained in-repo test sequence.
-- `npm run acceptance:audit -- --require-complete` — before claiming unattended end-to-end readiness.
-- `npm run test:all` — release-style changes when practical.
-- `node -e "console.log(require('./mcp-server').MCP_TOOLS.map(t => t.name).join('\n'))"` — verify live tool list from code.
+- Use `traecn_answer_question` for a returned question and one of its offered answers.
+- Use `traecn_decide_approval` only after checking the returned command and risk. Approval requires the exact `expectedCommand`, `acknowledgeRisk:true`, and a short audit `reason`; the gateway re-reads the visible card and rejects stale or changed commands. Denial needs no risk acknowledgement.
+
+Conversation deletion is permanent. Delete only an inactive conversation and
+only when the current user request explicitly names or unambiguously identifies
+it for deletion. Re-read its listed ID and exact title, then pass the title with
+`acknowledgePermanentDeletion:true`; the gateway rejects title mismatches and
+the active conversation, records the attempt, and cannot restore a successful
+deletion. This uses the user's existing instruction and does not add a separate
+confirmation round trip.
+
+## Safety
+
+- Keep the gateway on `127.0.0.1` unless remote access is secured.
+- Never expose `.env`, tokens, authorization headers, or TraeCN profile data.
+- Keep the default security audit log enabled; high-impact approvals, stops,
+  and deletions are written to date-based JSONL files with sensitive fields
+  redacted and a default 30-day retention.
+- Treat mock results and non-terminal task states as incomplete.
+- Do not recreate removed low-level tools through shell, generic commands, or GUI control.
+
+Read [references/mcp-surface.md](references/mcp-surface.md) only for exact
+schemas, protocol compatibility, notification behavior, and gateway ownership
+boundaries.

@@ -1,18 +1,42 @@
 'use strict';
 
 const assert = require('assert');
+const http = require('http');
+const mcpServer = require('./mcp-server');
 const {
-  DEFAULT_MCP_TOOL_PROFILE,
+  MCP_CONTRACT_VERSION,
+  MCP_TOOL_NAMES,
   MCP_TOOLS,
   createMcpHandlers,
   callTool,
-  getMcpToolsForProfile,
-  normalizeMcpToolProfile
-} = require('./mcp-server');
+  mcpAuth
+} = mcpServer;
 const { ApiKeyManager } = require('./src/shared/api-key-manager');
-const mcpAuth = require('./src/shared/mcp-auth');
 
 process.env.TRAECN_API_KEYS_ENABLED = '1';
+
+const EXPECTED_TOOLS = [
+  'traecn_send_message',
+  'traecn_get_task',
+  'traecn_cancel_task',
+  'traecn_stop_generation',
+  'traecn_open_workspace',
+  'traecn_list_models',
+  'traecn_select_model',
+  'traecn_select_mode',
+  'traecn_list_setting_sections',
+  'traecn_list_settings',
+  'traecn_list_setting_options',
+  'traecn_set_setting_toggle',
+  'traecn_select_setting_option',
+  'traecn_set_setting_text',
+  'traecn_list_conversations',
+  'traecn_create_conversation',
+  'traecn_select_conversation',
+  'traecn_delete_conversation',
+  'traecn_answer_question',
+  'traecn_decide_approval'
+];
 
 let passed = 0;
 let failed = 0;
@@ -22,324 +46,299 @@ async function test(name, fn) {
     await fn();
     passed++;
     console.log(`  PASS: ${name}`);
-  } catch (err) {
+  } catch (error) {
     failed++;
     console.error(`  FAIL: ${name}`);
-    console.error(`        ${err.message}`);
+    console.error(`        ${error.message}`);
   }
 }
 
 (async () => {
   console.log('\n[mcp-server.test.js] Running tests...\n');
 
-  await test('MCP tools include core and review tools', () => {
-    const names = MCP_TOOLS.map(tool => tool.name);
-    assert.ok(names.includes('traecn_get_capabilities'));
-    assert.ok(names.includes('traecn_plan_operation'));
-    assert.ok(names.includes('traecn_preflight'));
-    assert.ok(names.includes('traecn_run_task'));
-    assert.ok(names.includes('traecn_queue_task'));
-    assert.ok(names.includes('traecn_wait_task'));
-    assert.ok(names.includes('traecn_adopt_current_task'));
-    assert.ok(names.includes('traecn_cancel_task'));
-    assert.ok(names.includes('traecn_stop_generation'));
-    assert.ok(names.includes('traecn_dismiss_dialog'));
-    assert.ok(names.includes('traecn_restart_debug_session'));
-    assert.ok(names.includes('traecn_get_review_gate_status'));
-    assert.ok(names.includes('traecn_resolve_review_gate'));
-    assert.ok(names.includes('traecn_review_code'));
-    assert.ok(names.includes('traecn_run_unattended_workflow'));
-    assert.ok(names.includes('traecn_list_solo_chats'));
-    assert.ok(names.includes('traecn_switch_solo_chat'));
-    assert.ok(names.includes('traecn_cleanup_queue_probe_chats'));
-    assert.ok(names.includes('traecn_get_cleanup_watch_status'));
-    assert.ok(names.includes('traecn_start_long_queue_proof'));
-    assert.ok(names.includes('traecn_get_long_queue_proof_status'));
-    assert.ok(names.includes('traecn_cancel_long_queue_proof'));
-    assert.ok(names.includes('traecn_submit_solo_task'));
-    assert.ok(names.includes('traecn_run_command'));
-  });
-
-  await test('MCP tool names are unique for reliable agent discovery', () => {
-    const names = MCP_TOOLS.map(tool => tool.name);
-    assert.strictEqual(new Set(names).size, names.length);
-  });
-
-  await test('MCP tool profiles expose a smaller public surface by default', () => {
-    assert.strictEqual(DEFAULT_MCP_TOOL_PROFILE, 'public');
-    assert.strictEqual(normalizeMcpToolProfile('unknown'), 'public');
-
-    const publicNames = getMcpToolsForProfile('public').map(tool => tool.name);
-    const opsNames = getMcpToolsForProfile('ops').map(tool => tool.name);
-    const fullNames = getMcpToolsForProfile('full').map(tool => tool.name);
-
-    assert.ok(publicNames.length < fullNames.length);
-    assert.ok(opsNames.length > publicNames.length);
-    assert.ok(opsNames.length < fullNames.length);
-    assert.ok(publicNames.includes('traecn_get_capabilities'));
-    assert.ok(publicNames.includes('traecn_preflight'));
-    assert.ok(publicNames.includes('traecn_review_code'));
-    assert.ok(publicNames.includes('traecn_run_unattended_workflow'));
-    assert.ok(!publicNames.includes('traecn_start_long_queue_proof'));
-    assert.ok(!publicNames.includes('traecn_cleanup_queue_probe_chats'));
-    assert.ok(opsNames.includes('traecn_start_long_queue_proof'));
-    assert.ok(opsNames.includes('traecn_cleanup_queue_probe_chats'));
-    assert.ok(!opsNames.includes('traecn_get_status'));
-    assert.ok(fullNames.includes('traecn_get_status'));
-    assert.strictEqual(fullNames.length, MCP_TOOLS.length);
-  });
-
-  await test('initialize returns server capabilities', async () => {
+  await test('MCP contract v5 exposes exactly one 20-tool surface', async () => {
+    assert.strictEqual(MCP_CONTRACT_VERSION, 5);
+    assert.deepStrictEqual(MCP_TOOL_NAMES, EXPECTED_TOOLS);
+    assert.strictEqual(MCP_TOOLS.length, 20);
+    assert.deepStrictEqual(MCP_TOOLS.map(tool => tool.name), EXPECTED_TOOLS);
     const handlers = createMcpHandlers({ test: true });
-    const result = await handlers.handle({ method: 'initialize', params: { protocolVersion: '2024-11-05' } });
+    const result = await handlers.handle({ method: 'tools/list' });
+    assert.deepStrictEqual(result.tools.map(tool => tool.name), EXPECTED_TOOLS);
+  });
+
+  await test('MCP no longer exports profile compatibility APIs', () => {
+    for (const name of [
+      'DEFAULT_MCP_TOOL_PROFILE',
+      'MCP_TOOL_PROFILES',
+      'MCP_TOOL_PROFILE_DESCRIPTIONS',
+      'normalizeMcpToolProfile',
+      'getMcpToolsForProfile',
+      'getMcpToolProfileSummary',
+      'envToolProfile'
+    ]) {
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(mcpServer, name), false, name);
+    }
+  });
+
+  await test('initialize advertises tools, prompts, resources and logging', async () => {
+    const handlers = createMcpHandlers({ test: true });
+    const result = await handlers.handle({ method: 'initialize', params: { protocolVersion: '2025-11-25' } });
+    assert.strictEqual(result.protocolVersion, '2025-11-25');
     assert.strictEqual(result.serverInfo.name, 'traecnclaw');
     assert.ok(result.capabilities.tools);
     assert.ok(result.capabilities.prompts);
     assert.ok(result.capabilities.resources);
+    assert.ok(result.capabilities.logging);
+    const fallback = await handlers.handle({ method: 'initialize', params: { protocolVersion: '2099-01-01' } });
+    assert.strictEqual(fallback.protocolVersion, '2025-11-25');
   });
 
-  await test('tools/list uses the public profile by default', async () => {
-    const handlers = createMcpHandlers({ test: true });
-    const result = await handlers.handle({ method: 'tools/list' });
-    const names = result.tools.map(tool => tool.name);
-    assert.deepStrictEqual(names, getMcpToolsForProfile('public').map(tool => tool.name));
-    assert.ok(names.includes('traecn_run_task'));
-    assert.ok(!names.includes('traecn_restart_debug_session'));
-    assert.ok(!names.includes('traecn_start_long_queue_proof'));
-  });
-
-  await test('tools/list returns MCP tool schemas', async () => {
-    const handlers = createMcpHandlers({ test: true }, {}, { toolProfile: 'full' });
-    const result = await handlers.handle({ method: 'tools/list' });
-    assert.ok(Array.isArray(result.tools));
-    const runTask = result.tools.find(tool => tool.name === 'traecn_run_task');
-    assert.deepStrictEqual(runTask.inputSchema.required, ['task']);
-    const switchSoloChat = result.tools.find(tool => tool.name === 'traecn_switch_solo_chat');
-    assert.ok(switchSoloChat);
-    assert.ok(switchSoloChat.inputSchema.properties.index);
-    assert.ok(switchSoloChat.inputSchema.properties.titleIncludes);
-    assert.ok(switchSoloChat.inputSchema.properties.textIncludes);
-    const cleanup = result.tools.find(tool => tool.name === 'traecn_cleanup_queue_probe_chats');
-    assert.ok(cleanup);
-    assert.ok(cleanup.inputSchema.properties.dryRun);
-    assert.ok(cleanup.inputSchema.properties.execute);
-    const cleanupWatch = result.tools.find(tool => tool.name === 'traecn_get_cleanup_watch_status');
-    assert.ok(cleanupWatch);
-    assert.ok(cleanupWatch.inputSchema.properties.lockFile);
-    const proofStart = result.tools.find(tool => tool.name === 'traecn_start_long_queue_proof');
-    assert.ok(proofStart);
-    assert.ok(proofStart.inputSchema.properties.execute);
-    assert.ok(proofStart.inputSchema.properties.allowQuotaSpend);
-    assert.ok(proofStart.inputSchema.properties.detach);
-    const proofStatus = result.tools.find(tool => tool.name === 'traecn_get_long_queue_proof_status');
-    assert.ok(proofStatus);
-    assert.ok(proofStatus.inputSchema.properties.marker);
-    const submitSolo = result.tools.find(tool => tool.name === 'traecn_submit_solo_task');
-    assert.ok(submitSolo);
-    assert.deepStrictEqual(submitSolo.inputSchema.required, ['task']);
-    assert.ok(submitSolo.inputSchema.properties.soloChat);
-    assert.ok(submitSolo.inputSchema.properties.queueMaxWaitMs);
-    const queueTask = result.tools.find(tool => tool.name === 'traecn_queue_task');
-    assert.ok(queueTask.inputSchema.properties.sessionId);
-    assert.ok(queueTask.inputSchema.properties.soloChat);
-    assert.ok(queueTask.inputSchema.properties.soloChatTitleIncludes);
-    assert.ok(queueTask.inputSchema.properties.forceBackground);
-    assert.ok(queueTask.inputSchema.properties.maxQueueWaitMs);
-  });
-
-  await test('MCP workflow tools expose completion checks', async () => {
-    const handlers = createMcpHandlers({ test: true }, {}, { toolProfile: 'full' });
-    const result = await handlers.handle({ method: 'tools/list' });
-    const tools = Object.fromEntries(result.tools.map(tool => [tool.name, tool]));
-
-    assert.ok(tools.traecn_run_task.inputSchema.properties.completionChecks);
-    assert.ok(tools.traecn_queue_task.inputSchema.properties.completionChecks);
-    assert.ok(tools.traecn_wait_task.inputSchema.properties.pollMs);
-    assert.ok(tools.traecn_adopt_current_task.inputSchema.properties.completionChecks);
-    assert.ok(tools.traecn_review_code.inputSchema.properties.completionChecks);
-    assert.ok(tools.traecn_run_unattended_workflow.inputSchema.properties.completionChecks);
-    assert.ok(tools.traecn_run_unattended_workflow.inputSchema.properties.steps.items.anyOf);
-    assert.ok(tools.traecn_run_unattended_workflow.inputSchema.properties.followupTasks.items.anyOf);
-  });
-
-  await test('prompts and resources proxy prompt layer helpers', async () => {
-    const handlers = createMcpHandlers({ test: true });
-    const prompts = await handlers.handle({ method: 'prompts/list' });
-    assert.ok(prompts.prompts.some(prompt => prompt.name === 'traecn_layered_command'));
-    const resources = await handlers.handle({ method: 'resources/list' });
-    assert.ok(resources.resources.some(resource => resource.uri === 'traecn://commands/catalog'));
-  });
-
-  await test('tools/call handles command catalog without gateway access', async () => {
+  await test('modern discovery advertises MCP 2026-07-28 without deprecated logging', async () => {
     const handlers = createMcpHandlers({ test: true });
     const result = await handlers.handle({
-      method: 'tools/call',
-      params: { name: 'traecn_list_commands', arguments: {} }
-    });
-    const payload = JSON.parse(result.content[0].text);
-    assert.ok(payload.commands.some(command => command.command === 'review_code'));
-  });
-
-  await test('tools/call returns compact capabilities without gateway access', async () => {
-    const handlers = createMcpHandlers({ test: true });
-    const result = await handlers.handle({
-      method: 'tools/call',
-      params: { name: 'traecn_get_capabilities', arguments: {} }
-    });
-    const payload = JSON.parse(result.content[0].text);
-    assert.strictEqual(payload.name, 'traecnclaw');
-    assert.strictEqual(payload.mcp.toolProfile, 'public');
-    assert.ok(payload.mcp.toolProfiles.public);
-    assert.ok(payload.mcp.toolProfiles.ops);
-    assert.ok(payload.mcp.toolProfiles.full);
-    assert.ok(payload.commands.some(command => command.command === 'delegate_async'));
-    assert.ok(payload.commands.some(command => command.command === 'vibe_workflow'));
-    assert.ok(payload.commands.some(command => command.command === 'list_solo_chats'));
-    assert.ok(payload.commands.some(command => command.command === 'switch_solo_chat'));
-    assert.ok(payload.commands.some(command => command.command === 'cleanup_foreign_solo_queue'));
-    assert.ok(payload.commands.some(command => command.command === 'cleanup_queue_watch_status'));
-    assert.ok(payload.commands.some(command => command.command === 'long_queue_proof_start'));
-    assert.ok(payload.commands.some(command => command.command === 'long_queue_proof_status'));
-    assert.ok(payload.commands.some(command => command.command === 'long_queue_proof_cancel'));
-    assert.ok(payload.commands.some(command => command.command === 'submit_solo_chat_task'));
-    assert.ok(payload.mcp.tools.some(tool => tool.name === 'traecn_get_capabilities'));
-    assert.ok(payload.mcp.tools.some(tool => tool.name === 'traecn_run_unattended_workflow'));
-    assert.ok(!payload.mcp.tools.some(tool => tool.name === 'traecn_list_solo_chats'));
-    assert.ok(payload.mcp.toolProfiles.ops.tools.includes('traecn_list_solo_chats'));
-    assert.ok(!payload.mcp.tools.some(tool => tool.name === 'traecn_cleanup_queue_probe_chats'));
-    assert.ok(!payload.mcp.tools.some(tool => tool.name === 'traecn_get_cleanup_watch_status'));
-    assert.ok(!payload.mcp.tools.some(tool => tool.name === 'traecn_get_long_queue_proof_status'));
-    assert.ok(!payload.mcp.tools.some(tool => tool.name === 'traecn_submit_solo_task'));
-    const reviewTool = payload.mcp.tools.find(tool => tool.name === 'traecn_review_code');
-    assert.strictEqual(reviewTool.layer, 'review');
-    assert.strictEqual(reviewTool.profile, 'public');
-    assert.strictEqual(reviewTool.risk, 'delegate');
-    assert.ok(reviewTool.annotations);
-  });
-
-  await test('tools/call returns operation confirmation plan without gateway access', async () => {
-    const handlers = createMcpHandlers({ test: true });
-    const result = await handlers.handle({
-      method: 'tools/call',
+      method: 'server/discover',
       params: {
-        name: 'traecn_plan_operation',
-        arguments: { command: 'approve_dialog', params: { action: 'trust' } }
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientCapabilities': {}
+        }
       }
     });
-    const payload = JSON.parse(result.content[0].text);
-    assert.strictEqual(payload.risk, 'high');
-    assert.strictEqual(payload.requiresConfirmation, true);
-    assert.ok(payload.recommendedFlow.includes('check_dialog'));
+    assert.strictEqual(result.resultType, 'complete');
+    assert.deepStrictEqual(result.supportedVersions, ['2026-07-28', '2025-11-25', '2024-11-05']);
+    assert.strictEqual(result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
+    assert.strictEqual(result.capabilities.logging, undefined);
+    assert.ok(result.capabilities.tools);
+    assert.deepStrictEqual(
+      result.capabilities.extensions['io.modelcontextprotocol/tasks'],
+      {}
+    );
+    assert.strictEqual(result.cacheScope, 'private');
+    assert.ok(result.ttlMs > 0);
   });
 
-  // ── MCP tool authorization (Batch C2) ────────────────────────────────────
-
-  await test('MCP tools/call allows calls when auth layer is disabled', async () => {
-    const handlers = createMcpHandlers({ test: true }, {
-      apiKeyManager: { enabled: false }
+  await test('modern task extension creates and retrieves one durable TraeCN task', async () => {
+    let taskReads = 0;
+    const server = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      if (req.method === 'POST' && req.url === '/api/tasks/submit') {
+        res.writeHead(202);
+        return res.end(JSON.stringify({ taskId: 'task-ext-1', status: 'accepted' }));
+      }
+      if (req.method === 'GET' && req.url === '/api/task/task-ext-1') {
+        taskReads += 1;
+        res.writeHead(200);
+        return res.end(JSON.stringify(taskReads === 1
+          ? {
+            taskId: 'task-ext-1',
+            status: 'queued',
+            createdAt: 1785542400000,
+            message: 'queued by TraeCN'
+          }
+          : {
+            taskId: 'task-ext-1',
+            status: 'done',
+            createdAt: 1785542400000,
+            completedAt: '2026-08-01T00:01:00.000Z',
+            result: { text: 'extension result', stable: true }
+          }));
+      }
+      res.writeHead(404);
+      return res.end(JSON.stringify({ error: 'not found' }));
     });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const handlers = createMcpHandlers({
+      host: '127.0.0.1', port: server.address().port, token: '', timeout: 3000
+    });
+    const meta = {
+      'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+      'io.modelcontextprotocol/clientCapabilities': {
+        extensions: { 'io.modelcontextprotocol/tasks': {} }
+      }
+    };
+    try {
+      const created = await handlers.handle({
+        jsonrpc: '2.0',
+        id: 'send-1',
+        method: 'tools/call',
+        params: {
+          name: 'traecn_send_message',
+          arguments: { message: 'Complete this in the background' },
+          _meta: meta
+        }
+      });
+      assert.strictEqual(created.resultType, 'task');
+      assert.strictEqual(created.taskId, 'task-ext-1');
+      assert.strictEqual(created.status, 'working');
+      assert.strictEqual(created._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
+
+      const completed = await handlers.handle({
+        jsonrpc: '2.0',
+        id: 'get-1',
+        method: 'tasks/get',
+        params: { taskId: 'task-ext-1', _meta: meta }
+      });
+      assert.strictEqual(completed.resultType, 'complete');
+      assert.strictEqual(completed.status, 'completed');
+      assert.strictEqual(completed.result.content[0].text, 'extension result');
+
+      const fallback = await handlers.handle({
+        jsonrpc: '2.0',
+        id: 'send-without-task-extension',
+        method: 'tools/call',
+        params: {
+          name: 'traecn_send_message',
+          arguments: { message: 'Use the compatible result shape' },
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+            'io.modelcontextprotocol/clientCapabilities': {}
+          }
+        }
+      });
+      assert.strictEqual(fallback.resultType, 'complete');
+      assert.strictEqual(fallback.structuredContent.taskId, 'task-ext-1');
+
+      await assert.rejects(
+        () => handlers.handle({
+          jsonrpc: '2.0',
+          id: 'get-no-capability',
+          method: 'tasks/get',
+          params: {
+            taskId: 'task-ext-1',
+            _meta: {
+              'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+              'io.modelcontextprotocol/clientCapabilities': {}
+            }
+          }
+        }),
+        error => error.code === -32003
+      );
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
+  await test('modern requests require a supported per-request protocol version', async () => {
+    const handlers = createMcpHandlers({ test: true });
+    await assert.rejects(
+      () => handlers.handle({
+        method: 'tools/list',
+        params: {
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': '2099-01-01',
+            'io.modelcontextprotocol/clientCapabilities': {}
+          }
+        }
+      }),
+      error => error.code === -32022
+        && error.data.requested === '2099-01-01'
+        && error.data.supported.includes('2026-07-28')
+    );
+  });
+
+  await test('modern list results are typed and cacheable', async () => {
+    const handlers = createMcpHandlers({ test: true });
     const result = await handlers.handle({
-      method: 'tools/call',
-      params: { name: 'traecn_list_commands', arguments: {} }
+      method: 'tools/list',
+      params: {
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientCapabilities': {}
+        }
+      }
     });
-    const payload = JSON.parse(result.content[0].text);
-    assert.ok(payload.commands.some(c => c.command === 'review_code'));
+    assert.strictEqual(result.resultType, 'complete');
+    assert.strictEqual(result.cacheScope, 'private');
+    assert.ok(result.ttlMs > 0);
+    assert.strictEqual(result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
   });
 
-  await test('MCP tools/call rejects calls with no keyId when auth is enabled', async () => {
-    const manager = new ApiKeyManager({ enabled: true });
-    const handlers = createMcpHandlers({ test: true }, {
-      apiKeyManager: manager,
-      keyId: null
-    });
-    const result = await handlers.handle({
-      method: 'tools/call',
-      params: { name: 'traecn_get_capabilities', arguments: {} }
-    });
-    assert.strictEqual(result.isError, true);
-    const payload = JSON.parse(result.content[0].text);
-    assert.strictEqual(payload.code, 'MCP_AUTH_REQUIRED');
+  await test('tool metadata and results expose structured JSON', async () => {
+    assert.ok(MCP_TOOLS.every(tool => tool.outputSchema));
+    const synthetic = require('./src/mcp/tools').asMcpContent({ ok: true, count: 1 });
+    assert.deepStrictEqual(synthetic.structuredContent, { ok: true, count: 1 });
+    assert.strictEqual(synthetic.isError, false);
   });
 
-  await test('MCP tools/call rejects when key lacks required permission', async () => {
+  await test('MCP separates protocol errors from actionable tool errors', async () => {
+    const handlers = createMcpHandlers({
+      host: '127.0.0.1', port: 1, token: '', timeout: 10
+    });
+    await assert.rejects(
+      () => handlers.handle({ method: 'unknown/method' }),
+      error => error.code === -32601
+    );
+    await assert.rejects(
+      () => handlers.handle({ method: 'tools/call', params: { name: 'traecn_missing', arguments: {} } }),
+      error => error.code === -32602
+    );
+    const invalid = await handlers.handle({
+      method: 'tools/call',
+      params: { name: 'traecn_get_task', arguments: {} }
+    });
+    assert.strictEqual(invalid.isError, true);
+    assert.match(invalid.structuredContent.error, /taskId/);
+  });
+
+  await test('get_task forwards one explicit status lookup', async () => {
+    let request = null;
+    const server = http.createServer((req, res) => {
+      request = { method: req.method, url: req.url };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task-1', status: 'done', result: { text: 'complete' } }));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const result = await callTool('traecn_get_task', { taskId: 'task-1' }, {
+        host: '127.0.0.1', port: server.address().port, token: '', timeout: 3000
+      });
+      assert.deepStrictEqual(request, { method: 'GET', url: '/api/task/task-1' });
+      assert.strictEqual(JSON.parse(result.content[0].text).status, 'done');
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
+  await test('get_task lets the agent request the full execution trace', async () => {
+    let request = null;
+    const server = http.createServer((req, res) => {
+      request = { method: req.method, url: req.url };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ taskId: 'task-1', status: 'done', result: { text: 'trace' } }));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      await callTool('traecn_get_task', { taskId: 'task-1', detailLevel: 'trace' }, {
+        host: '127.0.0.1', port: server.address().port, token: '', timeout: 3000
+      });
+      assert.deepStrictEqual(request, {
+        method: 'GET',
+        url: '/api/task/task-1?detailLevel=trace'
+      });
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
+  await test('read keys cannot submit and can query tasks', () => {
     const manager = new ApiKeyManager({ enabled: true });
     const { keyId } = manager.createKey({ name: 'reader', permissions: ['read'] });
-    const handlers = createMcpHandlers({ test: true }, {
-      apiKeyManager: manager,
-      keyId
-    });
-    const result = await handlers.handle({
-      method: 'tools/call',
-      params: { name: 'traecn_run_task', arguments: { task: 'review repo' } }
-    });
-    assert.strictEqual(result.isError, true);
-    const payload = JSON.parse(result.content[0].text);
-    assert.strictEqual(payload.code, 'MCP_AUTH_DENIED');
-    assert.strictEqual(payload.required, 'delegate');
+    assert.strictEqual(mcpAuth.authorizeTool({ apiKeyManager: manager, keyId, toolName: 'traecn_get_task', args: {} }).ok, true);
+    const denied = mcpAuth.authorizeTool({ apiKeyManager: manager, keyId, toolName: 'traecn_send_message', args: {} });
+    assert.strictEqual(denied.ok, false);
+    assert.strictEqual(denied.required, 'delegate');
   });
 
-  await test('MCP tools/call accepts read key on read tool', async () => {
-    const manager = new ApiKeyManager({ enabled: true });
-    const { keyId } = manager.createKey({ name: 'reader', permissions: ['read'] });
-    const handlers = createMcpHandlers({ test: true }, {
-      apiKeyManager: manager,
-      keyId
-    });
-    const result = await handlers.handle({
-      method: 'tools/call',
-      params: { name: 'traecn_get_capabilities', arguments: {} }
-    });
-    assert.notStrictEqual(result.isError, true);
-    const payload = JSON.parse(result.content[0].text);
-    assert.strictEqual(payload.name, 'traecnclaw');
-  });
-
-  await test('MCP tools/call honors traecn_run_command permission from arguments', async () => {
-    const manager = new ApiKeyManager({ enabled: true });
-    const { keyId } = manager.createKey({ name: 'writer', permissions: ['read', 'write'] });
-    const handlers = createMcpHandlers({ test: true }, {
-      apiKeyManager: manager,
-      keyId
-    });
-
-    // Authorize the read-prefixed command without contacting a live gateway.
-    const decision = mcpAuth.authorizeTool({
-      apiKeyManager: manager,
-      keyId,
-      toolName: 'traecn_run_command',
-      args: { command: 'status' }
-    });
-    assert.strictEqual(decision.ok, true);
-    assert.strictEqual(decision.required, 'read');
-
-    // read+write is not enough for a delegate command.
-    const denied = await handlers.handle({
-      method: 'tools/call',
-      params: { name: 'traecn_run_command', arguments: { command: 'open_project' } }
-    });
-    assert.strictEqual(denied.isError, true);
-    const payload = JSON.parse(denied.content[0].text);
-    assert.strictEqual(payload.code, 'MCP_AUTH_DENIED');
-  });
-
-  await test('MCP auth treats proof status as read-only and proof start as delegate', () => {
-    assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_get_cleanup_watch_status', {}), 'read');
-    assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_run_command', { command: 'cleanup_queue_watch_status' }), 'read');
-    assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_get_long_queue_proof_status', {}), 'read');
-    assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_start_long_queue_proof', {}), 'delegate');
-    assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_run_command', { command: 'long_queue_proof_status' }), 'read');
-    assert.strictEqual(mcpAuth.requiredPermissionFor('traecn_run_command', { command: 'long_queue_proof_start' }), 'delegate');
-  });
-
-  await test('mcp-auth module is exported from mcp-server', () => {
-    const mcpServer = require('./mcp-server');
-    assert.ok(mcpServer.mcpAuth);
-    assert.strictEqual(typeof mcpServer.mcpAuth.authorizeTool, 'function');
+  await test('removed compatibility tools are unknown', async () => {
+    await assert.rejects(() => callTool('traecn_run_command', {}), /Unknown tool/);
+    await assert.rejects(() => callTool('traecn_preflight', {}), /Unknown tool/);
+    await assert.rejects(() => callTool('traecn_run_unattended_workflow', {}), /Unknown tool/);
+    await assert.rejects(() => callTool('traecn_submit', {}), /Unknown tool/);
   });
 
   console.log(`\n[mcp-server.test.js] Results: ${passed} passed, ${failed} failed\n`);
   process.exit(failed > 0 ? 1 : 0);
-})().catch(err => {
-  console.error('[mcp-server.test.js] Fatal error:', err);
+})().catch(error => {
+  console.error('[mcp-server.test.js] Fatal error:', error);
   process.exit(1);
 });

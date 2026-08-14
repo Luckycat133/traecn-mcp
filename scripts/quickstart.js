@@ -2,23 +2,68 @@
 
 const path = require('path');
 const { findTraeCNBinary, isTraeCNRunning, startTraeCN } = require('../src/config/quickstart');
+const { fetchCDPVersion, isTraeCNVersion } = require('../src/cdp/discovery');
 const { loadEnv } = require('../src/config/env');
-const { getEnvWithFallback } = require('../src/shared/utils');
+const { readRuntimeEnv } = require('../src/config/runtime-schema');
+
+const DEFAULT_CDP_PROBE_TIMEOUT_MS = 5000;
 
 loadEnv(path.resolve(__dirname, '..', '.env'));
+
+async function probeTraeCNCDP(options = {}) {
+  const host = options.host;
+  const port = options.port;
+  const fetchVersion = options.fetchVersion || fetchCDPVersion;
+  const timeoutMs = Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
+    ? Number(options.timeoutMs)
+    : DEFAULT_CDP_PROBE_TIMEOUT_MS;
+  let timeout;
+
+  try {
+    const version = await Promise.race([
+      Promise.resolve().then(() => fetchVersion(host, port)),
+      new Promise((resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`CDP /json/version request timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      })
+    ]);
+    if (!isTraeCNVersion(version)) {
+      throw new Error(`CDP endpoint does not identify TraeCN (${version?.Browser || 'unknown product'})`);
+    }
+    return version;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function buildCdpRecoveryInstructions(traeRunning) {
+  if (traeRunning) {
+    return [
+      'TraeCN is running, but its debug endpoint is unavailable.',
+      'Quit TraeCN, then restart the logged-in profile with:',
+      'TRAECN_QUICKSTART_PROFILE_MODE=existing npm run start:traecn -- --force-new --use-existing-profile'
+    ];
+  }
+  return [
+    'Start TraeCN with its debug endpoint enabled:',
+    'TRAECN_QUICKSTART_PROFILE_MODE=existing npm run start:traecn -- --force-new --use-existing-profile'
+  ];
+}
 
 async function main() {
   const args = process.argv.slice(2);
   // Default: do NOT auto-launch Trae CN. If the user has quit it, they
-  // probably want it to stay quit. Set TRAECN_AUTOSTART=1 (or pass
-  // --launch-trae) to restore the old auto-start behavior. This prevents
+  // probably want it to stay quit. Set TRAECN_AUTO_START_TRAE=1 (or pass
+  // --launch-trae) to opt in. This prevents
   // the "I quit Trae and it came back" footgun that bites every developer
   // the first time they run `npm run quickstart` after closing the IDE.
-  const autoLaunch = process.env.TRAECN_AUTOSTART === '1' || args.includes('--launch-trae');
+  const autoLaunch = readRuntimeEnv('TRAECN_AUTO_START_TRAE') === '1' || args.includes('--launch-trae');
 
   console.log('[TRAECNclaw] Checking TraeCN status...');
 
-  if (isTraeCNRunning()) {
+  const traeRunning = isTraeCNRunning();
+  if (traeRunning) {
     console.log('[TRAECNclaw] TraeCN is already running.');
   } else if (!autoLaunch) {
     console.log('[TRAECNclaw] TraeCN is not running. Skipping auto-launch (opt-in).');
@@ -34,7 +79,7 @@ async function main() {
     }
 
     try {
-      const result = startTraeCN({ binPath });
+      const result = await startTraeCN({ binPath });
       console.log(`[TRAECNclaw] TraeCN started (PID: ${result.pid})`);
       console.log('[TRAECNclaw] Waiting for TraeCN to initialize...');
       await new Promise(resolve => setTimeout(resolve, 5000));
@@ -44,31 +89,19 @@ async function main() {
     }
   }
 
-  const host = getEnvWithFallback('TRAECN_CDP_HOST', 'TRAE_CDP_HOST', '127.0.0.1');
-  const port = getEnvWithFallback('TRAECN_REMOTE_DEBUGGING_PORT', 'TRAE_REMOTE_DEBUGGING_PORT', '9222');
+  const host = readRuntimeEnv('TRAECN_CDP_HOST');
+  const port = readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT');
 
   console.log(`[TRAECNclaw] Checking CDP at ${host}:${port}...`);
 
   try {
-    const http = require('http');
-    await new Promise((resolve, reject) => {
-      http.get(`http://${host}:${port}/json/version`, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            const info = JSON.parse(data);
-            console.log(`[TRAECNclaw] CDP connected: ${info.Browser || 'Unknown'}`);
-            resolve();
-          } catch {
-            reject(new Error('Invalid CDP response'));
-          }
-        });
-      }).on('error', reject);
-    });
+    const info = await probeTraeCNCDP({ host, port });
+    console.log(`[TRAECNclaw] CDP connected: ${info.Browser || 'Unknown'}`);
   } catch (err) {
     console.error(`[TRAECNclaw] CDP not available: ${err.message}`);
-    console.error('[TRAECNclaw] Make sure TraeCN is started with --remote-debugging-port');
+    for (const instruction of buildCdpRecoveryInstructions(traeRunning)) {
+      console.error(`[TRAECNclaw] ${instruction}`);
+    }
     process.exit(1);
   }
 
@@ -79,7 +112,16 @@ async function main() {
   console.log(`[TRAECNclaw] Gateway running at http://${address.address}:${address.port}`);
 }
 
-main().catch(err => {
-  console.error('[TRAECNclaw] Quickstart failed:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[TRAECNclaw] Quickstart failed:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  DEFAULT_CDP_PROBE_TIMEOUT_MS,
+  buildCdpRecoveryInstructions,
+  main,
+  probeTraeCNCDP
+};

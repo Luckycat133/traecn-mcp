@@ -71,6 +71,11 @@ test('TaskQueueService: persistence path uses OS default when no override', () =
   assert.strictEqual(svc.persistencePath, expected);
 });
 
+test('TaskQueueService: obsolete createQueuedTask placeholder is absent', () => {
+  const svc = new TaskQueueService({ persistencePath: PERSIST_PATH });
+  assert.strictEqual(typeof svc.createQueuedTask, 'undefined');
+});
+
 asyncTest('TaskQueueService: persist serializes concurrent writes', async () => {
   const svc = new TaskQueueService({ persistencePath: PERSIST_PATH });
   const taskQueue = new Map();

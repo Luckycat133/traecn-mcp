@@ -1,7 +1,7 @@
 {
   "id": "traecnclaw",
   "name": "TraeCNclaw",
-  "version": "0.4.0",
+  "version": "0.5.6",
   "description": "Delegate IDE tasks from OpenClaw to a local TraeCNclaw instance that drives the TraeCN desktop app.",
   "baseUrl": "http://127.0.0.1:8788",
   "configSchema": {
@@ -100,6 +100,7 @@
               "delegate_async",
               "task_status",
               "wait_task",
+              "review_task",
               "adopt_current_task",
               "cancel_task",
               "stop_generation",
@@ -851,6 +852,10 @@
           "projectPath": {
             "type": "string",
             "description": "Path to the project to open"
+          },
+          "newInstance": {
+            "type": "boolean",
+            "description": "Open the project in a separate TraeCN window when TraeCN is already running"
           }
         }
       }

@@ -5,15 +5,15 @@ const { sleep, safeJsValue } = require('../shared/utils');
 const {
   clickByTextRadix,
   clickByTextEx,
-  clickByPredicate,
   evaluate,
   evaluateJSON
 } = require('./browser-dom');
 
 // Map human-readable section names to sidebar item text
 const SETTINGS_SECTIONS = [
-  '账号', '通用', '开发环境', '智能体', 'MCP', 'CUE',
-  '模型', '对话流', '索引与文档', '技能与命令', '规则', 'Beta', '关于 TRAE'
+  '账号', '用量管理', '通用', '开发环境', '智能体', 'MCP', 'CUE', '模型',
+  '对话流', '浏览器', '索引与文档', '技能与命令', '规则与记忆', 'Hooks',
+  'Beta', '关于 TRAE'
 ];
 
 const SOLO_MODE_TABS = ['编辑器', '设置', '智能体', 'MCP'];
@@ -24,6 +24,47 @@ const SOLO_MODE_TABS = ['编辑器', '设置', '智能体', 'MCP'];
  */
 async function _goToSettingsTab(client) {
   await _ensureClickHelper(client);
+  const point = await evaluateJSON(client, `() => {
+    const selectors = [
+      '.icube-settings-button-icon.codicon-icube-Settings',
+      '[class*="settings-button"] .codicon-icube-Settings',
+      '.tab-label[aria-label="设置"]',
+      '.tab[aria-label^="设置"]',
+      '.icube-solo-mode-tab-item',
+      '[aria-label="设置"]',
+      '[title="设置"]',
+      '[aria-label*="Settings"]',
+      '[title*="Settings"]',
+      '.codicon-icube-Settings',
+      '.codicon-settings'
+    ];
+    let target = null;
+    for (const selector of selectors) {
+      target = Array.from(document.querySelectorAll(selector)).find(el => {
+        const text = String(el.innerText || el.textContent || '').trim();
+        if (selector === '.icube-solo-mode-tab-item' && text !== '设置') return false;
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return r.width > 4 && r.height > 4
+          && style.visibility !== 'hidden'
+          && style.display !== 'none';
+      });
+      if (target) break;
+    }
+    if (!target) return null;
+    const r = target.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }`);
+  if (point) {
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1
+    });
+    await sleep(800);
+    return;
+  }
   // First try the SOLO mode tab strip; if that misses, click the
   // icube settings cog/button selectors used on other layouts.
   const clicked = await clickByTextRadix(
@@ -47,6 +88,7 @@ async function _goToSettingsTab(client) {
  * longer needed.
  */
 async function _clickSidebarItem(client, sectionName, waitMs = 5000) {
+  await _expandSettingsSidebarIfNeeded(client, sectionName);
   const result = await clickByTextEx(
     client,
     ['.settings-sidebar-menu-item'],
@@ -75,6 +117,56 @@ async function _clickSidebarItem(client, sectionName, waitMs = 5000) {
     value = result.reason || 'unknown';
   }
   return value;
+}
+
+async function _expandSettingsSidebarIfNeeded(client, sectionName) {
+  const result = await evaluate(
+    client,
+    `function() {
+      const sectionName = arguments[0];
+      function isVisible(el) {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return r.width > 0 && r.height > 0
+          && style.visibility !== 'hidden'
+          && style.display !== 'none';
+      }
+      const items = Array.from(document.querySelectorAll('.settings-sidebar-menu-item'));
+      const requestedVisible = items.some(el => {
+        const text = String(el.querySelector('.text')?.textContent || el.textContent || '').trim();
+        return text === sectionName && isVisible(el);
+      });
+      if (requestedVisible) return { status: 'already_visible' };
+
+      const toggle = document.querySelector(
+        '.icube-settings-sidebar-nav-button-container button, button:has(.codicon-icube-menuToggle)'
+      );
+      if (!isVisible(toggle)) return { status: 'toggle_not_found' };
+      const r = toggle.getBoundingClientRect();
+      return { status: 'toggle', x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }`,
+    [sectionName]
+  );
+  if (result?.status === 'toggle') {
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: result.x,
+      y: result.y,
+      button: 'left',
+      clickCount: 1
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: result.x,
+      y: result.y,
+      button: 'left',
+      clickCount: 1
+    });
+    await sleep(250);
+    return 'opened';
+  }
+  return result?.status || result;
 }
 
 async function _listSettingsSidebarSections(client) {
@@ -126,7 +218,7 @@ async function _listSettingsSidebarSections(client) {
 async function _waitForContent(client, maxWait = 8000) {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
-    let items = [];
+    let items;
     try {
       items = await evaluateJSON(
         client,
@@ -136,20 +228,26 @@ async function _waitForContent(client, maxWait = 8000) {
           const results = [];
           for (let i = 0; i < containerEls.length; i++) {
             const el = containerEls[i];
+            const r = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            if (r.width <= 0 || r.height <= 0
+              || style.visibility === 'hidden'
+              || style.display === 'none') continue;
             const labelEl = el.querySelector('.icb-setting-item-label');
             const descEl = el.querySelector('.icb-setting-item-description');
             const toggleEl = el.querySelector('input[type="checkbox"]');
             const dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
-            const r = el.getBoundingClientRect();
+            const textInputEl = el.querySelector('input[type="text"], input:not([type]), textarea, input[type="search"], input[type="number"]');
             results.push({
               label: labelEl ? labelEl.innerText.trim() : '',
               desc: descEl ? descEl.innerText.trim() : '',
               currentValue: dropdownEl ? dropdownEl.innerText.trim() : '',
               hasToggle: !!toggleEl,
               hasDropdown: !!dropdownEl,
+              hasTextInput: !!textInputEl,
               toggleChecked: toggleEl ? toggleEl.checked : null,
               y: Math.round(r.y),
-              visible: r.width > 0 && r.height > 0
+              visible: true
             });
           }
           return results;
@@ -172,7 +270,7 @@ async function _waitForContent(client, maxWait = 8000) {
  * `evaluateJSON` handles the JSON-stringify/parse transport round-trip.
  */
 async function _readSettingsContent(client, waitMs = 8000) {
-  let parsed = { count: 0, items: [], type: 'none' };
+  let parsed;
   try {
     parsed = await evaluateJSON(
       client,
@@ -181,35 +279,61 @@ async function _readSettingsContent(client, waitMs = 8000) {
         const containerItems = document.querySelectorAll('.icb-setting-item-container');
 
         // Strategy 2: table-based model list (the \u6a21\u578b section uses a <table>)
-        const tableRows = document.querySelectorAll('table tbody tr');
+        const tableRows = document.querySelectorAll([
+          '.icube-settings-container table tbody tr',
+          '.part.solo_settings table tbody tr',
+          '[class*="settings-content"] table tbody tr'
+        ].join(','));
+
+        // Strategy 3: settings pages that use custom cards/lists instead of
+        // the standard setting-row component (usage, agents, index/docs).
+        const customItems = document.querySelectorAll([
+          '.ai-agent-list-item-name',
+          '.codeIndex-list-item',
+          '.user-entitlement-credits-overview-card',
+          '.user-entitlement-credits-item',
+          '.icd-docset-list'
+        ].join(','));
 
         // Prefer whichever strategy returned more items
         const containerResults = [];
         const tableResults = [];
+        const customResults = [];
 
         if (containerItems.length > 0) {
           for (let i = 0; i < containerItems.length; i++) {
             const el = containerItems[i];
+            const r = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            if (r.width <= 0 || r.height <= 0
+              || style.visibility === 'hidden'
+              || style.display === 'none') continue;
             const labelEl = el.querySelector('.icb-setting-item-label');
             const descEl = el.querySelector('.icb-setting-item-description');
             const toggleEl = el.querySelector('input[type="checkbox"]');
             const dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
-            const r = el.getBoundingClientRect();
+            const textInputEl = el.querySelector('input[type="text"], input:not([type]), textarea, input[type="search"], input[type="number"]');
             containerResults.push({
               label: labelEl ? labelEl.innerText.trim() : '',
               desc: descEl ? descEl.innerText.trim() : '',
               currentValue: dropdownEl ? dropdownEl.innerText.trim() : '',
               hasToggle: !!toggleEl,
               hasDropdown: !!dropdownEl,
+              hasTextInput: !!textInputEl,
               toggleChecked: toggleEl ? toggleEl.checked : null,
               y: Math.round(r.y),
-              visible: r.width > 0 && r.height > 0
+              visible: true
             });
           }
         }
 
         if (tableRows.length > 0) {
           for (let i = 0; i < tableRows.length; i++) {
+            const rowRect = tableRows[i].getBoundingClientRect();
+            const rowStyle = getComputedStyle(tableRows[i]);
+            if (rowRect.width <= 0 || rowRect.height <= 0
+              || rowStyle.visibility === 'hidden'
+              || rowStyle.display === 'none') continue;
             const cells = tableRows[i].querySelectorAll('td');
             if (cells.length >= 2) {
               const modelName = (cells[0].textContent || '').trim();
@@ -222,6 +346,7 @@ async function _readSettingsContent(client, waitMs = 8000) {
                   currentValue: '',
                   hasToggle: false,
                   hasDropdown: false,
+                  hasTextInput: false,
                   toggleChecked: null,
                   y: Math.round(cells[0].getBoundingClientRect().y),
                   visible: true
@@ -231,9 +356,59 @@ async function _readSettingsContent(client, waitMs = 8000) {
           }
         }
 
-        // Use whichever strategy has more items (more content = the right section)
-        const chosen = containerResults.length >= tableResults.length ? containerResults : tableResults;
-        const strategy = containerResults.length >= tableResults.length ? 'standard' : 'model-table';
+        if (customItems.length > 0) {
+          for (let i = 0; i < customItems.length; i++) {
+            const el = customItems[i];
+            const r = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            if (r.width <= 0 || r.height <= 0
+              || style.visibility === 'hidden'
+              || style.display === 'none') continue;
+            const className = String(el.className || '');
+            const text = String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!text) continue;
+
+            let label = text;
+            let desc = '';
+            let currentValue = '';
+            if (className.includes('user-entitlement-credits-overview-card')) {
+              label = '积分概览';
+              desc = text;
+            } else if (className.includes('user-entitlement-credits-item')) {
+              label = String(el.querySelector('.user-entitlement-credits-item-title')?.textContent || text).trim();
+              desc = String(el.querySelector('.user-entitlement-credits-item-expire')?.textContent || '').trim();
+              currentValue = String(el.querySelector('.user-entitlement-credits-item-amount')?.textContent || '').trim();
+            } else if (className.includes('codeIndex-list-item')) {
+              const percentage = text.match(/\\d+(?:\\.\\d+)?%/);
+              label = text.replace(/\\d+(?:\\.\\d+)?%/g, '').trim();
+              currentValue = percentage ? percentage[0] : '';
+            } else if (className.includes('icd-docset-list')) {
+              label = '文档集';
+              desc = text;
+            }
+
+            customResults.push({
+              label,
+              desc,
+              currentValue,
+              hasToggle: false,
+              hasDropdown: false,
+              hasTextInput: false,
+              toggleChecked: null,
+              y: Math.round(r.y),
+              visible: true
+            });
+          }
+        }
+
+        // Use whichever strategy has more items (more content = the right section).
+        const candidates = [
+          { type: 'standard', items: containerResults },
+          { type: 'model-table', items: tableResults },
+          { type: 'custom', items: customResults }
+        ].sort((a, b) => b.items.length - a.items.length);
+        const chosen = candidates[0].items;
+        const strategy = candidates[0].type;
 
         if (chosen.length === 0) return { count: 0, type: 'none' };
         return { count: chosen.length, items: chosen, type: strategy };
@@ -318,6 +493,62 @@ async function _setDropdown(client, labelText, value) {
   await sleep(400);
   if (!selectedText) return 'option not found: ' + value;
   return 'selected: ' + selectedText;
+}
+
+async function _listDropdownOptions(client, labelText) {
+  await _ensureClickHelper(client);
+  const openResult = await clickByTextEx(
+    client,
+    [
+      '.icb-settings-container .icb-setting-item-container',
+      '.part.solo_settings .icb-setting-item-container',
+      '[class*="settings-content"] .icb-setting-item-container',
+      '.icb-setting-item-container'
+    ],
+    labelText,
+    { strategies: ['text'], exact: true, click: 'radix' }
+  );
+  if (!openResult.ok) return [];
+  await sleep(300);
+  let options;
+  try {
+    options = await evaluateJSON(
+      client,
+      `() => {
+        const selectors = ['[class*="auto-test-select-option"]', '[role="option"]'];
+        const seen = new Set();
+        const values = [];
+        for (const selector of selectors) {
+          for (const el of document.querySelectorAll(selector)) {
+            const rect = el.getBoundingClientRect();
+            const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (rect.width > 4 && rect.height > 4 && text && !seen.has(text)) {
+              seen.add(text);
+              values.push(text);
+            }
+          }
+        }
+        return values;
+      }`
+    );
+  } finally {
+    await evaluate(
+      client,
+      `() => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+        return 'closed';
+      }`
+    );
+  }
+  return Array.isArray(options) ? options : [];
+}
+
+function normalizeSettingItem(item) {
+  let controlType = 'display';
+  if (item.hasToggle) controlType = 'toggle';
+  else if (item.hasDropdown) controlType = 'option';
+  else if (item.hasTextInput) controlType = 'text';
+  return { ...item, controlType };
 }
 
 /**
@@ -546,8 +777,23 @@ class SettingsDriver {
     const settingsOpen = await evaluate(
       this.client,
       `() => {
-        const s = document.querySelector('.settings-sidebar-menu-item, .icb-setting-item-container, .part.solo_settings, [class*="settings-sidebar"]');
-        return !!(s && s.offsetParent !== null);
+        const soloTab = document.querySelector('.icube-solo-mode-tab-item.active');
+        if (soloTab) {
+          return String(soloTab.innerText || soloTab.textContent || '').trim() === '设置';
+        }
+        const editorTab = document.querySelector('.tab.active');
+        if (editorTab) {
+          const label = String(
+            editorTab.getAttribute('aria-label')
+              || editorTab.querySelector?.('.tab-label')?.getAttribute('aria-label')
+              || editorTab.innerText
+              || editorTab.textContent
+              || ''
+          ).trim();
+          return label === '设置' || label.startsWith('设置,');
+        }
+        const sidebar = document.querySelector('.icube-settings-sidebar-container, [class*="settings-sidebar"]');
+        return !!(sidebar && sidebar.offsetParent !== null);
       }`
     );
 
@@ -560,11 +806,24 @@ class SettingsDriver {
 
     // Navigate to section using sidebar item clicker (correct method)
     if (section) {
-      await _clickSidebarItem(this.client, section);
+      const clickResult = await _clickSidebarItem(this.client, section);
+      if (!String(clickResult).startsWith('clicked:')) {
+        throw TraeCNAutomationError.settingsSectionNotActivated(section, clickResult);
+      }
       await sleep(1200);
     }
 
     return { tab: 'settings', section: section || null };
+  }
+
+  async listSections() {
+    await this.switchTab();
+    const discovered = await _listSettingsSidebarSections(this.client);
+    return discovered.length > 0 ? discovered : SETTINGS_SECTIONS.slice();
+  }
+
+  async listOptions(label) {
+    return _listDropdownOptions(this.client, label);
   }
 
   /**
@@ -581,7 +840,7 @@ class SettingsDriver {
     for (const item of (data.items || [])) {
       if (!item.label || seen.has(item.label)) continue;
       seen.add(item.label);
-      items.push(item);
+      items.push(normalizeSettingItem(item));
     }
 
     return {
@@ -611,7 +870,7 @@ class SettingsDriver {
     try {
       const discoveredSections = await _listSettingsSidebarSections(this.client);
       sections = discoveredSections.length > 0 ? discoveredSections : SETTINGS_SECTIONS;
-    } catch (e) {
+    } catch {
       sections = SETTINGS_SECTIONS;
     }
 
@@ -667,7 +926,7 @@ class SettingsDriver {
       for (const item of (data.items || [])) {
         if (!item.label || seenItem.has(item.label)) continue;
         seenItem.add(item.label);
-        items.push(item);
+        items.push(normalizeSettingItem(item));
       }
 
       result[section] = {

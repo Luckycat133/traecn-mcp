@@ -8,7 +8,7 @@
  *   - backgroundResultRetryMode returns the right mode for each shape.
  *   - backgroundResultRetryMode uses the injected state machine for
  *     classification work (so changing the classifier changes the mode).
- *   - createQueuedTask throws the documented marker.
+ *   - the obsolete createQueuedTask placeholder is not exposed.
  */
 
 const assert = require('assert');
@@ -97,11 +97,11 @@ test('BatchExecutor: respects injected stateMachine for classification', () => {
   assert.strictEqual(be.backgroundResultRetryMode({ stable: true, text: 'anything' }), 'resubmit');
 });
 
-// ── createQueuedTask marker ─────────────────────────────────────────────
+// ── public surface ──────────────────────────────────────────────────────
 
-test('BatchExecutor: createQueuedTask throws marker', () => {
+test('BatchExecutor: obsolete createQueuedTask placeholder is absent', () => {
   const be = new BatchExecutor();
-  assert.throws(() => be.createQueuedTask({}, {}), /createQueuedTask must be supplied/);
+  assert.strictEqual(typeof be.createQueuedTask, 'undefined');
 });
 
 console.log(`\n[batch-executor.test.js] Results: ${passed} passed, ${failed} failed\n`);

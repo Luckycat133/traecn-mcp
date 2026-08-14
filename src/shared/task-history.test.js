@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -17,13 +18,33 @@ const { createRunner } = require('../shared/test-runner');
 
 const r = createRunner('task-history.test.js');
 const _baseTest = r.test;
-const { asyncTest, summary } = r;
+const { asyncTest, pendingAsyncTests, summary } = r;
 
 function resetPersistentState() {
   resetGlobalStore();
-  try {
-    fs.unlinkSync(TEST_HISTORY_PATH);
-  } catch {}
+  for (const suffix of ['', '.bak', '.tmp', '.bak.tmp']) {
+    try {
+      fs.unlinkSync(`${TEST_HISTORY_PATH}${suffix}`);
+    } catch {}
+  }
+  for (const name of fs.readdirSync(TEST_HISTORY_DIR)) {
+    if (name.startsWith(`${path.basename(TEST_HISTORY_PATH)}.corrupt-`)) {
+      fs.unlinkSync(path.join(TEST_HISTORY_DIR, name));
+    }
+  }
+}
+
+function silentLogger() {
+  return { error: () => {}, warn: () => {}, log: () => {} };
+}
+
+function documentChecksum(document) {
+  const payload = {
+    schemaVersion: document.schemaVersion,
+    savedAt: document.savedAt,
+    tasks: document.tasks
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
 // Wrap the runner's test() so each case resets persistent state around it —
@@ -31,11 +52,18 @@ function resetPersistentState() {
 function test(name, fn) {
   _baseTest(name, () => {
     resetPersistentState();
+    let result;
     try {
-      fn();
-    } finally {
+      result = fn();
+    } catch (error) {
       resetPersistentState();
+      throw error;
     }
+    if (result && typeof result.then === 'function') {
+      return result.finally(resetPersistentState);
+    }
+    resetPersistentState();
+    return result;
   });
 }
 
@@ -312,10 +340,12 @@ test('clearHistory deletes by olderThanHours', () => {
   store.shutdown();
 });
 
-test('cleanup enforces retention policy', async () => {
+test('cleanup enforces retention policy', () => {
   const store = new TaskHistoryStore({ maxSize: 100, retentionHours: 0 });
-  store.createTask(null, 'Old task');
-  await new Promise(r => setTimeout(r, 10));
+  store.ensureTask('task_old_retention', 'Old task', {
+    createdAtMs: Date.now() - 1000,
+    createdAt: new Date(Date.now() - 1000).toISOString()
+  });
   const result = store.cleanup();
   assert.strictEqual(result.deleted, 1);
   assert.strictEqual(store.tasks.size, 0);
@@ -387,6 +417,149 @@ test('persistence writes to file', () => {
   store2.shutdown();
 });
 
+test('history persistence writes checksummed snapshots atomically and preserves a backup', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-history-atomic-'));
+  const persistencePath = path.join(tmpDir, 'history.json');
+  const store = new TaskHistoryStore({ maxSize: 100, persistencePath, logger: silentLogger() });
+
+  try {
+    const taskId = store.createTask(null, 'Atomic history');
+    assert.strictEqual(store._persistNow(), true);
+    store.recordStep(taskId, 'second-snapshot');
+    assert.strictEqual(store._persistNow(), true);
+
+    const primary = JSON.parse(fs.readFileSync(persistencePath, 'utf8'));
+    const backup = JSON.parse(fs.readFileSync(`${persistencePath}.bak`, 'utf8'));
+    assert.strictEqual(primary.schemaVersion, 2);
+    assert.strictEqual(primary.checksum.algorithm, 'sha256');
+    assert.strictEqual(primary.checksum.digest, documentChecksum(primary));
+    assert.strictEqual(primary.tasks[0].steps.length, 1);
+    assert.strictEqual(backup.tasks[0].steps.length, 0);
+    assert.strictEqual(fs.existsSync(`${persistencePath}.tmp`), false);
+    assert.strictEqual(fs.existsSync(`${persistencePath}.bak.tmp`), false);
+  } finally {
+    store.shutdown();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('history persistence quarantines a corrupt primary and recovers the backup', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-history-backup-'));
+  const persistencePath = path.join(tmpDir, 'history.json');
+  const store = new TaskHistoryStore({ maxSize: 100, persistencePath, logger: silentLogger() });
+  let recovered;
+
+  try {
+    const taskId = store.createTask(null, 'Recoverable history');
+    store._persistNow();
+    store.recordStep(taskId, 'newer-primary-only');
+    store._persistNow();
+    fs.writeFileSync(persistencePath, '{corrupt-primary', 'utf8');
+
+    recovered = new TaskHistoryStore({ maxSize: 100, persistencePath, logger: silentLogger() });
+    assert.ok(recovered.getTask(taskId));
+    assert.strictEqual(recovered.getTask(taskId).steps.length, 0);
+    assert.strictEqual(recovered.getHealth().lastRecovery.source, 'backup');
+    assert.strictEqual(recovered.getHealth().durabilityDegraded, false);
+    assert.ok(fs.readdirSync(tmpDir).some(name => name.startsWith('history.json.corrupt-')));
+
+    const rewritten = JSON.parse(fs.readFileSync(persistencePath, 'utf8'));
+    assert.strictEqual(rewritten.checksum.digest, documentChecksum(rewritten));
+  } finally {
+    if (recovered) recovered.shutdown();
+    store.shutdown();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('history persistence recovers a complete interrupted temporary snapshot', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-history-temp-'));
+  const persistencePath = path.join(tmpDir, 'history.json');
+  const store = new TaskHistoryStore({ maxSize: 100, persistencePath, logger: silentLogger() });
+  let recovered;
+
+  try {
+    const taskId = store.createTask(null, 'Interrupted history');
+    store._persistNow();
+    fs.renameSync(persistencePath, `${persistencePath}.tmp`);
+
+    recovered = new TaskHistoryStore({ maxSize: 100, persistencePath, logger: silentLogger() });
+    assert.ok(recovered.getTask(taskId));
+    assert.strictEqual(recovered.getHealth().lastRecovery.source, 'temp');
+    assert.strictEqual(fs.existsSync(persistencePath), true);
+    assert.strictEqual(fs.existsSync(`${persistencePath}.tmp`), false);
+  } finally {
+    if (recovered) recovered.shutdown();
+    store.shutdown();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('history persistence migrates a legacy version 1 snapshot', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-history-legacy-'));
+  const persistencePath = path.join(tmpDir, 'history.json');
+  const legacyTask = {
+    taskId: 'task_legacy_history',
+    sessionId: null,
+    task: 'Legacy history',
+    result: null,
+    status: 'running',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    createdAtMs: 1754006400000,
+    sortKey: '1754006400000',
+    completedAt: null,
+    elapsedMs: null,
+    steps: [],
+    metadata: {}
+  };
+  fs.writeFileSync(persistencePath, JSON.stringify({
+    version: 1,
+    savedAt: '2026-08-01T00:00:00.000Z',
+    tasks: [legacyTask]
+  }), 'utf8');
+  const store = new TaskHistoryStore({ maxSize: 100, persistencePath, logger: silentLogger() });
+
+  try {
+    assert.ok(store.getTask(legacyTask.taskId));
+    assert.strictEqual(store.getHealth().lastRecovery.source, 'legacy');
+    const migrated = JSON.parse(fs.readFileSync(persistencePath, 'utf8'));
+    assert.strictEqual(migrated.schemaVersion, 2);
+    assert.strictEqual(migrated.checksum.digest, documentChecksum(migrated));
+  } finally {
+    store.shutdown();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('history persistence reports degraded health after a write failure', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-history-health-'));
+  const blockedDir = path.join(tmpDir, 'not-a-directory');
+  fs.writeFileSync(blockedDir, 'blocked', 'utf8');
+  const store = new TaskHistoryStore({
+    maxSize: 100,
+    persistencePath: path.join(blockedDir, 'history.json'),
+    logger: silentLogger()
+  });
+
+  try {
+    store.createTask(null, 'Unwritable history');
+    assert.strictEqual(store._persistNow(), false);
+    const health = store.getHealth();
+    assert.strictEqual(health.persistenceEnabled, true);
+    assert.strictEqual(health.historyStoreWritable, false);
+    assert.strictEqual(health.lastSuccessfulPersistAt, null);
+    assert.match(health.lastPersistError.code, /EEXIST|ENOTDIR|WRITE_FAILED/);
+    assert.strictEqual(health.lastPersistError.message, 'Task history persistence is unavailable');
+    assert.ok(health.lastPersistError.at);
+    assert.strictEqual(health.lastLoadError, null);
+    assert.strictEqual(health.lastRecovery, null);
+    assert.strictEqual(health.durabilityDegraded, true);
+  } finally {
+    store.shutdown();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('default persistence path is enabled when no explicit path is provided', () => {
   const store = new TaskHistoryStore({ maxSize: 100 });
   assert.ok(store.persistencePath);
@@ -428,6 +601,35 @@ test('step details are stored correctly', () => {
   store.shutdown();
 });
 
-summary();
-fs.rmSync(TEST_HISTORY_DIR, { recursive: true, force: true });
-process.exit(r.failed > 0 ? 1 : 0);
+asyncTest('recordStep schedules a step-only snapshot that survives restart', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-history-step-only-'));
+  const persistencePath = path.join(tmpDir, 'history.json');
+  const store = new TaskHistoryStore({
+    maxSize: 100,
+    persistencePath,
+    persistDebounceMs: 10
+  });
+  let restored;
+
+  try {
+    const taskId = store.createTask(null, 'Step-only persistence');
+    await new Promise(resolve => setTimeout(resolve, 30));
+    store.recordStep(taskId, 'step-only');
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    restored = new TaskHistoryStore({ maxSize: 100, persistencePath });
+    assert.strictEqual(restored.getTask(taskId).steps.length, 1);
+    assert.strictEqual(restored.getTask(taskId).steps[0].action, 'step-only');
+  } finally {
+    if (restored) restored.shutdown();
+    store.shutdown();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+(async () => {
+  await pendingAsyncTests();
+  summary();
+  fs.rmSync(TEST_HISTORY_DIR, { recursive: true, force: true });
+  process.exit(r.failed > 0 ? 1 : 0);
+})();

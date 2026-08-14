@@ -23,6 +23,7 @@
  */
 
 const { EventEmitter } = require('events');
+const { parsePositiveInt } = require('../shared/utils');
 
 const DEFAULT_PROBE_INTERVAL_MS = 30000;
 const DEFAULT_MAX_RECOVERIES = 5;
@@ -104,18 +105,24 @@ class CDPHealthWatcher extends EventEmitter {
 
   _attachClient() {
     if (!this._client || typeof this._client.on !== 'function') return;
-    this._client.on('disconnect', (data) => this._handleDisconnect(data, 'ws-disconnect'));
-    this._client.on('reconnect-failed', (data) => this._handleDisconnect(data, 'reconnect-failed'));
-    this._client.on('error', (err) => this._handleDisconnect({ error: err }, 'ws-error'));
+    this._handlers = {
+      disconnect: (data) => this._handleDisconnect(data, 'ws-disconnect'),
+      'reconnect-failed': (data) => this._handleDisconnect(data, 'reconnect-failed'),
+      error: (err) => this._handleDisconnect({ error: err }, 'ws-error')
+    };
+    for (const [ev, fn] of Object.entries(this._handlers)) {
+      this._client.on(ev, fn);
+    }
   }
 
   _detachClient() {
-    if (!this._client || typeof this._client.off !== 'function') return;
-    // We registered anonymous handlers, so we cannot remove them by reference.
-    // The client implementation drops its own handler list when the WS dies
-    // (`_clearPending`) and the watcher holds no state that depends on the
-    // old client beyond this point — `start` is the only way to attach
-    // again, and it always builds a fresh listener set.
+    if (!this._client || !this._handlers) return;
+    if (typeof this._client.off === 'function') {
+      for (const [ev, fn] of Object.entries(this._handlers)) {
+        this._client.off(ev, fn);
+      }
+    }
+    this._handlers = null;
   }
 
   async _handleDisconnect(data, source) {
@@ -198,7 +205,7 @@ class CDPHealthWatcher extends EventEmitter {
     this._emitHealthEvent('recovery-start', { source, attempt: this._consecutiveFailures });
 
     let recoveryOk = false;
-    let newClient = null;
+    let newClient;
     try {
       const reason = new Error(`auto-recovery:${source}`);
       if (this._recoverFn) {
@@ -323,12 +330,6 @@ class CDPHealthWatcher extends EventEmitter {
       stopped: this._stopped
     };
   }
-}
-
-function parsePositiveInt(value, fallback) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.floor(n);
 }
 
 function summarize(data) {

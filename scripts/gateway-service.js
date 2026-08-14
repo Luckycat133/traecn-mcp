@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { getQuickstartConfig } = require('../src/config/quickstart');
-const { readArg } = require('./lib/cli-config');
+const { runtimeDefault } = require('../src/config/runtime-schema');
 
 const LABEL = 'com.traecnclaw.gateway';
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -82,12 +82,12 @@ function buildEnvironmentVariables() {
   // to '1' explicitly in the plist (or via `launchctl setenv`).
   const env = {
     TRAECN_ENABLE_MOCK_BRIDGE: process.env.TRAECN_ENABLE_MOCK_BRIDGE || existingEnv.TRAECN_ENABLE_MOCK_BRIDGE || '0',
-    TRAECN_REMOTE_DEBUGGING_PORT: process.env.TRAECN_REMOTE_DEBUGGING_PORT || existingEnv.TRAECN_REMOTE_DEBUGGING_PORT || quickstart.remoteDebuggingPort || '9334',
-    TRAECN_RESPONSE_TIMEOUT_MS: process.env.TRAECN_RESPONSE_TIMEOUT_MS || existingEnv.TRAECN_RESPONSE_TIMEOUT_MS || '600000',
+    TRAECN_REMOTE_DEBUGGING_PORT: process.env.TRAECN_REMOTE_DEBUGGING_PORT || existingEnv.TRAECN_REMOTE_DEBUGGING_PORT || quickstart.remoteDebuggingPort || runtimeDefault('TRAECN_REMOTE_DEBUGGING_PORT'),
+    TRAECN_RESPONSE_TIMEOUT_MS: process.env.TRAECN_RESPONSE_TIMEOUT_MS || existingEnv.TRAECN_RESPONSE_TIMEOUT_MS || runtimeDefault('TRAECN_RESPONSE_TIMEOUT_MS'),
     TRAECN_QUICKSTART_PROFILE_MODE: process.env.TRAECN_QUICKSTART_PROFILE_MODE || existingEnv.TRAECN_QUICKSTART_PROFILE_MODE || quickstart.profileMode || 'existing',
     TRAECN_QUICKSTART_USE_ISOLATED_PROFILE: process.env.TRAECN_QUICKSTART_USE_ISOLATED_PROFILE || existingEnv.TRAECN_QUICKSTART_USE_ISOLATED_PROFILE || (quickstart.useIsolatedProfile ? '1' : '0'),
     TRAECN_TRAE_RECOVERY_NEW_INSTANCE: process.env.TRAECN_TRAE_RECOVERY_NEW_INSTANCE || existingEnv.TRAECN_TRAE_RECOVERY_NEW_INSTANCE || '0',
-    TRAECN_AUTO_START_TRAE: process.env.TRAECN_AUTO_START_TRAE || existingEnv.TRAECN_AUTO_START_TRAE || '0',
+    TRAECN_AUTO_START_TRAE: process.env.TRAECN_AUTO_START_TRAE || existingEnv.TRAECN_AUTO_START_TRAE || runtimeDefault('TRAECN_AUTO_START_TRAE'),
     TRAECN_AUTO_RECOVER: process.env.TRAECN_AUTO_RECOVER || existingEnv.TRAECN_AUTO_RECOVER || '0'
   };
   for (const [key, value] of Object.entries(process.env)) {

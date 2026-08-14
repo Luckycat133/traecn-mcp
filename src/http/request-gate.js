@@ -21,22 +21,10 @@
  * rate-limiter, idempotency map, auth header name).
  */
 
-const crypto = require('crypto');
 const zlib = require('zlib');
 const { URL } = require('url');
 const requestContext = require('../shared/request-context');
-
-const SENSITIVE_LOG_KEYS = Object.freeze([
-  'authorization',
-  'set-cookie',
-  'apikey',
-  'api_key',
-  'cookie',
-  'credential',
-  'password',
-  'secret',
-  'token',
-]);
+const { secureCompare, SENSITIVE_LOG_KEYS } = require('../shared/utils');
 
 const DEFAULT_JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
@@ -85,22 +73,9 @@ function redactUrl(rawUrl) {
   const query = rawUrl.slice(qIdx + 1);
   const redacted = query.replace(
     /(^|&)(token|authorization|api[_-]?key|secret|password)(=)/gi,
-    (_match, sep, _key, eq) => `${sep}${_key}=[REDACTED]`
+    (_match, sep, _key, _eq) => `${sep}${_key}=[REDACTED]`
   );
   return path + '?' + redacted;
-}
-
-/**
- * Constant-time string compare. Returns false for non-strings or mismatched
- * lengths rather than throwing, so callers can short-circuit on the public
- * auth path without try/catch noise.
- */
-function secureCompare(left, right) {
-  if (typeof left !== 'string' || typeof right !== 'string') return false;
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 /**

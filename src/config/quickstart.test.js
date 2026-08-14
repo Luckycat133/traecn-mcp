@@ -3,6 +3,7 @@
 const assert = require('assert');
 const {
   buildStartCommand,
+  buildReuseWindowCommand,
   findTraeCNBinary,
   isTraeCNMainProcessCommand,
   isTraeCNRunning,
@@ -38,11 +39,30 @@ test('getQuickstartConfig default gatewayHost is 127.0.0.1', () => {
   assert.strictEqual(config.gatewayHost, '127.0.0.1');
 });
 
-test('getQuickstartConfig default remoteDebuggingPort is 9334', () => {
+test('getQuickstartConfig uses the canonical default CDP port 9222', () => {
+  delete process.env.TRAECN_REMOTE_DEBUGGING_PORT;
+  delete process.env.TRAE_REMOTE_DEBUGGING_PORT;
   delete process.env.TRAECN_QUICKSTART_REMOTE_DEBUGGING_PORT;
   delete process.env.TRAE_QUICKSTART_REMOTE_DEBUGGING_PORT;
   const config = getQuickstartConfig();
-  assert.strictEqual(config.remoteDebuggingPort, '9334');
+  assert.strictEqual(config.remoteDebuggingPort, '9222');
+});
+
+test('getQuickstartConfig prefers canonical gateway variables', () => {
+  process.env.TRAECN_GATEWAY_HOST = '127.0.0.9';
+  process.env.TRAECN_GATEWAY_PORT = '8899';
+  process.env.HOST = '127.0.0.8';
+  process.env.PORT = '8888';
+  try {
+    const config = getQuickstartConfig();
+    assert.strictEqual(config.gatewayHost, '127.0.0.9');
+    assert.strictEqual(config.gatewayPort, '8899');
+  } finally {
+    delete process.env.TRAECN_GATEWAY_HOST;
+    delete process.env.TRAECN_GATEWAY_PORT;
+    delete process.env.HOST;
+    delete process.env.PORT;
+  }
 });
 
 test('getQuickstartConfig defaults to existing profile', () => {
@@ -108,6 +128,19 @@ test('buildStartCommand uses macOS open for normal app bundle launches', () => {
   });
   assert.strictEqual(result.command, 'open');
   assert.deepStrictEqual(result.commandArgs, ['-a', '/Applications/Trae CN.app', '--args', '--remote-debugging-port=9222']);
+});
+
+test('buildReuseWindowCommand uses the bundled TraeCN CLI and reuses the active window', () => {
+  const result = buildReuseWindowCommand(
+    '/Applications/Trae CN.app',
+    '/Users/jack/Documents/gh-repos/gemini-web-mcp',
+    { platform: 'darwin', pathExists: () => true }
+  );
+
+  assert.deepStrictEqual(result, {
+    command: '/Applications/Trae CN.app/Contents/Resources/app/bin/trae-cn',
+    commandArgs: ['--reuse-window', '/Users/jack/Documents/gh-repos/gemini-web-mcp']
+  });
 });
 
 test('buildStartCommand uses direct Electron executable for debug new instances when present', () => {

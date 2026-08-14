@@ -1,0 +1,477 @@
+{
+  "source": "mcp-server.js",
+  "contractVersion": 5,
+  "toolCount": 20,
+  "tools": [
+    {
+      "name": "traecn_send_message",
+      "description": "Send one message to TraeCN as a persistent background task. Optionally target an existing conversation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "The exact message to send."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable identifier returned by traecn_list_conversations."
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "task",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_get_task",
+      "description": "Read one known task. Defaults to the final result; request trace only when detailed execution history is needed for diagnosis.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          },
+          "detailLevel": {
+            "type": "string",
+            "enum": [
+              "result",
+              "trace"
+            ],
+            "description": "result returns only the final answer (default); trace includes the full visible Trae execution process."
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "task",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_cancel_task",
+      "description": "Cancel one gateway-tracked task by task ID.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "task",
+        "risk": "delegate",
+        "destructive": true
+      }
+    },
+    {
+      "name": "traecn_stop_generation",
+      "description": "Stop only the generation visible in the named active TraeCN conversation. This may interrupt work not submitted through the gateway, so the caller must acknowledge that scope and provide an audit reason.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "conversationId": {
+            "type": "string",
+            "description": "Stable identifier returned by traecn_list_conversations."
+          },
+          "acknowledgeUntrackedWork": {
+            "type": "boolean",
+            "description": "Must be true to acknowledge that visible work may belong to the user or another agent."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Concise reason recorded in the local security audit log."
+          }
+        },
+        "required": [
+          "conversationId",
+          "acknowledgeUntrackedWork",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "task",
+        "risk": "delegate",
+        "destructive": true
+      }
+    },
+    {
+      "name": "traecn_open_workspace",
+      "description": "Open one local folder in the active TraeCN window and verify it became the workspace.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute local folder path."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "context",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_list_models",
+      "description": "List the models currently offered by TraeCN and identify the selected model.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "context",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_select_model",
+      "description": "Select one TraeCN model without waiting or polling for model availability.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "context",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_select_mode",
+      "description": "Select TraeCN Solo or IDE mode.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "solo",
+              "ide"
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "context",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_list_setting_sections",
+      "description": "List the settings sections currently visible in the TraeCN UI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "settings",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_list_settings",
+      "description": "List the individual settings and control types visible in one TraeCN settings section.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "section"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "settings",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_list_setting_options",
+      "description": "List the visible choices for one dropdown setting in the TraeCN UI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "section",
+          "label"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "settings",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_set_setting_toggle",
+      "description": "Enable or disable one toggle setting in the TraeCN UI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "section",
+          "label",
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "settings",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_select_setting_option",
+      "description": "Select one dropdown option for a setting in the TraeCN UI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "section",
+          "label",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "settings",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_set_setting_text",
+      "description": "Enter one text value for a setting in the TraeCN UI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "section",
+          "label",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "settings",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_list_conversations",
+      "description": "List conversations in the current TraeCN mode with stable identifiers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "conversation",
+        "risk": "read"
+      }
+    },
+    {
+      "name": "traecn_create_conversation",
+      "description": "Create and select a new TraeCN conversation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "conversation",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_select_conversation",
+      "description": "Select one existing TraeCN conversation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "conversationId": {
+            "type": "string",
+            "description": "Stable identifier returned by traecn_list_conversations."
+          }
+        },
+        "required": [
+          "conversationId"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "conversation",
+        "risk": "write"
+      }
+    },
+    {
+      "name": "traecn_delete_conversation",
+      "description": "Permanently delete one inactive TraeCN conversation. The operation has no gateway recovery path and requires the listed title plus an explicit irreversible-deletion acknowledgement.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "conversationId": {
+            "type": "string",
+            "description": "Stable identifier returned by traecn_list_conversations."
+          },
+          "expectedTitle": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Exact title returned by traecn_list_conversations."
+          },
+          "acknowledgePermanentDeletion": {
+            "type": "boolean",
+            "description": "Must be true to acknowledge that the gateway cannot restore the deleted conversation."
+          }
+        },
+        "required": [
+          "conversationId",
+          "expectedTitle",
+          "acknowledgePermanentDeletion"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "conversation",
+        "risk": "delegate",
+        "destructive": true
+      }
+    },
+    {
+      "name": "traecn_answer_question",
+      "description": "Answer an exceptional TraeCN question that the gateway could not resolve mechanically.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "interaction",
+        "risk": "delegate"
+      }
+    },
+    {
+      "name": "traecn_decide_approval",
+      "description": "Approve or deny the exceptional unsafe or ambiguous TraeCN command card currently visible. Approval revalidates the exact command and requires a risk acknowledgement plus an audit reason; denial needs only the decision.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "deny"
+            ]
+          },
+          "expectedCommand": {
+            "type": "string",
+            "description": "For approve, the exact command returned with the pending interaction."
+          },
+          "acknowledgeRisk": {
+            "type": "boolean",
+            "description": "For approve, must be true after checking the command against the user-authorized scope."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "For approve, a concise authorization reason recorded in the local security audit log."
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "metadata": {
+        "layer": "interaction",
+        "risk": "delegate",
+        "destructive": true
+      }
+    }
+  ]
+}

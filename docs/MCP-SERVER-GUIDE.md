@@ -1,32 +1,52 @@
-# MCP 服务器配置
+# TRAECNclaw MCP server
 
-TRAECNclaw 自带零依赖 stdio MCP 服务器：`mcp-server.js`。MCP 客户端连接 MCP 服务器，MCP 服务器再调用本地 TraeCNclaw HTTP 网关（默认 `http://127.0.0.1:8788`）。TraeCN 桌面的 CDP 端口仍由网关配置管理，通常不需要暴露给 MCP 客户端。
+TRAECNclaw exposes a local stdio MCP server for operating TraeCN. The Agent
+contract contains 20 focused tools; lower-level HTTP, CLI, proof, waiting, and
+maintenance operations remain gateway or operator facilities.
 
-## 推荐入口：skill 启动器
+## Protocol compatibility
 
-Skill 自带启动器 `skills/traecnclaw-mcp/scripts/start-mcp.js`，会自动定位仓库根目录的 `mcp-server.js`。将下方各配置中的 `args` 替换为启动器路径即可：
+The current 0.5.x server is dual-era:
 
+| MCP revision | Lifecycle | TRAECNclaw behavior |
+| --- | --- | --- |
+| `2026-07-28` | Stateless requests with `_meta` | `server/discover`, strict per-request version checks, `resultType`, cache hints, server identity metadata, and an optional Tasks extension |
+| `2025-11-25` | `initialize` handshake | Focused tools plus legacy logging notifications |
+| `2024-11-05` | `initialize` handshake | Compatibility mode for existing clients |
+
+Standard stdio framing is newline-delimited JSON-RPC. The server can still
+decode and answer the `Content-Length` framing used by older TRAECNclaw
+clients, but new integrations should send one compact JSON object per line.
+Metadata such as `_meta.progressToken` on a legacy request does not switch the
+connection to the modern era; only the explicit TRAECNclaw protocol-version
+metadata does so.
+MCP contract version 5 names the frozen TRAECNclaw tool surface; it is separate
+from the date-based MCP protocol revision.
+
+## Configure
+
+From a source checkout, validate server discovery and render a resolved Skill
+launcher entry:
+
+```sh
+npm run --silent setup:mcp
 ```
-"args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"]
-```
 
-完整配置模板（含 Option A 启动器 / Option B 直连两种方式）见 `skills/traecnclaw-mcp/assets/mcp-client-config.json`。也可设置环境变量 `TRAECN_MCP_SERVER_PATH` 手动指定 `mcp-server.js` 的绝对路径。
-
-## 快速开始
-
-### 1. Cursor 配置
-
-创建 `~/.cursor/mcp.json` 或项目 `.cursor/mcp.json`（推荐使用 skill 启动器路径）：
+Use `npm run setup:mcp -- --output ./traecnclaw-mcp.json` to atomically create
+a new mode-0600 file; it refuses to replace an existing configuration. A
+standalone Skill installation can run `node scripts/setup-mcp.js`. Merge the
+resulting `mcpServers.traecn` entry into the host and reconnect it. The direct
+server entry below remains a fallback:
 
 ```json
 {
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"],
+      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
       "env": {
-        "TRAECN_HOST": "127.0.0.1",
-        "TRAECN_PORT": "8788",
+        "TRAECN_GATEWAY_HOST": "127.0.0.1",
+        "TRAECN_GATEWAY_PORT": "8788",
         "TRAECN_GATEWAY_TOKEN": ""
       }
     }
@@ -34,146 +54,119 @@ Skill 自带启动器 `skills/traecnclaw-mcp/scripts/start-mcp.js`，会自动�
 }
 ```
 
-### 2. Claude Desktop 配置
+Start the gateway separately with `npm run start:gateway`.
 
-编辑 `~/.claude_desktop_config.json`：
+## Tool groups
 
-```json
-{
-  "mcpServers": {
-    "traecn": {
-      "command": "node",
-      "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"],
-      "env": {
-        "TRAECN_HOST": "127.0.0.1",
-        "TRAECN_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": ""
-      }
-    }
-  }
-}
-```
+| Group | Tools |
+| --- | --- |
+| Work | `traecn_send_message`, `traecn_get_task`, `traecn_cancel_task`, `traecn_stop_generation` |
+| Context | `traecn_open_workspace`, `traecn_list_models`, `traecn_select_model`, `traecn_select_mode` |
+| Settings | `traecn_list_setting_sections`, `traecn_list_settings`, `traecn_list_setting_options`, `traecn_set_setting_toggle`, `traecn_select_setting_option`, `traecn_set_setting_text` |
+| Conversations | `traecn_list_conversations`, `traecn_create_conversation`, `traecn_select_conversation`, `traecn_delete_conversation` |
+| Exceptional interactions | `traecn_answer_question`, `traecn_decide_approval` |
 
-### 3. Cline/Roo Code 配置
-
-在设置中添加 MCP 服务器：
+Each tool performs one operation. For example, open a workspace, select a
+model, and send a message as separate calls only when those context changes are
+needed:
 
 ```json
-{
-  "mcpServers": {
-    "traecn": {
-      "command": "node",
-      "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"]
-    }
-  }
-}
+{"path":"/absolute/path/to/repository"}
+{"model":"GLM-5.2"}
+{"message":"Review the repository and report findings first."}
 ```
 
-### 4. Windsurf 配置
+`traecn_send_message` accepts only `message` and optional `conversationId`.
+Workspace paths are never inserted into the model prompt. New conversations
+are explicit; sending without a conversation ID uses the selected conversation.
 
-在 `.windsurfrc` 或 MCP 设置中：
+Settings use progressive discovery rather than one generic command: list the
+visible sections, inspect one section, and list a dropdown's choices only when
+needed. Use the mutation tool matching the returned `controlType`. The gateway
+opens Trae settings, performs the UI operation, serializes concurrent UI work,
+and returns to chat automatically.
 
-```json
-{
-  "mcpServers": {
-    "traecn": {
-      "command": "node",
-      "args": ["/absolute/path/to/skills/traecnclaw-mcp/scripts/start-mcp.js"]
-    }
-  }
-}
+`traecn_cancel_task` targets one gateway task. `traecn_stop_generation` is a
+separate direct UI action for untracked work: supply the active Solo
+`conversationId`, acknowledge that it may belong to another origin, and give a
+short audit reason. The gateway verifies that the ID is still active before it
+clicks stop.
+
+Conversation deletion is permanent and cannot target the active conversation.
+It requires the exact listed title and `acknowledgePermanentDeletion:true`.
+Unsafe-command approval requires the exact visible command,
+`acknowledgeRisk:true`, and an audit reason; the gateway rechecks the card to
+prevent stale approval. These high-impact operations use `delegate` permission
+and are recorded in the local append-only security audit log.
+
+## Gateway ownership
+
+The Agent does not preflight, choose sync versus background execution, wait,
+poll, acknowledge events, recover tasks, clean queues, or operate keep/revert
+controls. The gateway persists accepted tasks, maintains queues, resumes work,
+returns every command card for explicit review, and resolves file-review gates.
+
+HTTP task submissions may carry a stable `Idempotency-Key`. Active retries
+reuse the durable task, and terminal retries replay the original terminal
+status/result across restart for a configurable 24-hour default TTL. Reusing a
+key for different meaningful input is rejected before TraeCN is contacted.
+
+Legacy initialization-based clients receive compact MCP logging notifications.
+The first connection for a client ID baselines retained history before delivery
+starts; reconnecting with a previously acknowledged ID resumes only its
+undelivered events. Use a stable, unique `TRAECN_MCP_CLIENT_ID` when the host's
+derived name could collide with another connection.
+The `2026-07-28` protocol does not allow those free-floating notifications;
+modern clients use the separately negotiated Tasks extension described below,
+or make an intentional `traecn_get_task` read when their host does not support
+extensions. Do not use a tight Agent polling loop.
+
+`traecn_get_task` exists for explicit progress/result reads and modern clients
+that cannot receive legacy logging notifications. It is not a required
+immediate post-send step. The optional `detailLevel` is `result` by default,
+which returns only the final answer. Set it to `trace` when detailed visible
+execution steps are needed to investigate an unexpected result.
+
+## Modern Tasks extension
+
+`server/discover` advertises `io.modelcontextprotocol/tasks`. The upstream
+extension is independently versioned and still published as a draft; the core
+`2026-07-28` revision and TRAECNclaw contract version 5 remain separate.
+
+A client opts in on each request through
+`_meta.io.modelcontextprotocol/clientCapabilities.extensions`. For an opted-in
+`traecn_send_message`, the server returns the same durable gateway identity as
+a `resultType: "task"` handle. The extension adds protocol methods, not tools:
+
+| Method | Behavior |
+| --- | --- |
+| `tasks/get` | Returns the complete current task state and final `CallToolResult` when terminal. |
+| `tasks/update` | Supplies a response to an outstanding `input_required` approval or review request. |
+| `tasks/cancel` | Cooperatively cancels the corresponding gateway task. |
+| `subscriptions/listen` | Subscribes to exact task IDs and streams full `notifications/tasks` snapshots over stdio. |
+
+Respect `pollIntervalMs` when polling. Prefer a task-ID subscription when the
+host implements it: the acknowledgement and every notification carry
+`io.modelcontextprotocol/subscriptionId`, and reconnecting produces a fresh
+snapshot before durable event replay. On deliberate server shutdown, the
+listen request receives the standard empty, correlated result so official SDK
+clients classify the close as graceful. A client that does not opt in always
+receives the ordinary complete tool result shape and can continue using the
+focused `traecn_get_task` tool. Streamable HTTP transport is not exposed.
+
+## Validation
+
+```sh
+npm run test:mcp-stdio-smoke
+npm run test:mcp-conformance
+npm run check:skill-contracts
+npm test
 ```
 
-## MCP 工具定义
+The conformance command uses `@modelcontextprotocol/client` 2.x for independent
+2024, 2025, and pinned `2026-07-28` sessions. A separate transcript peer covers
+the legacy Content-Length compatibility path, malformed JSON recovery,
+JSON-RPC error codes, argument rejection, and connection-era pinning.
 
-运行 `node -e "console.log(require('./mcp-server').MCP_TOOLS.map(t => t.name))"` 可查看完整工具全集。运行时 `tools/list` 会按 `TRAECN_MCP_TOOL_PROFILE` 分层返回：
-
-| Profile | 数量 | 说明 |
-| --- | ---: | --- |
-| `public` | 20 | 默认发布面，适合通用 agent。 |
-| `ops` | 32 | 增加恢复、cleanup、Solo 对话和长队列证明工具。 |
-| `full` | 36 | 暴露所有显式工具，包括诊断/兼容快捷入口。 |
-
-核心工具包括：
-
-- `traecn_run_task`: 委派任务并尽量等待最终结果
-- `traecn_queue_task`: 提交后台队列任务并返回 `taskId`
-- `traecn_poll_task`: 查询队列任务状态
-- `traecn_review_code`: 对代码、diff 或指定文件范围生成 findings-first 审查
-- `traecn_preflight`: 默认状态、队列、弹窗和确认计划入口
-- `traecn_get_dialog_status`: 直接检查确认弹窗
-- `traecn_switch_model`, `traecn_switch_mode`, `traecn_create_chat`, `traecn_open_project`: TraeCN 控制
-- `traecn_get_settings`, `traecn_set_setting`, `traecn_respond_dialog`: 设置与确认操作
-- `traecn_get_capabilities`: 返回低 token 能力目录，包括命令、端点、模型、设置分区和建议调用顺序
-- `traecn_plan_operation`: 在执行有副作用命令前生成风险、确认和预检计划，不操作 TraeCN
-- `traecn_list_commands`, `traecn_run_command`: 枚举并调用完整稳定命令集
-
-`traecn_get_status` 和 `traecn_get_queue_status` 属于 `full` 兼容诊断工具；默认
-agent 应优先用 `traecn_preflight`。
-
-## 环境变量
-
-```bash
-# TraeCNclaw 网关连接
-export TRAECN_HOST=127.0.0.1
-export TRAECN_PORT=8788
-
-# 认证（可选）
-export TRAECN_GATEWAY_TOKEN=your_gateway_token
-
-# 日志
-export TRAECN_LOG_LEVEL=info
-export TRAECN_LOG_FORMAT=json
-
-# 超时设置（毫秒）
-export TRAECN_TIMEOUT=120000
-```
-
-## 故障排除
-
-### 连接失败
-
-```bash
-# 检查 TraeCN 是否运行
-curl http://localhost:9222/json
-
-# 检查端口占用
-lsof -i :9222
-netstat -an | grep 9222
-```
-
-### MCP 服务器不工作
-
-```bash
-# 测试网关直接连接
-curl http://127.0.0.1:8788/api/status
-
-# 检查日志
-tail -f logs/app-*.log
-```
-
-## 安全建议
-
-1. **使用 API 密钥**：启用 `TRAECN_API_KEY` 环境变量
-2. **限制来源**：使用 CORS 配置限制跨域请求
-3. **审计日志**：启用审计日志记录所有操作
-4. **定期轮换**：定期更换 API 密钥
-
-## 性能优化
-
-```javascript
-// 使用队列模式处理长时间任务
-const taskId = await queueTask('Long running task');
-
-// 使用轮询检查状态
-const status = await pollTask(taskId);
-
-// 批量操作时使用 queueTask 减少等待
-for (const task of tasks) {
-  await queueTask(task);
-}
-```
-
----
-
-**配置完成后重启 IDE 或 MCP 客户端使配置生效。**
+Generated schemas live in
+`skills/traecnclaw-mcp/references/mcp-tool-contracts.json`.

@@ -98,6 +98,7 @@ const { handleDelegateAsync } = require('./delegate');
 const { handleSubmitSoloChatTask, handleCleanupForeignQueue } = require('./solo-chat');
 const { handleDelegate: handleSessionDelegate } = require('./sessions');
 const { handleBatchSubmit } = require('./batch');
+const { handleStopGeneration } = require('./trae-control');
 const { isGenericQueueProbeTask } = require('../../shared/utils');
 
 function jsonReq(body) {
@@ -106,6 +107,7 @@ function jsonReq(body) {
 
 function fakeCtx() {
   return {
+    _assertProjectWorkspace: async () => null,
     _json: (req, res, body, status) => { res.status = status; res.body = body; return res; }
   };
 }
@@ -132,10 +134,10 @@ asyncTest('handleDelegateAsync with chatId sends OpenClaw notification', async (
   const timeoutIds = new Set();
   const ctx = {
     ...fakeCtx(),
+    mockBridge: true,
     _normalizeFallbackModels: () => [],
     _modelProbeIntervalMs: () => 60000,
     _ensureConnection: async () => {},
-    _taskWithProjectContext: task => task,
     _setTimeout: (cb, delay) => {
       const id = setTimeout(cb, delay);
       timeoutIds.add(id);
@@ -218,6 +220,54 @@ test('isGenericQueueProbeTask detects the canonical probe string', () => {
   assert.strictEqual(isGenericQueueProbeTask('Wait for Trae Queue 进行中 17:34'), true);
   assert.strictEqual(isGenericQueueProbeTask('Please implement a queue-status panel'), false);
   assert.strictEqual(isGenericQueueProbeTask('implement a queue-status panel without sending prompts'), false);
+});
+
+asyncTest('handleStopGeneration requires a scoped active conversation and audit reason', async () => {
+  let stopped = false;
+  const auditEntries = [];
+  const ctx = {
+    _ensureConnection: async () => {},
+    _json: (_req, res, body, status = 200) => { res.status = status; res.body = body; return res; },
+    driver: {
+      detectMode: async () => ({ mode: 'solo' }),
+      listSoloChats: async () => ({ chats: [
+        { index: 0, title: 'Current task', active: true },
+        { index: 1, title: 'Other task', active: false }
+      ] }),
+      stopGeneration: async () => { stopped = true; return { success: true }; }
+    },
+    auditLogger: { log: entry => auditEntries.push(entry) }
+  };
+
+  const wrongRes = {};
+  await handleStopGeneration(jsonReq({
+    conversationId: 'solo:T3RoZXIgdGFzaw',
+    acknowledgeUntrackedWork: true,
+    reason: 'Stop requested by user'
+  }), wrongRes, ctx);
+  assert.strictEqual(wrongRes.status, 409);
+  assert.strictEqual(wrongRes.body.error, 'active_conversation_mismatch');
+  assert.strictEqual(stopped, false);
+
+  const unacknowledgedRes = {};
+  await handleStopGeneration(jsonReq({
+    conversationId: 'solo:Q3VycmVudCB0YXNr',
+    reason: 'Stop requested by user'
+  }), unacknowledgedRes, ctx);
+  assert.strictEqual(unacknowledgedRes.status, 400);
+  assert.strictEqual(unacknowledgedRes.body.error, 'untracked_work_acknowledgement_required');
+
+  const successRes = {};
+  await handleStopGeneration(jsonReq({
+    conversationId: 'solo:Q3VycmVudCB0YXNr',
+    acknowledgeUntrackedWork: true,
+    reason: 'Stop requested by user'
+  }), successRes, ctx);
+  assert.strictEqual(successRes.status, 200);
+  assert.strictEqual(successRes.body.success, true);
+  assert.strictEqual(successRes.body.conversationId, 'solo:Q3VycmVudCB0YXNr');
+  assert.strictEqual(stopped, true);
+  assert.strictEqual(auditEntries.at(-1).action, 'trae.stop_generation');
 });
 
 asyncTest('handleCleanupForeignQueue dry-run lists queue-probe Solo chats without deleting', async () => {

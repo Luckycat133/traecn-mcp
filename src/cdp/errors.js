@@ -74,6 +74,38 @@ class TraeCNAutomationError extends Error {
     );
   }
 
+  static projectNotOpen(requestedPath, requestedFolder, currentFolder, currentPath = null) {
+    return new TraeCNAutomationError(
+      `Requested project folder '${requestedFolder}' is not open in TraeCN`,
+      'PROJECT_NOT_OPEN',
+      { requestedPath, requestedFolder, currentFolder, currentPath }
+    );
+  }
+
+  static workspaceContextUnavailable(requestedPath) {
+    return new TraeCNAutomationError(
+      'Cannot verify which project folder is open in TraeCN',
+      'WORKSPACE_CONTEXT_UNAVAILABLE',
+      { requestedPath }
+    );
+  }
+
+  static settingsSectionNotActivated(section, reason) {
+    return new TraeCNAutomationError(
+      `Settings section "${section}" was not activated: ${reason || 'the visible UI did not confirm the selection'}`,
+      'SETTINGS_SECTION_NOT_ACTIVATED',
+      { section, reason: reason || null }
+    );
+  }
+
+  static settingsContentUnavailable(section) {
+    return new TraeCNAutomationError(
+      `Settings section "${section}" did not expose readable content after two activation attempts`,
+      'SETTINGS_CONTENT_UNAVAILABLE',
+      { section }
+    );
+  }
+
   // ── 5xx — something went wrong in the bridge / driver / TraeCN ──────
 
   static connectionFailed(host, port, cause) {
@@ -161,6 +193,19 @@ class TraeCNAutomationError extends Error {
       `TraeCN recovery failed: ${cause}`,
       'RECOVERY_FAILED',
       { cause: String(cause) }
+    );
+  }
+
+  static taskStoreUnavailable(health = {}) {
+    return new TraeCNAutomationError(
+      'Active task queue persistence is unavailable; the task was not accepted',
+      'TASK_STORE_UNAVAILABLE',
+      {
+        taskStoreWritable: false,
+        durabilityDegraded: true,
+        lastSuccessfulPersistAt: health.lastSuccessfulPersistAt || null,
+        lastPersistError: health.lastPersistError || null
+      }
     );
   }
 }

@@ -9,13 +9,14 @@ TRAECNclaw is designed as a local desktop companion service. It should run on th
 Use these settings for a local production profile:
 
 ```env
-HOST=127.0.0.1
-PORT=8788
+TRAECN_GATEWAY_HOST=127.0.0.1
+TRAECN_GATEWAY_PORT=8788
 TRAECN_GATEWAY_TOKEN=<generate-a-random-token>
 TRAECN_ALLOWED_ORIGINS=http://127.0.0.1:8788
 TRAECN_ENABLE_DEBUG_ENDPOINTS=0
 TRAECN_ENABLE_MOCK_BRIDGE=0
 TRAECN_REMOTE_DEBUGGING_PORT=9222
+TRAECN_TERMINAL_IDEMPOTENCY_TTL_MS=86400000
 ```
 
 Set selector overrides only after validating them with `npm run inspect:traecn`.
@@ -32,6 +33,13 @@ Start the gateway:
 
 ```sh
 npm start
+```
+
+For the primary Agent path, validate the matching MCP server and generate the
+host entry before reconnecting the host:
+
+```sh
+npm run --silent setup:mcp
 ```
 
 For macOS and Windows desktop convenience, use `start-traecnapi.command` or `start-traecnapi.cmd` after reviewing the `.env` file.
@@ -54,6 +62,9 @@ npm run service:stop
 The LaunchAgent path is also the recommended production path for async queue work because it now:
 
 - reloads persisted active tasks from `~/Library/Application Support/TRAECNclaw/active-queue.json`
+- retains fingerprinted terminal idempotency responses in the same checksummed
+  TaskStore for 24 hours by default, preventing duplicate work after uncertain
+  retries and gateway restarts
 - avoids opening a fresh unauthenticated Trae profile by default
   (`TRAECN_QUICKSTART_PROFILE_MODE=existing`,
   `TRAECN_TRAE_RECOVERY_NEW_INSTANCE=0`)
@@ -75,15 +86,25 @@ npm test
 npm run test:system
 npm run test:uat
 npm run audit:prod
+npm run audit:all
 ```
+
+`audit:prod` reports the shipped runtime dependency view. `audit:all` also
+checks development tooling and is enforced by `npm run test:release` for a
+public release.
 
 Then verify with live TraeCN:
 
 1. Start TraeCN with the configured remote debugging port.
 2. Run `npm run inspect:traecn`.
 3. Call `GET /api/status`.
-4. Create a session with `POST /api/sessions`.
-5. Delegate a short task with `POST /api/sessions/{sessionId}/delegate`.
+4. Run `npm run --silent setup:mcp`, merge the entry into the intended host,
+   and reconnect it.
+5. Confirm the host discovers exactly 20 tools, then send one short task only
+   when model quota and UI effects are acceptable.
+6. Confirm a fresh `TRAECN_MCP_CLIENT_ID` does not receive retained historical
+   task notifications, while its cursor is durably established for later
+   reconnects.
 
 ## Security Controls
 
@@ -109,8 +130,9 @@ When using `delegate-async`:
   on the task as `modelProbeResults` with `lastModelProbeAt` and
   `nextModelProbeAt`, so callers can inspect progress without resending task
   context.
-- `reviewRequired=true` stops the workflow at the review gate so a user can audit
-  the result and explicitly continue any follow-up tasks.
+- `reviewRequired=true` with `autoContinue=false` stops the workflow at a
+  gateway task checkpoint so a user can audit the result and explicitly
+  continue via `traecn_resolve_task_review` (or the HTTP task-review route).
 
 ## Rollback
 
@@ -121,6 +143,10 @@ Stop the gateway, restore the previous repository revision, run `npm ci --omit=d
 ## Cloud Deployment (Render / Railway)
 
 TRAECNclaw can be deployed to cloud platforms like **Render** or **Railway**. Since the core function relies on CDP (Chrome DevTools Protocol) to control a local Trae instance, cloud deployment requires additional network configuration to bridge the CDP connection.
+
+> **Note**: The repository does not ship a `render.yaml` or `railway.json`
+> blueprint. The instructions below describe the manual setup; create the
+> blueprint file in your fork if you want one-click deploys.
 
 ### Architecture Overview
 
@@ -150,37 +176,35 @@ TRAECNclaw can be deployed to cloud platforms like **Render** or **Railway**. Si
 ### Render Deployment
 
 1. Fork or push this repository to GitHub.
-2. In Render Dashboard, click **New +** → **Blueprint**.
+2. In Render Dashboard, click **New +** → **Web Service**.
 3. Connect your GitHub repository.
-4. Render will auto-detect `render.yaml` and configure the service.
+4. Set the build command to `npm ci --omit=dev` and the start command to `npm start`.
 5. Set the following environment variables in Render Dashboard:
+   - `TRAECN_GATEWAY_HOST`: `0.0.0.0`
    - `TRAECN_CDP_HOST`: Your tunnel URL (e.g., `https://abc123.loca.lt`)
    - `TRAECN_REMOTE_DEBUGGING_PORT`: `80` or `443` (depending on tunnel)
-   - `TRAECN_GATEWAY_TOKEN`: A secure random token (auto-generated if not set)
+   - `TRAECN_GATEWAY_TOKEN`: A secure random token (required for a non-loopback bind)
 6. Deploy and verify with `GET https://<your-service>.onrender.com/api/status`.
-
-**Configuration**: See [`render.yaml`](../render.yaml)
 
 ### Railway Deployment
 
 1. Fork or push this repository to GitHub.
 2. In Railway Dashboard, click **New Project** → **Deploy from GitHub repo**.
-3. Select your repository. Railway auto-detects `railway.json`.
+3. Select your repository.
 4. Set environment variables in Railway Dashboard → Variables:
+   - `TRAECN_GATEWAY_HOST`: `0.0.0.0`
    - `TRAECN_CDP_HOST`: Your tunnel URL
    - `TRAECN_REMOTE_DEBUGGING_PORT`: Tunnel port
    - `TRAECN_GATEWAY_TOKEN`: Secure random token
 5. Deploy and verify health checks pass.
 
-**Configuration**: See [`railway.json`](../railway.json)
-
 ### Cloud Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `HOST` | Yes | Set to `0.0.0.0` to accept external connections |
-| `PORT` | Yes | Render/Railway provide this dynamically |
-| `TRAECN_GATEWAY_TOKEN` | Recommended | Authentication token. Leave empty to disable auth (not recommended for production) |
+| `TRAECN_GATEWAY_HOST` | Yes | Set to `0.0.0.0` to accept external connections |
+| `TRAECN_GATEWAY_PORT` / platform `PORT` | Yes | Gateway port; Render/Railway may inject the compatibility alias `PORT` |
+| `TRAECN_GATEWAY_TOKEN` | Yes | Authentication token; startup fails closed without one on a non-loopback bind |
 | `TRAECN_ALLOWED_ORIGINS` | No | CORS origins. Use `*` for development only |
 | `TRAECN_CDP_HOST` | Yes (cloud) | Tunnel URL pointing to your local Trae CDP port |
 | `TRAECN_REMOTE_DEBUGGING_PORT` | Yes (cloud) | Port of the tunnel (usually 80 or 443) |

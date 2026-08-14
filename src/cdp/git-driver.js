@@ -1,8 +1,29 @@
 'use strict';
 
-const { sleep, safeJsValue } = require('../shared/utils');
+const { sleep } = require('../shared/utils');
 const { TraeCNAutomationError } = require('./errors');
 const { evaluate, evaluateJSON } = require('./browser-dom');
+
+function parseGitStatusLabel(label) {
+  const text = String(label || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+
+  const patterns = [
+    /\(Git\)\s*[-–—:]\s*([^\s,，·•*]+)\*?\s*$/i,
+    /\bGit\s*:\s*([^\s,，·•*]+)/i,
+    /\bSource Control\s*:\s*([^\s,，·•*]+)/i,
+    /^([^\s,，·•*]+)\*?\s*[,，]\s*(?:签出分支\/标记|Checkout Branch\/Tag)/i,
+    /(?:未发布\s+\d+\s*个提交|Unpublished\s+\d+\s+commits?)\s*[·•]\s*([^\s,，·•*]+)\*?\s*$/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) return match[1].replace(/\*+$/, '');
+  }
+
+  if (/^[^\s,，·•*]+\*?$/.test(text)) return text.replace(/\*+$/, '');
+  return null;
+}
 
 /**
  * GitDriver — drive Source Control (Git) operations.
@@ -69,7 +90,7 @@ class GitDriver {
   /**
    * Open SCM, type commit message, click commit.
    */
-  async commitWithMessage(message, opts = {}) {
+  async commitWithMessage(message, _opts = {}) {
     if (typeof message !== 'string' || !message) {
       throw new TraeCNAutomationError('commit message is required', 'INVALID_INPUT', {});
     }
@@ -140,18 +161,19 @@ class GitDriver {
    * Read the current branch name (from status bar or SCM header).
    */
   async readCurrentBranch() {
-    return evaluate(
+    const labels = await evaluate(
       this.client,
       `() => {
         const els = document.querySelectorAll('.statusbar [aria-label*="Git" i], .statusbar [title*="Git" i]');
-        for (const e of els) {
-          const t = e.getAttribute('aria-label') || e.title || '';
-          const m = t.match(/\\b([a-z0-9._\\/-]+)/i);
-          if (m) return m[1];
-        }
-        return null;
+        return Array.from(els, e => e.getAttribute('aria-label') || e.title || '').filter(Boolean);
       }`
     );
+    const candidates = Array.isArray(labels) ? labels : [labels];
+    for (const label of candidates) {
+      const branch = parseGitStatusLabel(label);
+      if (branch) return branch;
+    }
+    return null;
   }
 
   // ── CLI fallback (optional) ────────────────────────────────────────
@@ -173,4 +195,4 @@ class GitDriver {
   }
 }
 
-module.exports = { GitDriver };
+module.exports = { GitDriver, parseGitStatusLabel };

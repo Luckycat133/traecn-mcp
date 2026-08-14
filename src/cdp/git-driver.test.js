@@ -61,6 +61,28 @@ test('readStatus parses JSON', () => {
   });
 });
 
+test('readCurrentBranch parses real TraeCN status-bar labels', async () => {
+  const fixtures = [
+    ['TraeCNClaw (Git) - main*', 'main'],
+    ['Git: main', 'main'],
+    ['main, 签出分支/标记', 'main'],
+    ['Source Control: feature/foo', 'feature/foo'],
+    ['未发布 3 个提交 · dev', 'dev']
+  ];
+
+  for (const [label, expected] of fixtures) {
+    const client = {
+      async send(method, params) {
+        assert.strictEqual(method, 'Runtime.evaluate');
+        assert.ok(params.expression.includes('statusbar'));
+        return { result: { value: [label] } };
+      }
+    };
+    const driver = new GitDriver(client, {});
+    assert.strictEqual(await driver.readCurrentBranch(), expected, label);
+  }
+});
+
 test('commitWithMessage: empty message throws', () => {
   const d = new GitDriver(mockClient(), {});
   return Promise.resolve().then(() => d.commitWithMessage('')).then(

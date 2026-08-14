@@ -8,7 +8,7 @@
  *     computation, recent-snapshot carry-over, result classification,
  *     per-task atomic claim, deadline extension, model-switch normalisation)
  *   - BatchExecutor — batch execution loop concerns (model-probe interval
- *     clamping, retry-mode decision, createQueuedTask factory hook)
+ *     clamping and retry-mode decision)
  *   - RecoveryHelper — reconnect / replay / snapshot-apply logic (active
  *     queue persistence, history-mirror sync, background polling,
  *     approval-required resume)
@@ -22,6 +22,7 @@
 const { QueueStateMachine } = require('./queue-state-machine');
 const { BatchExecutor } = require('./batch-executor');
 const { RecoveryHelper } = require('./recovery-helper');
+const { TaskStore } = require('./task-store');
 
 class TaskQueueService {
   constructor({
@@ -30,6 +31,9 @@ class TaskQueueService {
     taskHistoryStore = null,
     isMockBridge = () => false,
     isTerminalStatus = () => false,
+    onWritePhase = null,
+    terminalReplayTtlMs,
+    now,
   } = {}) {
     this.logger = logger;
     this.taskHistoryStore = taskHistoryStore;
@@ -38,12 +42,20 @@ class TaskQueueService {
 
     // Compose the three domain services.
     this.stateMachine = new QueueStateMachine({ logger });
-    this.recoveryHelper = new RecoveryHelper({
+    this.taskStore = new TaskStore({
       logger,
       persistencePath,
+      isTerminalStatus,
+      onWritePhase,
+      terminalReplayTtlMs,
+      now,
+    });
+    this.recoveryHelper = new RecoveryHelper({
+      logger,
       taskHistoryStore,
       isMockBridge,
       isTerminalStatus,
+      taskStore: this.taskStore,
     });
     this.batchExecutor = new BatchExecutor({
       logger,
@@ -52,16 +64,21 @@ class TaskQueueService {
 
     // Mirror the persistence path so existing callers (tests + gateway)
     // that read `svc.persistencePath` keep working.
-    this.persistencePath = this.recoveryHelper.persistencePath;
-
     // Mirror the lock map + polling timer for the same reason.
     this.taskLocks = this.stateMachine.taskLocks;
   }
 
   // ── persistence (RecoveryHelper) ──────────────────────────────────────
 
-  resolvePersistencePath() { return this.recoveryHelper.resolvePersistencePath(); }
+  get persistencePath() { return this.taskStore.persistencePath; }
+  set persistencePath(value) { this.taskStore.setPersistencePath(value); }
+  setPersistencePath(value) { return this.taskStore.setPersistencePath(value); }
+  resolvePersistencePath(configuredPath = '') { return this.taskStore.resolvePersistencePath(configuredPath); }
   persist(taskQueue) { return this.recoveryHelper.persist(taskQueue); }
+  recordTerminalReplay(task, taskQueue) { return this.taskStore.recordTerminalReplay(task, taskQueue); }
+  getTerminalReplay(idempotencyKey) { return this.taskStore.getTerminalReplay(idempotencyKey); }
+  getPersistenceHealth() { return this.taskStore.getHealth(); }
+  close() { return this.taskStore.close(); }
   syncHistoryMirror(task) { return this.recoveryHelper.syncHistoryMirror(task); }
   restore(taskQueue) { return this.recoveryHelper.restore(taskQueue); }
 
@@ -107,10 +124,6 @@ class TaskQueueService {
   resumeApprovalRequiredTasksAfterDialogAnswer(answer, taskQueue, opts) {
     return this.recoveryHelper.resumeApprovalRequiredTasksAfterDialogAnswer(answer, taskQueue, opts);
   }
-
-  // ── task creation (BatchExecutor) ────────────────────────────────────
-
-  createQueuedTask(body, queueStatus) { return this.batchExecutor.createQueuedTask(body, queueStatus); }
 
   // ── deadline / snapshot (QueueStateMachine) ──────────────────────────
 

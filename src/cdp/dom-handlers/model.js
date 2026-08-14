@@ -16,15 +16,7 @@
  */
 
 const { sleep, safeJsValue } = require('../../shared/utils');
-
-const KNOWN_MODELS = [
-  'Doubao-Seed-2.0-Code', 'Doubao-Seed-1.8', 'Doubao-Seed-Code',
-  'MiniMax-M2.7', 'MiniMax-M2.5',
-  'GLM-5.2', 'GLM-5.1', 'GLM-5V-Turbo', 'GLM-5',
-  'DeepSeek-V4-Pro', 'DeepSeek-V4-Flash',
-  'Kimi-K2.6', 'Kimi-K2.5',
-  'Qwen3.6-Plus', 'Qwen3.5-Plus'
-];
+const { KNOWN_MODELS } = require('../../shared/models');
 
 async function checkQueueStatus(driver, timeoutMs = 5000) {
   let timeoutId;
@@ -38,7 +30,10 @@ async function checkQueueStatus(driver, timeoutMs = 5000) {
     ]);
     return result;
   } catch (e) {
-    return { queued: false };
+    if (e.message === 'checkQueueStatus timeout') {
+      return { queued: false, timedOut: true };
+    }
+    return { queued: false, error: e.message };
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }
@@ -164,6 +159,51 @@ async function getCurrentModel(driver) {
     returnByValue: true
   });
   return result.result?.value || '';
+}
+
+async function listModels(driver) {
+  const result = await driver.client.send('Runtime.evaluate', {
+    expression: `
+      (async function() {
+        function visible(el) {
+          if (!el || !el.getBoundingClientRect) return false;
+          var rect = el.getBoundingClientRect();
+          return rect.width > 4 && rect.height > 4;
+        }
+        function textOf(el) {
+          return (el && (el.innerText || el.textContent) || '').replace(/\\s+/g, ' ').trim();
+        }
+        var trigger = Array.from(document.querySelectorAll(
+          '.chat-model-label,[role="combobox"],[class*="model-select"],[class*="ai-model-select"]'
+        )).find(visible);
+        var current = textOf(trigger);
+        if (trigger && typeof trigger.click === 'function') trigger.click();
+        await new Promise(function(resolve) { setTimeout(resolve, 120); });
+        var labels = Array.from(document.querySelectorAll(
+          '.chat-modelPicker-item,.icube-model-select-portal-model-item,[role="option"],[class*="modelPicker"],[class*="model-picker"],[class*="model-item"]'
+        ))
+          .filter(visible)
+          .map(function(el) {
+            return textOf(el.querySelector('.chat-model-label,[class*="label"],[class*="name"]') || el);
+          })
+          .filter(function(text) {
+            return text && text.length < 120;
+          });
+        if (trigger && typeof trigger.click === 'function') trigger.click();
+        var models = Array.from(new Set(labels));
+        if (!models.length && current) models.push(current);
+        return { current: current, models: models };
+      })()
+    `,
+    awaitPromise: true,
+    returnByValue: true
+  });
+  const value = result.result?.value || { current: '', models: [] };
+  return {
+    current: value.current || '',
+    models: Array.from(new Set((Array.isArray(value.models) ? value.models : [])
+      .filter(model => !/^\d+(?:\.\d+)?x$/i.test(String(model || '').trim()))))
+  };
 }
 
 function _normalizeModelName(name) {
@@ -401,6 +441,40 @@ async function switchModel(driver, modelName) {
 
   await sleep(driver.config.postActionDelayMs);
   const switchResult = result.result?.value || 'unknown';
+  const accessNotice = await driver.client.send('Runtime.evaluate', {
+    expression: `(() => {
+      var selectors = [
+        '[role="alert"]', '[role="dialog"]',
+        '[class*="toast"]', '[class*="notification"]', '[class*="notice"]',
+        '[class*="tooltip"]', '[class*="popover"]', '[class*="modal"]'
+      ];
+      var candidates = Array.from(document.querySelectorAll(selectors.join(',')));
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        var rect = el.getBoundingClientRect();
+        var style = getComputedStyle(el);
+        if (rect.width <= 0 || rect.height <= 0
+          || style.visibility === 'hidden' || style.display === 'none') continue;
+        var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+        var match = text.match(/仅\\s*会员[^。！!]{0,160}(?:可用|使用)/);
+        if (match) return match[0];
+      }
+      return '';
+    })()`,
+    returnByValue: true
+  });
+  const accessError = String(accessNotice.result?.value || '').trim();
+  if (accessError) {
+    return {
+      success: false,
+      code: 'MODEL_ACCESS_DENIED',
+      model: beforeModel,
+      requestedModel,
+      previousModel: beforeModel,
+      switchResult,
+      error: accessError
+    };
+  }
   let currentModel = '';
   for (let attempt = 0; attempt < 20; attempt++) {
     await sleep(150);
@@ -432,6 +506,7 @@ module.exports = {
   checkQueueStatus,
   _checkQueueStatusRaw,
   getCurrentModel,
+  listModels,
   _normalizeModelName,
   switchModel
 };
