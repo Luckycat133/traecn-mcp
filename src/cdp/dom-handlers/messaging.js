@@ -431,6 +431,38 @@ async function newChat(driver) {
     await sleep(driver.config.postActionDelayMs * 2);
   }
 
+  const alreadyFresh = await driver.client.send('Runtime.evaluate', {
+    expression: `
+      (function() {
+        function visible(el) {
+          if (!el || !el.getBoundingClientRect) return false;
+          var rect = el.getBoundingClientRect();
+          return rect.width > 20 && rect.height > 8 && el.offsetParent !== null;
+        }
+        var composerSelectors = ${safeJsValue(driver.config.composerSelectors)};
+        var hasComposer = composerSelectors.some(function(selector) {
+          return Array.from(document.querySelectorAll(selector)).some(visible);
+        });
+        var turnSelectors = [
+          '.solo-chat-turn', 'section.chat-turn', 'section[class*="chat-turn"]',
+          '.chat-message', '.agent-message', '[class*="chat-message"]',
+          '[data-message-author-role]'
+        ];
+        var hasTurn = turnSelectors.some(function(selector) {
+          return Array.from(document.querySelectorAll(selector)).some(visible);
+        });
+        return hasComposer && !hasTurn;
+      })()
+    `,
+    returnByValue: true
+  });
+  if (alreadyFresh.result?.value === true) {
+    driver._lastTaskText = '';
+    driver._pendingUserTask = '';
+    driver._preSendSnapshot = '';
+    return true;
+  }
+
   const previousPanelText = await driver._captureIdePanelText();
 
   // Try keyboard shortcut first (works in both modes)

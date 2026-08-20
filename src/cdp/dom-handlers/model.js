@@ -136,7 +136,10 @@ async function getCurrentModel(driver) {
     expression: `
       (function() {
         var selectors = [
+          '.icd-model-select-trigger-value-name',
+          '.icd-model-select-trigger',
           '.chat-model-label',
+          '.ai-model-select [role="combobox"]',
           '[role="combobox"]',
           '[class*="model-select"]',
           '[class*="ai-model-select"]'
@@ -148,7 +151,7 @@ async function getCurrentModel(driver) {
             var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
             if (rect && (rect.width < 10 || rect.height < 10)) continue;
             var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-            if (text && /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text)) {
+            if (text && /Seed|Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text)) {
               return text.replace(/\\s*Beta\\s*/i, '').trim();
             }
           }
@@ -162,9 +165,10 @@ async function getCurrentModel(driver) {
 }
 
 async function listModels(driver) {
-  const result = await driver.client.send('Runtime.evaluate', {
+  const current = await driver.getCurrentModel();
+  const triggerResult = await driver.client.send('Runtime.evaluate', {
     expression: `
-      (async function() {
+      (function() {
         function visible(el) {
           if (!el || !el.getBoundingClientRect) return false;
           var rect = el.getBoundingClientRect();
@@ -173,32 +177,86 @@ async function listModels(driver) {
         function textOf(el) {
           return (el && (el.innerText || el.textContent) || '').replace(/\\s+/g, ' ').trim();
         }
-        var trigger = Array.from(document.querySelectorAll(
-          '.chat-model-label,[role="combobox"],[class*="model-select"],[class*="ai-model-select"]'
-        )).find(visible);
-        var current = textOf(trigger);
-        if (trigger && typeof trigger.click === 'function') trigger.click();
-        await new Promise(function(resolve) { setTimeout(resolve, 120); });
-        var labels = Array.from(document.querySelectorAll(
-          '.chat-modelPicker-item,.icube-model-select-portal-model-item,[role="option"],[class*="modelPicker"],[class*="model-picker"],[class*="model-item"]'
-        ))
-          .filter(visible)
-          .map(function(el) {
-            return textOf(el.querySelector('.chat-model-label,[class*="label"],[class*="name"]') || el);
-          })
-          .filter(function(text) {
-            return text && text.length < 120;
-          });
-        if (trigger && typeof trigger.click === 'function') trigger.click();
-        var models = Array.from(new Set(labels));
-        if (!models.length && current) models.push(current);
-        return { current: current, models: models };
+        var triggers = Array.from(document.querySelectorAll(
+          '.icd-model-select-trigger,.ai-model-select [role="combobox"],.chat-model-label,[role="combobox"],[class*="model-select"],[class*="ai-model-select"]'
+        )).filter(visible);
+        var trigger = triggers.find(function(el) {
+          var className = String(el.className || '');
+          var text = textOf(el);
+          return /chat-model-label|icd-model-select-trigger|ai-model-select/i.test(className) ||
+            /Seed|Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
+        }) || null;
+        if (!trigger) return null;
+        var rect = trigger.getBoundingClientRect();
+        return {
+          x: rect.x + rect.width / 2,
+          y: rect.y + rect.height / 2,
+          expanded: trigger.getAttribute('aria-expanded') === 'true'
+        };
       })()
     `,
-    awaitPromise: true,
     returnByValue: true
   });
-  const value = result.result?.value || { current: '', models: [] };
+  const trigger = triggerResult.result?.value || null;
+  const openedByList = Boolean(trigger && !trigger.expanded);
+
+  async function clickTrigger() {
+    await driver.client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: trigger.x,
+      y: trigger.y,
+      button: 'left',
+      clickCount: 1
+    });
+    await driver.client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: trigger.x,
+      y: trigger.y,
+      button: 'left',
+      clickCount: 1
+    });
+  }
+
+  if (openedByList) {
+    await clickTrigger();
+    await sleep(200);
+  }
+
+  let value = { current, models: [] };
+  try {
+    const result = await driver.client.send('Runtime.evaluate', {
+      expression: `
+        (function() {
+          function visible(el) {
+            if (!el || !el.getBoundingClientRect) return false;
+            var rect = el.getBoundingClientRect();
+            return rect.width > 4 && rect.height > 4;
+          }
+          function textOf(el) {
+            return (el && (el.innerText || el.textContent) || '').replace(/\\s+/g, ' ').trim();
+          }
+          var labels = Array.from(document.querySelectorAll(
+            '.chat-modelPicker-item,.icube-model-select-portal-model-item,[role="option"],[class*="modelPicker"],[class*="model-picker"],[class*="model-item"]'
+          ))
+            .filter(visible)
+            .map(function(el) {
+              return textOf(el.querySelector(
+                '.icube-model-select-portal-model-item-name,.chat-model-label,[class*="label"],[class*="name"]'
+              ) || el);
+            })
+            .filter(function(text) {
+              return text && text.length < 120;
+            });
+          return { models: Array.from(new Set(labels)) };
+        })()
+      `,
+      returnByValue: true
+    });
+    value = { current, models: result.result?.value?.models || [] };
+  } finally {
+    if (openedByList) await clickTrigger();
+  }
+
   return {
     current: value.current || '',
     models: Array.from(new Set((Array.isArray(value.models) ? value.models : [])
@@ -209,7 +267,7 @@ async function listModels(driver) {
 function _normalizeModelName(name) {
   return String(name || '')
     .replace(/\s*Beta\s*/ig, '')
-    .replace(/[^a-zA-Z0-9]/g, '')
+    .replace(/[^\p{L}\p{N}]/gu, '')
     .toLowerCase();
 }
 
@@ -285,7 +343,7 @@ async function switchModel(driver, modelName) {
           var all = Array.from(document.querySelectorAll('.chat-modelPicker-item,.icube-model-select-portal-model-item,[role="option"],[class*="modelPicker"],[class*="model-picker"],[class*="model-item"],[class*="model"][class*="item"]'));
           return all.filter(function(el) {
             var text = (el.innerText || el.textContent || '').trim();
-            return /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
+            return /Seed|Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
           }).length;
         })()
       `,
@@ -301,7 +359,7 @@ async function switchModel(driver, modelName) {
           var trigger = triggers.find(function(el) {
             var text = (el.innerText || el.textContent || '').trim();
             var rect = el.getBoundingClientRect();
-            return rect.width > 10 && rect.height > 10 && /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
+            return rect.width > 10 && rect.height > 10 && /Seed|Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
           }) || triggers[0];
           if (!trigger) return 'no model trigger found';
           var rect = trigger.getBoundingClientRect();
@@ -328,7 +386,7 @@ async function switchModel(driver, modelName) {
           var trigger = triggers.find(function(el) {
             var text = (el.innerText || el.textContent || '').trim();
             var rect = el.getBoundingClientRect();
-            return rect.width > 10 && rect.height > 10 && /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
+            return rect.width > 10 && rect.height > 10 && /Seed|Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(text);
           }) || triggers[0];
           if (!trigger) return null;
           var rect = trigger.getBoundingClientRect();
@@ -344,7 +402,7 @@ async function switchModel(driver, modelName) {
     }
 
     await driver._waitForExpression(
-      '(function(){return Array.from(document.querySelectorAll(".chat-modelPicker-item,.icube-model-select-portal-model-item,[role=option],[class*=modelPicker],[class*=model-picker],[class*=model-item],[class*=model][class*=item]")).some(function(el){return /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(el.innerText || el.textContent || "");});})()',
+      '(function(){return Array.from(document.querySelectorAll(".chat-modelPicker-item,.icube-model-select-portal-model-item,[role=option],[class*=modelPicker],[class*=model-picker],[class*=model-item],[class*=model][class*=item]")).some(function(el){return /Seed|Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(el.innerText || el.textContent || "");});})()',
       5000, 150
     );
   }
@@ -381,10 +439,10 @@ async function switchModel(driver, modelName) {
     expression: `
       (function() {
         var targetName = ${safeJsValue(requestedModel)};
-        var normalizedTarget = targetName.replace(/\\s*Beta\\s*/ig, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+        var normalizedTarget = targetName.replace(/\\s*Beta\\s*/ig, '').replace(/[^\\p{L}\\p{N}]/gu, '').toLowerCase();
 
         function normalize(value) {
-          return String(value || '').replace(/\\s*Beta\\s*/ig, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+          return String(value || '').replace(/\\s*Beta\\s*/ig, '').replace(/[^\\p{L}\\p{N}]/gu, '').toLowerCase();
         }
 
         function textOf(el) {
@@ -412,7 +470,7 @@ async function switchModel(driver, modelName) {
             return { el: el, text: text, norm: normalize(text) };
           })
           .filter(function(item) {
-            return item.text && /Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(item.text);
+            return item.text && /Seed|Doubao|MiniMax|GLM|DeepSeek|Kimi|Qwen|Auto Mode/i.test(item.text);
           });
 
         if (!items || !items.length) return 'no model items found';

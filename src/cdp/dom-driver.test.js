@@ -4,6 +4,7 @@ const assert = require('assert');
 const vm = require('vm');
 const { DomDriver, getConfig, sanitizeActivityText, isTruncationSignal, DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS, DEFAULT_RESPONSE_SELECTORS } = require('./dom-driver');
 const { cleanAssistantResultText } = require('./dom-handlers/response-collection');
+const { _normalizeModelName } = require('./dom-handlers/model');
 const { createRunner } = require('../shared/test-runner');
 
 const r = createRunner('dom-driver.test.js');
@@ -968,6 +969,26 @@ test('newChat ignores empty review gate with zero pending files', async () => {
   assert.strictEqual(result, true);
 });
 
+test('newChat accepts an already blank composer as a fresh conversation', async () => {
+  let calls = 0;
+  const driver = new DomDriver({
+    send: async (method) => {
+      calls += 1;
+      assert.strictEqual(method, 'Runtime.evaluate');
+      return { result: { value: true } };
+    }
+  }, getConfig());
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, reviewCount: 0 });
+  driver._captureIdePanelText = async () => {
+    throw new Error('already-fresh path must not compare panel text');
+  };
+
+  const result = await driver.newChat();
+
+  assert.strictEqual(result, true);
+  assert.strictEqual(calls, 1);
+});
+
 test('extractLatestIdeAssistantState waits for assistant turn after latest user turn', () => {
   const driver = new DomDriver(null, getConfig());
   const state = driver._extractLatestIdeAssistantState({
@@ -1481,6 +1502,40 @@ test('switchModel busy guard blocks when live stop state is visible', async () =
   assert.strictEqual(result.error, 'generating');
 });
 
+test('model normalization preserves formal-edition identity', () => {
+  assert.notStrictEqual(
+    _normalizeModelName('DeepSeek-V4-Pro 正式版'),
+    _normalizeModelName('DeepSeek-V4-Pro')
+  );
+});
+
+test('switchModel recognizes Seed models in the live picker', async () => {
+  let currentModelCalls = 0;
+  const driver = new DomDriver({
+    send: async (method, params) => {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (params.expression.includes('stopIcon')) return { result: { value: { busy: false } } };
+      if (params.expression.includes('var all = Array.from')) {
+        assert.ok(params.expression.includes('/Seed|Doubao'));
+        return { result: { value: 1 } };
+      }
+      if (params.expression.includes('modeItem')) return { result: { value: 'auto mode already off' } };
+      if (params.expression.includes('targetName')) {
+        assert.ok(params.expression.includes('/Seed|Doubao'));
+        return { result: { value: 'clicked: Seed-2.1-Pro at index 0' } };
+      }
+      if (params.expression.includes('[role="alert"]')) return { result: { value: '' } };
+      throw new Error('Unexpected Runtime.evaluate expression');
+    }
+  }, { ...getConfig(), postActionDelayMs: 0 });
+  driver.getCurrentModel = async () => (++currentModelCalls === 1 ? 'DeepSeek-V4-Flash' : 'Seed-2.1-Pro');
+
+  const result = await driver.switchModel('Seed-2.1-Pro');
+
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.model, 'Seed-2.1-Pro');
+});
+
 test('switchModel ignores unrelated upgrade prompts elsewhere on the page', async () => {
   let currentModelCalls = 0;
   const driver = new DomDriver({
@@ -1548,21 +1603,28 @@ test('switchModel surfaces a membership notice containing whitespace', async () 
 
 asyncTest('listModels returns the currently offered TraeCN models', async () => {
   let expression = '';
+  let inputEvents = 0;
   const driver = new DomDriver({
     async send(method, payload) {
+      if (method === 'Input.dispatchMouseEvent') {
+        inputEvents++;
+        return {};
+      }
       assert.strictEqual(method, 'Runtime.evaluate');
-      assert.strictEqual(payload.awaitPromise, true);
       expression = payload.expression || '';
+      if (expression.includes('expanded:')) {
+        return { result: { value: { x: 100, y: 200, expanded: false } } };
+      }
       return {
         result: {
           value: {
-            current: 'GLM-5.2',
             models: ['GLM-5.2', '0.40x', 'DeepSeek-V3.2']
           }
         }
       };
     }
   }, getConfig());
+  driver.getCurrentModel = async () => 'GLM-5.2';
 
   const result = await driver.listModels();
 
@@ -1572,6 +1634,63 @@ asyncTest('listModels returns the currently offered TraeCN models', async () => 
   });
   assert.ok(expression.includes('.chat-model-label'));
   assert.ok(expression.includes('modelPicker'));
+  assert.strictEqual(inputEvents, 4);
+});
+
+asyncTest('listModels ignores the permission combobox and reads the model trigger', async () => {
+  let pickerOpen = false;
+  const visibleRect = { width: 120, height: 24 };
+  const permissionTrigger = {
+    className: 'permission-mode-select-trigger',
+    innerText: '',
+    textContent: '',
+    getBoundingClientRect: () => visibleRect,
+    click: () => { throw new Error('permission picker must not be opened'); }
+  };
+  const modelTrigger = {
+    className: 'icd-model-select-trigger',
+    innerText: 'DeepSeek-V4-Flash',
+    textContent: 'DeepSeek-V4-Flash',
+    getBoundingClientRect: () => visibleRect,
+    getAttribute: name => name === 'aria-expanded' ? String(pickerOpen) : null,
+    click: () => { pickerOpen = !pickerOpen; }
+  };
+  const item = label => ({
+    innerText: label + ' 0.77x',
+    textContent: label + ' 0.77x',
+    getBoundingClientRect: () => visibleRect,
+    querySelector: () => ({ innerText: label, textContent: label })
+  });
+  const driver = new DomDriver({
+    async send(method, payload) {
+      if (method === 'Input.dispatchMouseEvent') {
+        if (payload.type === 'mouseReleased') pickerOpen = !pickerOpen;
+        return {};
+      }
+      assert.strictEqual(method, 'Runtime.evaluate');
+      const value = await vm.runInNewContext(payload.expression, {
+        document: {
+          querySelectorAll(selector) {
+            if (selector.includes('[role="combobox"]')) return [permissionTrigger, modelTrigger];
+            if (selector.includes('modelPicker')) {
+              return pickerOpen ? [item('Seed-2.1-Pro'), item('DeepSeek-V4-Flash')] : [];
+            }
+            return [];
+          }
+        },
+        setTimeout
+      });
+      return { result: { value } };
+    }
+  }, getConfig());
+  driver.getCurrentModel = async () => 'DeepSeek-V4-Flash';
+
+  const result = await driver.listModels();
+
+  assert.deepStrictEqual(result, {
+    current: 'DeepSeek-V4-Flash',
+    models: ['Seed-2.1-Pro', 'DeepSeek-V4-Flash']
+  });
 });
 
 test('checkReadiness reports login blocker when composer is unavailable', async () => {
