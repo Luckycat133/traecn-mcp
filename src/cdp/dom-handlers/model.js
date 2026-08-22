@@ -222,7 +222,7 @@ async function listModels(driver) {
     await sleep(200);
   }
 
-  let value = { current, models: [] };
+  let value;
   try {
     const result = await driver.client.send('Runtime.evaluate', {
       expression: `
