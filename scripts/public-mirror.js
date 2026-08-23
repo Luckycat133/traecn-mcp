@@ -203,6 +203,8 @@ function verifyPublicMirror({ mirrorRoot, sourceRevision }) {
   if (!dockerfile.includes(`/v${packageInfo.version}/traecnclaw-${packageInfo.version}.tgz`)
       || !dockerfile.includes('ENTRYPOINT ["traecnclaw-mcp"]')
       || !dockerfile.includes('TRAECN_GATEWAY_HOST=127.0.0.1')
+      || !dockerfile.includes('npm install -g --ignore-scripts --force /tmp/traecnclaw.tgz')
+      || !dockerfile.includes('without changing the package metadata or claiming Linux support')
       || /0\.3\.0|TRAECN_MCP_TOOL_PROFILE|ENV TRAECN_HOST=|ENV TRAECN_PORT=|TRAECN_ENABLE_MOCK_BRIDGE/.test(dockerfile)) {
     violations.push({ rule: 'glama-dockerfile-stale', path: 'Dockerfile' });
   }

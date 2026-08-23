@@ -16,9 +16,12 @@ RUN apk add --no-cache ca-certificates curl
 
 ARG TRAECNCLAW_RELEASE_BASE=https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/download
 
+# The public package correctly declares macOS-only runtime support. Glama builds
+# this Linux image only to inspect the stdio schema, so bypass npm's platform
+# guard here without changing the package metadata or claiming Linux support.
 RUN curl -fsSLo /tmp/traecnclaw.tgz \
       "${TRAECNCLAW_RELEASE_BASE}/v{{VERSION}}/traecnclaw-{{VERSION}}.tgz" \
-    && npm install -g --ignore-scripts /tmp/traecnclaw.tgz \
+    && npm install -g --ignore-scripts --force /tmp/traecnclaw.tgz \
     && rm -f /tmp/traecnclaw.tgz \
     && npm cache clean --force
 

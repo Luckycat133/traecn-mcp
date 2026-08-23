@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Fixed
+
+- Allowed the Glama Linux inspection image to bypass the scoped package's
+  intentional macOS npm platform guard without changing runtime compatibility
+  claims; the container remains schema-inspection-only.
+
 ## [0.5.9] - 2026-08-23
 
 ### Added

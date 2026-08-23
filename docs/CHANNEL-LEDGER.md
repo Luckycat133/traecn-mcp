@@ -39,7 +39,7 @@ verified listing, and a directory scan is not a runtime test.
 | Channel | Current public state | Next exact step | Status |
 | --- | --- | --- | --- |
 | Glama | [Existing listing](https://glama.ai/mcp/servers/Luckycat133/traecnclaw-mcp-skill) is stale at 0.5.6, unclaimed, and did not expose the current 20-tool schema | With action-time confirmation, click Claim, sync the 0.5.9 public mirror, then inspect version/tools/score/install text | blocked-external |
-| Glama Docker preflight | Cached official `node:22-alpine` image built the public mirror and initialization returned exactly 20 tools; `docker build --pull` hit a daemon-to-registry TLS timeout | Re-run pull when registry path recovers; do not confuse this with listing completion | blocked-external |
+| Glama Docker preflight | After reproducing npm `EBADPLATFORM`, the canonical inspection template now bypasses only npm's platform guard; a no-cache Linux build installed the public 0.5.9 archive, initialized MCP 2025-11-25, and returned exactly 20 tools | Keep the explicit schema-only/no-Linux-support copy; do not confuse this with listing completion | verified |
 | MCP.Directory Skill | Submission was already sent; current site states review can take up to 24 hours | Wait and inspect; reconcile if rejected, never duplicate | pending-review |
 | MCP.Directory Server | Submission was already sent; no exact public listing was found yet | Wait and inspect generated install path; reconcile if rejected | pending-review |
 | AwesomeSkills.dev | No exact entry found; public GitHub payload is prepared | With action-time confirmation, submit the deep Skill URL and inspect the live page/install | blocked-external |

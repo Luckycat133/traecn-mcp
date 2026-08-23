@@ -63,6 +63,8 @@ try {
   assert.match(dockerfile, new RegExp(`/v${escapedVersion}/traecnclaw-${escapedVersion}\\.tgz`));
   assert.match(dockerfile, /ENTRYPOINT \["traecnclaw-mcp"\]/);
   assert.match(dockerfile, /TRAECN_GATEWAY_HOST=127\.0\.0\.1/);
+  assert.match(dockerfile, /npm install -g --ignore-scripts --force \/tmp\/traecnclaw\.tgz/);
+  assert.match(dockerfile, /without changing the package metadata or claiming Linux support/);
   assert.doesNotMatch(dockerfile, /0\.3\.0|TRAECN_MCP_TOOL_PROFILE|TRAECN_ENABLE_MOCK_BRIDGE/);
 
   assert.strictEqual(fs.existsSync(path.join(tempRoot, 'smithery.yaml')), false);
