@@ -1,0 +1,28 @@
+# Glama inspection image for TRAECNclaw MCP {{VERSION}}
+#
+# This image lets Glama build the public package and inspect the stdio MCP
+# schema. Normal TRAECNclaw execution remains local-first: the gateway and
+# TraeCN desktop run on the user's Mac. Do not bake gateway credentials into
+# this image and do not enable mock mode to imitate a live desktop connection.
+
+FROM node:22-alpine
+
+LABEL org.opencontainers.image.title="TRAECNclaw MCP"
+LABEL org.opencontainers.image.description="Local-first MCP server and Agent Skill for TraeCN desktop automation"
+LABEL org.opencontainers.image.source="https://github.com/Luckycat133/traecnclaw-mcp-skill"
+LABEL org.opencontainers.image.version="{{VERSION}}"
+
+RUN apk add --no-cache ca-certificates curl
+
+ARG TRAECNCLAW_RELEASE_BASE=https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/download
+
+RUN curl -fsSLo /tmp/traecnclaw.tgz \
+      "${TRAECNCLAW_RELEASE_BASE}/v{{VERSION}}/traecnclaw-{{VERSION}}.tgz" \
+    && npm install -g --ignore-scripts /tmp/traecnclaw.tgz \
+    && rm -f /tmp/traecnclaw.tgz \
+    && npm cache clean --force
+
+ENV TRAECN_GATEWAY_HOST=127.0.0.1
+ENV TRAECN_GATEWAY_PORT=8788
+
+ENTRYPOINT ["traecnclaw-mcp"]

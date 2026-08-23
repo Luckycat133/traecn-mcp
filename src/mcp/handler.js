@@ -14,6 +14,7 @@ const {
   internalMcpToolName,
   asMcpContent,
   asMcpError,
+  unwrapGatewayResult,
   validateMcpToolArguments,
   checkGenericQueueProbe
 } = require('./tools');
@@ -90,22 +91,24 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
   switch (internalName) {
     case 'send_message':
       if (checkGenericQueueProbe(args && args.message)) {
-        return asMcpContent({
-          ok: false,
-          error: 'generic_queue_probe_task_rejected',
-          message: 'The gateway already tracks queued work. Query the existing task instead of sending a queue-probe message.'
-        });
+        const probeRejection = new Error(
+          'The gateway already tracks queued work. Query the existing task instead of sending a queue-probe message.'
+        );
+        probeRejection.code = 'generic_queue_probe_task_rejected';
+        probeRejection.retryable = false;
+        probeRejection.nextAction = 'Query the existing task with traecn_get_task instead.';
+        return asMcpError(probeRejection);
       }
-      return asMcpContent((await client.submitTask(args, {
+      return asMcpContent(unwrapGatewayResult(await client.submitTask(args, {
         idempotencyKey: authContext.idempotencyKey
-      })).data);
+      })));
     case 'get_task': {
       const result = await client.getTaskStatus(args.taskId, { detailLevel: args.detailLevel });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'cancel_task': {
       const result = await client.cancelTask(args.taskId);
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'stop_generation': {
       const result = await client.stopGeneration({
@@ -113,35 +116,35 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
         acknowledgeUntrackedWork: args.acknowledgeUntrackedWork,
         reason: args.reason
       });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'open_workspace': {
       const result = await client.openProject(args.path);
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'list_models': {
       const result = await client.listModels();
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'select_model': {
       const result = await client.switchModel(args.model, { waitForQueue: false });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'select_mode': {
       const result = await client.switchMode(args.mode);
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'list_setting_sections': {
       const result = await client.settingsListSections({ restoreChat: true });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'list_settings': {
       const result = await client.settingsRead(args.section, { restoreChat: true });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'list_setting_options': {
       const result = await client.settingsListOptions(args.section, args.label, { restoreChat: true });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'set_setting_toggle': {
       const result = await client.settingsWrite(args.section, {
@@ -149,7 +152,7 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
         value: args.enabled,
         kind: 'toggle'
       }, settingsWriteOptions(args.section, args.label, args.enabled));
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'select_setting_option': {
       const result = await client.settingsWrite(args.section, {
@@ -157,7 +160,7 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
         value: args.value,
         kind: 'option'
       }, settingsWriteOptions(args.section, args.label, args.value));
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'set_setting_text': {
       const result = await client.settingsWrite(args.section, {
@@ -165,19 +168,19 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
         value: args.text,
         kind: 'text'
       }, settingsWriteOptions(args.section, args.label, args.text));
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'list_conversations': {
       const result = await client.listConversations();
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'create_conversation': {
       const result = await client.manageConversation({ action: 'create' });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'select_conversation': {
       const result = await client.manageConversation({ action: 'select', conversationId: args.conversationId });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'delete_conversation': {
       const result = await client.manageConversation({
@@ -186,11 +189,11 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
         expectedTitle: args.expectedTitle,
         acknowledgePermanentDeletion: args.acknowledgePermanentDeletion
       });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'answer_question': {
       const result = await client.resolveInteraction({ action: 'answer', answer: args.answer });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     case 'decide_approval': {
       const result = await client.resolveInteraction({
@@ -199,7 +202,7 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
         ...(args.acknowledgeRisk === true ? { acknowledgeRisk: true } : {}),
         ...(args.reason ? { reason: args.reason } : {})
       });
-      return asMcpContent(result.data || result);
+      return asMcpContent(unwrapGatewayResult(result));
     }
     default:
       throw new Error(`Unknown tool: ${name}`);

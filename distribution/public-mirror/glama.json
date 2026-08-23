@@ -2,5 +2,31 @@
   "$schema": "https://glama.ai/mcp/schemas/server.json",
   "maintainers": [
     "Luckycat133"
-  ]
+  ],
+  "name": "TRAECNclaw MCP",
+  "description": "Local-first stdio MCP server and Agent Skill that lets AI agents operate the TraeCN desktop app through a gateway running on the user's Mac.",
+  "repository": "https://github.com/Luckycat133/traecnclaw-mcp-skill",
+  "homepage": "https://github.com/Luckycat133/traecnclaw-mcp-skill",
+  "license": "MIT",
+  "type": "mcp_server",
+  "status": "production",
+  "transport": [
+    "stdio"
+  ],
+  "tools": 20,
+  "keywords": [
+    "traecn",
+    "mcp",
+    "agent-skill",
+    "coding-agent",
+    "desktop-automation",
+    "macos",
+    "local-first",
+    "cdp",
+    "developer-tools"
+  ],
+  "docker": {
+    "source": "repository",
+    "file": "Dockerfile"
+  }
 }

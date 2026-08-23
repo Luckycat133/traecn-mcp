@@ -12,6 +12,7 @@ const repoRoot = path.resolve(__dirname, '..');
 const canonicalSkillRoot = path.join(repoRoot, 'skills/traecnclaw-mcp');
 const distributionRoot = path.join(repoRoot, 'distribution/public-mirror');
 const mirrorSkillPath = '.codex/skills/traecnclaw-mcp';
+const obsoleteRootFiles = ['smithery.yaml', 'server.json', 'Dockerfile.glama'];
 
 function listTree(rootPath) {
   const files = [];
@@ -84,6 +85,11 @@ function renderReadme(sourceRevision) {
     .replaceAll('{{SOURCE_REVISION}}', sourceRevision);
 }
 
+function renderGlamaDockerfile() {
+  return fs.readFileSync(path.join(distributionRoot, 'Dockerfile.glama.template'), 'utf8')
+    .replaceAll('{{VERSION}}', packageInfo.version);
+}
+
 function releaseManifest(sourceRevision) {
   return {
     name: 'traecnclaw-mcp-skill',
@@ -95,7 +101,13 @@ function releaseManifest(sourceRevision) {
     sourceRevision,
     skillPath: mirrorSkillPath,
     marketplaces: {
-      glama: { status: 'metadata-ready', file: 'glama.json' },
+      glama: {
+        status: 'listing-ready',
+        file: 'glama.json',
+        dockerfile: 'Dockerfile',
+        runtime: 'local-gateway-required',
+        hostedConnector: false
+      },
       smithery: { status: 'requires-mcpb-publication', legacySmitheryYaml: false },
       officialMcpRegistry: {
         status: 'requires-public-package-publication',
@@ -113,12 +125,13 @@ function buildPublicMirror({ mirrorRoot, sourceRevision }) {
   fs.writeFileSync(path.join(mirrorRoot, 'SOURCE_REVISION'), sourceRevisionDocument(sourceRevision), 'utf8');
   fs.writeFileSync(path.join(mirrorRoot, 'README.md'), renderReadme(sourceRevision), 'utf8');
   fs.copyFileSync(path.join(distributionRoot, 'glama.json'), path.join(mirrorRoot, 'glama.json'));
+  fs.writeFileSync(path.join(mirrorRoot, 'Dockerfile'), renderGlamaDockerfile(), 'utf8');
   fs.writeFileSync(
     path.join(mirrorRoot, 'release-manifest.json'),
     `${JSON.stringify(releaseManifest(sourceRevision), null, 2)}\n`,
     'utf8'
   );
-  for (const obsolete of ['smithery.yaml', 'server.json']) {
+  for (const obsolete of obsoleteRootFiles) {
     fs.rmSync(path.join(mirrorRoot, obsolete), { force: true });
   }
 }
@@ -127,38 +140,55 @@ function verifyPublicMirror({ mirrorRoot, sourceRevision }) {
   assertRevision(sourceRevision);
   const violations = compareTrees(canonicalSkillRoot, path.join(mirrorRoot, mirrorSkillPath))
     .map(detail => ({ rule: 'skill-byte-mismatch', ...detail }));
+
   const sourcePath = path.join(mirrorRoot, 'SOURCE_REVISION');
   const source = fs.existsSync(sourcePath) ? fs.readFileSync(sourcePath, 'utf8') : '';
   const commitMatches = source.match(/^Canonical commit:\s*([a-f0-9]{40})\s*$/mi);
   if (!commitMatches || commitMatches[1].toLowerCase() !== sourceRevision.toLowerCase()) {
     violations.push({ rule: 'source-revision-mismatch', path: 'SOURCE_REVISION' });
   }
+
   const readmePath = path.join(mirrorRoot, 'README.md');
   const readme = fs.existsSync(readmePath) ? fs.readFileSync(readmePath, 'utf8') : '';
   if (!readme.includes(`TRAECNclaw ${packageInfo.version}`)
       || !/contract version 5/i.test(readme)
       || !/exactly 20/i.test(readme)
+      || !/local-first/i.test(readme)
       || /TRAECN_MCP_TOOL_PROFILE|traecnclaw@0\.3/i.test(readme)) {
     violations.push({ rule: 'mirror-readme-stale', path: 'README.md' });
   }
+
   const manifestPath = path.join(mirrorRoot, 'release-manifest.json');
   try {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     if (manifest.version !== packageInfo.version
         || manifest.contractVersion !== MCP_CONTRACT_VERSION
         || manifest.toolCount !== MCP_TOOL_NAMES.length
-        || manifest.sourceRevision !== sourceRevision) {
+        || manifest.sourceRevision !== sourceRevision
+        || manifest.marketplaces?.glama?.status !== 'listing-ready'
+        || manifest.marketplaces?.glama?.hostedConnector !== false) {
       violations.push({ rule: 'mirror-manifest-stale', path: 'release-manifest.json' });
     }
   } catch {
     violations.push({ rule: 'mirror-manifest-invalid', path: 'release-manifest.json' });
   }
+
   const expectedGlama = path.join(distributionRoot, 'glama.json');
   const actualGlama = path.join(mirrorRoot, 'glama.json');
   if (!fs.existsSync(actualGlama) || sha256(expectedGlama) !== sha256(actualGlama)) {
     violations.push({ rule: 'glama-metadata-stale', path: 'glama.json' });
   }
-  for (const obsolete of ['smithery.yaml', 'server.json']) {
+
+  const dockerfilePath = path.join(mirrorRoot, 'Dockerfile');
+  const dockerfile = fs.existsSync(dockerfilePath) ? fs.readFileSync(dockerfilePath, 'utf8') : '';
+  if (!dockerfile.includes(`/v${packageInfo.version}/traecnclaw-${packageInfo.version}.tgz`)
+      || !dockerfile.includes('ENTRYPOINT ["traecnclaw-mcp"]')
+      || !dockerfile.includes('TRAECN_GATEWAY_HOST=127.0.0.1')
+      || /0\.3\.0|TRAECN_MCP_TOOL_PROFILE|ENV TRAECN_HOST=|ENV TRAECN_PORT=|TRAECN_ENABLE_MOCK_BRIDGE/.test(dockerfile)) {
+    violations.push({ rule: 'glama-dockerfile-stale', path: 'Dockerfile' });
+  }
+
+  for (const obsolete of obsoleteRootFiles) {
     if (fs.existsSync(path.join(mirrorRoot, obsolete))) {
       violations.push({ rule: 'obsolete-marketplace-metadata', path: obsolete });
     }
@@ -211,5 +241,6 @@ module.exports = {
   compareTrees,
   verifyPublicMirror,
   releaseManifest,
-  sourceRevisionDocument
+  sourceRevisionDocument,
+  renderGlamaDockerfile
 };
