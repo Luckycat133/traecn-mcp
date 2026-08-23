@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-08-23
+
+### Fixed
+
+- Ship the complete `scripts/lib` directory in the published package. The
+  0.5.7 tarball omitted `scripts/lib/cli-config.js`, which broke the
+  `traecnclaw` CLI in npm-, Homebrew-, and MCPB-installed copies while the
+  stdio MCP server kept working.
+
 ## [0.5.7] - 2026-08-23
 
 ### Added

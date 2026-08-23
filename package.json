@@ -1,6 +1,6 @@
 {
   "name": "traecnclaw",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "mcpName": "io.github.luckycat133/traecnclaw",
   "private": true,
   "description": "Focused MCP gateway and Agent Skill for TraeCN desktop automation, with CLI, web diagnostics, and OpenClaw integration.",
@@ -46,7 +46,7 @@
     "scripts/gateway-service.js",
     "scripts/inspect-traecn.js",
     "scripts/live-uat.js",
-    "scripts/lib/version-surfaces.js",
+    "scripts/lib/**/*.js",
     "scripts/long-queue-proof.js",
     "scripts/package-skill.js",
     "scripts/public-mirror.js",
