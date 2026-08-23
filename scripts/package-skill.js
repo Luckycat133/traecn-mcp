@@ -7,6 +7,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
+const packageInfo = require(path.join(repoRoot, 'package.json'));
+const version = packageInfo.version;
 const skillName = 'traecnclaw-mcp';
 const skillRoot = path.join(repoRoot, 'skills');
 const skillDir = path.join(skillRoot, skillName);
@@ -93,6 +95,14 @@ const zipResult = run('zip', ['-qr', zipPath, skillName], { cwd: skillRoot });
 const artifacts = [artifact(tgzPath)];
 if (zipResult.available && fs.existsSync(zipPath)) {
   artifacts.push(artifact(zipPath));
+}
+
+// Include a previously built .mcpb bundle (scripts/build-mcpb.js) so the
+// release manifest carries its bytes and checksum alongside the other
+// distribution surfaces.
+const mcpbPath = path.join(distDir, `${skillName}-${version}.mcpb`);
+if (fs.existsSync(mcpbPath)) {
+  artifacts.push(artifact(mcpbPath));
 }
 
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
