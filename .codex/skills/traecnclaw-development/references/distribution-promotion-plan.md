@@ -4,10 +4,10 @@ Use this plan for public packaging, directory submission, browser-Agent handoff,
 launch content, and post-publication verification. Recheck every channel before
 acting; marketplace requirements and public versions change independently.
 
-## Execution status — 2026-08-23
+## Execution status — 2026-08-24
 
-Target 0.5.9 implementation is prepared locally. The following plan decisions
-are no longer open:
+The 0.5.9 source/Release/public-mirror/Homebrew/ClawHub/Skills portion is
+published and verified. The following plan decisions are no longer open:
 
 - public npm identity is `@luckycat133/traecnclaw`;
 - MCPB uses the official schema/CLI and deterministic packaging;
@@ -20,11 +20,11 @@ are no longer open:
 - architecture, use cases, limitations, video scripts, and post drafts are in
   `docs/LAUNCH-KIT.md`.
 
-The local implementation is not a public release. Remaining work is the clean
-0.5.9 merge/tag/Release chain, authenticated npm/Smithery/Registry/Claude
-actions, confirmed browser submissions, directory review/indexing, real launch
-recording, and approved Web Console design/implementation. Never convert those
-external blockers into claimed completion.
+Remaining work is authenticated npm/Smithery/Registry/Claude actions, confirmed
+browser submissions, directory review/indexing, a strict live UAT with the
+TRAECNclaw workspace actually open, real launch recording, and approved Web
+Console design/implementation. Never convert those external blockers into
+claimed completion.
 
 ## Principles
 
@@ -52,7 +52,7 @@ Use these identities unless a later release deliberately changes them:
 Product: TRAECNclaw MCP
 Public repository: https://github.com/Luckycat133/traecnclaw-mcp-skill
 Canonical source: private Luckycat133/TRAECNclaw
-Target release candidate: 0.5.9; last verified public Release/Homebrew: 0.5.8
+Current release: 0.5.9; public Release/Homebrew/ClawHub verified
 Current npm package: @luckycat133/traecnclaw (selected; not yet public)
 Runtime: local stdio MCP server + local HTTP gateway
 Platform: macOS; verified TraeCN 1.107.x (recheck compatibility evidence)
@@ -70,11 +70,13 @@ release manifest as provenance.
 
 These deliver runnable bytes or a one-command install:
 
-- Public GitHub mirror Release — selected and existing.
-- ClawHub — selected and existing for the Skill.
-- MCPB bundle — implemented and locally validated; clean host install remains.
+- Public GitHub mirror Release — 0.5.9 published, downloaded, and hash-verified.
+- ClawHub — 0.5.9 live with CLEAN scanner result.
+- MCPB bundle — public 0.5.9 bytes and clean-room discovery verified; Claude
+  Desktop installation remains.
 - Smithery local/MCPB publication — prepared; login/publish/install remains.
-- Homebrew tap — existing at 0.5.8; stronger 0.5.9 template is prepared.
+- Homebrew tap — 0.5.9 published; strict online audit, real upgrade, and exact
+  20-tool test pass.
 - Scoped npm package — implementation selected and tested locally; publish and
   registry-origin clean install remain.
 
@@ -91,7 +93,8 @@ These establish machine-readable identity and feed other indexes:
 
 ### Skill discovery channels
 
-- skills.sh — public detail page exists; reindex/inspect 0.5.9 after release.
+- skills.sh — public detail page and clean 0.5.9 install are verified; the
+  site's generated `Cross-platform` JSON-LD conflicts with canonical macOS copy.
 - AwesomeSkills.dev — exact payload prepared; final submit confirmation remains.
 - MCP.Directory Skill listing — already submitted; pending review.
 - Additional Skill directories may be syndicated later when submission is free,

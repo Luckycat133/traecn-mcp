@@ -1,6 +1,6 @@
 # TRAECNclaw Channel Ledger
 
-Last checked: 2026-08-23 (Asia/Shanghai). Target release: 0.5.9.
+Last checked: 2026-08-24 (Asia/Shanghai). Target release: 0.5.9.
 
 Status meanings:
 
@@ -19,20 +19,20 @@ verified listing, and a directory scan is not a runtime test.
 
 | Channel | Current public state | Target 0.5.9 state | Evidence / next exact step | Status |
 | --- | --- | --- | --- | --- |
-| Canonical source | Private `Luckycat133/TRAECNclaw`; tag `v0.5.8` exists; 0.5.9 is on a release branch | Clean merged 0.5.9 commit and immutable tag | Run Node 22 gates, merge, tag, inspect tag commit | ready |
-| Canonical GitHub Release | No verified canonical `v0.5.8` Release was found | Private 0.5.9 provenance Release with all manifest assets | Create after clean manifest; download and hash assets | ready |
-| Public mirror | [`v0.5.8`](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v0.5.8) is live | Generated 0.5.9 mirror, tag, Release, and asset verification | Regenerate from exact canonical commit, scan, push, release | ready |
+| Canonical source | PR [#27](https://github.com/Luckycat133/TRAECNclaw/pull/27) merged the 0.5.9 release source; immutable `v0.5.9` resolves to `4edb1b3`; post-release Glama/Homebrew template fixes are on `main` | Exact release source and later distribution-template corrections remain distinguishable | Node 22 `test:release` passed on the tag commit; inspect the tag before every republish | verified |
+| Canonical GitHub Release | Private [`v0.5.9`](https://github.com/Luckycat133/TRAECNclaw/releases/tag/v0.5.9) contains the scoped npm tarball, MCPB, two Skill archives, and provenance manifest | Downloaded bytes match every recorded SHA-256 | GitHub Actions is disabled for this repository, so the identical locally passed Node 22 workflow was run before manual Release creation | verified |
+| Public mirror | Public [`v0.5.9`](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v0.5.9) contains six assets; `main@5ad3a3e` also carries the canonical Glama inspection fix | Public source, Release assets, provenance, and inspection entry are current | Downloaded all assets and matched their SHA-256; regenerate only from canonical source | verified |
 | Scoped npm | `@luckycat133/traecnclaw` is not published | Public 0.5.9 with verified `mcpName`, macOS restriction, bins, and 20 tools | Complete npm web login, publish generated tarball, clean-prefix test | blocked-external |
 | Historical npm | Unscoped `traecnclaw@0.3.1` is still `latest` | Deprecation message points to scoped package; never republish current code here | Requires npm ownership/auth after scoped package is verified | blocked-external |
-| MCPB artifact | Local 0.5.9 builder now passes official schema validation and deterministic rebuild check | Public Release asset plus clean host install with 20 tools | Rebuild from tag, verify digest, install in a compatible desktop host | ready |
+| MCPB artifact | Public 0.5.9 MCPB SHA-256 is `05baf8549ba75386b7f6586138608334d7a5d261109c2d24c2f35c231990dd1e`; official validation, deterministic rebuild, release download, and clean-room 20-tool discovery passed | Preserve the exact public bundle for desktop-host and Smithery checks | Install this byte-identical bundle in Claude Desktop and compare the downloaded Smithery bundle later | verified |
 | Claude Desktop MCPB host | Claude Desktop is installed but was logged out during verification | Exact 0.5.9 bundle installed and 20 tools visible | User logs into Claude Desktop; install and inspect extension | blocked-external |
 | Smithery Local | No current MCPB server listing; an older third-party Skill page is stale | 0.5.9 Local/MCPB listing and downloaded-bundle verification | Complete Smithery login; publish exact MCPB, download and compare digest | blocked-external |
 | Official MCP Registry | Active [`io.github.Luckycat133/traecnclaw`](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.Luckycat133%2Ftraecnclaw) 0.3.1 entry uses the historical unscoped package and legacy environment names | Reconcile the existing identity with 0.5.9 backed by scoped npm; do not create a lowercase duplicate | Publish npm first, render/validate matching metadata, authenticate publisher, publish a new version, then query exact identity | blocked-external |
 | PulseMCP | No verified current entry | Correct downstream entry | Wait for Official Registry ingestion, then inspect; do not duplicate early | pending-index |
-| Homebrew tap | [`Luckycat133/tap/traecnclaw`](https://github.com/Luckycat133/homebrew-tap) installs 0.5.8 and its runtime smoke passed; caveats and formula test are too weak | 0.5.9 formula with truthful CLI commands and real 20-tool stdio test | Render from clean manifest, update tap, audit/style/reinstall/test public formula | ready |
-| ClawHub | `traecnclaw-mcp` latest is 0.5.6 | Clean 0.5.9 Skill sourced from public mirror commit | Dry-run, publish after public mirror, inspect version/security/install | ready |
-| Skills CLI | Clean install from public mirror passed | Re-test exact 0.5.9 public commit | Install into clean temporary skills root and inspect files | ready |
-| skills.sh | [Detail page](https://www.skills.sh/luckycat133/traecnclaw-mcp-skill/traecnclaw-mcp) is live; first seen 2026-08-23, no install count yet | Page resolves to 0.5.9 public source and correct install | Reinspect after mirror release/indexing; verify platform copy if site exposes it | pending-index |
+| Homebrew tap | [`Luckycat133/tap/traecnclaw`](https://github.com/Luckycat133/homebrew-tap) is 0.5.9 at `329f2cc`; syntax, style, strict online audit, real upgrade, CLI help, and exact 20-tool `brew test` passed | Keep formula generated from the release manifest digest | Re-run the public audit/install path for future releases | verified |
+| ClawHub | `traecnclaw-mcp` latest and all six tags are 0.5.9; scanner result is CLEAN; publication source is public mirror commit `5ad3a3e` | Published Skill version, provenance, and scanner agree | Reinspect after future scanner/index changes | verified |
+| Skills CLI | `npx skills add` cloned the public repository into a clean temporary project, installed metadata version 0.5.9, and passed all 10 launcher tests | Public install path is reproducible | Re-test after future Skill changes | verified |
+| skills.sh | [Detail page](https://www.skills.sh/luckycat133/traecnclaw-mcp-skill/traecnclaw-mcp) shows the correct repository, Skill content, and install command; audits are Trust Hub Warn, Socket Pass, Snyk Pass; install count is still unavailable | Keep source/install current and do not invent counts | Site-generated JSON-LD incorrectly says `Cross-platform`; retain the repository's explicit macOS limitation and request correction if the site exposes a channel | verified |
 
 ## Directory and catalog channels
 
@@ -45,8 +45,9 @@ verified listing, and a directory scan is not a runtime test.
 | AwesomeSkills.dev | No exact entry found; public GitHub payload is prepared | With action-time confirmation, submit the deep Skill URL and inspect the live page/install | blocked-external |
 | MCP Server Hub (`mcpserver.dev`) | No exact entry found; form payload is prepared | With action-time confirmation, submit URL/title/description/category/keywords, then inspect | blocked-external |
 | mcp.so | No exact entry found; current submission path is a public GitHub issue | With action-time confirmation, open the prepared issue and inspect the resulting listing | blocked-external |
+| mcpservers.org | [Existing page](https://mcpservers.org/servers/luckycat133/traecnclaw-mcp-skill) was crawled on 2026-08-24 but still renders 0.5.6 documentation and exposes an `Update request` action | With action-time confirmation, request a refresh from public `main`, then verify version/install/platform copy | blocked-external |
 | Smithery legacy Skill page | Existing third-party `xingmiao201081/traecnclaw-mcp` page contains stale profiles | Do not treat it as the MCPB server listing; request reconciliation after current Local listing exists | stale |
-| `punkpeye/awesome-mcp-servers` | Previous submission state was not re-verified in this release pass | Search open/closed PRs, reconcile existing work after Glama evidence, do not open a duplicate | pending-review |
+| `punkpeye/awesome-mcp-servers` | No exact open PR or issue was found in the 2026-08-24 GitHub search | After Glama evidence and action-time confirmation, follow current contribution rules and open one non-duplicate submission | blocked-external |
 | GitHub MCP Registry | Not selected as an independent runtime | Use public mirror and Official MCP Registry metadata only | not-selected |
 | Smithery URL mode | No public Streamable HTTP product exists | Keep excluded; use Smithery Local/MCPB | not-selected |
 | Glama hosted runtime | Cannot transparently reach the user's local Mac/TraeCN | Keep excluded; listing and schema inspection only | not-selected |
@@ -64,13 +65,16 @@ verified listing, and a directory scan is not a runtime test.
 
 ## Resume checklist
 
-1. Finish and merge the 0.5.9 release commit under Node.js 22.
-2. Tag and verify both GitHub Release surfaces.
-3. Publish and test scoped npm; only then publish Registry metadata.
-4. Update and clean-test Homebrew; publish ClawHub from the public mirror.
-5. Install the exact MCPB in a logged-in desktop host and publish Smithery Local.
-6. Complete the confirmed Glama claim/sync and the three prepared directory
-   submissions.
-7. Reinspect every public page and generated install path, then replace this
-   ledger's provisional states with evidence and timestamps.
-8. Record real launch media and obtain confirmation before public posts.
+1. Complete npm web login, publish and clean-test the scoped package, then
+   deprecate the historical unscoped package if ownership permits.
+2. Publish the already validated Official Registry metadata and wait for
+   PulseMCP ingestion.
+3. Log into Claude Desktop, install the exact MCPB, then authenticate and
+   publish the same bundle through Smithery Local.
+4. Obtain action-time confirmation for Glama Claim/sync, AwesomeSkills.dev,
+   MCP Server Hub, mcp.so, mcpservers.org refresh, and the curated GitHub list.
+5. Re-run strict live UAT with the TRAECNclaw project actually open in TraeCN;
+   current 1.107.1 doctor/DOM/adapter checks pass, but session UAT correctly
+   rejected the currently open `empty-project` workspace.
+6. Obtain Web Console design approval before implementation; record/review real
+   launch media and exact post payloads before public posting.

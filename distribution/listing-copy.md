@@ -112,3 +112,14 @@ Body:
 > the user's Mac. The current MCP contract has exactly 20 tools. Do not present
 > the inspection container as a hosted connection to the user's TraeCN app, and
 > do not use the historical unscoped npm package.
+
+### mcpservers.org update request
+
+> Please refresh the existing TRAECNclaw MCP page from the current public
+> repository `main` branch:
+> https://github.com/Luckycat133/traecnclaw-mcp-skill. The existing page still
+> renders 0.5.6 documentation. The current release is 0.5.9, uses local stdio on
+> macOS, exposes exactly 20 focused tools, and installs the server through
+> `@luckycat133/traecnclaw` or `Luckycat133/tap/traecnclaw`. Please remove old
+> tool-profile and unscoped `traecnclaw@0.3.1` install copy; this is not a hosted
+> cloud endpoint.

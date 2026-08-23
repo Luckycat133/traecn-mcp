@@ -4,22 +4,26 @@ This is the current operational snapshot. Re-read source, public Releases,
 marketplaces, open work, and live evidence before relying on any status below.
 The detailed public-channel facts live in `docs/CHANNEL-LEDGER.md`.
 
-## Snapshot — 2026-08-23
+## Snapshot — 2026-08-24
 
-- Canonical release candidate: `0.5.9`, Node.js 22 CommonJS.
+- Canonical release: `0.5.9`, Node.js 22 CommonJS; tag commit `4edb1b3` passed
+  the complete local release workflow before both Releases were created.
 - Canonical repository: private `Luckycat133/TRAECNclaw`.
 - Public distribution repository: public
   `Luckycat133/traecnclaw-mcp-skill`.
-- Last verified public Release/Homebrew pair: 0.5.8.
-- ClawHub remains stale at 0.5.6.
+- Canonical and public GitHub Releases are verified at 0.5.9; every downloaded
+  asset digest matches the generated provenance manifest.
+- Homebrew and ClawHub are verified at 0.5.9. Skills CLI clean installation and
+  the skills.sh public detail page are also verified.
 - Historical unscoped npm `traecnclaw@0.3.1` is not a current channel.
 - Selected public npm identity: `@luckycat133/traecnclaw`.
 - MCP identity: existing Registry name `io.github.Luckycat133/traecnclaw`.
 - MCP contract v5 remains exactly 20 ordered tools.
 - Verified runtime scope remains macOS and TraeCN 1.107.x. Unknown versions use
   a reported degraded adapter and are not a platform claim.
-- The current worktree contains the 0.5.9 distribution fixes; it is not yet a
-  clean release commit and no 0.5.9 public surface is claimed.
+- Canonical `main` contains post-release Glama inspection and strict Homebrew
+  audit fixes. Those later commits are separate from the immutable 0.5.9 server
+  bytes; the generated public mirror carries the Glama fix on its `main`.
 
 ## Completion verdict
 
@@ -35,10 +39,12 @@ distribution implementation now covers:
 - scoped-package discovery from the portable Skill launcher;
 - canonical listing copy, release runbook, channel ledger, and launch drafts.
 
-The overall campaign is not complete until the external rows are verified.
-Current external blockers are npm/Smithery/Claude authentication, action-time
-confirmation for browser submissions and Glama claim, directory review/indexing,
-real launch recording, and Web Console design approval.
+The verified source/Release/Homebrew/ClawHub/Skills/Glama-preflight portion is
+complete. The overall campaign is not complete until the remaining external
+rows are verified. Current blockers are npm/Smithery/Claude authentication,
+action-time confirmation for browser submissions and Glama claim, directory
+review/indexing, a live UAT with this repository actually open in TraeCN, real
+launch recording, and Web Console design approval.
 
 ## Product surfaces
 
@@ -79,23 +85,31 @@ Still not selected:
 
 ### Verified current public facts
 
-- Public mirror 0.5.8 Release is reachable and contains the server/Skill pair.
-- Homebrew 0.5.8 installs and its real stdio server returns 20 tools; its public
-  formula has stale caveats and an insufficient old test, fixed in the 0.5.9
-  template but not yet published.
-- Skills CLI can install the public Skill path cleanly.
-- The skills.sh detail page exists and points to the public repository.
+- Public mirror 0.5.9 Release is reachable; all six downloaded assets match
+  their published SHA-256 digests.
+- Homebrew 0.5.9 passes syntax, style, strict online audit, real upgrade, CLI,
+  and exact 20-tool stdio tests.
+- ClawHub 0.5.9 is live with current tags, public-source provenance, and a CLEAN
+  scanner result.
+- Skills CLI installs metadata version 0.5.9 from the public repository in a
+  clean project and the installed launcher passes all focused tests.
+- The skills.sh detail page points to the public repository and correct install
+  command. Its generated `Cross-platform` JSON-LD remains a third-party warning;
+  canonical metadata continues to say macOS.
 - Official Registry already has active
   `io.github.Luckycat133/traecnclaw@0.3.1`; it uses the historical unscoped
   package and legacy variables, so 0.5.9 must update that identity rather than
   create a lowercase duplicate.
 - Glama has an existing listing, but it is stale/unclaimed and not current
   acceptance evidence.
-- Cached Glama Docker preflight builds and discovers 20 tools. A forced image
-  pull failed because the Docker daemon's registry TLS connection timed out;
-  that external failure does not prove or disprove the listing.
+- A no-cache Glama Linux inspection build reproduced npm's intentional Darwin
+  platform rejection. The canonical inspection-only override then built from
+  the public 0.5.9 archive, negotiated MCP, and returned exactly 20 tools without
+  changing package platform claims.
 - MCP.Directory Skill and Server submissions already exist in review; do not
   submit duplicates.
+- mcpservers.org already has a page but still renders 0.5.6 documentation; its
+  public update request joins the action-time confirmation queue.
 
 ### 0.5.9 packaging acceptance
 
@@ -106,7 +120,8 @@ MCPB:
 - no credentials or persistent user data;
 - deterministic digest across rebuilds;
 - release manifest size, SHA-256, and source revision;
-- clean compatible-host install still required after the final tag.
+- public asset download and clean-room install are verified; Claude Desktop UI
+  installation remains an independent authenticated host check.
 
 Scoped npm and Registry:
 
@@ -123,8 +138,8 @@ Homebrew:
 
 - formula generated from the clean release manifest and public artifact digest;
 - truthful `traecnclaw` caveats;
-- CLI help and exact 20-tool stdio discovery in `brew test`;
-- public 0.5.9 tap update, audit/style/reinstall/test still required.
+- public 0.5.9 tap update, Ruby syntax, style, strict online audit, real upgrade,
+  CLI help, and exact 20-tool stdio discovery in `brew test` are verified.
 
 Directories:
 
@@ -178,17 +193,19 @@ coordinated votes, or present mock output as live TraeCN evidence.
 
 ## Current execution order
 
-1. Complete the 0.5.9 source change and run focused/full Node 22 gates.
-2. Merge and tag the exact release commit; verify canonical and public Releases.
-3. Publish and clean-test scoped npm.
-4. Publish Official Registry metadata; then inspect PulseMCP ingestion.
-5. Render, publish, and clean-test Homebrew 0.5.9.
-6. Publish ClawHub 0.5.9 from the public mirror commit and recheck skills.sh.
-7. Install the exact MCPB in a logged-in host and publish Smithery Local.
-8. With confirmation, claim/sync Glama and submit the prepared directory forms.
-9. Wait for and verify MCP.Directory and other review/indexing results.
-10. Obtain Web Console design approval, implement it, and run browser acceptance.
-11. Record real launch media; review exact posts at action time and publish.
+1. Complete npm web login, publish and clean-test scoped npm, then deprecate the
+   historical package when account ownership permits.
+2. Publish validated Official Registry metadata; inspect PulseMCP ingestion.
+3. Install the exact MCPB in a logged-in Claude Desktop and publish Smithery
+   Local after Smithery authentication.
+4. With action-time confirmation, claim/sync Glama and complete the prepared
+   directory/update submissions without duplicates.
+5. Re-run strict live UAT with TRAECNclaw open in TraeCN. Current doctor, DOM,
+   readiness, and verified 1.107.1 adapter checks pass; the session phase
+   correctly rejected the unrelated `empty-project` workspace.
+6. Wait for and verify MCP.Directory and other review/indexing results.
+7. Obtain Web Console design approval, implement it, and run browser acceptance.
+8. Record real launch media; review exact posts at action time and publish.
 
 ## Test and evidence ladder
 
