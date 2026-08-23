@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - Allowed the Glama Linux inspection image to bypass the scoped package's
   intentional macOS npm platform guard without changing runtime compatibility
   claims; the container remains schema-inspection-only.
+- Removed the redundant Homebrew `:run` dependency qualifier and made the
+  formula test use Homebrew's preferred `bin/"traecnclaw-mcp"` path form so the
+  published formula passes strict online audit.
 
 ## [0.5.9] - 2026-08-23
 
