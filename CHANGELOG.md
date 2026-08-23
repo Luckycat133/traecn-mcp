@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-08-23
+
+### Added
+
+- Added the MCP metadata quality milestone for contract v5: human-readable
+  titles on all 20 tools, rewritten intent-level descriptions with fully
+  described input properties, seven reusable output-schema families matched
+  to real gateway payloads, accurate annotations (`openWorldHint` confined to
+  `traecn_send_message`, evidence-backed `idempotentHint`), and explicit
+  `execution.taskSupport` (optional for send_message, forbidden elsewhere).
+- Added structured tool execution errors: gateway non-2xx responses now
+  surface as `isError` results carrying stable codes, `retryable`, and
+  `nextAction` instead of passing through as successful results, and the
+  queue-probe rejection uses the same shape.
+- Added `src/mcp/metadata-quality.test.js` gating names, metadata accuracy,
+  schema-vs-payload agreement, task support, annotations, and error shape.
+- Added deterministic `.mcpb` bundle packaging (`scripts/build-mcpb.js`) with
+  a spec-v0.3 manifest exposing only gateway host/port/token/client ID,
+  credential scanning, byte-identical rebuilds, and offline conformance tests.
+
+### Changed
+
+- Regenerated the public mirror from canonical sources: pinned Glama image
+  asset URL, Skills CLI install path, listing-ready marketplace metadata.
+
 ## [0.5.6] - 2026-08-08
 
 ### Added
