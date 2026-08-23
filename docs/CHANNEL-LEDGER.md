@@ -38,14 +38,14 @@ verified listing, and a directory scan is not a runtime test.
 
 | Channel | Current public state | Next exact step | Status |
 | --- | --- | --- | --- |
-| Glama | [Existing listing](https://glama.ai/mcp/servers/Luckycat133/traecnclaw-mcp-skill) is stale at 0.5.6, unclaimed, and did not expose the current 20-tool schema | With action-time confirmation, click Claim, sync the 0.5.9 public mirror, then inspect version/tools/score/install text | blocked-external |
-| Glama Docker preflight | After reproducing npm `EBADPLATFORM`, the canonical inspection template now bypasses only npm's platform guard; a no-cache Linux build installed the public 0.5.9 archive, initialized MCP 2025-11-25, and returned exactly 20 tools | Keep the explicit schema-only/no-Linux-support copy; do not confuse this with listing completion | verified |
-| MCP.Directory Skill | Submission was already sent; current site states review can take up to 24 hours | Wait and inspect; reconcile if rejected, never duplicate | pending-review |
-| MCP.Directory Server | Submission was already sent; no exact public listing was found yet | Wait and inspect generated install path; reconcile if rejected | pending-review |
+| Glama | [Existing listing](https://glama.ai/mcp/servers/Luckycat133/traecnclaw-mcp-skill) shows verified maintainers, but its last sync is public commit `d81c119` and the overview/schema still describe 0.5.6 and legacy tool-profile configuration | With action-time confirmation, click `Sync Server`, verify public commit `5ad3a3e`, then inspect version/tools/score/install text; do not repeat Claim | blocked-external |
+| Glama Docker preflight | After reproducing npm `EBADPLATFORM`, the canonical inspection template bypasses only npm's platform guard. Both the root Dockerfile and the current Glama-generated `mcp-proxy` shape were reproduced locally with Node.js 22 and the public 0.5.9 archive: MCP reported version 0.5.9 and exactly 20 tools, while a tool call without the user's gateway returned actionable `ECONNREFUSED` rather than mock output | With action-time confirmation, run private `Build` using the pinned public commit and verified inputs; never click `Build & Release` for this local-first product | verified |
+| MCP.Directory Skill | Submission was already sent. A full 2026-08-24 pass over the public Skills API (9,291 rows at inspection time) found no `traecn` match | Wait and inspect; reconcile if rejected, never duplicate | pending-review |
+| MCP.Directory Server | Submission was already sent. A full 2026-08-24 pass over the public Servers API (2,303 rows at inspection time) found no `traecn` match | Wait and inspect the generated install path; reconcile if rejected | pending-review |
 | AwesomeSkills.dev | No exact entry found; public GitHub payload is prepared | With action-time confirmation, submit the deep Skill URL and inspect the live page/install | blocked-external |
 | MCP Server Hub (`mcpserver.dev`) | No exact entry found; form payload is prepared | With action-time confirmation, submit URL/title/description/category/keywords, then inspect | blocked-external |
 | mcp.so | No exact entry found; current submission path is a public GitHub issue | With action-time confirmation, open the prepared issue and inspect the resulting listing | blocked-external |
-| mcpservers.org | [Existing page](https://mcpservers.org/servers/luckycat133/traecnclaw-mcp-skill) was crawled on 2026-08-24 but still renders 0.5.6 documentation and exposes an `Update request` action | With action-time confirmation, request a refresh from public `main`, then verify version/install/platform copy | blocked-external |
+| mcpservers.org | [Existing page](https://mcpservers.org/servers/luckycat133/traecnclaw-mcp-skill) still renders 0.5.6 documentation. Its one-click refresh action was sent on 2026-08-24 and the page now shows `Requested`; the control exposed no preview or custom-message step | Wait for the crawler, then verify version/install/platform copy; reconcile rather than submit a duplicate | pending-review |
 | Smithery legacy Skill page | Existing third-party `xingmiao201081/traecnclaw-mcp` page contains stale profiles | Do not treat it as the MCPB server listing; request reconciliation after current Local listing exists | stale |
 | `punkpeye/awesome-mcp-servers` | No exact open PR or issue was found in the 2026-08-24 GitHub search | After Glama evidence and action-time confirmation, follow current contribution rules and open one non-duplicate submission | blocked-external |
 | GitHub MCP Registry | Not selected as an independent runtime | Use public mirror and Official MCP Registry metadata only | not-selected |
@@ -71,8 +71,10 @@ verified listing, and a directory scan is not a runtime test.
    PulseMCP ingestion.
 3. Log into Claude Desktop, install the exact MCPB, then authenticate and
    publish the same bundle through Smithery Local.
-4. Obtain action-time confirmation for Glama Claim/sync, AwesomeSkills.dev,
-   MCP Server Hub, mcp.so, mcpservers.org refresh, and the curated GitHub list.
+4. Obtain action-time confirmation for Glama sync/private Build,
+   AwesomeSkills.dev, MCP Server Hub, mcp.so, and the curated GitHub list.
+   Monitor the already-requested mcpservers.org refresh. Do not create a Glama
+   hosted Release.
 5. Re-run strict live UAT with the TRAECNclaw project actually open in TraeCN;
    current 1.107.1 doctor/DOM/adapter checks pass, but session UAT correctly
    rejected the currently open `empty-project` workspace.

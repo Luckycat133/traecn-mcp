@@ -42,9 +42,9 @@ distribution implementation now covers:
 The verified source/Release/Homebrew/ClawHub/Skills/Glama-preflight portion is
 complete. The overall campaign is not complete until the remaining external
 rows are verified. Current blockers are npm/Smithery/Claude authentication,
-action-time confirmation for browser submissions and Glama claim, directory
-review/indexing, a live UAT with this repository actually open in TraeCN, real
-launch recording, and Web Console design approval.
+action-time confirmation for browser submissions and Glama sync/build,
+directory review/indexing, a live UAT with this repository actually open in
+TraeCN, real launch recording, and Web Console design approval.
 
 ## Product surfaces
 
@@ -100,16 +100,24 @@ Still not selected:
   `io.github.Luckycat133/traecnclaw@0.3.1`; it uses the historical unscoped
   package and legacy variables, so 0.5.9 must update that identity rather than
   create a lowercase duplicate.
-- Glama has an existing listing, but it is stale/unclaimed and not current
+- Glama has an existing maintainer-verified listing, but it was last synced at
+  public commit `d81c119` and still renders 0.5.6, so it is not current
   acceptance evidence.
 - A no-cache Glama Linux inspection build reproduced npm's intentional Darwin
   platform rejection. The canonical inspection-only override then built from
   the public 0.5.9 archive, negotiated MCP, and returned exactly 20 tools without
   changing package platform claims.
+- The current Glama-generated `mcp-proxy` build shape was also reproduced
+  locally with Node.js 22 and the public 0.5.9 archive. It reported server
+  version 0.5.9 and exactly 20 tools; a real tool call without a user gateway
+  returned the expected actionable `ECONNREFUSED 127.0.0.1:8788` error rather
+  than mock output. Manual Sync and private Build still require action-time
+  confirmation; a hosted Glama Release remains deliberately excluded.
 - MCP.Directory Skill and Server submissions already exist in review; do not
   submit duplicates.
-- mcpservers.org already has a page but still renders 0.5.6 documentation; its
-  public update request joins the action-time confirmation queue.
+- mcpservers.org already has a page but still renders 0.5.6 documentation. Its
+  one-click public update request was sent on 2026-08-24 and the page now shows
+  `Requested`; verification waits for the site's refresh/indexing pass.
 
 ### 0.5.9 packaging acceptance
 
@@ -198,7 +206,8 @@ coordinated votes, or present mock output as live TraeCN evidence.
 2. Publish validated Official Registry metadata; inspect PulseMCP ingestion.
 3. Install the exact MCPB in a logged-in Claude Desktop and publish Smithery
    Local after Smithery authentication.
-4. With action-time confirmation, claim/sync Glama and complete the prepared
+4. With action-time confirmation, sync Glama, run its private schema-inspection
+   Build without creating a hosted Release, and complete the prepared
    directory/update submissions without duplicates.
 5. Re-run strict live UAT with TRAECNclaw open in TraeCN. Current doctor, DOM,
    readiness, and verified 1.107.1 adapter checks pass; the session phase
@@ -257,7 +266,8 @@ time, and findings in `docs/CHANNEL-LEDGER.md`.
 
 ## User or external input still required
 
-- action-time confirmation for Glama Claim/sync and public directory submits;
+- action-time confirmation for Glama sync/private Build and public directory
+  submits;
 - npm, Smithery, Registry, and Claude Desktop authentication where requested;
 - Web Console design-direction/spec approval;
 - a real local TraeCN session for final media and any fresh live compatibility

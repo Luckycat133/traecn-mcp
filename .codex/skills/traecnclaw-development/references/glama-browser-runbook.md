@@ -162,18 +162,54 @@ Glama's current release flow uses the Dockerfile admin page:
 ```
 
 A build test is allowed only for package boot and tool-schema inspection.
+Glama's 2026-08-24 admin does not select the repository Dockerfile directly;
+it generates one from form fields. Keep the root Dockerfile as the canonical
+local preflight, then enter the equivalent inspection-only form values below.
 
-1. Open the Dockerfile admin page.
-2. Select the root `Dockerfile` from the repository.
-3. Do not enter a gateway token.
-4. Do not enable mock mode.
-5. Keep the command/entrypoint as `traecnclaw-mcp` over stdio.
-6. Click **Deploy** or **Build Test**.
-7. Verify the image builds, the MCP process starts, and Glama can list exactly
-   20 tools.
-8. If Glama tries to call a tool, the expected honest result without a user
-   gateway is a clear connection/setup failure—not a mock TraeCN answer.
-9. Capture build logs with secrets redacted.
+1. Open the Dockerfile admin page after **Sync Server** reports the current
+   public commit.
+2. Set Node.js to `22`. The selected Debian base may remain the current Glama
+   default; Python is unused and may remain at the form default if the field
+   cannot be empty.
+3. Set **Build steps** to the current public Release archive, replacing the
+   version only after its downloaded digest has been verified:
+
+   ```json
+   ["npm install --global --ignore-scripts --force https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/download/v0.5.9/traecnclaw-0.5.9.tgz"]
+   ```
+
+   `--force` bypasses only the package's intentional Darwin platform guard for
+   Linux schema inspection. It does not make Linux a supported runtime.
+4. Set **CMD arguments** to:
+
+   ```json
+   ["mcp-proxy", "--", "traecnclaw-mcp"]
+   ```
+
+   `mcp-proxy` is Glama's inspection wrapper; the upstream remains local stdio.
+5. Set **Environment variables JSON schema** to an empty object schema and
+   **Placeholder parameters** to an empty object:
+
+   ```json
+   {"type":"object","properties":{}}
+   ```
+
+   ```json
+   {}
+   ```
+
+   Do not enter a gateway token, legacy tool profile, or mock-mode variable.
+6. Pin the full current public-mirror commit SHA. For 0.5.9 this is
+   `5ad3a3e18aac63cffa8f61ba792c427a2fd897b5`; do not use the stale dashboard
+   placeholder.
+7. Obtain action-time confirmation, then click **Build**. Never click
+   **Build & Release** for this inspection pass.
+8. Verify the image builds, the MCP process starts, reports release 0.5.9, and
+   Glama lists exactly 20 tools.
+9. If Glama calls a tool, the expected honest result without a user gateway is
+   a clear connection/setup failure such as `ECONNREFUSED 127.0.0.1:8788`—not
+   a mock TraeCN answer.
+10. Capture build logs with secrets redacted.
 
 ## Public Glama release guard
 
