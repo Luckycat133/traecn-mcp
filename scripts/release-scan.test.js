@@ -17,7 +17,10 @@ assert.deepStrictEqual(unsafe.map(item => item.rule), [
 ]);
 
 assert.deepStrictEqual(findViolations([
-  { path: 'docs/safe.md', content: '<workspace>/TRAECNclaw and ~/Library/Application Support/TRAECNclaw' }
+  {
+    path: 'docs/safe.md',
+    content: '<workspace>/TRAECNclaw and ~/Library/Application Support/TRAECNclaw\nHistorical traecnclaw@0.3.1 is not current.'
+  }
 ]), []);
 
 const actual = scanPublicFiles();

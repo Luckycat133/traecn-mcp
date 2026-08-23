@@ -32,12 +32,31 @@ try {
   assert.match(readme, /exactly 20/i);
   assert.match(readme, /local-first/i);
   assert.doesNotMatch(readme, /TRAECN_MCP_TOOL_PROFILE/);
+  assert.doesNotMatch(readme, /npm\s+(?:install|i)\b[^\n]*\btraecnclaw@0\.3/i);
+
+  const license = fs.readFileSync(path.join(tempRoot, 'LICENSE'), 'utf8');
+  assert.match(license, /^MIT License/);
+  assert.match(license, /Copyright \(c\) 2026 Luckycat133/);
 
   const glama = JSON.parse(fs.readFileSync(path.join(tempRoot, 'glama.json'), 'utf8'));
   assert.deepStrictEqual(glama.maintainers, ['Luckycat133']);
   assert.strictEqual(glama.tools, 20);
   assert.deepStrictEqual(glama.transport, ['stdio']);
   assert.strictEqual(glama.docker.file, 'Dockerfile');
+
+  const releaseManifest = JSON.parse(
+    fs.readFileSync(path.join(tempRoot, 'release-manifest.json'), 'utf8')
+  );
+  assert.strictEqual(releaseManifest.marketplaces.npm.package, '@luckycat133/traecnclaw');
+  assert.strictEqual(releaseManifest.marketplaces.smithery.mode, 'local-mcpb');
+  assert.strictEqual(
+    releaseManifest.marketplaces.officialMcpRegistry.name,
+    'io.github.Luckycat133/traecnclaw'
+  );
+  assert.strictEqual(
+    releaseManifest.marketplaces.homebrew.formula,
+    'Luckycat133/tap/traecnclaw'
+  );
 
   const dockerfilePath = path.join(tempRoot, 'Dockerfile');
   const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
@@ -49,6 +68,13 @@ try {
   assert.strictEqual(fs.existsSync(path.join(tempRoot, 'smithery.yaml')), false);
   assert.strictEqual(fs.existsSync(path.join(tempRoot, 'server.json')), false);
   assert.strictEqual(fs.existsSync(path.join(tempRoot, 'Dockerfile.glama')), false);
+
+  fs.appendFileSync(path.join(tempRoot, 'LICENSE'), '\nchanged\n', 'utf8');
+  assert.ok(
+    verifyPublicMirror({ mirrorRoot: tempRoot, sourceRevision: revision })
+      .some(item => item.rule === 'public-license-stale')
+  );
+  buildPublicMirror({ mirrorRoot: tempRoot, sourceRevision: revision });
 
   fs.writeFileSync(
     dockerfilePath,

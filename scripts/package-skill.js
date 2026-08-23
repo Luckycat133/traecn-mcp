@@ -5,10 +5,11 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { buildMcpb } = require('./build-mcpb');
+const { buildNpmPackage } = require('./build-npm-package');
 
 const repoRoot = path.resolve(__dirname, '..');
 const packageInfo = require(path.join(repoRoot, 'package.json'));
-const version = packageInfo.version;
 const skillName = 'traecnclaw-mcp';
 const skillRoot = path.join(repoRoot, 'skills');
 const skillDir = path.join(skillRoot, skillName);
@@ -86,6 +87,13 @@ if (!fs.existsSync(path.join(skillDir, 'SKILL.md'))) {
 
 fs.mkdirSync(distDir, { recursive: true });
 
+const sourceRevision = gitOutput(['rev-parse', 'HEAD']);
+const { outPath: builtMcpbPath } = buildMcpb({
+  outDir: distDir,
+  revision: sourceRevision,
+  packageInfo
+});
+
 const tgzPath = path.join(distDir, `${skillName}-skill.tgz`);
 const zipPath = path.join(distDir, `${skillName}-skill.zip`);
 
@@ -97,38 +105,31 @@ if (zipResult.available && fs.existsSync(zipPath)) {
   artifacts.push(artifact(zipPath));
 }
 
-// Include a previously built .mcpb bundle (scripts/build-mcpb.js) so the
-// release manifest carries its bytes and checksum alongside the other
-// distribution surfaces.
-const mcpbPath = path.join(distDir, `${skillName}-${version}.mcpb`);
-if (fs.existsSync(mcpbPath)) {
-  artifacts.push(artifact(mcpbPath));
-}
+artifacts.push(artifact(builtMcpbPath));
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const serverPackResult = run(npmCommand, ['pack', '--pack-destination', distDir, '--json']);
-let serverPackInfo;
-try {
-  [serverPackInfo] = JSON.parse(serverPackResult.stdout);
-} catch {
-  fail(`could not parse npm pack output\n${serverPackResult.stdout}`);
-}
-if (!serverPackInfo?.filename) fail('npm pack did not report an artifact filename');
-const serverArchivePath = path.join(distDir, serverPackInfo.filename);
+const publicPackage = buildNpmPackage({
+  outDir: distDir,
+  packageInfo,
+  revision: sourceRevision
+});
+const serverArchivePath = publicPackage.outPath;
 const serverPackageArtifact = artifact(serverArchivePath);
 
 const manifest = {
   name: skillName,
   version: require('../package.json').version,
   generatedAt: new Date().toISOString(),
-  sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+  sourceRevision,
   sourceDirty: Boolean(gitOutput(['status', '--porcelain'])),
   skillPath: path.relative(repoRoot, skillDir),
   skillTreeSha256: treeSha256(skillDir),
   artifacts,
   serverPackage: {
-    name: require('../package.json').name,
+    name: publicPackage.package.name,
     version: require('../package.json').version,
+    mcpName: publicPackage.package.mcpName,
+    registry: publicPackage.package.registry,
+    os: publicPackage.package.os,
     artifact: serverPackageArtifact
   },
   install: {

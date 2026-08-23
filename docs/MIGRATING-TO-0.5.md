@@ -1,9 +1,27 @@
 # Migrating to 0.5.x
 
 This guide covers the 0.3.x to 0.5.0 migration and compatible patch updates
-through source version 0.5.6. TRAECNclaw 0.5.0 freezes MCP contract version 5 and repairs the
+through source version 0.5.9. TRAECNclaw 0.5.0 freezes MCP contract version 5 and repairs the
 distribution, configuration, persistence, and security boundaries that changed
 throughout the 0.4.x series.
+
+## Updating to 0.5.9
+
+Version 0.5.9 is a compatible distribution and operator-experience patch. It
+does not change MCP contract v5 or its 20 tools. It adds an official-schema,
+deterministic MCPB; stages the public server as
+`@luckycat133/traecnclaw`; prepares matching Official Registry metadata; makes
+Homebrew test a real 20-tool stdio exchange; and leads the installed CLI with
+setup, doctor, Quickstart, service, status, logs, and MCP configuration.
+
+The standalone Skill launcher now prefers the scoped package, retains the
+historical unscoped package only as a compatibility fallback, and still falls
+back to the trusted `traecnclaw-mcp` executable on `PATH`. Existing source-path
+and 0.5.x MCP configurations remain compatible.
+
+Version 0.5.8 fixed the packaged CLI by including `scripts/lib/cli-config.js`.
+Users of a 0.5.7 npm/Homebrew/MCPB artifact should upgrade instead of copying
+that missing file into an installed package.
 
 ## Updating to 0.5.6
 
@@ -79,18 +97,18 @@ version 5 and its ordered 20-tool surface are unchanged.
 
 ## Installation source
 
-Version 0.5.6 provides a complete public server + Skill pair through the public
-mirror's [`v0.5.6` Release](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v0.5.6).
-Its `SOURCE_REVISION`, release manifest, artifact sizes, and SHA-256 values bind
-both archives to the immutable canonical `v0.5.6` tag. ClawHub provides the
-matching 0.5.6 Skill. npm `traecnclaw` remains the older 0.3.1 channel and must
-not be used as the 0.5.6 server. An exact source checkout can still point the
-MCP client at `mcp-server.js` or use the bundled Skill launcher.
+Use only a version whose row is verified in
+[`CHANNEL-LEDGER.md`](CHANNEL-LEDGER.md). The public mirror Release is the
+public provenance source and binds its server archive, MCPB, Skill archives,
+manifest, and `SOURCE_REVISION` to one immutable canonical commit. Scoped npm
+installs must use `@luckycat133/traecnclaw`; unscoped `traecnclaw@0.3.1` is a
+historical channel and must never be selected for 0.5.x.
 
-Before replacing an existing installation, verify that the server archive,
-Skill archive, manifest, and Skill metadata all say 0.5.6 and identify the
-same source commit. Never mix a newer Skill with an older server when
-validating version-specific behavior.
+Before replacing an existing installation, verify that the server package,
+MCPB or host package, Skill, manifest, and public listing all identify the same
+version and source commit. Never mix a newer Skill with an older server when
+validating version-specific behavior. An authorized exact source checkout can
+still point the MCP client at `mcp-server.js` or use the bundled Skill launcher.
 
 ## MCP contract
 
@@ -197,8 +215,8 @@ when other local processes are not trusted.
 ## Upgrade checklist
 
 1. Stop the old gateway and back up its active queue file.
-2. Update to the exact verified 0.5.6 source revision, or unpack matching
-   0.5.6 server and Skill artifacts after they are published.
+2. Update to one exact version verified in `CHANNEL-LEDGER.md`, using matching
+   server and Skill artifacts from the same public Release.
 3. Remove MCP profile configuration and switch to canonical environment names.
 4. Run `npm install`, `npm run doctor`, and `npm run verify`.
 5. Start TraeCN with CDP on port 9222, then start the gateway and reconnect the

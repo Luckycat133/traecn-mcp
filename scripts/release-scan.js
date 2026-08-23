@@ -12,7 +12,10 @@ const RULES = Object.freeze([
   { name: 'local-windows-user-path', pattern: /[A-Za-z]:\\Users\\[^\\\s]+\\/i },
   { name: 'local-linux-user-path', pattern: /\/home\/[A-Za-z0-9._-]+\// },
   { name: 'removed-mcp-profile-config', pattern: /TRAECN_MCP_TOOL_PROFILE\s*=/ },
-  { name: 'stale-0.3-install', pattern: /traecnclaw@0\.3(?:\.\d+)?/i }
+  {
+    name: 'stale-0.3-install',
+    pattern: /\b(?:npm\s+(?:install|i|add|exec)|npx)\b[^\r\n`]*\btraecnclaw@0\.3(?:\.\d+)?/i
+  }
 ]);
 
 function lineNumber(content, index) {

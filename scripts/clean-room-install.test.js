@@ -221,6 +221,25 @@ async function stop(child) {
       path.join(repoRoot, manifest.serverPackage.artifact.path)
     ], { cwd: runtime });
 
+    const operatorEnv = {
+      ...process.env,
+      HOME: cleanHome,
+      CODEX_HOME: codexHome
+    };
+    const cli = path.join(
+      runtime,
+      'node_modules',
+      '.bin',
+      process.platform === 'win32' ? 'traecnclaw.cmd' : 'traecnclaw'
+    );
+    const help = run(cli, ['--help'], { cwd: runtime, env: operatorEnv });
+    assert.match(help.stdout, /setup-mcp/);
+    assert.match(help.stdout, /service start/);
+    const setup = run(cli, ['setup-mcp'], { cwd: runtime, env: operatorEnv });
+    const setupConfig = JSON.parse(setup.stdout);
+    assert.ok(setupConfig.mcpServers?.traecn);
+    assert.match(setupConfig.mcpServers.traecn.args[0], /start-mcp\.js$/);
+
     const port = await freePort();
     const env = {
       ...process.env,
@@ -233,7 +252,7 @@ async function stop(child) {
       TRAECN_RESPONSE_TIMEOUT_MS: '5000',
       TRAECN_QUIET_LOG: '1'
     };
-    const installedPackage = path.join(runtime, 'node_modules', 'traecnclaw');
+    const installedPackage = path.join(runtime, 'node_modules', '@luckycat133', 'traecnclaw');
     gateway = spawn(process.execPath, [path.join(installedPackage, 'scripts', 'start-gateway.js')], {
       cwd: runtime,
       env,

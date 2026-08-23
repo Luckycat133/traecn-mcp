@@ -26,12 +26,20 @@ try {
   assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
   assert.strictEqual(manifest.server.type, 'node');
   assert.strictEqual(manifest.server.entry_point, 'mcp-server.js');
+  assert.deepStrictEqual(manifest.repository, {
+    type: 'git',
+    url: 'https://github.com/Luckycat133/traecnclaw-mcp-skill.git'
+  });
+  assert.strictEqual(manifest.support, 'https://github.com/Luckycat133/traecnclaw-mcp-skill/issues');
   assert.deepStrictEqual(manifest.compatibility.platforms, ['darwin']);
   assert.strictEqual(manifest.compatibility.runtimes.node, packageInfo.engines.node);
   assert.strictEqual(manifest.license, 'MIT');
 
   // The 20-tool contract is advertised verbatim.
-  assert.deepStrictEqual(manifest.tools, [...MCP_TOOL_NAMES]);
+  assert.deepStrictEqual(manifest.tools.map(tool => tool.name), [...MCP_TOOL_NAMES]);
+  assert.strictEqual(manifest.tools.length, 20);
+  assert.ok(manifest.tools.every(tool => tool.description && typeof tool.description === 'string'));
+  assert.strictEqual(manifest.tools_generated, false);
   assert.strictEqual(MCP_CONTRACT_VERSION, 5);
 
   // Every ${user_config.*} reference maps to a declared option, and every

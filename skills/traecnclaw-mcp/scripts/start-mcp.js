@@ -9,8 +9,9 @@
  *
  * Resolution order:
  *   1. In-repo relative path (skill/scripts/ → repo root)
- *   2. Installed `traecnclaw` package export
- *   3. `traecnclaw-mcp` executable on PATH
+ *   2. Installed `@luckycat133/traecnclaw` package export
+ *   3. Legacy installed `traecnclaw` package export
+ *   4. `traecnclaw-mcp` executable on PATH
  *
  * Usage from an MCP client config:
  *   "command": "node",
@@ -45,13 +46,15 @@ function resolveServerPath(env = process.env, scriptDir = SCRIPT_DIR, options = 
   try {
     const searchPaths = [cwd, scriptDir];
     if (env.NODE_PATH) searchPaths.push(...env.NODE_PATH.split(path.delimiter).filter(Boolean));
-    for (const searchPath of searchPaths) {
-      try {
-        const resolveFrom = createRequire(path.join(path.resolve(searchPath), 'package.json'));
-        candidates.push(resolveFrom.resolve('traecnclaw/mcp'));
-        break;
-      } catch {
-        // Try the next package search root.
+    for (const packageExport of ['@luckycat133/traecnclaw/mcp', 'traecnclaw/mcp']) {
+      for (const searchPath of searchPaths) {
+        try {
+          const resolveFrom = createRequire(path.join(path.resolve(searchPath), 'package.json'));
+          candidates.push(resolveFrom.resolve(packageExport));
+          break;
+        } catch {
+          // Try the next package search root.
+        }
       }
     }
   } catch {
@@ -96,7 +99,7 @@ function main() {
     const tried = [path.join(repoRoot, 'mcp-server.js')];
     console.error('[traecnclaw-mcp] mcp-server.js not found.');
     console.error('Tried: ' + tried.join(', '));
-    console.error('Install the matching traecnclaw package, add traecnclaw-mcp to PATH,');
+    console.error('Install the matching @luckycat133/traecnclaw package, add traecnclaw-mcp to PATH,');
     console.error('or install this skill inside the repository.');
     process.exit(1);
   }

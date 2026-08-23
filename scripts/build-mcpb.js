@@ -3,8 +3,8 @@
 /**
  * Build a deterministic .mcpb bundle for the local TRAECNclaw MCP server.
  *
- * Pipeline: npm pack -> extract -> npm ci --omit=dev -> manifest.json ->
- * secret scan -> fixed-timestamp zip. The bundle carries the full server
+ * Pipeline: npm pack -> extract -> npm ci --omit=dev -> public metadata ->
+ * manifest.json -> secret scan -> official pack -> normalized zip. The bundle carries the full server
  * plus production dependencies and no credentials, TraeCN profile data, or
  * persisted state; runtime configuration is limited to the local gateway
  * host/port, an optional bearer token, and an optional client ID.
@@ -15,9 +15,13 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { MCP_CONTRACT_VERSION, MCP_TOOL_NAMES } = require('../src/mcp/contract');
+const { MCP_TOOLS } = require('../src/mcp/tool-metadata');
+const { publicPackageJson, publicReadme } = require('./build-npm-package');
+const { assertNoSecrets } = require('./package-security');
 
-const FIXED_MTIME = new Date('2026-01-01T00:00:00Z').getTime();
+const FIXED_MTIME = new Date('2026-01-01T00:00:00Z');
 const REPO_ROOT = path.resolve(__dirname, '..');
+const MCPB_CLI_PACKAGE = '@anthropic-ai/mcpb@2.1.2';
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -25,6 +29,9 @@ function run(command, args, options = {}) {
     encoding: 'utf8',
     stdio: options.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit'
   });
+  if (result.error) {
+    throw new Error(`${command} could not start: ${result.error.message}`);
+  }
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed: ${result.stderr || result.stdout || result.status}`);
   }
@@ -39,9 +46,13 @@ function buildMcpbManifest({ version, description, keywords }) {
     version,
     description,
     author: { name: 'Luckycat133', url: 'https://github.com/Luckycat133' },
-    repository: 'https://github.com/Luckycat133/TRAECNclaw',
+    repository: {
+      type: 'git',
+      url: 'https://github.com/Luckycat133/traecnclaw-mcp-skill.git'
+    },
     homepage: 'https://github.com/Luckycat133/traecnclaw-mcp-skill',
-    support: 'https://github.com/Luckycat133/TRAECNclaw/issues',
+    documentation: 'https://github.com/Luckycat133/traecnclaw-mcp-skill#readme',
+    support: 'https://github.com/Luckycat133/traecnclaw-mcp-skill/issues',
     license: 'MIT',
     keywords,
     server: {
@@ -89,42 +100,13 @@ function buildMcpbManifest({ version, description, keywords }) {
         required: false
       }
     },
-    tools: [...MCP_TOOL_NAMES],
+    tools: MCP_TOOLS.map(tool => ({ name: tool.name, description: tool.description })),
+    tools_generated: false,
     compatibility: {
       platforms: ['darwin'],
       runtimes: { node: '>=22' }
     }
   };
-}
-
-const SECRET_FILE_PATTERN = /(^|\/)\.env(?!\.example$)([^/]*$)/;
-const SECRET_CONTENT_PATTERN = /\b(?:sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|(?:api[-_]?key|token|password)\s*[:=]\s*["'][^"'\s]{16,}["'])/i;
-
-function assertNoSecrets(stagingRoot) {
-  const offenders = [];
-  function visit(currentPath, relativePath = '') {
-    for (const entry of fs.readdirSync(currentPath, { withFileTypes: true })) {
-      const childRelative = path.join(relativePath, entry.name);
-      const childPath = path.join(currentPath, entry.name);
-      if (entry.isDirectory()) {
-        visit(childPath, childRelative);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      if (SECRET_FILE_PATTERN.test(childRelative)) {
-        offenders.push(`${childRelative} (credential-looking filename)`);
-        continue;
-      }
-      const stat = fs.statSync(childPath);
-      if (stat.size > 4 * 1024 * 1024) continue;
-      const text = fs.readFileSync(childPath, 'utf8');
-      if (SECRET_CONTENT_PATTERN.test(text)) offenders.push(`${childRelative} (credential-looking content)`);
-    }
-  }
-  visit(stagingRoot);
-  if (offenders.length) {
-    throw new Error(`MCPB staging contains credential-looking files:\n${offenders.join('\n')}`);
-  }
 }
 
 function sortedStagedFiles(stagingRoot) {
@@ -165,8 +147,22 @@ function buildMcpb({ outDir, revision, packageInfo }) {
     // The published tarball omits the lockfile; restore it so dependency
     // installation stays pinned to the audited tree.
     fs.copyFileSync(path.join(REPO_ROOT, 'package-lock.json'), path.join(stagingRoot, 'package-lock.json'));
+    fs.copyFileSync(
+      path.join(REPO_ROOT, 'distribution', 'public-mirror', 'LICENSE'),
+      path.join(stagingRoot, 'LICENSE')
+    );
 
     run('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: stagingRoot });
+    fs.writeFileSync(
+      path.join(stagingRoot, 'package.json'),
+      `${JSON.stringify(publicPackageJson(packageInfo), null, 2)}\n`,
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(stagingRoot, 'README.md'),
+      publicReadme({ packageInfo, revision }),
+      'utf8'
+    );
 
     const manifest = buildMcpbManifest({
       version: packageInfo.version,
@@ -176,8 +172,8 @@ function buildMcpb({ outDir, revision, packageInfo }) {
     fs.writeFileSync(path.join(stagingRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
     assertNoSecrets(stagingRoot);
 
-    // Pin timestamps on directories as well as files: zip stores directory
-    // entries too, and their creation-time mtimes would break determinism.
+    // Pin timestamps on directories as well as files so the official packer
+    // produces byte-identical bundles from the same staged tree.
     function pinMtimes(currentPath) {
       fs.utimesSync(currentPath, FIXED_MTIME, FIXED_MTIME);
       for (const entry of fs.readdirSync(currentPath, { withFileTypes: true })) {
@@ -188,7 +184,22 @@ function buildMcpb({ outDir, revision, packageInfo }) {
     }
     pinMtimes(stagingRoot);
     fs.rmSync(outPath, { force: true });
-    run('zip', ['-X', '-rq', outPath, '.'], { cwd: stagingRoot });
+    const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const mcpbArgs = ['exec', '--yes', `--package=${MCPB_CLI_PACKAGE}`, '--', 'mcpb'];
+    run(npmCommand, [...mcpbArgs, 'validate', path.join(stagingRoot, 'manifest.json')]);
+    const officialPackPath = path.join(workRoot, path.basename(outPath));
+    run(npmCommand, [...mcpbArgs, 'pack', stagingRoot, officialPackPath]);
+
+    // The official packer currently stamps every ZIP entry with the build
+    // time. Normalize its exact selected file set after packing so release
+    // checksums remain reproducible without weakening official validation.
+    const normalizedRoot = path.join(workRoot, 'normalized');
+    fs.mkdirSync(normalizedRoot, { recursive: true });
+    run('unzip', ['-q', officialPackPath, '-d', normalizedRoot]);
+    pinMtimes(normalizedRoot);
+    run('zip', ['-X', '-q', outPath, ...sortedStagedFiles(normalizedRoot)], {
+      cwd: normalizedRoot
+    });
 
     const meta = {
       file: path.basename(outPath),
@@ -198,7 +209,7 @@ function buildMcpb({ outDir, revision, packageInfo }) {
       contractVersion: MCP_CONTRACT_VERSION,
       toolCount: MCP_TOOL_NAMES.length,
       sourceRevision: revision,
-      deterministicMtime: new Date(FIXED_MTIME).toISOString()
+      deterministicMtime: FIXED_MTIME.toISOString()
     };
     fs.writeFileSync(
       path.join(outDir, `${path.basename(outPath)}.meta.json`),
@@ -231,6 +242,7 @@ if (require.main === module) {
 
 module.exports = {
   FIXED_MTIME,
+  MCPB_CLI_PACKAGE,
   buildMcpb,
   buildMcpbManifest,
   assertNoSecrets,

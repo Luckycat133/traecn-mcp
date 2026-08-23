@@ -27,10 +27,18 @@ protocol revision. The independently negotiated, upstream-draft
 
 ## Install the server
 
-Use this repository's matching [GitHub Release](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases)
-for the complete server archive. Install the exact archive version before
-configuring a host; do not use the unrelated historical npm 0.3.1 package as a
-current server.
+Install the exact release through one verified channel:
+
+```sh
+npm install --global @luckycat133/traecnclaw@{{VERSION}}
+# or, after `brew info` reports {{VERSION}}
+brew install Luckycat133/tap/traecnclaw
+```
+
+The matching [GitHub Release](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v{{VERSION}})
+also provides the complete scoped npm tarball and deterministic MCPB bundle.
+The unrelated unscoped `traecnclaw@0.3.1` package is historical and is not a
+current install path.
 
 ## Install the Agent Skill
 
@@ -58,10 +66,10 @@ The server and gateway run on the same user-owned Mac as TraeCN. Marketplace
 containers may inspect the stdio schema, but a cloud container cannot
 transparently control the user's local TraeCN desktop.
 
-The mirror does not advertise an npm or Official MCP Registry version until
-that exact artifact has been published and verified. Smithery local publication
-will use a verified MCPB bundle; the retired `smithery.yaml` format remains
-absent.
+Prepared Official Registry metadata uses the scoped package
+`@luckycat133/traecnclaw@{{VERSION}}` with local stdio transport. Smithery Local
+uses the matching verified MCPB bundle; the retired `smithery.yaml` format
+remains absent.
 
 ## Configuration
 

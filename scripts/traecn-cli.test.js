@@ -145,8 +145,19 @@ test('buildProofCliArgs keeps proof start dry-run unless caller passes execute',
 
 test('CLI proof help does not suggest quota-spending start without approval flag', () => {
   const source = fs.readFileSync(path.join(__dirname, 'traecn-cli.js'), 'utf8');
-  assert.ok(source.includes('traecn proof start --execute --detach --allow-quota-spend --marker'));
-  assert.ok(!source.includes('traecn proof start --execute --detach --marker'));
+  assert.ok(source.includes('traecnclaw proof start --execute --detach --allow-quota-spend --marker'));
+  assert.ok(!source.includes('traecnclaw proof start --execute --detach --marker'));
+});
+
+test('buildLocalScriptArgs exposes first-run and operator commands from the package', () => {
+  clearModuleCache();
+  const { buildLocalScriptArgs } = require('./traecn-cli');
+  assert.ok(buildLocalScriptArgs('setup-mcp', ['--output', 'mcp.json'])[0].endsWith('setup-mcp.js'));
+  assert.ok(buildLocalScriptArgs('doctor')[0].endsWith('doctor.js'));
+  assert.ok(buildLocalScriptArgs('quickstart', ['--launch-trae'])[0].endsWith('quickstart.js'));
+  assert.deepStrictEqual(buildLocalScriptArgs('service', ['status']).slice(-1), ['status']);
+  assert.ok(buildLocalScriptArgs('live-uat', ['--strict'])[0].endsWith('live-uat.js'));
+  assert.throws(() => buildLocalScriptArgs('delegate'), /Unknown local operator command/);
 });
 
 test('buildProofCliArgs maps proof cancel without resubmission flag', () => {

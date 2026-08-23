@@ -4,6 +4,28 @@ Use this plan for public packaging, directory submission, browser-Agent handoff,
 launch content, and post-publication verification. Recheck every channel before
 acting; marketplace requirements and public versions change independently.
 
+## Execution status — 2026-08-23
+
+Target 0.5.9 implementation is prepared locally. The following plan decisions
+are no longer open:
+
+- public npm identity is `@luckycat133/traecnclaw`;
+- MCPB uses the official schema/CLI and deterministic packaging;
+- Official Registry identity is the existing `io.github.Luckycat133/traecnclaw` over local
+  stdio and follows scoped npm publication;
+- Homebrew uses `Luckycat133/tap/traecnclaw` and tests exact 20-tool discovery;
+- Smithery uses Local/MCPB, never URL mode;
+- canonical listing copy is `distribution/listing-copy.md`;
+- channel status is `docs/CHANNEL-LEDGER.md`;
+- architecture, use cases, limitations, video scripts, and post drafts are in
+  `docs/LAUNCH-KIT.md`.
+
+The local implementation is not a public release. Remaining work is the clean
+0.5.9 merge/tag/Release chain, authenticated npm/Smithery/Registry/Claude
+actions, confirmed browser submissions, directory review/indexing, real launch
+recording, and approved Web Console design/implementation. Never convert those
+external blockers into claimed completion.
+
 ## Principles
 
 1. **Install truth before listing count.** Every listing must point to a public,
@@ -30,7 +52,8 @@ Use these identities unless a later release deliberately changes them:
 Product: TRAECNclaw MCP
 Public repository: https://github.com/Luckycat133/traecnclaw-mcp-skill
 Canonical source: private Luckycat133/TRAECNclaw
-Current selected public version: 0.5.6 (recheck)
+Target release candidate: 0.5.9; last verified public Release/Homebrew: 0.5.8
+Current npm package: @luckycat133/traecnclaw (selected; not yet public)
 Runtime: local stdio MCP server + local HTTP gateway
 Platform: macOS; verified TraeCN 1.107.x (recheck compatibility evidence)
 Contract: MCP tool contract v5, exactly 20 tools
@@ -49,33 +72,34 @@ These deliver runnable bytes or a one-command install:
 
 - Public GitHub mirror Release — selected and existing.
 - ClawHub — selected and existing for the Skill.
-- MCPB bundle — selected next for one-click local MCP installation.
-- Smithery local/MCPB publication — selected after the bundle is verified.
-- Homebrew tap — selected after the public archive/install script is stable.
-- Current public npm package — selected only after package-name/version and old
-  `traecnclaw@0.3.1` handling are deliberate.
+- MCPB bundle — implemented and locally validated; clean host install remains.
+- Smithery local/MCPB publication — prepared; login/publish/install remains.
+- Homebrew tap — existing at 0.5.8; stronger 0.5.9 template is prepared.
+- Scoped npm package — implementation selected and tested locally; publish and
+  registry-origin clean install remain.
 
 ### Authority and aggregation channels
 
 These establish machine-readable identity and feed other indexes:
 
 - Official MCP Registry — selected after a current public package exists.
+- The Registry already contains `io.github.Luckycat133/traecnclaw@0.3.1`;
+  reconcile it with a new version instead of creating a case-only duplicate.
 - PulseMCP — normally ingested from the Official Registry; manually submit only
   if ingestion does not occur.
 - Glama — selected for claim, schema inspection, score, and directory listing.
 
 ### Skill discovery channels
 
-- skills.sh — selected immediately; installation from the public GitHub repo
-  automatically creates usage/install evidence.
-- AwesomeSkills.dev — selected immediately.
-- MCP.Directory Skill listing — selected immediately.
+- skills.sh — public detail page exists; reindex/inspect 0.5.9 after release.
+- AwesomeSkills.dev — exact payload prepared; final submit confirmation remains.
+- MCP.Directory Skill listing — already submitted; pending review.
 - Additional Skill directories may be syndicated later when submission is free,
   transparent, and does not require maintaining duplicate code.
 
 ### MCP directory channels
 
-- MCP.Directory Server listing — selected immediately.
+- MCP.Directory Server listing — already submitted; pending review.
 - punkpeye/awesome-mcp-servers — selected after Glama listing/score and exact
   install copy are ready.
 - mcp.so — selected as a secondary directory.
@@ -101,10 +125,10 @@ These establish machine-readable identity and feed other indexes:
 
 ### Phase A — repair and verify the current public mirror
 
-1. Merge the canonical Glama/public-mirror generator changes after tests.
-2. Merge the generated public-mirror Glama/Dockerfile change.
-3. Verify public Release assets and `SOURCE_REVISION`.
-4. Confirm the root Dockerfile installs the current public server archive and
+1. Merge the 0.5.9 canonical distribution changes after Node 22 gates.
+2. Generate the mirror from the exact tagged canonical commit.
+3. Verify both Release surfaces, assets, hashes, and `SOURCE_REVISION`.
+4. Confirm the root Dockerfile installs the 0.5.9 public server archive and
    exposes the exact 20 tools without mock mode.
 5. Run the Glama browser runbook and record the listing and score.
 
@@ -181,21 +205,14 @@ or imply the user's Mac stays available when the Uplink process is offline.
 
 ### Phase D — current public package and Official MCP Registry
 
-This phase requires a product/package naming decision because public npm
-`traecnclaw@0.3.1` is an older independent surface.
-
-Preferred options, in order:
-
-1. Publish a new scoped current package such as
-   `@luckycat133/traecnclaw`, then deprecate or clearly redirect the old package.
-2. Upgrade the existing unscoped package only if ownership, compatibility, and
-   migration can be handled without surprising existing users.
-3. Use another public artifact registry supported by the Official MCP Registry
-   only when it improves installation rather than adding complexity.
+The selected package is `@luckycat133/traecnclaw`. The canonical source package
+stays private; a tested staging builder creates the public scoped tarball. After
+that exact version is public and clean-tested, deprecate or clearly redirect
+historical `traecnclaw@0.3.1` if account ownership permits.
 
 Before publish:
 
-- remove `private: true` only in the deliberate package source/build path;
+- remove `private: true` only in the deliberate staged package build path;
 - verify package contents from a clean tarball;
 - require exact `mcpName` matching the intended registry namespace;
 - run full audit, repository, release, and clean-room gates;
@@ -211,7 +228,7 @@ mcp-publisher login github
 mcp-publisher publish
 ```
 
-Use a GitHub-authenticated `io.github.Luckycat133/...` namespace consistent
+Use the existing GitHub-authenticated `io.github.Luckycat133/...` namespace consistent
 with the package `mcpName`. Validate the public Registry API result and install
 metadata. Registry versions are immutable; publish a new version for corrections.
 
@@ -579,10 +596,9 @@ aggregate, and user-submitted evidence.
 
 ## Channel ledger
 
-Maintain a table in the current project audit or a generated release record:
-
-| Channel | Type | Version | Status | URL | Last verified | Install tested | Findings |
-| --- | --- | --- | --- | --- | --- | --- | --- |
+Maintain public truth in `docs/CHANNEL-LEDGER.md` with URL, exact version,
+status, last verification time, generated install path, test result, blocker,
+and resume step.
 
 Allowed statuses:
 
@@ -610,8 +626,8 @@ The expanded distribution milestone is complete when:
 2. skills.sh, AwesomeSkills.dev, and MCP.Directory installs/listings are verified.
 3. A clean MCPB bundle is built and installed; Smithery local publication is
    verified or precisely blocked.
-4. A current public package and Official MCP Registry entry exist, or the package
-   naming decision is explicitly deferred without misusing npm 0.3.1.
+4. Scoped `@luckycat133/traecnclaw` and the Official MCP Registry entry are
+   publicly verified without misusing npm 0.3.1.
 5. PulseMCP or another downstream registry reflects the official metadata.
 6. Homebrew installation is available when selected and tested on a clean Mac.
 7. Curated and secondary listings reuse canonical copy and correct install data.

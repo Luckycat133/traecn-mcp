@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-08-23
+
+### Added
+
+- Added a deliberately staged public npm artifact under
+  `@luckycat133/traecnclaw`, keeping the canonical source package private while
+  recording the scoped identity and digest in the release manifest.
+- Added canonical Official MCP Registry metadata generation for the scoped npm
+  package and local stdio transport.
+- Added a source-owned Homebrew formula template and renderer whose test performs
+  a real MCP initialize/tools-list exchange and verifies all 20 tools.
+- Added a date-stamped channel ledger, canonical directory copy, release
+  runbook, architecture diagram, use cases, limitations, and launch scripts.
+
+### Changed
+
+- Promoted setup, doctor, Quickstart, service operations, status, logs, and MCP
+  configuration to the leading operator CLI surface while retaining advanced
+  task and proof commands.
+- Made the standalone Skill launcher prefer the scoped public server package,
+  with the historical unscoped package retained only as a compatibility
+  fallback.
+- Updated public mirror and marketplace metadata to use public provenance and
+  the scoped npm identity instead of the private canonical repository or old
+  unscoped package.
+
+### Fixed
+
+- Rebuilt MCPB packaging around the pinned official CLI and schema: repository
+  metadata is an object, tools are named/description objects, official
+  validation runs before packaging, and normalized archive metadata preserves
+  deterministic byte-for-byte output.
+- Corrected Homebrew caveats to use the installed `traecnclaw` command and
+  strengthened packaged CLI access to first-run and service scripts.
+
 ## [0.5.8] - 2026-08-23
 
 ### Fixed

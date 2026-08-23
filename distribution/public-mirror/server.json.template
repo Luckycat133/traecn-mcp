@@ -1,16 +1,16 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.luckycat133/traecnclaw",
+  "name": "io.github.Luckycat133/traecnclaw",
   "description": "Local persistent TraeCN coding-task gateway with a focused MCP Agent surface.",
   "repository": {
-    "url": "https://github.com/Luckycat133/TRAECNclaw",
+    "url": "https://github.com/Luckycat133/traecnclaw-mcp-skill",
     "source": "github"
   },
   "version": "{{VERSION}}",
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "traecnclaw",
+      "identifier": "@luckycat133/traecnclaw",
       "version": "{{VERSION}}",
       "transport": {
         "type": "stdio"

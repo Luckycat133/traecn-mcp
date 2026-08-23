@@ -1,270 +1,287 @@
-# TRAECNclaw MCP Distribution
+# TRAECNclaw Distribution
 
-This checklist prepares TRAECNclaw and its portable agent skill for public
-distribution. The skill is useful only when users can also access the MCP server
-code or an installable package.
+TRAECNclaw has one runtime and several independent publication surfaces. A
+source version, tag, GitHub Release, npm package, Homebrew formula, MCPB bundle,
+Skill listing, and MCP directory entry are separate facts. Never call a release
+complete until each selected surface has been inspected and its generated
+install path has been exercised.
 
-## Current Publication Inventory
+The live, date-stamped status is maintained in
+[`CHANNEL-LEDGER.md`](CHANNEL-LEDGER.md). This document defines how to build,
+publish, and verify those rows.
 
-Observed on 2026-08-08. Treat each row as a separate version surface:
+## Product and package identities
 
-| Surface | Observed state | Usable for current 0.5.6 source? |
-| --- | --- | --- |
-| Canonical repository | Private `Luckycat133/TRAECNclaw`; immutable `v0.5.6` is the source revision recorded in both release manifests | Yes for authorized source-checkout users; the full history is not public |
-| Source version | `package.json`, lockfile, Skill, and OpenClaw manifests say `0.5.6` | Yes for the exact tagged checkout |
-| Canonical tag | Immutable `v0.5.6` | Yes; source of both Release channels |
-| Canonical GitHub Release | Private `v0.5.6` provenance Release with matching server, Skill, and manifest assets | Yes for authorized canonical-repository users |
-| ClawHub | `traecnclaw-mcp` 0.5.6, clean, sourced from the canonical tag | Yes for the Skill; pair it with the matching server archive |
-| npm | Package `traecnclaw` has dist-tag `latest=0.3.1` | No; it is not the 0.5.x server |
-| Public mirror | `SOURCE_REVISION` identifies canonical `v0.5.6`; public `v0.5.6` Release carries the matching server, Skill, and manifest assets | Yes; selected public download channel |
+| Role | Canonical identity |
+| --- | --- |
+| Private source | `Luckycat133/TRAECNclaw` |
+| Public distribution mirror | `Luckycat133/traecnclaw-mcp-skill` |
+| MCP server name | `io.github.Luckycat133/traecnclaw` (existing Registry identity) |
+| Current npm package | `@luckycat133/traecnclaw` |
+| Historical npm package | `traecnclaw@0.3.1`; never advertise as current |
+| Agent Skill | `traecnclaw-mcp` |
+| Homebrew formula | `Luckycat133/tap/traecnclaw` |
+| Transport | local stdio on the same Mac as TraeCN |
+| Platform evidence | macOS with TraeCN 1.107.x; do not claim other platforms |
+| Public MCP surface | contract v5, exactly 20 ordered tools |
 
-Version 0.5.6 therefore has one complete public server + Skill pair. The public
-mirror exposes only generated distribution files and Release assets, while the
-canonical repository stays private. Both Releases are built from the same
-immutable canonical commit; the generated manifest records that revision,
-artifact sizes, and checksums. npm remains a deliberately separate older
-surface and is not part of this release.
+The canonical repository stays private unless its full history is deliberately
+approved for disclosure. Public sites receive only the generated mirror,
+release assets, and the exact canonical `SOURCE_REVISION`.
 
-## Release Sources
+## Release build
 
-The selected public server channel for 0.5.6 is the public mirror GitHub
-Release. The canonical GitHub Release retains identical assets for provenance
-and authorized source users. Keeping the canonical repository private avoids
-publishing its full history merely to make four generated files downloadable.
-
-Use one of these public sources before submitting to skill or MCP directories:
-
-- Public mirror Release:
-  `https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v0.5.6`
-- Canonical GitHub Release for authorized provenance inspection:
-  `https://github.com/Luckycat133/TRAECNclaw/releases/tag/v0.5.6`
-- npm package `traecnclaw` only after the exact release version is visibly
-  published; do not advertise a version merely because it exists in source
-
-Do not submit private repository links to public catalogs; most indexes crawl
-GitHub or require a public docs URL.
-
-## Package The Skill
+Use Node.js 22. Do not use a green run from a different default runtime as the
+release result.
 
 ```sh
+nvm use 22
+npm ci
+npm run verify:static
 npm run pack:skill
 ```
 
-The command writes:
+`npm run pack:skill` creates:
 
-- `dist/traecnclaw-mcp-skill.tgz`
-- `dist/traecnclaw-mcp-skill.zip` when the local `zip` command is available
-- `dist/traecnclaw-<version>.tgz`, an npm-compatible complete server package
-- `dist/traecnclaw-mcp-release.json` with the source revision, checksums, and
-  install hints for both the Skill and server
+- `dist/traecnclaw-mcp-skill.tgz` and `.zip`;
+- `dist/traecnclaw-mcp-<version>.mcpb`, validated with the pinned official
+  MCPB CLI and normalized for byte-identical rebuilds;
+- `dist/traecnclaw-<version>.tgz`, whose internal npm identity is
+  `@luckycat133/traecnclaw` even though the canonical source package remains
+  private and unscoped;
+- `dist/traecnclaw-mcp-release.json`, recording source revision, dirty state,
+  artifact size, SHA-256, package identity, and install hints.
 
-`dist/` is intentionally ignored by git. Attach these artifacts to a GitHub
-Release or upload them to a download page.
+The generated files are ignored by git. Build them from the clean tagged
+commit; a manifest with `sourceDirty: true` is evidence for testing only and
+must not be published.
 
-Verify a manifest generated from a clean final commit before publishing it:
+## Required release gate
+
+Run focused tests first, then the complete gate:
 
 ```sh
+npm run audit:all
+npm run verify
+npm run test:release
 npm run verify:release-manifest
 ```
 
-This checks the checked-out source revision, package version, clean-source
-marker, artifact sizes, and SHA-256 digests. Pushing a `vX.Y.Z` tag runs the
-same check in `.github/workflows/release.yml` and uploads the exact artifacts
-to the matching GitHub Release.
+The release is blocked if any of these are true:
 
-## ClawHub Publication
+- source, lockfile, Skill, or OpenClaw versions differ;
+- the tree contains unrelated or local-only files in the release commit;
+- an archive contains credentials, `.env`, raw TraeCN profile data, or a
+  private canonical URL where a public link is required;
+- MCPB validation fails or two builds differ;
+- a clean npm/MCPB/Homebrew install does not discover exactly 20 tools in the
+  stable order;
+- the mock clean-room task does not complete;
+- a live compatibility claim lacks current live UAT evidence.
 
-Publish the canonical Skill directory only after the final version commit is
-tagged and the release gate has passed:
+## Tag, Releases, and public mirror
+
+After the release commit is merged and the full gate passes:
+
+1. Tag the exact commit `vX.Y.Z` and push the tag.
+2. Verify or create the private canonical GitHub Release with the generated
+   assets and manifest.
+3. Regenerate the public mirror from that exact full commit:
+
+   ```sh
+   node scripts/public-mirror.js \
+     --mirror /path/to/traecnclaw-mcp-skill \
+     --revision <full-canonical-commit>
+   node scripts/public-mirror.js --check \
+     --mirror /path/to/traecnclaw-mcp-skill \
+     --revision <full-canonical-commit>
+   ```
+
+4. Scan the generated mirror, commit it, tag the public commit, and create the
+   public Release with the exact same assets.
+5. Download the assets from the public Release and verify their SHA-256 values;
+   local `dist/` files alone are not public-channel evidence.
+
+The mirror's root Dockerfile and `glama.json` are inspection metadata. They do
+not turn TRAECNclaw into a hosted service and must never include a gateway token
+or mock bridge.
+
+## Scoped npm publication
+
+The private canonical `package.json` intentionally retains
+`"name": "traecnclaw"` and `"private": true`. `scripts/build-npm-package.js`
+stages a separate public tarball with:
+
+- package name `@luckycat133/traecnclaw`;
+- the release version and `mcpName`;
+- public repository, homepage, and issue URLs;
+- `os: ["darwin"]` and public publish configuration;
+- the `traecnclaw` and `traecnclaw-mcp` binaries.
+
+Publish only the generated tarball:
+
+```sh
+npm run build:npm-package
+npm publish dist/traecnclaw-<version>.tgz --access public
+```
+
+Then verify the registry, not the local cache:
+
+```sh
+npm view @luckycat133/traecnclaw@<version> \
+  name version dist.integrity dist.tarball mcpName os
+npm install --global @luckycat133/traecnclaw@<version>
+traecnclaw --help
+traecnclaw-mcp
+```
+
+Use a temporary prefix for automated stdio discovery so an existing global
+install cannot mask a broken package. Record the registry URL, integrity, clean
+install path, 20-tool result, and task smoke result in the channel ledger.
+
+If the maintainer owns the historical unscoped package, deprecate it only after
+the scoped package is live and verified. The message must point to
+`@luckycat133/traecnclaw`; never republish current code under the old identity.
+
+## Official MCP Registry and PulseMCP
+
+The Registry row is blocked until the exact scoped npm version is public.
+Generate metadata only after that check:
+
+```sh
+npm run build:registry-metadata
+mcp-publisher validate
+mcp-publisher publish
+```
+
+Run the publisher from the directory containing generated `server.json`, use
+the official GitHub authentication flow, then query the public Registry API for
+`io.github.Luckycat133/traecnclaw`. Confirm the package, version, stdio
+transport, repository, secret flag, and install command.
+
+PulseMCP normally ingests Official Registry entries. Wait for that ingestion
+and inspect it before any manual submission. A delayed aggregator is
+`pending-index`, not published.
+
+## MCPB and Smithery Local
+
+The MCPB manifest follows the official schema and lists 20 tool objects with
+names and descriptions. It exposes only gateway host, port, token, and client
+ID configuration. Build and validate it with:
+
+```sh
+npm run build:mcpb
+npm exec --yes --package=@anthropic-ai/mcpb@2.1.2 -- \
+  mcpb validate dist/traecnclaw-mcp-<version>.mcpb
+```
+
+Install the exact bundle into a clean compatible desktop host and verify all 20
+tools before publishing it through Smithery Local. Smithery URL mode is not
+valid because TRAECNclaw does not expose a public Streamable HTTP service.
+Record the Smithery page, bundle digest, downloaded digest, host, and tool count.
+
+## Homebrew
+
+Render the formula from the clean release manifest:
+
+```sh
+npm run build:homebrew-formula -- \
+  --manifest dist/traecnclaw-mcp-release.json \
+  --out /path/to/homebrew-tap/Formula/traecnclaw.rb
+```
+
+The formula URL and SHA-256 must point to the public Release tarball. Its test
+must exercise both `traecnclaw --help` and a real stdio initialize/tools-list
+exchange with exactly 20 tools. Verify the public tap on a clean install:
+
+```sh
+brew update
+brew audit --strict Luckycat133/tap/traecnclaw
+brew style Luckycat133/tap/traecnclaw
+brew reinstall Luckycat133/tap/traecnclaw
+brew test Luckycat133/tap/traecnclaw
+traecnclaw --help
+```
+
+Homebrew installs the local operator CLI and stdio runtime. Users install the
+Agent Skill separately.
+
+## Agent Skill and ClawHub
+
+The public mirror is the public provenance source. After its release commit is
+known, dry-run and publish the generated Skill path:
 
 ```sh
 clawhub publish skills/traecnclaw-mcp \
   --slug traecnclaw-mcp \
   --name "TRAECNclaw MCP" \
-  --version "$(node -p "require('./package.json').version")" \
+  --version <version> \
   --tags latest,mcp,agent-skills,codex,openclaw,traecn \
-  --source-repo https://github.com/Luckycat133/TRAECNclaw \
-  --source-commit "$(git rev-parse HEAD)" \
-  --source-ref "v$(node -p "require('./package.json').version")" \
-  --source-path skills/traecnclaw-mcp \
-  --changelog "See CHANGELOG.md for the verified release changes."
+  --source-repo Luckycat133/traecnclaw-mcp-skill \
+  --source-commit <public-commit> \
+  --source-ref main \
+  --source-path .codex/skills/traecnclaw-mcp \
+  --changelog "See CHANGELOG.md for verified release changes."
 clawhub inspect traecnclaw-mcp --versions --limit 3
 ```
 
-The inspect result must show the requested version as `latest` and the clean
-security scan before announcing the listing. Never publish a working tree or a
-Skill directory copied from a different commit.
+The public mirror stores the Skill under `.codex/skills/traecnclaw-mcp` even
+though the canonical source path is `skills/traecnclaw-mcp`.
 
-## Manual Skill Install
-
-From a source checkout:
+Also test the public repository through Skills CLI:
 
 ```sh
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
-cp -R skills/traecnclaw-mcp "${CODEX_HOME:-$HOME/.codex}/skills/"
+npx skills add https://github.com/Luckycat133/traecnclaw-mcp-skill \
+  --skill traecnclaw-mcp \
+  -g
 ```
 
-From the generated archive:
+Restart the host after installing or updating the Skill.
 
-```sh
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
-tar -xzf dist/traecnclaw-mcp-skill.tgz -C "${CODEX_HOME:-$HOME/.codex}/skills"
-```
+## Directory submissions
 
-Restart the agent client after installing the skill so its `SKILL.md`
-frontmatter is discovered.
+Search each site for an existing record before submitting. Reconcile the
+existing record rather than creating a duplicate. Every listing must use the
+canonical copy in [`distribution/listing-copy.md`](../distribution/listing-copy.md)
+and state:
 
-## MCP Server Install
+- local stdio server on the user's Mac;
+- TraeCN desktop and Node.js 22 requirements;
+- exactly 20 tools;
+- public mirror and matching release;
+- no cloud-hosted control claim;
+- no unscoped npm 0.3.1 install path;
+- tested macOS/TraeCN versions only.
 
-For source checkouts:
+Browser submissions, claims, public issues, and social posts are external
+representational actions. Prepare and review the exact payload first, then get
+action-time confirmation before the final click.
 
-```sh
-git clone https://github.com/Luckycat133/TRAECNclaw.git
-cd TRAECNclaw
-npm install
-npm run doctor
-```
+## Promotion evidence
 
-From a release download, install the complete server package either into the
-client's launch directory or a trusted npm prefix:
+Promotion requires real artifacts, not mock claims:
 
-```sh
-npm install ./traecnclaw-<version>.tgz
-# Or install into a dedicated prefix and expose its bin directory on PATH.
-npm install --prefix "$HOME/.local/share/traecnclaw" ./traecnclaw-<version>.tgz
-export PATH="$HOME/.local/share/traecnclaw/node_modules/.bin:$PATH"
-```
+- architecture and trust-boundary diagram;
+- three concrete use cases;
+- limitation card covering macOS, local runtime, TraeCN version, and transport;
+- 60–90 second real host recording with secrets and unrelated content removed;
+- five-minute setup tutorial;
+- Chinese and global copy linked to the verified install page;
+- screenshots or recordings of the public listing and generated install path.
 
-**Option A (recommended): generate the Skill launcher entry**
+Use [`LAUNCH-KIT.md`](LAUNCH-KIT.md) for the prepared copy and shot list. A
+draft or unrecorded shot list is not a completed public launch asset.
 
-The Skill launcher resolves the server in this order: repository-local
-`mcp-server.js`, an installed `traecnclaw/mcp` package export, then
-`traecnclaw-mcp` on `PATH`. It does not execute a JavaScript entry point selected
-through an environment variable. From a source checkout, validate discovery
-and print a resolved single-entry configuration:
+## Definition of done
 
-```sh
-npm run --silent setup:mcp
-```
+A selected channel is done only when all four items exist:
 
-Use `npm run setup:mcp -- --output ./traecnclaw-mcp.json` to create a new
-mode-0600 file atomically; existing files are never overwritten. From a
-standalone Skill directory, run `node scripts/setup-mcp.js`. Merge the emitted
-`mcpServers.traecn` entry into the host configuration. The unresolved template
-remains available at `skills/traecnclaw-mcp/assets/mcp-client-config.json` for
-manual fallback:
+1. public page or package/version URL;
+2. generated install/download path inspected;
+3. clean install and appropriate runtime test passed;
+4. evidence and date recorded in `CHANNEL-LEDGER.md`.
 
-```json
-{
-  "mcpServers": {
-    "traecn": {
-      "command": "node",
-      "args": ["SKILL_DIR/scripts/start-mcp.js"],
-      "env": {
-        "TRAECN_GATEWAY_HOST": "127.0.0.1",
-        "TRAECN_GATEWAY_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": ""
-      }
-    }
-  }
-}
-```
-
-**Option B (fallback): direct mcp-server.js path**
-
-Use the separate `skills/traecnclaw-mcp/assets/mcp-client-config.direct.json`
-template. Do not register it alongside Option A.
-
-```json
-{
-  "mcpServers": {
-    "traecn": {
-      "command": "node",
-      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
-      "env": {
-        "TRAECN_GATEWAY_HOST": "127.0.0.1",
-        "TRAECN_GATEWAY_PORT": "8788",
-        "TRAECN_GATEWAY_TOKEN": ""
-      }
-    }
-  }
-}
-```
-
-For package installs, use `command: "traecnclaw-mcp"` only after that exact
-version is verified on npm. Source and release-archive instructions are the
-authoritative path for the intended release; the generated server archive is
-installable directly from a GitHub Release download.
-
-## Public mirror synchronization
-
-Prepare or verify the public mirror checkout with:
-
-```sh
-node scripts/public-mirror.js --mirror /path/to/traecnclaw-mcp-skill --revision <full-canonical-commit>
-node scripts/public-mirror.js --check --mirror /path/to/traecnclaw-mcp-skill --revision <full-canonical-commit>
-```
-
-The command copies `skills/traecnclaw-mcp` byte-for-byte, writes the exact
-canonical commit to `SOURCE_REVISION`, refreshes version/contract metadata,
-keeps `glama.json`, and removes the obsolete legacy `smithery.yaml`. The
-canonical commit must be the exact release commit tagged `vX.Y.Z`; a dirty
-working tree is not a release source.
-
-The bundled MCP server supports the stable `2026-07-28` protocol over standard
-newline-delimited stdio and legacy `initialize` clients. Catalog descriptions
-should call it a local stdio server; Streamable HTTP is not exposed by the
-current 0.5.x line.
-The server also advertises the separately negotiated, upstream-draft
-`io.modelcontextprotocol/tasks` extension for durable task handles and exact-ID
-completion subscriptions; do not describe the extension itself as core MCP.
-
-Smithery now distributes local stdio servers as MCPB bundles, so no replacement
-legacy YAML is generated. The official MCP Registry metadata template lives at
-`distribution/public-mirror/server.json.template`, but it must not be copied to
-the public mirror or published until npm contains the matching selected release
-package.
-The Registry validates that package version and the `mcpName` field before it
-accepts `server.json`. The ClawHub 0.5.6 Skill and public mirror 0.5.6 server
-archive form the selected public pair. The matching npm package is still not
-published, so do not publish Registry metadata or describe npm as a current
-installation channel. Any future npm or Registry publication must reuse an
-explicitly verified source revision and be inspected separately.
-
-## Directory Submissions
-
-Recommended first submissions:
-
-- SkillsLLM: submit as an open-source AI skill and MCP server helper.
-- mcpservers.org: submit as a local stdio MCP server for development automation.
-- Codex Skills Registry: submit a PR or issue pointing to
-  `.codex/skills/traecnclaw-mcp` in the public mirror.
-- Composio awesome-codex-skills: submit the skill path and installation notes.
-- Awesome Skills: rely on the public GitHub repository and `SKILL.md` crawl.
-
-Suggested listing fields:
-
-- Name: `TRAECNclaw MCP`
-- Short description: `Portable MCP skill for connecting AI agents to TraeCN desktop automation.`
-- Category: `Development` or `MCP Servers`
-- Tags: `mcp`, `agent-skills`, `codex`, `openclaw`, `traecn`, `automation`
-- Primary link: `https://github.com/Luckycat133/traecnclaw-mcp-skill`
-- Skill path: `.codex/skills/traecnclaw-mcp`
-
-## Public Release Gate
-
-Before attaching or replacing release artifacts:
-
-1. Confirm `git status --short` contains only intended changes.
-2. Run `npm run audit:all` and require zero high or critical production or
-   development dependency advisories.
-3. Run `npm run verify`.
-4. Run `npm run check:skill-contracts` to validate the canonical Skill and generated MCP contract.
-5. Run `npm run test:release`; keep the generated checksums and require the
-   clean-room install, 20-tool discovery, mock submission, result read, and
-   release-manifest verification to pass. A pushed version tag repeats this
-   gate in GitHub Actions before creating or updating the GitHub Release.
-6. Scan current files and git history for `.env`, tokens, cookies, auth headers,
-   raw TraeCN profiles, and local-only paths.
-7. Replace any credential-bearing git remote URL with a credential-free HTTPS or
-   SSH URL before showing setup commands publicly.
+Authentication, payment, maintainer approval, a browser confirmation, real
+TraeCN availability, or indexing delay can be legitimate external blockers.
+Record the exact blocker and resume step; do not mark the row complete or
+silently substitute a different product surface.

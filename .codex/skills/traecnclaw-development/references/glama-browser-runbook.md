@@ -34,8 +34,9 @@ Before opening Glama, verify the public repository in the browser or GitHub:
 2. Root `glama.json` exists and includes maintainer `Luckycat133`.
 3. Root `LICENSE` is detected by GitHub.
 4. Root README describes a **local stdio** server requiring TraeCN and the gateway on the user's Mac.
-5. Public `v0.5.6` Release exists with:
-   - `traecnclaw-0.5.6.tgz`;
+5. The public Release matching `package.json` (currently target `v0.5.9`) exists with:
+   - `traecnclaw-0.5.9.tgz`;
+   - `traecnclaw-mcp-0.5.9.mcpb`;
    - Skill archive(s);
    - release manifest.
 6. Root Dockerfile installs the current public release and contains none of:
@@ -69,6 +70,10 @@ Do not work around canonical defects in the Glama dashboard.
 Do not submit the private `Luckycat133/TRAECNclaw` repository.
 
 ## Claim ownership
+
+Claim and manual sync mutate a public listing. Show the exact target listing
+and obtain action-time confirmation before clicking the final Claim or Sync
+control.
 
 1. Open the server page's **Score** tab or click **Claim** / **Claim authorship**.
 2. Complete GitHub authorization using `Luckycat133`.
@@ -105,7 +110,8 @@ Check and record:
 - License: MIT.
 - Language/runtime: JavaScript or Node.js 22.
 - Transport/type: local stdio, not a native hosted remote connector.
-- Current public Release: 0.5.6.
+- Current public Release: the exact target version from `package.json`
+  (0.5.9 for this campaign).
 - Tool count: exactly 20.
 - Tool names: match contract v5.
 - No tool profiles.

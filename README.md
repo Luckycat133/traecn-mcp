@@ -44,15 +44,13 @@ Edit `.env` for your TraeCN installation path, CDP port, gateway token, and sele
 Upgrading from 0.3.x: read [the 0.5.0 migration guide](docs/MIGRATING-TO-0.5.md)
 before replacing MCP configuration.
 
-Release channels must match. This checkout now identifies source version
-0.5.6. Matching public server and Skill archives are distributed together by
-the public mirror's
-[`v0.5.6` Release](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v0.5.6),
-whose `SOURCE_REVISION` identifies the same immutable canonical tag. ClawHub
-provides the matching 0.5.6 Skill, while npm `traecnclaw` remains the unrelated
-older 0.3.1 channel. The canonical source repository and its provenance
-Release remain private; do not mix versions across these channels. See the
-[distribution inventory](docs/DISTRIBUTION.md#current-publication-inventory).
+Release channels must match. This checkout identifies the 0.5.9 release
+candidate; it is not a public release until the tagged public mirror, scoped
+npm package, Homebrew formula, MCPB bundle, and directory rows are individually
+verified in the [channel ledger](docs/CHANNEL-LEDGER.md). The unscoped npm
+package `traecnclaw@0.3.1` is historical and must never be used as a current
+install path. The canonical source repository remains private; public channels
+use the generated mirror and its exact `SOURCE_REVISION` instead.
 
 ## Configuration
 
@@ -276,10 +274,11 @@ Build release artifacts for direct download:
 npm run pack:skill
 ```
 
-This writes `dist/traecnclaw-mcp-skill.tgz`, a zip artifact when `zip` is
-available, an installable `dist/traecnclaw-<version>.tgz` server package, and
-`dist/traecnclaw-mcp-release.json` with source revision and checksums. See
-[Distribution](docs/DISTRIBUTION.md) for catalog submission fields.
+This writes the Skill tar/zip, a deterministic MCPB bundle, an installable
+`dist/traecnclaw-<version>.tgz` whose internal npm identity is
+`@luckycat133/traecnclaw`, and `dist/traecnclaw-mcp-release.json` with source
+revision and checksums. See [Distribution](docs/DISTRIBUTION.md) for the release
+order and [the channel ledger](docs/CHANNEL-LEDGER.md) for public status.
 
 ### Layered Architecture
 
@@ -515,8 +514,9 @@ increments only for an explicitly documented breaking contract. The checked-in
 Verify workflow runs the same non-quota gate on pushes and pull requests.
 Pushing a version tag starts the GitHub release workflow. The workflow repeats
 the clean-room gate, verifies the tag's source revision and artifact manifest,
-then creates or updates the matching GitHub Release assets. npm publication and
-marketplace submission remain explicit maintainer actions. ClawHub publication
+then creates or updates the matching GitHub Release assets. Scoped npm
+publication, Official Registry publication, and marketplace submission remain
+explicit maintainer actions. ClawHub publication
 must use the tagged `skills/traecnclaw-mcp` directory and record the same source
 commit; the exact command and post-publish inspection are in
 `docs/DISTRIBUTION.md`.
@@ -530,6 +530,9 @@ or `traecnclaw-mcp` for the server entrypoint.
 
 ## Documentation
 
+- [Distribution and Release Runbook](docs/DISTRIBUTION.md)
+- [Current Channel Ledger](docs/CHANNEL-LEDGER.md)
+- [Launch Kit](docs/LAUNCH-KIT.md)
 - [Compatibility Matrix](docs/COMPATIBILITY.md)
 - [0.5.x Migration Guide](docs/MIGRATING-TO-0.5.md)
 - [Runtime Configuration](docs/configuration.md)

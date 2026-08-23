@@ -4,7 +4,7 @@ description: Operate TraeCN through TRAECNclaw's focused stdio MCP tools. Use wh
 license: MIT-0
 metadata:
   author: TRAECNclaw
-  version: "0.5.8"
+  version: "0.5.9"
   openclaw:
     requires:
       bins:

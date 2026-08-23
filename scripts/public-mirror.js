@@ -108,12 +108,20 @@ function releaseManifest(sourceRevision) {
         runtime: 'local-gateway-required',
         hostedConnector: false
       },
-      smithery: { status: 'requires-mcpb-publication', legacySmitheryYaml: false },
+      smithery: { status: 'requires-mcpb-publication', mode: 'local-mcpb', legacySmitheryYaml: false },
       officialMcpRegistry: {
         status: 'requires-public-package-publication',
+        name: 'io.github.Luckycat133/traecnclaw',
         schema: 'https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json'
       },
-      npm: { status: 'not-asserted-until-published' }
+      npm: {
+        status: 'not-asserted-until-published',
+        package: '@luckycat133/traecnclaw'
+      },
+      homebrew: {
+        status: 'not-asserted-until-published',
+        formula: 'Luckycat133/tap/traecnclaw'
+      }
     }
   };
 }
@@ -124,6 +132,7 @@ function buildPublicMirror({ mirrorRoot, sourceRevision }) {
   copyTree(canonicalSkillRoot, path.join(mirrorRoot, mirrorSkillPath));
   fs.writeFileSync(path.join(mirrorRoot, 'SOURCE_REVISION'), sourceRevisionDocument(sourceRevision), 'utf8');
   fs.writeFileSync(path.join(mirrorRoot, 'README.md'), renderReadme(sourceRevision), 'utf8');
+  fs.copyFileSync(path.join(distributionRoot, 'LICENSE'), path.join(mirrorRoot, 'LICENSE'));
   fs.copyFileSync(path.join(distributionRoot, 'glama.json'), path.join(mirrorRoot, 'glama.json'));
   fs.writeFileSync(path.join(mirrorRoot, 'Dockerfile'), renderGlamaDockerfile(), 'utf8');
   fs.writeFileSync(
@@ -154,7 +163,7 @@ function verifyPublicMirror({ mirrorRoot, sourceRevision }) {
       || !/contract version 5/i.test(readme)
       || !/exactly 20/i.test(readme)
       || !/local-first/i.test(readme)
-      || /TRAECN_MCP_TOOL_PROFILE|traecnclaw@0\.3/i.test(readme)) {
+      || /TRAECN_MCP_TOOL_PROFILE|npm\s+(?:install|i)\b[^\n]*\btraecnclaw@0\.3/i.test(readme)) {
     violations.push({ rule: 'mirror-readme-stale', path: 'README.md' });
   }
 
@@ -166,7 +175,11 @@ function verifyPublicMirror({ mirrorRoot, sourceRevision }) {
         || manifest.toolCount !== MCP_TOOL_NAMES.length
         || manifest.sourceRevision !== sourceRevision
         || manifest.marketplaces?.glama?.status !== 'listing-ready'
-        || manifest.marketplaces?.glama?.hostedConnector !== false) {
+        || manifest.marketplaces?.glama?.hostedConnector !== false
+        || manifest.marketplaces?.npm?.package !== '@luckycat133/traecnclaw'
+        || manifest.marketplaces?.officialMcpRegistry?.name !== 'io.github.Luckycat133/traecnclaw'
+        || manifest.marketplaces?.smithery?.mode !== 'local-mcpb'
+        || manifest.marketplaces?.homebrew?.formula !== 'Luckycat133/tap/traecnclaw') {
       violations.push({ rule: 'mirror-manifest-stale', path: 'release-manifest.json' });
     }
   } catch {
@@ -177,6 +190,12 @@ function verifyPublicMirror({ mirrorRoot, sourceRevision }) {
   const actualGlama = path.join(mirrorRoot, 'glama.json');
   if (!fs.existsSync(actualGlama) || sha256(expectedGlama) !== sha256(actualGlama)) {
     violations.push({ rule: 'glama-metadata-stale', path: 'glama.json' });
+  }
+
+  const expectedLicense = path.join(distributionRoot, 'LICENSE');
+  const actualLicense = path.join(mirrorRoot, 'LICENSE');
+  if (!fs.existsSync(actualLicense) || sha256(expectedLicense) !== sha256(actualLicense)) {
+    violations.push({ rule: 'public-license-stale', path: 'LICENSE' });
   }
 
   const dockerfilePath = path.join(mirrorRoot, 'Dockerfile');

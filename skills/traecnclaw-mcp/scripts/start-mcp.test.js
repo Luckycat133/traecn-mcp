@@ -189,6 +189,27 @@ test('resolveServerPath finds the installed traecnclaw package from the launch d
   }
 });
 
+test('resolveServerPath finds the scoped public package from the launch directory', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'start-mcp-scoped-package-'));
+  const scriptDir = makeFakeScriptDir(path.join(root, 'skill-root'));
+  const packageDir = path.join(root, 'runtime', 'node_modules', '@luckycat133', 'traecnclaw');
+  const serverFile = path.join(packageDir, 'mcp-server.js');
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({
+    name: '@luckycat133/traecnclaw',
+    exports: { './mcp': './mcp-server.js' }
+  }));
+  fs.writeFileSync(serverFile, 'module.exports = { startStdioServer() {} };\n');
+  try {
+    const result = require('./start-mcp').resolveServerPath({}, scriptDir, {
+      cwd: path.join(root, 'runtime')
+    });
+    expect(result).toBe(fs.realpathSync(serverFile));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('resolveServerPath falls back to a traecnclaw-mcp executable on PATH', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'start-mcp-path-'));
   const scriptDir = makeFakeScriptDir(path.join(root, 'skill-root'));

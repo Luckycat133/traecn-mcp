@@ -126,31 +126,33 @@ function showProgress(current, total, label = '') {
 
 function showHelp() {
   console.log(`
-${color('bold', 'TraeCN CLI')} - Command line interface for TraeCN Gateway
+${color('bold', 'TRAECNclaw')} - setup and operations for the local TraeCN gateway
 
 ${color('bold', 'USAGE:')}
-  traecn <command> [options]
+  traecnclaw <command> [options]
 
-${color('bold', 'COMMANDS:')}
-  ${color('green', 'delegate')} <task>      Execute a task
-  ${color('green', 'delegate')} -f <file>    Execute task from file
-  ${color('green', 'vibe')} <task>          Start unattended vibe coding workflow
-  ${color('green', 'wait')} <taskId>        Wait locally for a queued task to finish
-  ${color('green', 'status')}                Show gateway status
-  ${color('green', 'capabilities')}          Show compact agent capability catalog
-  ${color('green', 'preflight')} [cmd] [json] One-call readiness/queue/dialog preflight
-  ${color('green', 'cleanup-queue')}          Find and delete queue-probe Solo chats
-  ${color('green', 'cleanup-queue')} --status Show cleanup watcher lock/process status
-  ${color('green', 'proof')} status|start|cancel  Manage guarded GLM-5.2 long-queue proof
-  ${color('green', 'plan')} <command> [json] Create operation confirmation plan
-  ${color('green', 'models')}                List available models
-  ${color('green', 'config')} get <key>      Get config value
-  ${color('green', 'config')} set <key> <value>  Set config value
-  ${color('green', 'batch')} submit <file>   Submit batch tasks from JSON file
-  ${color('green', 'batch')} status <id>     Check batch status
-  ${color('green', 'batch')} cancel <id>    Cancel batch
-  ${color('green', 'logs')} [lines]          View recent logs
-  ${color('green', 'help')}                 Show this help
+${color('bold', 'SETUP AND OPERATIONS:')}
+  ${color('green', 'setup-mcp')} [--output FILE]  Validate discovery and print/write MCP config
+  ${color('green', 'doctor')}                    Diagnose Node, gateway, CDP, and TraeCN readiness
+  ${color('green', 'quickstart')} [--launch-trae] Start/check the gateway; launch TraeCN only on request
+  ${color('green', 'service')} start|stop|status Manage the macOS LaunchAgent gateway service
+  ${color('green', 'status')}                    Show gateway status
+  ${color('green', 'logs')} [lines]              View recent logs
+  ${color('green', 'config')} get|set <key>       Read or update host, port, or token
+
+${color('bold', 'ADVANCED / SCRIPTING:')}
+  ${color('green', 'capabilities')}              Show compact agent capability catalog
+  ${color('green', 'models')}                    List available models
+  ${color('green', 'delegate')} <task>           Execute a task through the gateway
+  ${color('green', 'vibe')} <task>               Run an unattended workflow
+  ${color('green', 'wait')} <taskId>             Wait locally for a queued task
+  ${color('green', 'preflight')} [cmd] [json]    Inspect readiness/queue/dialog state
+  ${color('green', 'batch')} submit|status|cancel Operate a scripted batch
+  ${color('green', 'cleanup-queue')} [options]   Diagnose or clean queue-probe chats
+  ${color('green', 'proof')} status|start|cancel Manage guarded long-queue evidence
+  ${color('green', 'plan')} <command> [json]     Create an operation confirmation plan
+  ${color('green', 'live-uat')} [options]        Run live compatibility checks
+  ${color('green', 'help')}                      Show this help
 
 ${color('bold', 'OPTIONS:')}
   -h, --help              Show help
@@ -175,30 +177,18 @@ ${color('bold', 'OPTIONS:')}
   --auto-approve-dialog [action] Wait: handle an eligible non-command dialog
 
 ${color('bold', 'EXAMPLES:')}
-  traecn delegate "Write a hello world program"
-  traecn delegate -f task.txt
-  traecn vibe "Implement feature" --step "Run tests" --step "Fix failures"
-  traecn vibe "Ship report" --check-file FINAL_REPORT.md --check-text WORKFLOW_STATUS.md:Follow-up
-  traecn wait task_123 --poll-ms 30000 --timeout-ms 0 --log evidence.jsonl --quiet -o json
-  traecn wait task_123 --detach --log evidence.jsonl
-  traecn status
-  traecn capabilities
-  traecn preflight delegate_async '{"task":"..."}'
-  traecn cleanup-queue --execute --max-passes 10
-  traecn cleanup-queue --status --json
-  traecn cleanup-queue --execute --watch-ms 600000 --stable-ms 120000
-  traecn cleanup-queue --execute --watch-ms 7200000 --stable-ms 1800000 --detach --log cleanup-watch.jsonl
-  traecn proof status
-  traecn proof start --marker TRAECN_GLM52_CLEAN_1
-  traecn proof start --execute --detach --allow-quota-spend --marker TRAECN_GLM52_CLEAN_1
-  traecn proof cancel --marker TRAECN_GLM52_CLEAN_1
-  traecn plan settings_set '{"label":"Auto Save","value":true}'
-  traecn models
-  traecn config get host
-  traecn config set host 192.168.1.100
-  traecn batch submit tasks.json
-  traecn batch status batch_123456_abc
-  traecn logs 100
+  traecnclaw setup-mcp --output ./traecnclaw-mcp.json
+  traecnclaw doctor
+  traecnclaw quickstart --launch-trae
+  traecnclaw service start
+  traecnclaw service status
+  traecnclaw status
+  traecnclaw logs 100
+  traecnclaw delegate "Write a hello world program"
+  traecnclaw wait task_123 --poll-ms 30000 --timeout-ms 0 --quiet -o json
+  traecnclaw cleanup-queue --status --json
+  traecnclaw cleanup-queue --execute --watch-ms 7200000 --stable-ms 1800000 --detach
+  traecnclaw proof start --execute --detach --allow-quota-spend --marker TRAECN_GLM52_CLEAN_1
 
 ${color('bold', 'CONFIG FILE:')}
   Config is stored at ${CONFIG_FILE}
@@ -207,6 +197,29 @@ ${color('bold', 'CONFIG FILE:')}
 ${color('bold', 'ENVIRONMENT:')}
   TRAECN_GATEWAY_HOST, TRAECN_GATEWAY_PORT, TRAECN_GATEWAY_TOKEN
 `);
+}
+
+const LOCAL_SCRIPT_COMMANDS = Object.freeze({
+  'setup-mcp': path.join(__dirname, '..', 'skills', 'traecnclaw-mcp', 'scripts', 'setup-mcp.js'),
+  doctor: path.join(__dirname, 'doctor.js'),
+  quickstart: path.join(__dirname, 'quickstart.js'),
+  service: path.join(__dirname, 'gateway-service.js'),
+  'live-uat': path.join(__dirname, 'live-uat.js')
+});
+
+function buildLocalScriptArgs(command, args = []) {
+  const scriptPath = LOCAL_SCRIPT_COMMANDS[command];
+  if (!scriptPath) throw new Error(`Unknown local operator command "${command}"`);
+  return [scriptPath, ...args];
+}
+
+function cmdLocalScript(command, args) {
+  const result = spawnSync(process.execPath, buildLocalScriptArgs(command, args), {
+    cwd: path.resolve(__dirname, '..'),
+    stdio: 'inherit'
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status === null ? 1 : result.status);
 }
 
 function parseJsonArg(raw, label) {
@@ -732,7 +745,7 @@ async function cmdDelegate(args) {
 
   if (!task.trim()) {
     console.error(color('red', 'Error: Task is required'));
-    console.error(color('gray', 'Usage: traecn delegate <task>'));
+    console.error(color('gray', 'Usage: traecnclaw delegate <task>'));
     process.exit(1);
   }
 
@@ -746,7 +759,7 @@ async function cmdDelegate(args) {
     });
 
     if (result.status === 202 && result.data.status === 'queued') {
-      console.log(color('yellow', '⚠ Task queued, use traecn status to check progress'));
+      console.log(color('yellow', '⚠ Task queued, use traecnclaw status to check progress'));
       console.log(color('dim', `Task ID: ${result.data.taskId}`));
       if (outputFormat === 'json') {
         console.log(JSON.stringify(result.data, null, 2));
@@ -830,7 +843,7 @@ async function cmdVibe(args) {
 
   if (!task.trim()) {
     console.error(color('red', 'Error: Task is required'));
-    console.error(color('gray', 'Usage: traecn vibe <task> [--step <task>] [--project <path>]'));
+    console.error(color('gray', 'Usage: traecnclaw vibe <task> [--step <task>] [--project <path>]'));
     process.exit(1);
   }
 
@@ -869,7 +882,7 @@ async function cmdWait(args) {
   const options = parseWaitArgs(args);
   if (!options.taskId) {
     console.error(color('red', 'Error: taskId is required'));
-    console.error(color('gray', 'Usage: traecn wait <taskId> [--poll-ms <ms>] [--timeout-ms <ms>] [--log <file>]'));
+    console.error(color('gray', 'Usage: traecnclaw wait <taskId> [--poll-ms <ms>] [--timeout-ms <ms>] [--log <file>]'));
     process.exit(1);
   }
 
@@ -991,7 +1004,7 @@ async function cmdPlan(args) {
   const command = args[0];
   if (!command) {
     console.error(color('red', 'Error: command is required'));
-    console.error(color('gray', 'Usage: traecn plan <command> [params-json] [--force-confirm]'));
+    console.error(color('gray', 'Usage: traecnclaw plan <command> [params-json] [--force-confirm]'));
     process.exit(1);
   }
   const params = args[1] && !args[1].startsWith('-') ? parseJsonArg(args[1], 'params') : {};
@@ -1515,7 +1528,7 @@ async function cmdConfig(args) {
     const key = args[1];
     if (!key) {
       console.error(color('red', 'Error: Key required'));
-      console.error(color('gray', 'Usage: traecn config get <key>'));
+      console.error(color('gray', 'Usage: traecnclaw config get <key>'));
       process.exit(1);
     }
     const value = cfg[key];
@@ -1534,7 +1547,7 @@ async function cmdConfig(args) {
 
     if (!key || value === undefined) {
       console.error(color('red', 'Error: Key and value required'));
-      console.error(color('gray', 'Usage: traecn config set <key> <value>'));
+      console.error(color('gray', 'Usage: traecnclaw config set <key> <value>'));
       process.exit(1);
     }
 
@@ -1565,14 +1578,14 @@ async function cmdConfig(args) {
   }
 
   console.error(color('red', `Error: Unknown config command "${action}"`));
-  console.error(color('gray', 'Usage: traecn config [get <key> | set <key> <value>]'));
+  console.error(color('gray', 'Usage: traecnclaw config [get <key> | set <key> <value>]'));
   process.exit(1);
 }
 
 async function cmdBatch(args) {
   if (args.length === 0) {
     console.error(color('red', 'Error: Batch command required'));
-    console.error(color('gray', 'Usage: traecn batch [submit|status|cancel] [args]'));
+    console.error(color('gray', 'Usage: traecnclaw batch [submit|status|cancel] [args]'));
     process.exit(1);
   }
 
@@ -1582,7 +1595,7 @@ async function cmdBatch(args) {
     const filePath = args[1];
     if (!filePath) {
       console.error(color('red', 'Error: File path required'));
-      console.error(color('gray', 'Usage: traecn batch submit <file.json>'));
+      console.error(color('gray', 'Usage: traecnclaw batch submit <file.json>'));
       process.exit(1);
     }
 
@@ -1668,7 +1681,7 @@ async function cmdBatch(args) {
     const batchId = args[1];
     if (!batchId) {
       console.error(color('red', 'Error: Batch ID required'));
-      console.error(color('gray', 'Usage: traecn batch status <batchId>'));
+      console.error(color('gray', 'Usage: traecnclaw batch status <batchId>'));
       process.exit(1);
     }
 
@@ -1714,7 +1727,7 @@ async function cmdBatch(args) {
     const batchId = args[1];
     if (!batchId) {
       console.error(color('red', 'Error: Batch ID required'));
-      console.error(color('gray', 'Usage: traecn batch cancel <batchId>'));
+      console.error(color('gray', 'Usage: traecnclaw batch cancel <batchId>'));
       process.exit(1);
     }
 
@@ -1740,7 +1753,7 @@ async function cmdBatch(args) {
   }
 
   console.error(color('red', `Error: Unknown batch command "${action}"`));
-  console.error(color('gray', 'Usage: traecn batch [submit|status|cancel]'));
+  console.error(color('gray', 'Usage: traecnclaw batch [submit|status|cancel]'));
   process.exit(1);
 }
 
@@ -1797,7 +1810,7 @@ async function cmdProof(args) {
     proofArgs = buildProofCliArgs(args);
   } catch (err) {
     console.error(color('red', `Error: ${err.message}`));
-    console.error(color('gray', 'Usage: traecn proof status|start|cancel [long-queue-proof options]'));
+    console.error(color('gray', 'Usage: traecnclaw proof status|start|cancel [long-queue-proof options]'));
     process.exit(1);
   }
   const result = spawnSync(process.execPath, proofArgs, {
@@ -1823,6 +1836,13 @@ async function main() {
 
   try {
     switch (command) {
+      case 'setup-mcp':
+      case 'doctor':
+      case 'quickstart':
+      case 'service':
+      case 'live-uat':
+        cmdLocalScript(command, args.slice(1));
+        break;
       case 'delegate':
         await cmdDelegate(args.slice(1));
         break;
@@ -1866,7 +1886,7 @@ async function main() {
         break;
       default:
         console.error(color('red', `Error: Unknown command "${command}"`));
-        console.error(color('gray', 'Run "traecn help" for usage'));
+        console.error(color('gray', 'Run "traecnclaw help" for usage'));
         process.exit(1);
     }
   } catch (err) {
@@ -1895,6 +1915,7 @@ module.exports = {
   defaultWaitSessionName,
   buildDetachedWaitCommand,
   buildProofCliArgs,
+  buildLocalScriptArgs,
   appSupportDir,
   defaultCleanupWatchLockFile,
   isPidRunning,
