@@ -17,15 +17,15 @@ function loadTraecnSkill() {
 }
 
 const API_FAMILIES = Object.freeze({
-  discovery: ['/api/capabilities', '/api/preflight', '/api/status', '/openapi.json'],
-  delegation: ['/api/delegate', '/api/delegate-async', '/api/task/adopt-current', '/api/task/{taskId}', '/api/task/{taskId}/review', '/api/task/{taskId}/cancel'],
+  discovery: ['/api/capabilities', '/api/preflight', '/api/status', '/api/workspace', '/openapi.json'],
+  delegation: ['/api/delegate', '/api/delegate-async', '/api/task/adopt-current', '/api/task/{taskId}', '/api/task/{taskId}/review', '/api/task/{taskId}/cancel', '/api/task/{taskId}/interaction'],
   taskEvents: ['/api/task-events', '/api/task-events/ack'],
   sessions: ['/api/sessions', '/api/sessions/{sessionId}', '/api/sessions/{sessionId}/delegate'],
   queue: ['/api/queue-status', '/api/queue/status', '/api/tasks/batch', '/api/tasks/batch/{batchId}'],
   review: ['/api/delegate', '/api/delegate-async'],
   control: ['/api/new-chat', '/api/solo/chats', '/api/solo/chats/switch', '/api/solo/chats/cleanup-foreign-queue', '/api/solo/chats/submit', '/api/trae/stop-generation', '/api/trae/review-gate', '/api/detect-mode', '/api/switch-mode', '/api/switch-model', '/api/open-project'],
   settings: ['/api/settings/sections', '/api/settings/read', '/api/settings/options', '/api/settings/read-all', '/api/settings/set', '/api/settings/switch-tab', '/api/settings/back-to-chat'],
-  confirmation: ['/api/dialog/status', '/api/dialog/approve', '/api/dialog/dismiss'],
+  confirmation: ['/api/dialog/status', '/api/dialog/approve', '/api/dialog/dismiss', '/api/task/{taskId}/interaction'],
   confirmationPlan: ['/api/confirm/plan'],
   history: ['/api/tasks/history', '/api/tasks/{taskId}', '/api/tasks/{taskId}/replay']
 });

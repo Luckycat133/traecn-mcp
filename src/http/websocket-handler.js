@@ -5,6 +5,8 @@ const { secureCompare } = require('../shared/utils');
 
 const WS_HEARTBEAT_INTERVAL = 30000;
 const WS_HEARTBEAT_TIMEOUT = 60000;
+const WS_PUBLIC_PROTOCOL = 'traecnclaw.v1';
+const WS_BEARER_PROTOCOL_PREFIX = 'traecnclaw.bearer.';
 // Hard cap on inbound WS frame payload. Default 64 KiB; messages above this
 // size are dropped by the ws library with code 1009 (Message Too Big).
 // Prevents slow-loris / memory-exhaustion attacks on long-lived WS clients.
@@ -39,7 +41,8 @@ class WebSocketHandler {
   initialize(server) {
     this.wss = new WebSocketServer({
       noServer: true,
-      maxPayload: WS_MAX_PAYLOAD_BYTES
+      maxPayload: WS_MAX_PAYLOAD_BYTES,
+      handleProtocols: (protocols, request) => this._selectProtocol(protocols, request)
     });
 
     this.wss.on('connection', (ws, req, context) => {
@@ -89,24 +92,89 @@ class WebSocketHandler {
   }
 
   _handleUpgradeAuth(request, context) {
+    if (this._hasQueryCredential(request)) return false;
+
+    const protocols = this._protocolsFromRequest(request);
+    const browserCredentials = protocols.filter(protocol => protocol.startsWith(WS_BEARER_PROTOCOL_PREFIX));
+    if (browserCredentials.length > 1) return false;
+    let browserToken = null;
+    if (browserCredentials.length === 1) {
+      if (!protocols.includes(WS_PUBLIC_PROTOCOL)) return false;
+      browserToken = this._decodeBearerProtocol(browserCredentials[0]);
+      if (browserToken === null) return false;
+    }
+    if (protocols.includes(WS_PUBLIC_PROTOCOL)) {
+      request._traecnclawSelectedProtocol = WS_PUBLIC_PROTOCOL;
+    }
+
     const token = this.gateway.token;
     if (!token) {
       context.authenticated = true;
+      context.authMethod = 'none';
       return true;
     }
 
-    const authHeader = request.headers[this.gateway.authHeader.toLowerCase()] || '';
+    const credentials = [];
+    const authHeaderName = String(this.gateway.authHeader || 'Authorization').toLowerCase();
+    const authHeader = request.headers[authHeaderName] || '';
     if (authHeader.startsWith('Bearer ')) {
-      context.authenticated = secureCompare(authHeader.slice(7), token);
-      return context.authenticated;
+      credentials.push({ method: 'authorization', value: authHeader.slice(7) });
     }
 
     const customToken = request.headers['x-traecn-token'];
     if (customToken) {
-      context.authenticated = secureCompare(customToken, token);
-      return context.authenticated;
+      credentials.push({ method: 'x-traecn-token', value: customToken });
     }
 
+    if (browserToken !== null) credentials.push({ method: 'subprotocol', value: browserToken });
+    if (credentials.length === 0) return false;
+    if (credentials.some(credential => credential.value !== credentials[0].value)) return false;
+
+    context.authenticated = secureCompare(credentials[0].value, token);
+    context.authMethod = context.authenticated ? credentials[0].method : null;
+    return context.authenticated;
+  }
+
+  _protocolsFromRequest(request) {
+    const raw = request.headers['sec-websocket-protocol'];
+    if (typeof raw !== 'string') return [];
+    return raw.split(',').map(value => value.trim()).filter(Boolean);
+  }
+
+  _decodeBearerProtocol(protocol) {
+    const encoded = protocol.slice(WS_BEARER_PROTOCOL_PREFIX.length);
+    if (!encoded || encoded.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(encoded)) return null;
+    try {
+      const bytes = Buffer.from(encoded, 'base64url');
+      if (bytes.length === 0 || bytes.toString('base64url') !== encoded) return null;
+      const value = bytes.toString('utf8');
+      if (!Buffer.from(value, 'utf8').equals(bytes)) return null;
+      return value;
+    } catch {
+      return null;
+    }
+  }
+
+  _hasQueryCredential(request) {
+    let parsed;
+    try {
+      parsed = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`);
+    } catch {
+      return true;
+    }
+    for (const key of parsed.searchParams.keys()) {
+      if (/token|authorization|api[_-]?key|secret|password|credential|cookie/i.test(key)) return true;
+    }
+    return false;
+  }
+
+  _selectProtocol(protocols, request) {
+    if (
+      request._traecnclawSelectedProtocol === WS_PUBLIC_PROTOCOL &&
+      protocols.has(WS_PUBLIC_PROTOCOL)
+    ) {
+      return WS_PUBLIC_PROTOCOL;
+    }
     return false;
   }
 
@@ -623,6 +691,8 @@ module.exports = {
   WS_MAX_PAYLOAD_BYTES,
   WS_HEARTBEAT_INTERVAL,
   WS_HEARTBEAT_TIMEOUT,
+  WS_PUBLIC_PROTOCOL,
+  WS_BEARER_PROTOCOL_PREFIX,
   WS_MAX_CLIENTS,
   WS_RATE_LIMIT_WINDOW_MS,
   WS_MAX_UPGRADES_PER_WINDOW

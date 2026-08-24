@@ -46,6 +46,9 @@ const handlerModules = [
 // Handler modules are the source of truth for every extracted endpoint above.
 const gatewayRoutes = [
   { method: 'GET', path: '/', handler: '_handleRoot', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
+  { method: 'GET', path: '/assets/web-console/styles.css', handler: '_handleWebConsoleAsset', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
+  { method: 'GET', path: '/assets/web-console/state.js', handler: '_handleWebConsoleAsset', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
+  { method: 'GET', path: '/assets/web-console/app.js', handler: '_handleWebConsoleAsset', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/openapi.json', handler: '_handleOpenApiSpec', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/settings/sections', handler: '_handleSettingsListSections', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/settings/options', handler: '_handleSettingsListOptions', requiresAuth: true, requiresRateLimit: true, requiresBody: false },

@@ -27,6 +27,9 @@ assert.strictEqual(Object.hasOwn(published.scripts, 'test'), false);
 assert.ok(published.files.includes('!docs/CHANNEL-LEDGER.md'));
 assert.ok(published.files.includes('!docs/DISTRIBUTION.md'));
 assert.ok(published.files.includes('!docs/LAUNCH-KIT.md'));
+assert.ok(published.files.includes('src/http/web-console/*.html'));
+assert.ok(published.files.includes('src/http/web-console/*.css'));
+assert.ok(published.files.includes('src/**/*.js'));
 
 const readme = publicReadme({
   packageInfo: source,

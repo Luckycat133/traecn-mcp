@@ -7,14 +7,45 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-24
+
+### Added
+
+- Replaced the legacy chat/diagnostics page with Web Control Console v1, the
+  single responsive human surface for readiness, workspace context, task
+  submission, active progress, exceptional interactions, reviews, recent
+  results, history, and Advanced diagnostics.
+- Added authenticated `GET /api/workspace` context and exact-task
+  `POST /api/task/:taskId/interaction` handling, plus opt-in review requests on
+  the unified task submission route.
+- Added focused console state, behavior, route, WebSocket, packaging, and
+  browser acceptance coverage without changing the ordered 20-tool MCP v5
+  contract.
+
+### Changed
+
+- Served the console from fixed HTML, CSS, and JavaScript assets with
+  event-first WebSocket synchronization, bounded reconnect and polling
+  fallback, deterministic task projection, and responsive native-light layout.
+- Authenticated browser WebSocket sessions through a bearer subprotocol while
+  negotiating only the public `traecnclaw.v1` protocol with the application.
+
 ### Fixed
 
+- Updated deterministic MCPB validation to use the pinned official CLI through
+  the npm 10/11-compatible `--call` execution form.
 - Allowed the Glama Linux inspection image to bypass the scoped package's
   intentional macOS npm platform guard without changing runtime compatibility
   claims; the container remains schema-inspection-only.
 - Removed the redundant Homebrew `:run` dependency qualifier and made the
   formula test use Homebrew's preferred `bin/"traecnclaw-mcp"` path form so the
   published formula passes strict online audit.
+
+### Security
+
+- Kept connection tokens in browser session storage only, omitted them from
+  URLs and rendered fields, applied same-origin authenticated requests, and
+  retained strict CSP and safe DOM rendering for the console assets.
 
 ## [0.5.9] - 2026-08-23
 

@@ -9,7 +9,7 @@ TRAECNclaw is split into maintained components with explicit ownership:
 - `src/cdp`: CDP discovery, WebSocket client, generic DOM driver, settings driver, and mock driver.
 - `src/trae-adapters`: Trae product/version detection, adapter selection, versioned selectors, capability declarations, and sanitized fixture replay.
 - `src/client`: the shared HTTP client and stable command catalog.
-- `src/http`: REST routing and lifecycle, OpenAPI generation, built-in chat UI,
+- `src/http`: REST routing and lifecycle, OpenAPI generation, Web Control Console,
   queue orchestration, and an isolated `CompletionSignal` for durable events,
   WebSocket delivery, OpenClaw messages, and webhooks.
 - `src/mcp`: MCP tool schemas, authorization metadata, handlers, and stdio transport.

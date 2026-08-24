@@ -165,7 +165,7 @@ one operations workspace, and an on-demand inspector drawer:
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ TRAECNclaw  Local · Live  Ready  v0.5.9  TRAECNclaw     Advanced  Connect│
+│ TRAECNclaw  Local · Live  Ready  v0.6.0  TRAECNclaw     Advanced  Connect│
 ├────────────────┬─────────────────────────────────────────┬───────────────┤
 │ Context        │ Operations                              │ Inspector     │
 │ Workspace      │ [Instruction composer                 ] │ Adapter       │

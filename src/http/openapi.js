@@ -408,6 +408,7 @@ function generateOpenAPISpec() {
                     workspace: { type: 'string', description: 'Folder opened and verified by the gateway; never inserted into the message.' },
                     conversationId: { type: 'string' },
                     newConversation: { type: 'boolean' },
+                    reviewRequired: { type: 'boolean', default: false, description: 'Pause the managed task at its final result until an explicit review decision.' },
                     steps: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object' }] } },
                     completionChecks: completionChecksSchema
                   }
@@ -1150,6 +1151,46 @@ function generateOpenAPISpec() {
           }
         }
       },
+      '/api/task/{taskId}/interaction': {
+        post: {
+          summary: 'Resolve the exact current interaction for one tracked task',
+          operationId: 'resolveTaskInteraction',
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['interactionRequestId', 'action'],
+                  properties: {
+                    interactionRequestId: {
+                      type: 'string',
+                      description: 'Exact current interaction identity returned by the task endpoint.'
+                    },
+                    action: { type: 'string', enum: ['approve', 'deny', 'answer', 'dismiss'] },
+                    answer: { type: 'string', description: 'Exact current option label for answer.' },
+                    expectedCommand: { type: 'string', description: 'Exact visible command required for approve.' },
+                    acknowledgeRisk: { type: 'boolean', description: 'Must be true for command approval.' },
+                    reason: { type: 'string', minLength: 1, maxLength: 500, description: 'Required security audit reason for command approval.' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'The identity-bound interaction was resolved' },
+            '400': { description: 'Malformed action or missing action-specific authorization context' },
+            '401': { description: 'Gateway authentication is required' },
+            '404': { description: 'Task not found' },
+            '409': { description: 'Task, interaction identity, command, or visible dialog changed; no action applied' },
+            '501': { description: 'The active adapter cannot verify the visible interaction' }
+          }
+        }
+      },
       '/api/trae/stop-generation': {
         post: {
           summary: 'Stop the visible generation only in a verified active Solo conversation',
@@ -1435,6 +1476,40 @@ function generateOpenAPISpec() {
             '200': { description: 'Batch cancelled' },
             '400': { description: 'Batch cannot be cancelled' },
             '404': { description: 'Batch not found' }
+          }
+        }
+      },
+      '/api/workspace': {
+        get: {
+          summary: 'Read the authenticated TraeCN workspace context',
+          operationId: 'getWorkspaceContext',
+          security: [{ bearerAuth: [] }],
+          responses: {
+            '200': {
+              description: 'Sanitized workspace context and exact-path verification state',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    required: ['folderName', 'rootPath', 'selectedPath', 'title', 'hasExplorer', 'verified'],
+                    properties: {
+                      folderName: { type: 'string', nullable: true },
+                      rootPath: { type: 'string', nullable: true },
+                      selectedPath: { type: 'string', nullable: true },
+                      title: { type: 'string', nullable: true },
+                      hasExplorer: { type: 'boolean' },
+                      verified: {
+                        type: 'boolean',
+                        description: 'True only when the selected workspace guard matches an exact detected root path.'
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            '401': { description: 'Gateway authentication is required' },
+            '501': { description: 'The active adapter cannot read workspace context' },
+            '503': { description: 'Workspace context is temporarily unavailable' }
           }
         }
       },

@@ -20,10 +20,11 @@ published and verified. The following plan decisions are no longer open:
 - architecture, use cases, limitations, video scripts, and post drafts are in
   `docs/LAUNCH-KIT.md`.
 
-Remaining work is authenticated npm/Smithery/Registry/Claude actions, the MCP
+Web Control Console v1 is implemented and mock browser-accepted on the 0.6.0
+candidate without adding a second lifecycle. Remaining work is authenticated npm/Smithery/Registry/Claude actions, the MCP
 Server Hub Google account handoff, recovery of AwesomeSkills.dev's failing
 submission service, directory review/indexing, real launch recording, and
-approved Web Console B-spec/implementation. The strict non-delegating live UAT
+0.6.0 publication. The strict non-delegating live UAT
 now passes with the TRAECNclaw workspace open. Glama sync and its private Node
 22 Build also pass, but no hosted Release exists or should be inferred. Never
 convert the remaining external blockers into claimed completion.
@@ -54,7 +55,7 @@ Use these identities unless a later release deliberately changes them:
 Product: TRAECNclaw MCP
 Public repository: https://github.com/Luckycat133/traecnclaw-mcp-skill
 Canonical source: private Luckycat133/TRAECNclaw
-Current release: 0.5.9; public Release/Homebrew/ClawHub verified
+Current public release: 0.5.9; 0.6.0 Web Control Console candidate under release verification
 Current npm package: @luckycat133/traecnclaw (selected; not yet public)
 Runtime: local stdio MCP server + local HTTP gateway
 Platform: macOS; verified TraeCN 1.107.x (recheck compatibility evidence)
@@ -419,7 +420,7 @@ Give your coding Agent a durable, focused way to operate TraeCN without making t
 Promise:
 
 ```text
-Operate and monitor your own TraeCN from agents today, and from one remote Web Control Console as the human interface matures.
+Operate and monitor your own TraeCN through agents or the same gateway-backed Web Control Console.
 ```
 
 ### MCP developers
@@ -526,8 +527,8 @@ Human Browser -> Web Control Console -> same Local Gateway
    - Do not ask for upvotes or post a marketing landing page.
 
 4. **Product Hunt**
-   - Defer until the Web Control Console and onboarding feel like a complete
-     product rather than only repository metadata.
+   - Web Control Console v1 is complete; defer until public installation and
+     onboarding are independently verified and launch media exists.
    - Prepare a direct product URL, concise description, thumbnail, at least two
      gallery assets, demo video, and a personal first comment.
    - Ask for feedback, never upvotes.

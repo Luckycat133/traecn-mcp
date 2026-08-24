@@ -44,7 +44,7 @@ Edit `.env` for your TraeCN installation path, CDP port, gateway token, and sele
 Upgrading from 0.3.x: read [the 0.5.0 migration guide](docs/MIGRATING-TO-0.5.md)
 before replacing MCP configuration.
 
-Release channels must match. This checkout identifies the 0.5.9 release
+Release channels must match. This checkout identifies the 0.6.0 release
 candidate; it is not a public release until the tagged public mirror, scoped
 npm package, Homebrew formula, MCPB bundle, and directory rows are individually
 verified in the [channel ledger](docs/CHANNEL-LEDGER.md). The unscoped npm
@@ -123,13 +123,18 @@ TRAECN_ENABLE_MOCK_BRIDGE=0 TRAECN_REMOTE_DEBUGGING_PORT=9222 TRAECN_QUICKSTART_
 npm run service:status
 ```
 
-Open the built-in chat UI at:
+Open the Web Control Console at:
 
 ```text
 http://127.0.0.1:8788/
 ```
 
-The chat UI includes a Dev Console panel for gateway status, CDP ownership, mode/readiness, queue/dialog state, recent task history, and OpenAPI contract checks.
+The console is the single human control product for local or authenticated
+private-network use. It shows readiness, workspace/model/mode/conversation
+context, task progress, exceptional interactions, reviews, recent results, and
+an Advanced inspector over the same gateway-owned lifecycle used by MCP and the
+CLI. Connection tokens stay in the browser session only and are never placed in
+the URL.
 
 Diagnose local setup:
 
@@ -499,7 +504,7 @@ evidence.
 
 ## Security
 
-Bind the gateway to `127.0.0.1`, set `TRAECN_GATEWAY_TOKEN` before exposing protected endpoints to browser or tool clients, and configure `TRAECN_ALLOWED_ORIGINS` when using the chat UI from a browser origin other than the gateway. Set `TRAECN_ENFORCE_OPERATION_CONFIRMATION=1` in production to require a matching confirmation plan ID for high-risk settings and dialog operations. Logs redact common sensitive keys such as tokens, passwords, secrets, credentials, and authorization values.
+Bind the gateway to `127.0.0.1`, set `TRAECN_GATEWAY_TOKEN` before exposing protected endpoints to browser or tool clients, and configure `TRAECN_ALLOWED_ORIGINS` when using the Web Control Console from a browser origin other than the gateway. Prefer a private network such as Tailscale or a deliberately configured HTTPS tunnel for remote human access; never expose a tokenless gateway publicly. Set `TRAECN_ENFORCE_OPERATION_CONFIRMATION=1` in production to require a matching confirmation plan ID for high-risk settings and dialog operations. Logs redact common sensitive keys such as tokens, passwords, secrets, credentials, and authorization values.
 
 ## Distribution
 

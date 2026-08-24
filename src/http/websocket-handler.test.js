@@ -6,6 +6,8 @@ const {
   WS_MAX_PAYLOAD_BYTES,
   WS_HEARTBEAT_INTERVAL,
   WS_HEARTBEAT_TIMEOUT,
+  WS_PUBLIC_PROTOCOL,
+  WS_BEARER_PROTOCOL_PREFIX,
   WS_MAX_CLIENTS,
   WS_MAX_UPGRADES_PER_WINDOW
 } = require('./websocket-handler');
@@ -384,6 +386,88 @@ test('WebSocketHandler handles _handleUpgradeAuth with X-TraeCN-Token header', (
   assert.strictEqual(context.authenticated, true);
 });
 
+test('WebSocketHandler authenticates a browser bearer protocol and selects only the public protocol', () => {
+  const token = 'browser-token-你好';
+  const bearerProtocol = WS_BEARER_PROTOCOL_PREFIX + Buffer.from(token, 'utf8').toString('base64url');
+  const handler = new WebSocketHandler({ token, authHeader: 'Authorization' });
+  const request = {
+    url: '/ws/events',
+    headers: {
+      host: '127.0.0.1:8788',
+      'sec-websocket-protocol': `${WS_PUBLIC_PROTOCOL}, ${bearerProtocol}`
+    }
+  };
+  const context = { authenticated: false };
+
+  assert.strictEqual(handler._handleUpgradeAuth(request, context), true);
+  assert.strictEqual(context.authenticated, true);
+  assert.strictEqual(context.authMethod, 'subprotocol');
+  assert.strictEqual(request._traecnclawSelectedProtocol, WS_PUBLIC_PROTOCOL);
+  assert.strictEqual(
+    handler._selectProtocol(new Set([WS_PUBLIC_PROTOCOL, bearerProtocol]), request),
+    WS_PUBLIC_PROTOCOL
+  );
+  assert.notStrictEqual(request._traecnclawSelectedProtocol, bearerProtocol);
+});
+
+test('WebSocketHandler rejects malformed, unversioned, and duplicate browser credentials', () => {
+  const token = 'browser-token';
+  const bearerProtocol = WS_BEARER_PROTOCOL_PREFIX + Buffer.from(token).toString('base64url');
+  const handler = new WebSocketHandler({ token, authHeader: 'Authorization' });
+
+  for (const protocolHeader of [
+    bearerProtocol,
+    `${WS_PUBLIC_PROTOCOL}, ${WS_BEARER_PROTOCOL_PREFIX}%%%`,
+    `${WS_PUBLIC_PROTOCOL}, ${bearerProtocol}, ${bearerProtocol}`
+  ]) {
+    const request = {
+      url: '/ws/events',
+      headers: { host: '127.0.0.1:8788', 'sec-websocket-protocol': protocolHeader }
+    };
+    assert.strictEqual(handler._handleUpgradeAuth(request, { authenticated: false }), false);
+  }
+});
+
+test('WebSocketHandler rejects query-string credentials even with a valid header', () => {
+  const token = 'secret-token';
+  const handler = new WebSocketHandler({ token, authHeader: 'Authorization' });
+  const request = {
+    url: '/ws/events?token=secret-token',
+    headers: {
+      host: '127.0.0.1:8788',
+      authorization: `Bearer ${token}`
+    }
+  };
+  assert.strictEqual(handler._handleUpgradeAuth(request, { authenticated: false }), false);
+  request.url = '/ws/events?gateway_token=secret-token';
+  assert.strictEqual(handler._handleUpgradeAuth(request, { authenticated: false }), false);
+});
+
+test('WebSocketHandler rejects conflicting credential sources and preserves matching header clients', () => {
+  const token = 'secret-token';
+  const wrongProtocol = WS_BEARER_PROTOCOL_PREFIX + Buffer.from('different-token').toString('base64url');
+  const handler = new WebSocketHandler({ token, authHeader: 'Authorization' });
+  const conflict = {
+    url: '/ws/events',
+    headers: {
+      host: '127.0.0.1:8788',
+      authorization: `Bearer ${token}`,
+      'sec-websocket-protocol': `${WS_PUBLIC_PROTOCOL}, ${wrongProtocol}`
+    }
+  };
+  assert.strictEqual(handler._handleUpgradeAuth(conflict, { authenticated: false }), false);
+
+  const matching = {
+    url: '/ws/events',
+    headers: {
+      host: '127.0.0.1:8788',
+      authorization: `Bearer ${token}`,
+      'x-traecn-token': token
+    }
+  };
+  assert.strictEqual(handler._handleUpgradeAuth(matching, { authenticated: false }), true);
+});
+
 test('WebSocketHandler sends task update for queued task', () => {
   const handler = new WebSocketHandler({});
   const mockWs = {
@@ -540,6 +624,101 @@ test('WebSocketHandler subscribe and unsubscribe to task from events endpoint', 
   assert.strictEqual(mockWs.messages.length, 2);
   assert.strictEqual(mockWs.messages[1].type, 'unsubscribed');
   assert.strictEqual(mockWs.messages[1].taskId, 'task1');
+});
+
+asyncTest('WebSocketHandler completes browser subprotocol auth without reflecting the bearer protocol', async () => {
+  const token = 'browser-live-token-你好';
+  const bearerProtocol = WS_BEARER_PROTOCOL_PREFIX + Buffer.from(token, 'utf8').toString('base64url');
+  const gateway = {
+    token,
+    authHeader: 'Authorization',
+    allowedOrigins: '',
+    taskQueue: new Map()
+  };
+  const handler = new WebSocketHandler(gateway);
+  const server = http.createServer((req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  handler.initialize(server);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+
+  try {
+    const selectedProtocol = await new Promise((resolve, reject) => {
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${port}/ws/events`,
+        [WS_PUBLIC_PROTOCOL, bearerProtocol],
+        { origin: `http://127.0.0.1:${port}` }
+      );
+      const timer = setTimeout(() => {
+        ws.close();
+        reject(new Error('browser subprotocol websocket timed out'));
+      }, 1500);
+      ws.on('message', data => {
+        const message = JSON.parse(data.toString());
+        if (message.type !== 'connected') return;
+        clearTimeout(timer);
+        const protocol = ws.protocol;
+        ws.close();
+        resolve(protocol);
+      });
+      ws.on('error', error => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+
+    assert.strictEqual(selectedProtocol, WS_PUBLIC_PROTOCOL);
+    assert.notStrictEqual(selectedProtocol, bearerProtocol);
+  } finally {
+    handler.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+asyncTest('WebSocketHandler preserves Authorization header clients with gateway tokens', async () => {
+  const token = 'header-client-token';
+  const gateway = {
+    token,
+    authHeader: 'Authorization',
+    allowedOrigins: '',
+    taskQueue: new Map()
+  };
+  const handler = new WebSocketHandler(gateway);
+  const server = http.createServer((req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  handler.initialize(server);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+
+  try {
+    const message = await new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const timer = setTimeout(() => {
+        ws.close();
+        reject(new Error('header-auth websocket timed out'));
+      }, 1500);
+      ws.on('message', data => {
+        clearTimeout(timer);
+        const parsed = JSON.parse(data.toString());
+        ws.close();
+        resolve(parsed);
+      });
+      ws.on('error', error => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    assert.strictEqual(message.type, 'connected');
+  } finally {
+    handler.close();
+    await new Promise(resolve => server.close(resolve));
+  }
 });
 
 asyncTest('WebSocketHandler accepts direct task websocket subscriptions on /ws/tasks/:id', async () => {

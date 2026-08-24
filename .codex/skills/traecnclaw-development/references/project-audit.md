@@ -8,6 +8,10 @@ The detailed public-channel facts live in `docs/CHANNEL-LEDGER.md`.
 
 - Canonical release: `0.5.9`, Node.js 22 CommonJS; tag commit `4edb1b3` passed
   the complete local release workflow before both Releases were created.
+- Candidate source: `0.6.0` adds Web Control Console v1; the complete Node 22
+  repository gate and mock browser acceptance pass on the isolated feature
+  branch. Public channels remain 0.5.9 until the candidate is merged, tagged,
+  published, downloaded, and install-tested independently.
 - Canonical repository: private `Luckycat133/TRAECNclaw`.
 - Public distribution repository: public
   `Luckycat133/traecnclaw-mcp-skill`.
@@ -50,8 +54,7 @@ portion is complete. The overall campaign is not complete until the remaining
 external rows are verified. Current blockers are npm/Smithery/Claude
 authentication, the MCP Server Hub Google account handoff, an
 AwesomeSkills.dev submission-service failure, directory review/indexing, real
-launch recording, and owner review of the committed Web Console v1 written
-specification.
+launch recording, and publication of the verified 0.6.0 candidate.
 
 ## Product surfaces
 
@@ -59,7 +62,7 @@ specification.
 | --- | --- | --- | --- |
 | Local gateway | Runtime | Same-Mac TraeCN control, durability, approvals, APIs | Sole owner of task/UI lifecycle mechanics |
 | MCP Skill + stdio | Agents | Primary TraeCN operation | Exactly 20 focused tools; no wait/poll/recovery tools |
-| Web Control Console | Humans | Local or authenticated private-network observation/control | Direction B and its complete design are approved; written specification review pending |
+| Web Control Console | Humans | Local or authenticated private-network observation/control | v1 implemented over the gateway lifecycle; Node tests and desktop/tablet/mobile browser acceptance pass |
 | CLI | Operators/scripts | Setup, doctor, service, recovery, logs, release/live checks | Leading commands simplified; not a second chat product |
 | OpenClaw | OpenClaw users | Ecosystem adapter | No independent lifecycle |
 | REST/JavaScript API | Integrators | Foundation for clients and custom composition | Secondary surface |
@@ -170,10 +173,10 @@ Directories:
 - Official Registry must follow scoped npm, and PulseMCP should ingest it before
   any manual submission.
 
-## Web Control Console plan
+## Web Control Console v1 completion
 
 The existing page remains the only intended human product and reuses gateway
-APIs. The required milestone contains:
+APIs. The completed milestone contains:
 
 - responsive readiness/status header;
 - workspace, model, mode, and conversation context;
@@ -186,11 +189,14 @@ APIs. The required milestone contains:
 - Advanced drawer for adapter, persistence, metrics, logs, OpenAPI, and audit.
 
 The user approved direction B and its complete native macOS light design. The
-written specification is committed at
-`docs/superpowers/specs/2026-08-24-web-control-console-v1-design.md` for owner
-review. Implementation remains paused until that written specification is
-approved and the required writing-plan stage is completed. Do not bypass that
-gate or grow a second lifecycle in the browser.
+written specification and implementation plan are committed under
+`docs/superpowers/`. Fixed same-origin assets now implement that design with
+session-only token handling, authenticated WebSockets, bounded polling
+fallback, exact task-bound actions, safe DOM rendering, responsive layouts,
+keyboard focus return, reduced-motion behavior, and package inclusion. Mock
+browser acceptance passed at 1440x1000, 820x1100, 390x844, and 200% page scale;
+the synthetic-token authentication/reload path also passed. This evidence does
+not replace a future real TraeCN task recording or Claude Desktop host check.
 
 ## Promotion audit
 
@@ -206,7 +212,7 @@ Prepared in `docs/LAUNCH-KIT.md`:
 
 Not yet complete:
 
-- a real 0.5.9 host recording;
+- a real 0.6.0 installed-release host recording;
 - a rendered tutorial;
 - reviewed final URLs/media;
 - public posts or community submissions.
@@ -225,9 +231,8 @@ coordinated votes, or present mock output as live TraeCN evidence.
    AwesomeSkills.dev after its submission service recovers.
 5. Wait for and verify MCP.Directory, mcp.so issue #3717, awesome PR #10724,
    mcpservers.org, and other review/indexing results.
-6. Obtain owner review of the committed Web Console v1 written specification,
-   create the required implementation plan, then implement and run browser
-   acceptance.
+6. Merge and publish the 0.6.0 Web Control Console candidate only after the
+   release gate, then verify every generated artifact and public install path.
 7. Record real launch media; review exact posts at action time and publish.
 
 ## Test and evidence ladder

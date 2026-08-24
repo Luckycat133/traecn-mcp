@@ -5,6 +5,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
+  MCPB_CLI_PACKAGE,
+  quoteNpmCallArg,
+  buildMcpbNpmCall,
   buildMcpbManifest,
   assertNoSecrets,
   sortedStagedFiles
@@ -34,6 +37,16 @@ try {
   assert.deepStrictEqual(manifest.compatibility.platforms, ['darwin']);
   assert.strictEqual(manifest.compatibility.runtimes.node, packageInfo.engines.node);
   assert.strictEqual(manifest.license, 'MIT');
+  assert.strictEqual(MCPB_CLI_PACKAGE, '@anthropic-ai/mcpb@2.1.2');
+  assert.strictEqual(quoteNpmCallArg("path with ' apostrophe"), "'path with '\"'\"' apostrophe'");
+  assert.strictEqual(
+    buildMcpbNpmCall(['validate', '/tmp/manifest path.json']),
+    "'mcpb' 'validate' '/tmp/manifest path.json'"
+  );
+  assert.throws(() => quoteNpmCallArg('bad\0path'), /NUL/);
+  assert.ok(packageInfo.files.includes('src/http/web-console/*.html'));
+  assert.ok(packageInfo.files.includes('src/http/web-console/*.css'));
+  assert.ok(packageInfo.files.includes('src/**/*.js'));
 
   // The 20-tool contract is advertised verbatim.
   assert.deepStrictEqual(manifest.tools.map(tool => tool.name), [...MCP_TOOL_NAMES]);

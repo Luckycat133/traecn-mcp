@@ -2,6 +2,7 @@
 
 const { parseBody } = require('../request-gate');
 const { hasDriverCapability } = require('./helpers');
+const { resolveInteractionBody } = require('./unified-agent');
 
 /**
  * task-actions handlers.
@@ -51,6 +52,17 @@ const ROUTES = [
     },
     {
       "method": "POST",
+      "path": "/api/task/:taskId/interaction",
+      "handler": "_handleTaskInteraction",
+      "requiresAuth": true,
+      "requiresRateLimit": true,
+      "requiresBody": true,
+      "pathParams": [
+        "taskId"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/task/adopt-current",
       "handler": "_handleAdoptCurrentTask",
       "requiresAuth": true,
@@ -58,6 +70,101 @@ const ROUTES = [
       "requiresBody": false
     }
   ];
+
+function normalizedText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function optionLabels(task) {
+  const options = Array.isArray(task?.result?.options) ? task.result.options : [];
+  return options
+    .map(option => typeof option === 'string' ? option : option?.label || option?.text || option?.value)
+    .map(normalizedText)
+    .filter(Boolean);
+}
+
+function visibleInteractionMatches(task, dialog) {
+  if (!dialog || dialog.needsApproval !== true) return false;
+  const expectedType = normalizedText(task?.result?.dialogType);
+  const visibleType = normalizedText(dialog.dialogType);
+  if (expectedType && visibleType && expectedType !== visibleType) return false;
+
+  const expectedCommand = normalizedText(task?.result?.command);
+  const visibleCommand = normalizedText(dialog.command);
+  if (expectedCommand || visibleCommand) {
+    return Boolean(expectedCommand && visibleCommand && expectedCommand === visibleCommand);
+  }
+
+  const expectedQuestion = normalizedText(task?.result?.question || task?.result?.text);
+  const visibleQuestion = normalizedText(dialog.question || dialog.text);
+  return Boolean(expectedQuestion && visibleQuestion && expectedQuestion === visibleQuestion);
+}
+
+async function handleTaskInteraction(req, res, ctx, taskId) {
+  const body = await parseBody(req);
+  const interactionRequestId = normalizedText(body.interactionRequestId);
+  const action = normalizedText(body.action).toLowerCase();
+  if (!interactionRequestId) {
+    return ctx._json(req, res, { error: 'interactionRequestId is required' }, 400);
+  }
+  if (!['approve', 'deny', 'answer', 'dismiss'].includes(action)) {
+    return ctx._json(req, res, { error: 'action must be approve, deny, answer, or dismiss' }, 400);
+  }
+  if (action === 'answer' && !normalizedText(body.answer)) {
+    return ctx._json(req, res, { error: 'answer is required for question interactions' }, 400);
+  }
+
+  const resolve = async () => {
+    const task = ctx.taskQueue.get(taskId);
+    if (!task) return ctx._json(req, res, { error: 'Task not found' }, 404);
+    if (task.status !== 'approval_required') {
+      return ctx._json(req, res, {
+        error: 'task_interaction_conflict',
+        message: 'The task is no longer awaiting this interaction.',
+        status: task.status
+      }, 409);
+    }
+    if (normalizedText(task.interactionRequestId) !== interactionRequestId) {
+      return ctx._json(req, res, {
+        error: 'task_interaction_conflict',
+        message: 'The visible interaction changed; refresh the task before deciding.'
+      }, 409);
+    }
+
+    await ctx._ensureConnection();
+    if (!ctx.driver || typeof ctx.driver.checkForApprovalDialog !== 'function') {
+      return ctx._json(req, res, {
+        error: 'interaction_verification_unsupported',
+        message: 'The active adapter cannot verify the visible interaction.'
+      }, 501);
+    }
+    const dialog = await ctx.driver.checkForApprovalDialog();
+    if (!visibleInteractionMatches(task, dialog)) {
+      return ctx._json(req, res, {
+        error: 'task_interaction_conflict',
+        message: 'The visible interaction changed; refresh the task before deciding.'
+      }, 409);
+    }
+
+    if (action === 'answer') {
+      const answer = normalizedText(body.answer);
+      const labels = optionLabels(task);
+      if (labels.length > 0 && !labels.includes(answer)) {
+        return ctx._json(req, res, {
+          error: 'answer_option_mismatch',
+          message: 'The answer must exactly match a current option label.'
+        }, 400);
+      }
+      body.answer = answer;
+    }
+    body.action = action;
+    return resolveInteractionBody(body, req, res, ctx, { taskId, dialog });
+  };
+
+  return typeof ctx._withUiActionLock === 'function'
+    ? ctx._withUiActionLock(resolve)
+    : resolve();
+}
 
 async function handleTaskStatus(req, res, ctx, taskId) {
   let detailLevel = 'result';
@@ -389,4 +496,12 @@ async function handleAdoptCurrentTask(req, res, ctx) {
   }, 202);
 }
 
-module.exports = { ROUTES, handleTaskStatus, handleTaskReview, handleTaskCancel, handleAdoptCurrentTask };
+module.exports = {
+  ROUTES,
+  visibleInteractionMatches,
+  handleTaskInteraction,
+  handleTaskStatus,
+  handleTaskReview,
+  handleTaskCancel,
+  handleAdoptCurrentTask
+};

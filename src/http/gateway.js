@@ -11,7 +11,7 @@ const { discoverTarget, connectToTarget, resolveCDPEndpoint, fetchCDPTargets, de
 const { DomDriver, getConfig } = require('../cdp/dom-driver');
 const { MockDriver } = require('../cdp/mock-driver');
 const { TraeCNAutomationError } = require('../cdp/errors');
-const { renderChatUI } = require('./chat-ui');
+const { WEB_CONSOLE_CSP, getWebConsoleAsset, renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
 const { parsePositiveInt, sanitizeLog, isGenericQueueProbeTask, isLoopbackHost } = require('../shared/utils');
 const { errorToHttpStatus, errorToBody, safeErrorMessage } = require('./error-mapping');
@@ -41,7 +41,7 @@ const {
 // after the helpers moved to ./request-gate. The real implementation lives
 // in request-gate.js; this is a one-line shim kept for readability.
 const { redactUrl: _redactUrl } = require('./request-gate');
-const { normalizeUrl, jsonResponse, htmlResponse, parseBody, secureCompare, RateLimiter } = require('./request-gate');
+const { normalizeUrl, jsonResponse, htmlResponse, staticResponse, parseBody, secureCompare, RateLimiter } = require('./request-gate');
 const { TaskQueueService } = require('./task-queue-service');
 const { TaskOrchestrator } = require('./task-orchestrator');
 const { resolveTaskStorePath } = require('./task-store');
@@ -1653,7 +1653,19 @@ class Gateway {
   }
 
   _handleRoot(req, res) {
-    return this._html(req, res, renderChatUI());
+    return this._html(req, res, renderChatUI(), 200, {
+      'Content-Security-Policy': WEB_CONSOLE_CSP
+    });
+  }
+
+  _handleWebConsoleAsset(req, res) {
+    const pathname = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`).pathname;
+    const asset = getWebConsoleAsset(pathname);
+    if (!asset) return this._json(req, res, { error: 'Not found' }, 404);
+    return staticResponse(res, asset.body, asset.contentType, 200, {
+      ...this._corsHeaders(req),
+      'Content-Security-Policy': WEB_CONSOLE_CSP
+    });
   }
 
   _handleOpenApiSpec(req, res) {
@@ -2432,6 +2444,10 @@ class Gateway {
     return projectHandlers.handleOpenProject(req, res, this);
   }
 
+  async _handleWorkspaceContext(req, res) {
+    return projectHandlers.handleWorkspaceContext(req, res, this);
+  }
+
   async _handleUpdateSelf(req, res) {
     return projectHandlers.handleUpdateSelf(req, res, this);
   }
@@ -2844,6 +2860,10 @@ class Gateway {
 
   async _handleTaskCancel(req, res, taskId) {
     return taskActionsHandlers.handleTaskCancel(req, res, this, taskId);
+  }
+
+  async _handleTaskInteraction(req, res, taskId) {
+    return taskActionsHandlers.handleTaskInteraction(req, res, this, taskId);
   }
 
   async _handleBatchSubmit(req, res) {
@@ -3283,12 +3303,13 @@ class Gateway {
     });
   }
 
-  _resumeApprovalRequiredTasksAfterDialogAnswer(answer, result = {}) {
+  _resumeApprovalRequiredTasksAfterDialogAnswer(answer, result = {}, expectedTaskId = null) {
     const resumedTaskIds = [];
     const answeredAt = Date.now();
 
     for (const [taskId, task] of this.taskQueue) {
       if (task.status !== 'approval_required') continue;
+      if (expectedTaskId && taskId !== expectedTaskId) continue;
 
       const dialogType = String(task.result?.dialogType || '');
       const question = String(task.result?.question || '');
@@ -3326,10 +3347,11 @@ class Gateway {
     return resumedTaskIds;
   }
 
-  _resumeApprovalRequiredTasksAfterInteraction(action, dialog = {}, result = {}) {
+  _resumeApprovalRequiredTasksAfterInteraction(action, dialog = {}, result = {}, expectedTaskId = null) {
     const normalizedCommand = String(dialog.command || '').replace(/\s+/g, ' ').trim();
     const candidates = Array.from(this.taskQueue.entries())
       .filter(([, task]) => task.status === 'approval_required')
+      .filter(([taskId]) => !expectedTaskId || taskId === expectedTaskId)
       .filter(([, task]) => {
         if (!normalizedCommand) return true;
         const taskInteractionText = String(task.result?.question || task.result?.text || '')

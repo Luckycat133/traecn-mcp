@@ -209,6 +209,13 @@ function request(body, headers = {}) {
     autoApproveDialog: 'auto'
   });
 
+  snapshotCalls.length = 0;
+  await handleSubmit(request({
+    message: 'Require a final review',
+    reviewRequired: true
+  }), {}, snapshotCtx);
+  assert.strictEqual(snapshotCalls[0].reviewRequired, true);
+
   const listRes = {};
   await handleListConversations(request({}), listRes, ctx);
   assert.deepStrictEqual(listRes.body, {
@@ -302,6 +309,11 @@ function request(body, headers = {}) {
   const spec = generateOpenAPISpec();
   assert.ok(spec.paths['/api/tasks/submit']?.post);
   assert.ok(spec.paths['/api/tasks/submit'].post.responses['503']);
+  assert.strictEqual(
+    spec.paths['/api/tasks/submit'].post.requestBody.content['application/json']
+      .schema.properties.reviewRequired.default,
+    false
+  );
   assert.ok(spec.paths['/api/status'].get.responses['200']
     .content['application/json'].schema.properties.durability);
   assert.ok(spec.paths['/api/models']?.get);

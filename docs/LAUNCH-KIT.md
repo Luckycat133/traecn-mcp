@@ -1,4 +1,4 @@
-# TRAECNclaw 0.5.9 Launch Kit
+# TRAECNclaw 0.6.0 Launch Kit
 
 This is prepared source material, not proof that a video or post is public.
 Replace every `<verified-...>` placeholder only after the corresponding channel
@@ -6,8 +6,8 @@ row in `CHANNEL-LEDGER.md` is verified.
 
 ## Product sentence
 
-TRAECNclaw gives MCP-capable agents a focused, durable way to operate coding
-tasks in the TraeCN desktop app running on the user's own Mac.
+TRAECNclaw gives agents and people one durable local gateway for operating and
+observing coding tasks in the TraeCN desktop app running on the user's own Mac.
 
 ## Architecture and trust boundary
 
@@ -78,7 +78,7 @@ return to normal task flow. Never approve destructive work in a demo.
 
 ## 60–90 second demo shot list
 
-Target duration: 75 seconds. Record a fresh 0.5.9 installation; do not splice in
+Target duration: 75 seconds. Record a fresh 0.6.0 installation; do not splice in
 old-version footage.
 
 1. **0–8 s — premise:** TraeCN and the MCP host visible on one Mac; overlay
@@ -87,8 +87,9 @@ old-version footage.
    then `traecnclaw doctor` with secrets and personal paths cropped.
 3. **20–30 s — discovery:** MCP host lists 20 tools; briefly show first
    `traecn_send_message` and last `traecn_decide_approval`.
-4. **30–52 s — task:** send a harmless task in a disposable sample workspace;
-   show the task ID and TraeCN receiving the instruction.
+4. **30–52 s — task:** use the Web Control Console to send a harmless task in a
+   disposable sample workspace; show the exact task ID and TraeCN receiving the
+   instruction.
 5. **52–65 s — durability:** switch away while the gateway waits, then return to
    the completed task/result without a second submission.
 6. **65–75 s — close:** show public repository, exact limitation card, and one
@@ -98,7 +99,7 @@ Acceptance before export:
 
 - terminal, notifications, browser tabs, and TraeCN reveal no tokens, email,
   private repository content, or unrelated user data;
-- version 0.5.9 and public URL are readable;
+- version 0.6.0 and public URL are readable;
 - recording shows the real host and task, not mock bridge output;
 - audio/video decode scan passes and no unexplained black segment remains;
 - captions do not say “hosted”, “cross-platform”, or imply untested versions.
@@ -144,14 +145,15 @@ Invite issue reports with TraeCN version and sanitized doctor output.
 
 ## Chinese launch draft
 
-> TRAECNclaw 0.5.9：让 MCP Agent 在你自己的 Mac 上操作 TraeCN。
+> TRAECNclaw 0.6.0：让 MCP Agent 和你本人在自己的 Mac 上操作 TraeCN。
 >
 > 它不是云端代跑服务，而是一套本地优先的 MCP Server + Agent Skill：20
 > 个单一意图工具负责工作区、模型、模式、会话、任务和异常交互；队列等待、
 > 持久化、重启恢复与完成通知统一交给本地 gateway。
 >
-> 本次发行补齐了可验证的 MCPB、作用域 npm 包、Homebrew、Registry 元数据和
-> 多目录统一文案。当前验证边界是 macOS、Node.js 22、TraeCN 1.107.x，本地
+> 本次发行加入了同一 gateway 驱动的 Web Control Console：可查看就绪状态、
+> 工作区上下文、任务进度、异常交互、审查结果和高级诊断；连接 token 仅保留
+> 在浏览器会话中。当前验证边界是 macOS、Node.js 22、TraeCN 1.107.x，本地
 > stdio 运行；目录扫描容器不能远程接管你的 Mac。
 >
 > 安装与限制：<verified-release-url>
@@ -160,15 +162,15 @@ Invite issue reports with TraeCN version and sanitized doctor output.
 
 ## Global launch draft
 
-> TRAECNclaw 0.5.9 connects MCP-capable agents to TraeCN running on your own
-> Mac. Its 20-tool, single-intent surface handles workspace, model, mode,
-> conversation, task, and exceptional-interaction intents while one local
-> gateway owns queues, persistence, recovery, and completion delivery.
+> TRAECNclaw 0.6.0 connects MCP-capable agents and one Web Control Console to
+> TraeCN running on your own Mac. Its 20-tool, single-intent Agent surface and
+> human console share one local gateway that owns queues, persistence,
+> recovery, approvals, and completion delivery.
 >
 > This is a local stdio product—not a hosted cloud bridge. The verified release
-> boundary is macOS, Node.js 22, and TraeCN 1.107.x. Version 0.5.9 adds a
-> validated deterministic MCPB, scoped npm packaging, stronger Homebrew tests,
-> Official Registry metadata generation, and consistent directory copy.
+> boundary is macOS, Node.js 22, and TraeCN 1.107.x. Version 0.6.0 adds the
+> responsive Web Control Console with session-only authentication, exact task
+> identity, event-first progress, reviews, and Advanced diagnostics.
 >
 > Install and limitations: <verified-release-url>
 > Demo: <verified-demo-url>

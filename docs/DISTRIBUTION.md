@@ -171,8 +171,8 @@ ID configuration. Build and validate it with:
 
 ```sh
 npm run build:mcpb
-npm exec --yes --package=@anthropic-ai/mcpb@2.1.2 -- \
-  mcpb validate dist/traecnclaw-mcp-<version>.mcpb
+npm exec --package=@anthropic-ai/mcpb@2.1.2 \
+  --call='mcpb validate dist/traecnclaw-mcp-<version>.mcpb'
 ```
 
 Install the exact bundle into a clean compatible desktop host and verify all 20

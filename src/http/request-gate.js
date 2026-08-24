@@ -39,7 +39,13 @@ const DEFAULT_HTML_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline' 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+};
+
+const DEFAULT_STATIC_HEADERS = {
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer'
 };
 
 // 1 MiB body cap. Anything bigger becomes a 413 HttpError so the connection
@@ -210,6 +216,15 @@ function htmlResponse(res, html, statusCode = 200, headers = {}) {
   res.end(html);
 }
 
+function staticResponse(res, body, contentType, statusCode = 200, headers = {}) {
+  res.writeHead(statusCode, {
+    ...DEFAULT_STATIC_HEADERS,
+    'Content-Type': contentType,
+    ...headers
+  });
+  res.end(body);
+}
+
 /**
  * Resolve the rate-limit identity for a request.
  *
@@ -349,6 +364,7 @@ module.exports = {
   parseBody,
   jsonResponse,
   htmlResponse,
+  staticResponse,
   resolveRateLimitKey,
   // Class
   RateLimiter,

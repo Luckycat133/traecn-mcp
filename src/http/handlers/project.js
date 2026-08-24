@@ -19,6 +19,14 @@ const { readRuntimeEnv } = require('../../config/runtime-schema');
 
 const ROUTES = [
     {
+      "method": "GET",
+      "path": "/api/workspace",
+      "handler": "_handleWorkspaceContext",
+      "requiresAuth": true,
+      "requiresRateLimit": true,
+      "requiresBody": false
+    },
+    {
       "method": "POST",
       "path": "/api/open-project",
       "handler": "_handleOpenProject",
@@ -35,6 +43,77 @@ const ROUTES = [
       "requiresBody": true
     }
   ];
+
+function cleanString(value, maxLength) {
+  const cleaned = Array.from(String(value || ''), character => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127 ? ' ' : character;
+  }).join('').trim();
+  return cleaned ? cleaned.slice(0, maxLength) : null;
+}
+
+async function handleWorkspaceContext(req, res, ctx) {
+  if (ctx.mockBridge) {
+    const selectedPath = cleanString(ctx._selectedWorkspacePath, 4096) || '/mock/TRAECNclaw';
+    return ctx._json(req, res, {
+      folderName: 'TRAECNclaw',
+      rootPath: selectedPath,
+      selectedPath,
+      title: 'TRAECNclaw — Mock workspace',
+      hasExplorer: true,
+      verified: true
+    });
+  }
+
+  try {
+    await ctx._ensureConnection();
+    if (!ctx.driver || typeof ctx.driver.getWorkspaceContext !== 'function') {
+      return ctx._json(req, res, {
+        error: 'Workspace context is not supported by the active adapter',
+        code: 'WORKSPACE_CONTEXT_UNSUPPORTED',
+        folderName: null,
+        rootPath: null,
+        selectedPath: cleanString(ctx._selectedWorkspacePath, 4096),
+        title: null,
+        hasExplorer: false,
+        verified: false
+      }, 501);
+    }
+
+    const workspace = await ctx.driver.getWorkspaceContext();
+    const rootPath = cleanString(workspace?.rootPath, 4096);
+    const selectedPath = cleanString(ctx._selectedWorkspacePath, 4096);
+    let verified = false;
+    if (rootPath && selectedPath && typeof ctx._assertProjectWorkspace === 'function') {
+      try {
+        const assertion = await ctx._assertProjectWorkspace(selectedPath);
+        verified = Boolean(assertion?.currentPath && assertion.currentPath === assertion.requestedPath);
+      } catch {
+        verified = false;
+      }
+    }
+
+    return ctx._json(req, res, {
+      folderName: cleanString(workspace?.folderName, 512),
+      rootPath,
+      selectedPath,
+      title: cleanString(workspace?.title, 512),
+      hasExplorer: workspace?.hasExplorer === true,
+      verified
+    });
+  } catch {
+    return ctx._json(req, res, {
+      error: 'Workspace context is temporarily unavailable',
+      code: 'WORKSPACE_CONTEXT_UNAVAILABLE',
+      folderName: null,
+      rootPath: null,
+      selectedPath: cleanString(ctx._selectedWorkspacePath, 4096),
+      title: null,
+      hasExplorer: false,
+      verified: false
+    }, 503);
+  }
+}
 
 async function handleOpenProject(req, res, ctx) {
   const body = await parseBody(req);
@@ -235,4 +314,4 @@ async function handleUpdateSelf(req, res, ctx) {
   }, 200);
 }
 
-module.exports = { ROUTES, handleOpenProject, handleUpdateSelf };
+module.exports = { ROUTES, handleWorkspaceContext, handleOpenProject, handleUpdateSelf };

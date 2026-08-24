@@ -23,6 +23,16 @@ const FIXED_MTIME = new Date('2026-01-01T00:00:00Z');
 const REPO_ROOT = path.resolve(__dirname, '..');
 const MCPB_CLI_PACKAGE = '@anthropic-ai/mcpb@2.1.2';
 
+function quoteNpmCallArg(value) {
+  const text = String(value);
+  if (text.includes('\0')) throw new Error('npm call arguments cannot contain NUL bytes');
+  return `'${text.replace(/'/g, "'\"'\"'")}'`;
+}
+
+function buildMcpbNpmCall(args) {
+  return ['mcpb', ...args].map(quoteNpmCallArg).join(' ');
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd || REPO_ROOT,
@@ -184,11 +194,20 @@ function buildMcpb({ outDir, revision, packageInfo }) {
     }
     pinMtimes(stagingRoot);
     fs.rmSync(outPath, { force: true });
-    const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-    const mcpbArgs = ['exec', '--yes', `--package=${MCPB_CLI_PACKAGE}`, '--', 'mcpb'];
-    run(npmCommand, [...mcpbArgs, 'validate', path.join(stagingRoot, 'manifest.json')]);
+    // npm 11 removed the historical `npm exec --yes --package ... --` form.
+    // `--call` works across the supported npm eras; quote each generated path
+    // before npm invokes the pinned official CLI through the POSIX shell.
+    if (process.platform === 'win32') {
+      throw new Error('MCPB release packaging requires the supported macOS/POSIX environment');
+    }
+    const npmCommand = 'npm';
+    const mcpbArgs = ['exec', `--package=${MCPB_CLI_PACKAGE}`, '--call'];
+    run(npmCommand, [
+      ...mcpbArgs,
+      buildMcpbNpmCall(['validate', path.join(stagingRoot, 'manifest.json')])
+    ]);
     const officialPackPath = path.join(workRoot, path.basename(outPath));
-    run(npmCommand, [...mcpbArgs, 'pack', stagingRoot, officialPackPath]);
+    run(npmCommand, [...mcpbArgs, buildMcpbNpmCall(['pack', stagingRoot, officialPackPath])]);
 
     // The official packer currently stamps every ZIP entry with the build
     // time. Normalize its exact selected file set after packing so release
@@ -243,6 +262,8 @@ if (require.main === module) {
 module.exports = {
   FIXED_MTIME,
   MCPB_CLI_PACKAGE,
+  quoteNpmCallArg,
+  buildMcpbNpmCall,
   buildMcpb,
   buildMcpbManifest,
   assertNoSecrets,

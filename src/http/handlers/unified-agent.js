@@ -90,6 +90,7 @@ async function handleSubmit(req, res, ctx) {
   let projectPath = typeof body.workspace === 'string' && body.workspace.trim() ? body.workspace.trim() : null;
   let soloChat = parseConversationId(body.conversationId);
   const followupTasks = normalizeSteps(body.steps);
+  const reviewRequired = body.reviewRequired === true;
   const requestIntent = {
     task: message,
     ...(projectPath ? { projectPath } : {}),
@@ -100,7 +101,7 @@ async function handleSubmit(req, res, ctx) {
     followupTasks,
     ...(body.completionChecks ? { completionChecks: body.completionChecks } : {}),
     autoContinue: true,
-    reviewRequired: false,
+    reviewRequired,
     autoApproveDialog: 'auto'
   };
   const idempotencyFingerprint = idempotencyKey
@@ -152,7 +153,7 @@ async function handleSubmit(req, res, ctx) {
     followupTasks,
     ...(body.completionChecks ? { completionChecks: body.completionChecks } : {}),
     autoContinue: true,
-    reviewRequired: false,
+    reviewRequired,
     autoApproveDialog: 'auto'
   };
   const task = ctx._createQueuedTask(queuedBody, {
@@ -266,8 +267,7 @@ async function handleManageConversation(req, res, ctx) {
   });
 }
 
-async function handleResolveInteraction(req, res, ctx) {
-  const body = await parseBody(req);
+async function resolveInteractionBody(body, req, res, ctx, options = {}) {
   const action = String(body.action || '');
   if (!['approve', 'deny', 'answer', 'dismiss'].includes(action)) {
     return ctx._json(req, res, { error: 'action must be approve, deny, answer, or dismiss' }, 400);
@@ -280,11 +280,15 @@ async function handleResolveInteraction(req, res, ctx) {
     }
     result = await ctx.driver.answerQuestionDialog(body.answer);
     if (result.success === true && typeof ctx._resumeApprovalRequiredTasksAfterDialogAnswer === 'function') {
-      result.resumedTaskIds = ctx._resumeApprovalRequiredTasksAfterDialogAnswer(body.answer, result);
+      result.resumedTaskIds = ctx._resumeApprovalRequiredTasksAfterDialogAnswer(
+        body.answer,
+        result,
+        options.taskId || null
+      );
     }
   } else {
-    let dialog = null;
-    if (typeof ctx.driver.checkForApprovalDialog === 'function') {
+    let dialog = options.dialog || null;
+    if (!dialog && typeof ctx.driver.checkForApprovalDialog === 'function') {
       dialog = await ctx.driver.checkForApprovalDialog();
     }
     if (action === 'approve') {
@@ -317,9 +321,14 @@ async function handleResolveInteraction(req, res, ctx) {
     }
     result = await ctx.driver.approveDialog(action);
     if (result.success === true && typeof ctx._resumeApprovalRequiredTasksAfterInteraction === 'function') {
-      result.resumedTaskIds = ctx._resumeApprovalRequiredTasksAfterInteraction(action, dialog, result);
+      result.resumedTaskIds = ctx._resumeApprovalRequiredTasksAfterInteraction(
+        action,
+        dialog,
+        result,
+        options.taskId || null
+      );
     }
-    auditSecurityAction(ctx, req, 'interaction.approval_decision', 'trae:current-dialog', {
+    auditSecurityAction(ctx, req, 'interaction.approval_decision', options.taskId ? `trae:task:${options.taskId}` : 'trae:current-dialog', {
       decision: action,
       reason: typeof body.reason === 'string' ? body.reason.trim() : null,
       risk: dialog?.commandRisk || null,
@@ -329,12 +338,21 @@ async function handleResolveInteraction(req, res, ctx) {
   return ctx._json(req, res, result, result.success === false ? 409 : 200);
 }
 
+async function handleResolveInteraction(req, res, ctx) {
+  const body = await parseBody(req);
+  const resolve = () => resolveInteractionBody(body, req, res, ctx);
+  return typeof ctx._withUiActionLock === 'function'
+    ? ctx._withUiActionLock(resolve)
+    : resolve();
+}
+
 module.exports = {
   ROUTES,
   parseConversationId,
   stableConversationTitle,
   conversationId,
   normalizeSteps,
+  resolveInteractionBody,
   handleSubmit,
   handleListModels,
   handleListConversations,
