@@ -50,7 +50,8 @@ portion is complete. The overall campaign is not complete until the remaining
 external rows are verified. Current blockers are npm/Smithery/Claude
 authentication, the MCP Server Hub Google account handoff, an
 AwesomeSkills.dev submission-service failure, directory review/indexing, real
-launch recording, and complete Web Console B-spec approval.
+launch recording, and owner review of the committed Web Console v1 written
+specification.
 
 ## Product surfaces
 
@@ -58,7 +59,7 @@ launch recording, and complete Web Console B-spec approval.
 | --- | --- | --- | --- |
 | Local gateway | Runtime | Same-Mac TraeCN control, durability, approvals, APIs | Sole owner of task/UI lifecycle mechanics |
 | MCP Skill + stdio | Agents | Primary TraeCN operation | Exactly 20 focused tools; no wait/poll/recovery tools |
-| Web Control Console | Humans | Local or authenticated private-network observation/control | Selected human product; design approval pending |
+| Web Control Console | Humans | Local or authenticated private-network observation/control | Direction B and its complete design are approved; written specification review pending |
 | CLI | Operators/scripts | Setup, doctor, service, recovery, logs, release/live checks | Leading commands simplified; not a second chat product |
 | OpenClaw | OpenClaw users | Ecosystem adapter | No independent lifecycle |
 | REST/JavaScript API | Integrators | Foundation for clients and custom composition | Secondary surface |
@@ -184,9 +185,11 @@ APIs. The required milestone contains:
 - authenticated private-network guidance;
 - Advanced drawer for adapter, persistence, metrics, logs, OpenAPI, and audit.
 
-The user selected direction B: a native macOS light control surface.
-Implementation remains paused until the complete design is approved, written
-and committed, and the written specification is reviewed. Do not bypass that
+The user approved direction B and its complete native macOS light design. The
+written specification is committed at
+`docs/superpowers/specs/2026-08-24-web-control-console-v1-design.md` for owner
+review. Implementation remains paused until that written specification is
+approved and the required writing-plan stage is completed. Do not bypass that
 gate or grow a second lifecycle in the browser.
 
 ## Promotion audit
@@ -222,8 +225,9 @@ coordinated votes, or present mock output as live TraeCN evidence.
    AwesomeSkills.dev after its submission service recovers.
 5. Wait for and verify MCP.Directory, mcp.so issue #3717, awesome PR #10724,
    mcpservers.org, and other review/indexing results.
-6. Obtain complete Web Console B-spec approval, commit and review the written
-   specification, then implement and run browser acceptance.
+6. Obtain owner review of the committed Web Console v1 written specification,
+   create the required implementation plan, then implement and run browser
+   acceptance.
 7. Record real launch media; review exact posts at action time and publish.
 
 ## Test and evidence ladder
@@ -279,7 +283,7 @@ time, and findings in `docs/CHANNEL-LEDGER.md`.
 - npm, Smithery, Registry, and Claude Desktop authentication where requested;
 - Google sign-in/OAuth for MCP Server Hub and recovery of the
   AwesomeSkills.dev submission service;
-- complete Web Console B-spec and written-spec approval;
+- owner approval of the committed Web Console written specification;
 - a real local TraeCN task plus recording review for final media;
 - third-party review/indexing time.
 

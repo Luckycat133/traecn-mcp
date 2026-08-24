@@ -67,7 +67,7 @@ verified listing, and a directory scan is not a runtime test.
 | Five-minute tutorial | Script prepared; no new verified recording | Record clean installation, MCP host connection, task, result, and recovery | blocked-external |
 | Chinese/global launch posts | Drafts prepared; not posted | Insert verified links/media, review exact payload, obtain confirmation, post | blocked-external |
 | Live TraeCN compatibility | Public MCP `traecn_open_workspace` selected the canonical repository; DOM inspection and strict non-delegating UAT passed against TraeCN 1.107.1 with verified adapter `traecn-1.107` | Repeat for future TraeCN/release compatibility claims; this run did not send a model task or spend quota | verified |
-| Web Control Console v1 | The user selected direction B, a native macOS light control surface. The existing dark three-column chat/dev page and current gateway APIs have been audited | Approve the complete B specification, commit it, obtain written-spec review, then implement and run browser acceptance without adding a second lifecycle | blocked-external |
+| Web Control Console v1 | Direction B and its complete native macOS light design are approved. The written specification is committed at `docs/superpowers/specs/2026-08-24-web-control-console-v1-design.md`; implementation has not started | Obtain owner review of the written specification, create the required implementation plan, then implement and run browser acceptance without adding a second lifecycle | blocked-external |
 
 ## Resume checklist
 
@@ -83,5 +83,5 @@ verified listing, and a directory scan is not a runtime test.
    hosted Release deliberately absent.
 5. Preserve the now-passing live UAT evidence and re-run it only when the
    release or supported TraeCN version changes.
-6. Obtain complete Web Console B-spec approval before implementation; record/review real
-   launch media and exact post payloads before public posting.
+6. Review the committed Web Console written specification before implementation;
+   record/review real launch media and exact post payloads before public posting.
