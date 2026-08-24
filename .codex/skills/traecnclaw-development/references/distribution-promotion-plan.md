@@ -20,11 +20,13 @@ published and verified. The following plan decisions are no longer open:
 - architecture, use cases, limitations, video scripts, and post drafts are in
   `docs/LAUNCH-KIT.md`.
 
-Remaining work is authenticated npm/Smithery/Registry/Claude actions, confirmed
-browser submissions, directory review/indexing, a strict live UAT with the
-TRAECNclaw workspace actually open, real launch recording, and approved Web
-Console design/implementation. Never convert those external blockers into
-claimed completion.
+Remaining work is authenticated npm/Smithery/Registry/Claude actions, the MCP
+Server Hub Google account handoff, recovery of AwesomeSkills.dev's failing
+submission service, directory review/indexing, real launch recording, and
+approved Web Console B-spec/implementation. The strict non-delegating live UAT
+now passes with the TRAECNclaw workspace open. Glama sync and its private Node
+22 Build also pass, but no hosted Release exists or should be inferred. Never
+convert the remaining external blockers into claimed completion.
 
 ## Principles
 
@@ -89,13 +91,16 @@ These establish machine-readable identity and feed other indexes:
   reconcile it with a new version instead of creating a case-only duplicate.
 - PulseMCP — normally ingested from the Official Registry; manually submit only
   if ingestion does not occur.
-- Glama — selected for claim, schema inspection, score, and directory listing.
+- Glama — maintainers verified, public mirror synced to `5ad3a3e`, and private
+  0.5.9/20-tool Build verified. No hosted Release or public score exists by
+  design.
 
 ### Skill discovery channels
 
 - skills.sh — public detail page and clean 0.5.9 install are verified; the
   site's generated `Cross-platform` JSON-LD conflicts with canonical macOS copy.
-- AwesomeSkills.dev — exact payload prepared; final submit confirmation remains.
+- AwesomeSkills.dev — exact deep Skill payload was confirmed and attempted, but
+  the site returned a repeatable network error and created no entry.
 - MCP.Directory Skill listing — already submitted; pending review.
 - Additional Skill directories may be syndicated later when submission is free,
   transparent, and does not require maintaining duplicate code.
@@ -105,8 +110,9 @@ These establish machine-readable identity and feed other indexes:
 - MCP.Directory Server listing — already submitted; pending review.
 - punkpeye/awesome-mcp-servers — selected after Glama listing/score and exact
   install copy are ready.
-- mcp.so — selected as a secondary directory.
-- MCP Server Hub (`mcpserver.dev`) — selected as a secondary directory.
+- mcp.so — issue #3717 is submitted and pending review.
+- MCP Server Hub (`mcpserver.dev`) — exact anonymous form attempt did not
+  create a record; Google account sign-in is required.
 - mcpservers.org and AllMCPs — low-cost syndication after higher-signal listings.
 
 ### Channels deliberately deferred or rejected

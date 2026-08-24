@@ -24,6 +24,12 @@ The detailed public-channel facts live in `docs/CHANNEL-LEDGER.md`.
 - Canonical `main` contains post-release Glama inspection and strict Homebrew
   audit fixes. Those later commits are separate from the immutable 0.5.9 server
   bytes; the generated public mirror carries the Glama fix on its `main`.
+- The local LaunchAgent now runs the canonical 0.5.9 source. Doctor passes, the
+  TRAECNclaw workspace is open in TraeCN, and strict non-delegating live UAT
+  passes against TraeCN 1.107.1 with verified adapter `traecn-1.107`.
+- Glama is synced to public mirror commit `5ad3a3e`; its private Node 22 Build
+  test passed with server version 0.5.9 and exactly 20 tools. No hosted Glama
+  Release was created.
 
 ## Completion verdict
 
@@ -39,12 +45,12 @@ distribution implementation now covers:
 - scoped-package discovery from the portable Skill launcher;
 - canonical listing copy, release runbook, channel ledger, and launch drafts.
 
-The verified source/Release/Homebrew/ClawHub/Skills/Glama-preflight portion is
-complete. The overall campaign is not complete until the remaining external
-rows are verified. Current blockers are npm/Smithery/Claude authentication,
-action-time confirmation for browser submissions and Glama sync/build,
-directory review/indexing, a live UAT with this repository actually open in
-TraeCN, real launch recording, and Web Console design approval.
+The verified source/Release/Homebrew/ClawHub/Skills/Glama-private-build/live-UAT
+portion is complete. The overall campaign is not complete until the remaining
+external rows are verified. Current blockers are npm/Smithery/Claude
+authentication, the MCP Server Hub Google account handoff, an
+AwesomeSkills.dev submission-service failure, directory review/indexing, real
+launch recording, and complete Web Console B-spec approval.
 
 ## Product surfaces
 
@@ -100,24 +106,23 @@ Still not selected:
   `io.github.Luckycat133/traecnclaw@0.3.1`; it uses the historical unscoped
   package and legacy variables, so 0.5.9 must update that identity rather than
   create a lowercase duplicate.
-- Glama has an existing maintainer-verified listing, but it was last synced at
-  public commit `d81c119` and still renders 0.5.6, so it is not current
-  acceptance evidence.
+- Glama's existing maintainer-verified listing is synced to public mirror
+  commit `5ad3a3e`; its Overview now renders canonical 0.5.9 copy with no
+  removed tool-profile guidance.
 - A no-cache Glama Linux inspection build reproduced npm's intentional Darwin
   platform rejection. The canonical inspection-only override then built from
   the public 0.5.9 archive, negotiated MCP, and returned exactly 20 tools without
   changing package platform claims.
-- The current Glama-generated `mcp-proxy` build shape was also reproduced
-  locally with Node.js 22 and the public 0.5.9 archive. It reported server
-  version 0.5.9 and exactly 20 tools; a real tool call without a user gateway
-  returned the expected actionable `ECONNREFUSED 127.0.0.1:8788` error rather
-  than mock output. Manual Sync and private Build still require action-time
-  confirmation; a hosted Glama Release remains deliberately excluded.
+- The current Glama-generated `mcp-proxy` build shape was first reproduced
+  locally, then verified by private Glama Build
+  `01a03167-9fc1-7cb1-ae25-504060a86421` with Node.js 22, pinned public commit
+  `5ad3a3e`, server version 0.5.9, and exactly 20 tools. A hosted Glama Release
+  remains deliberately excluded because it could not reach the user's Mac.
 - MCP.Directory Skill and Server submissions already exist in review; do not
   submit duplicates.
-- mcpservers.org already has a page but still renders 0.5.6 documentation. Its
-  one-click public update request was sent on 2026-08-24 and the page now shows
-  `Requested`; verification waits for the site's refresh/indexing pass.
+- mcpservers.org already has a page but still renders 0.5.8 provenance. Its
+  one-click public update request was re-sent on 2026-08-24 and the page now
+  shows `Requested`; verification waits for the site's refresh/indexing pass.
 
 ### 0.5.9 packaging acceptance
 
@@ -153,7 +158,13 @@ Directories:
 
 - canonical payloads are checked in for AwesomeSkills.dev, MCP Server Hub,
   mcp.so, and Glama correction;
-- final public submit/claim actions require action-time confirmation;
+- Glama sync/private Build passed without creating a hosted Release;
+- mcp.so issue #3717 is pending review;
+- existing `punkpeye/awesome-mcp-servers` PR #10724 has accurate macOS-only
+  copy and passing checks; its maintainer must decide whether to waive the
+  hosted-Glama-score requirement for a local-only server;
+- AwesomeSkills.dev returned a repeatable submission network error, and MCP
+  Server Hub requires Google sign-in before its prepared form can be accepted;
 - Smithery Local requires the exact verified MCPB and current account login;
 - Official Registry must follow scoped npm, and PulseMCP should ingest it before
   any manual submission.
@@ -173,9 +184,10 @@ APIs. The required milestone contains:
 - authenticated private-network guidance;
 - Advanced drawer for adapter, persistence, metrics, logs, OpenAPI, and audit.
 
-The required brainstorming workflow is active. Implementation is paused until
-the user chooses and approves a design direction/spec. Do not bypass that gate
-or grow a second lifecycle in the browser.
+The user selected direction B: a native macOS light control surface.
+Implementation remains paused until the complete design is approved, written
+and committed, and the written specification is reviewed. Do not bypass that
+gate or grow a second lifecycle in the browser.
 
 ## Promotion audit
 
@@ -206,15 +218,13 @@ coordinated votes, or present mock output as live TraeCN evidence.
 2. Publish validated Official Registry metadata; inspect PulseMCP ingestion.
 3. Install the exact MCPB in a logged-in Claude Desktop and publish Smithery
    Local after Smithery authentication.
-4. With action-time confirmation, sync Glama, run its private schema-inspection
-   Build without creating a hosted Release, and complete the prepared
-   directory/update submissions without duplicates.
-5. Re-run strict live UAT with TRAECNclaw open in TraeCN. Current doctor, DOM,
-   readiness, and verified 1.107.1 adapter checks pass; the session phase
-   correctly rejected the unrelated `empty-project` workspace.
-6. Wait for and verify MCP.Directory and other review/indexing results.
-7. Obtain Web Console design approval, implement it, and run browser acceptance.
-8. Record real launch media; review exact posts at action time and publish.
+4. Complete the MCP Server Hub Google account handoff and retry
+   AwesomeSkills.dev after its submission service recovers.
+5. Wait for and verify MCP.Directory, mcp.so issue #3717, awesome PR #10724,
+   mcpservers.org, and other review/indexing results.
+6. Obtain complete Web Console B-spec approval, commit and review the written
+   specification, then implement and run browser acceptance.
+7. Record real launch media; review exact posts at action time and publish.
 
 ## Test and evidence ladder
 
@@ -266,12 +276,11 @@ time, and findings in `docs/CHANNEL-LEDGER.md`.
 
 ## User or external input still required
 
-- action-time confirmation for Glama sync/private Build and public directory
-  submits;
 - npm, Smithery, Registry, and Claude Desktop authentication where requested;
-- Web Console design-direction/spec approval;
-- a real local TraeCN session for final media and any fresh live compatibility
-  claim;
+- Google sign-in/OAuth for MCP Server Hub and recovery of the
+  AwesomeSkills.dev submission service;
+- complete Web Console B-spec and written-spec approval;
+- a real local TraeCN task plus recording review for final media;
 - third-party review/indexing time.
 
 These are tracked blockers, not authorization to invent substitute evidence or

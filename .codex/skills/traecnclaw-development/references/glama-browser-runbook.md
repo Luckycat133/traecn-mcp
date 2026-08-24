@@ -25,6 +25,27 @@ Not selected in this pass:
 - changing the private canonical repository visibility;
 - creating a new runtime transport solely for Glama.
 
+## Executed evidence — 2026-08-24
+
+- Existing listing:
+  `https://glama.ai/mcp/servers/Luckycat133/traecnclaw-mcp-skill`.
+- Maintainer verification is active for `Luckycat133`; no duplicate claim was
+  submitted.
+- Manual sync reached public mirror commit `5ad3a3e`; the Overview shows
+  canonical 0.5.9 copy and no removed tool-profile text.
+- Private Build `01a03167-9fc1-7cb1-ae25-504060a86421` succeeded with Node.js
+  22, pinned public commit
+  `5ad3a3e18aac63cffa8f61ba792c427a2fd897b5`, server version 0.5.9, and the
+  exact 20-tool contract.
+- No `Build & Release`, `Create Release`, token, or mock mode was used.
+- The public Schema/Score has no hosted release or tool-quality grade. Glama
+  requires a hosted release for those grades, which remains deliberately
+  unselected for this local-Mac product.
+- Public mirror issue #1 was reconciled and closed; issue #2 remains open only
+  for canonical-sync credentials/Actions work. Existing upstream awesome-list
+  PR #10724 contains corrected macOS-only metadata and the local-only score
+  exception request.
+
 ## Repository preflight
 
 Before opening Glama, verify the public repository in the browser or GitHub:
