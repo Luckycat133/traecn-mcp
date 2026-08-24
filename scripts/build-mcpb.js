@@ -48,8 +48,8 @@ function run(command, args, options = {}) {
   return result.stdout;
 }
 
-function buildMcpbManifest({ version, description, keywords }) {
-  return {
+function buildMcpbManifest({ version, description, keywords, includeToolSummaries = true }) {
+  const manifest = {
     manifest_version: '0.3',
     name: 'traecnclaw-mcp',
     display_name: 'TRAECNclaw MCP',
@@ -110,13 +110,16 @@ function buildMcpbManifest({ version, description, keywords }) {
         required: false
       }
     },
-    tools: MCP_TOOLS.map(tool => ({ name: tool.name, description: tool.description })),
-    tools_generated: false,
     compatibility: {
       platforms: ['darwin'],
       runtimes: { node: '>=22' }
     }
   };
+  if (includeToolSummaries) {
+    manifest.tools = MCP_TOOLS.map(tool => ({ name: tool.name, description: tool.description }));
+    manifest.tools_generated = false;
+  }
+  return manifest;
 }
 
 function sortedStagedFiles(stagingRoot) {
@@ -137,10 +140,11 @@ function sha256File(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
-function buildMcpb({ outDir, revision, packageInfo }) {
+function buildMcpb({ outDir, revision, packageInfo, smitheryCompatible = false }) {
   const workRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'traecn-mcpb-'));
   const stagingRoot = path.join(workRoot, 'staging');
-  const outPath = path.join(outDir, `traecnclaw-mcp-${packageInfo.version}.mcpb`);
+  const suffix = smitheryCompatible ? '-smithery' : '';
+  const outPath = path.join(outDir, `traecnclaw-mcp-${packageInfo.version}${suffix}.mcpb`);
   try {
     fs.mkdirSync(stagingRoot, { recursive: true });
     fs.mkdirSync(outDir, { recursive: true });
@@ -177,7 +181,12 @@ function buildMcpb({ outDir, revision, packageInfo }) {
     const manifest = buildMcpbManifest({
       version: packageInfo.version,
       description: packageInfo.description,
-      keywords: [...packageInfo.keywords]
+      keywords: [...packageInfo.keywords],
+      // Smithery CLI 4.11.1 incorrectly validates MCPB's optional tool
+      // summaries as full MCP tool definitions. Omitting the optional array
+      // preserves official MCPB 0.3 conformance; Smithery discovers the real
+      // 20-tool contract from the running server after import.
+      includeToolSummaries: !smitheryCompatible
     });
     fs.writeFileSync(path.join(stagingRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
     assertNoSecrets(stagingRoot);
@@ -230,6 +239,7 @@ function buildMcpb({ outDir, revision, packageInfo }) {
       sourceRevision: revision,
       deterministicMtime: FIXED_MTIME.toISOString()
     };
+    if (smitheryCompatible) meta.smitheryCompatible = true;
     fs.writeFileSync(
       path.join(outDir, `${path.basename(outPath)}.meta.json`),
       `${JSON.stringify(meta, null, 2)}\n`,
@@ -253,7 +263,8 @@ if (require.main === module) {
   const { outPath, meta } = buildMcpb({
     outDir: path.resolve(argValue('--out') || path.join(REPO_ROOT, 'dist')),
     revision: argValue('--revision') || revisionResult.stdout.trim(),
-    packageInfo
+    packageInfo,
+    smitheryCompatible: process.argv.includes('--smithery-compatible')
   });
   console.log(`[build-mcpb] Wrote ${outPath}`);
   console.log(`[build-mcpb] sha256=${meta.sha256} bytes=${meta.bytes} revision=${meta.sourceRevision}`);
