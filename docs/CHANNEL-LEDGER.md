@@ -23,11 +23,11 @@ verified listing, and a directory scan is not a runtime test.
 
 | Channel | Current public state | Target 0.6.0 state | Evidence / next exact step | Status |
 | --- | --- | --- | --- | --- |
-| Canonical source | Immutable `v0.5.9` resolves to `4edb1b3`; the approved Web Control Console design is on `main`, and the 0.6.0 implementation is isolated on `feat/web-control-console-v1` | Merge one reviewable 0.6.0 source commit line only after Node 22 release gates | Complete the feature PR, verify CI, merge, then tag the exact merge result | ready |
+| Canonical source | Immutable `v0.6.0` and `origin/main` resolve to merge commit `40bcf7707ed9b0ff7938aea8e511d0b87d300705`; PR [#34](https://github.com/Luckycat133/TRAECNclaw/pull/34) is merged | Keep the tagged source and generated release manifest immutable | Node 22 `test:release` passed from the exact clean merge result before tagging | verified |
 | Local LaunchAgent gateway | `com.traecnclaw.gateway` is loaded from the canonical checkout, owns `127.0.0.1:8788`, and reports live version 0.5.9 | Keep the long-running local service aligned with the checked-out release | Recovered a competing non-launchd listener, confirmed the final listener has PPID 1, then passed doctor and strict non-delegating live UAT | verified |
-| Canonical GitHub Release | Private [`v0.5.9`](https://github.com/Luckycat133/TRAECNclaw/releases/tag/v0.5.9) contains the previous six verified assets | Private `v0.6.0` carries the exact generated artifacts and provenance manifest | Create only from the verified tag, download every asset, and compare size/SHA-256/source revision | ready |
-| Public mirror | Public [`v0.5.9`](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v0.5.9) contains six verified assets; `main@5ad3a3e` carries the last canonical inspection fix | Regenerated public source and `v0.6.0` assets match the canonical release manifest | Regenerate from the exact canonical tag, push/tag/release, then download and compare all assets | ready |
-| Scoped npm | `@luckycat133/traecnclaw` is not published | Public 0.6.0 with verified `mcpName`, Darwin restriction, bins, 20 tools, and Web Control Console assets | Complete npm CLI web login, publish the generated tarball, then perform a registry-origin clean-prefix test | blocked-external |
+| Canonical GitHub Release | Private [`v0.6.0`](https://github.com/Luckycat133/TRAECNclaw/releases/tag/v0.6.0) contains all six generated assets from tag `v0.6.0`; every downloaded asset was byte-compared and its SHA-256 matches the release manifest | Preserve the verified immutable release | Release tarball SHA-256 is `ae7c2a9170e4525bb2b0bab8f9009c8a19ce7b68ff298bbceccc9e6fbbeb9f33`; MCPB SHA-256 is `437a8ff85c8ab377c709cf6446739809a0112ddf1731ea1b85dda1eb00480e00` | verified |
+| Public mirror | Public [`v0.5.9`](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v0.5.9) remains the latest public release; the 0.6.0 mirror has been regenerated locally from canonical commit `40bcf77` and passes the mirror verifier | Publish only after the scoped npm install command in its generated README is true | After npm verification, push/tag/release, then download and compare all six public assets | ready |
+| Scoped npm | `@luckycat133/traecnclaw` is not published. The npm website session is authenticated, but the configured CLI token returns `E401` from `npm whoami`; the exact local tarball publish reaches the registry and is denied with `E404`/no package permission | Public 0.6.0 with verified `mcpName`, Darwin restriction, bins, 20 tools, and Web Control Console assets | Restore CLI publishing permission, publish `./dist/traecnclaw-0.6.0.tgz`, then perform a registry-origin clean-prefix test | blocked-external |
 | Historical npm | Unscoped `traecnclaw@0.3.1` is still `latest` | Deprecation message points to scoped package; never republish current code here | Requires npm ownership/auth after scoped package is verified | blocked-external |
 | MCPB artifact | Public 0.5.9 MCPB SHA-256 is `05baf8549ba75386b7f6586138608334d7a5d261109c2d24c2f35c231990dd1e`; official validation, deterministic rebuild, release download, and clean-room 20-tool discovery passed | Deterministic 0.6.0 bundle includes the fixed console assets and preserves the 20-tool manifest | Build twice during `test:release`, then compare public downloads before any host/listing claim | ready |
 | Claude Desktop MCPB host | Claude Desktop is installed but was logged out during verification | Exact 0.6.0 bundle installed and 20 tools visible | This is an independent authenticated host check; it is not required for npm or the core release | blocked-external |
@@ -66,15 +66,16 @@ verified listing, and a directory scan is not a runtime test.
 | 60–90 second demo | Shot list updated for 0.6.0; no new verified recording | Record a real local TraeCN task and Web Control Console flow after final 0.6.0 install, redact and review | blocked-external |
 | Five-minute tutorial | Script prepared; no new verified recording | Record clean installation, MCP host connection, task, result, and recovery | blocked-external |
 | Chinese/global launch posts | Drafts prepared; not posted | Insert verified links/media, review exact payload, obtain confirmation, post | blocked-external |
-| Live TraeCN compatibility | Public MCP `traecn_open_workspace` selected the canonical repository; DOM inspection and strict non-delegating UAT passed against TraeCN 1.107.1 with verified adapter `traecn-1.107` | Repeat for future TraeCN/release compatibility claims; this run did not send a model task or spend quota | verified |
-| Web Control Console v1 | Direction B, specification, implementation plan, fixed assets, authenticated APIs/WebSockets, exact task interactions, package coverage, and mock browser acceptance are complete on the 0.6.0 candidate | Preserve one gateway-owned lifecycle and repeat live/browser checks after installation from the final public artifact | verified |
+| Live TraeCN compatibility | From exact tag `v0.6.0`, DOM inspection and strict non-delegating UAT passed against the open `empty-project` workspace in TraeCN 1.107.1 with verified adapter `traecn-1.107`; readiness, two logical sessions, settings reads, SOLO chat reads, and cleanup dry-run all passed | Repeat for future TraeCN/release compatibility claims; this run did not send a model task or spend quota | verified |
+| Web Control Console v1 | Direction B, specification, implementation plan, fixed assets, authenticated APIs/WebSockets, exact task interactions, package coverage, mock browser acceptance, and clean release artifact tests are shipped in `v0.6.0` | Repeat the browser check after installation from the final public artifact | verified |
 
 ## Resume checklist
 
-1. Merge, tag, and publish the exact 0.6.0 candidate; regenerate the public
-   mirror and verify every downloaded artifact against its manifest.
-2. Complete npm CLI web login, publish and clean-test the scoped package, then
-   deprecate the historical unscoped package if ownership permits.
+1. Restore npm CLI package permission, publish and clean-test the scoped package,
+   then push/tag/release the already regenerated public mirror and verify every
+   downloaded artifact against its manifest.
+2. After the scoped package is verified, deprecate the historical unscoped
+   package if ownership permits.
 3. Publish the already validated Official Registry metadata and wait for
    PulseMCP ingestion.
 4. Log into Claude Desktop, install the exact MCPB, then authenticate and
