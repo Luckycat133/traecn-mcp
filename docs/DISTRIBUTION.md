@@ -180,6 +180,20 @@ tools before publishing it through Smithery Local. Smithery URL mode is not
 valid because TRAECNclaw does not expose a public Streamable HTTP service.
 Record the Smithery page, bundle digest, downloaded digest, host, and tool count.
 
+Smithery CLI 4.11.1 validates the optional MCPB `manifest.tools` summaries as
+full MCP tool definitions and rejects official MCPB 0.3 summaries that contain
+only `name` and `description`. Build the explicitly named compatibility bundle
+when that defect is present:
+
+```bash
+npm run build:mcpb -- --smithery-compatible
+```
+
+This variant omits only the optional manifest summaries. It keeps the same
+server, version, local stdio transport, macOS restriction, and runtime 20-tool
+contract. Record its separate digest and never substitute it for the immutable
+GitHub Release MCPB. After publication, the Smithery page must say `Local`.
+
 ## Homebrew
 
 Render the formula from the clean release manifest:

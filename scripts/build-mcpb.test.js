@@ -55,6 +55,18 @@ try {
   assert.strictEqual(manifest.tools_generated, false);
   assert.strictEqual(MCP_CONTRACT_VERSION, 5);
 
+  // Smithery CLI 4.11.1 rejects valid MCPB 0.3 summary entries because it
+  // expects full inputSchema objects. Its compatibility bundle omits only the
+  // optional manifest summary; runtime discovery still supplies all 20 tools.
+  const smitheryManifest = buildMcpbManifest({
+    version: packageInfo.version,
+    description: packageInfo.description,
+    keywords: [...packageInfo.keywords],
+    includeToolSummaries: false
+  });
+  assert.strictEqual(Object.hasOwn(smitheryManifest, 'tools'), false);
+  assert.strictEqual(Object.hasOwn(smitheryManifest, 'tools_generated'), false);
+
   // Every ${user_config.*} reference maps to a declared option, and every
   // declared option is referenced; only the token is sensitive.
   const envValues = Object.values(manifest.server.mcp_config.env);
