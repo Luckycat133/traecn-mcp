@@ -1,6 +1,6 @@
 # TRAECNclaw Channel Ledger
 
-Last checked: 2026-08-24 (Asia/Shanghai). Target release: 0.6.0.
+Last checked: 2026-08-25 (Asia/Shanghai). Target release: 0.6.0.
 
 Status meanings:
 
@@ -48,7 +48,7 @@ verified listing, and a directory scan is not a runtime test.
 | MCP.Directory Skill | Submission was already sent. A full 2026-08-24 pass over the public Skills API (9,291 rows at inspection time) found no `traecn` match | Wait and inspect; reconcile if rejected, never duplicate | pending-review |
 | MCP.Directory Server | Submission was already sent. A full 2026-08-24 pass over the public Servers API (2,303 rows at inspection time) found no `traecn` match | Wait and inspect the generated install path; reconcile if rejected | pending-review |
 | AwesomeSkills.dev | No exact entry exists. The confirmed deep Skill URL was submitted twice, but the site returned `Network error. Please try again.` and created no listing | Retry the same deep URL only after the submission service recovers, then inspect parsed name/platform/source/install fields | preflight-failed |
-| MCP Server Hub (`mcpserver.dev`) | No exact entry exists. The anonymous form was filled with canonical URL/title/description/category/keywords, but it created no record; the account page requires Google sign-in | Complete the explicit Google account/OAuth handoff, submit once, then inspect the generated listing and install copy | blocked-external |
+| MCP Server Hub (`mcpserver.dev`) | [`TRAECNclaw MCP`](https://mcpserver.dev/s/traecnclaw-mcp_dflmqfc) is publicly listed as a Developer Tools MCP server and appears in Recently added. Inspection confirmed the canonical public repository, generated 0.6.0 scoped npm and Homebrew commands, Skill install command, local stdio/macOS boundary, exact 20-tool description, and explicit rejection of historical npm 0.3.1 | Preserve the public mirror identity and current generated copy | verified |
 | mcp.so | Public issue [chatmcp/mcpso#3717](https://github.com/chatmcp/mcpso/issues/3717) requests the current local stdio/macOS listing and explicitly rejects the historical unscoped package | Wait for directory maintainers, then inspect and correct the generated listing rather than opening a duplicate | pending-review |
 | mcpservers.org | [Existing page](https://mcpservers.org/servers/luckycat133/traecnclaw-mcp-skill) still renders 0.5.8 provenance. Its one-click refresh action was re-sent on 2026-08-24 and the page now shows `Requested`; the control exposed no preview or custom-message step | Wait for the crawler, then verify 0.5.9 version/install/platform copy; reconcile rather than submit a duplicate | pending-review |
 | Smithery legacy Skill page | The existing identity now resolves to the current Local/MCPB server listing | Keep the published Local listing distinct from URL/cloud execution claims | listed |
@@ -81,9 +81,8 @@ verified listing, and a directory scan is not a runtime test.
 4. Wait for Glama support to remove the unintended hosted `0.6.0` Release that
    is backed by the stale 0.5.9 build, then inspect the public page; preserve the
    correct private 0.6.0 Build test.
-5. Retry AwesomeSkills.dev after its submission API recovers and complete the
-   MCP Server Hub Google account handoff. Monitor mcp.so issue #3717, awesome
-   PR #10724, MCP.Directory, and mcpservers.org without duplicates. Keep Glama
-   hosted Release deliberately absent.
+5. Retry AwesomeSkills.dev after its submission API recovers. Monitor mcp.so
+   issue #3717, awesome PR #10724, MCP.Directory, and mcpservers.org without
+   duplicates. Keep Glama hosted Release deliberately absent.
 6. Re-run strict non-delegating live UAT against the installed 0.6.0 release;
    record/review real launch media and exact post payloads before public posting.

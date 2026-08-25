@@ -4,10 +4,11 @@ Use this plan for public packaging, directory submission, browser-Agent handoff,
 launch content, and post-publication verification. Recheck every channel before
 acting; marketplace requirements and public versions change independently.
 
-## Execution status — 2026-08-24
+## Execution status — 2026-08-25
 
-The 0.5.9 source/Release/public-mirror/Homebrew/ClawHub/Skills portion is
-published and verified. The following plan decisions are no longer open:
+The 0.6.0 source, Releases, public mirror, npm, Official Registry, Homebrew,
+ClawHub, Skills CLI, and MCP Server Hub listing are published and verified. The
+following plan decisions are no longer open:
 
 - public npm identity is `@luckycat133/traecnclaw`;
 - MCPB uses the official schema/CLI and deterministic packaging;
@@ -20,14 +21,14 @@ published and verified. The following plan decisions are no longer open:
 - architecture, use cases, limitations, video scripts, and post drafts are in
   `docs/LAUNCH-KIT.md`.
 
-Web Control Console v1 is implemented and mock browser-accepted on the 0.6.0
-candidate without adding a second lifecycle. Remaining work is authenticated npm/Smithery/Registry/Claude actions, the MCP
-Server Hub Google account handoff, recovery of AwesomeSkills.dev's failing
-submission service, directory review/indexing, real launch recording, and
-0.6.0 publication. The strict non-delegating live UAT
-now passes with the TRAECNclaw workspace open. Glama sync and its private Node
-22 Build also pass, but no hosted Release exists or should be inferred. Never
-convert the remaining external blockers into claimed completion.
+Web Control Console v1 is shipped in 0.6.0 without adding a second lifecycle.
+Smithery Local is published but its generated Quick Start is precisely blocked
+by Smithery CLI's keychain defect. Remaining work is recovery of
+AwesomeSkills.dev's failing submission service, directory review/indexing,
+Glama support removal of a misleading hosted Release, optional Claude host
+acceptance, and real launch recording/posting. Strict non-delegating live UAT
+passes against TraeCN 1.107.1. Never convert the remaining external blockers
+into claimed completion.
 
 ## Principles
 
@@ -112,8 +113,8 @@ These establish machine-readable identity and feed other indexes:
 - punkpeye/awesome-mcp-servers — selected after Glama listing/score and exact
   install copy are ready.
 - mcp.so — issue #3717 is submitted and pending review.
-- MCP Server Hub (`mcpserver.dev`) — exact anonymous form attempt did not
-  create a record; Google account sign-in is required.
+- MCP Server Hub (`mcpserver.dev`) — the 0.6.0 listing is public and its
+  generated npm, Homebrew, Skill, local stdio/macOS, and 20-tool copy is verified.
 - mcpservers.org and AllMCPs — low-cost syndication after higher-signal listings.
 
 ### Channels deliberately deferred or rejected
