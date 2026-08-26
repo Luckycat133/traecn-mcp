@@ -4,6 +4,25 @@
 >
 > **TRAECNclaw is the canonical source repository.** Packages, the Agent Skill, OpenClaw metadata, and GitHub Releases are generated and versioned from this repository.
 
+> ## ⚠️ Deprecation Notice — Unscoped npm Package (2026-08-26)
+>
+> The **unscoped** npm package `traecnclaw` (versions `0.3.0`, `0.3.1`) is
+> **deprecated as of 2026-08-26**. New work, including `v0.6.0` and all
+> subsequent releases, is published under the **scoped** package
+> `@traecnclaw/traecnclaw`.
+>
+> If your project still depends on the unscoped name, migrate to the scoped
+> package:
+>
+> ```bash
+> npm uninstall traecnclaw
+> npm install @traecnclaw/traecnclaw
+> ```
+>
+> The scoped package is the only supported install target going forward. The
+> unscoped package is no longer maintained, will not receive updates, and is
+> scheduled for removal from npm.
+
 Focused MCP gateway and Agent Skill for TraeCN desktop automation. MCP is the
 primary Agent entry point; the CLI supports development and live validation,
 the built-in web UI provides diagnostics, and OpenClaw remains an ecosystem

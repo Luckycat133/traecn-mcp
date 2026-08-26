@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Changed
+
+- **Deprecated unscoped npm package `traecnclaw`** (versions `0.3.0`, `0.3.1`)
+  as of 2026-08-26. New work — including `v0.6.0` and all subsequent releases —
+  is published under the **scoped** package `@traecnclaw/traecnclaw`. The
+  unscoped name is no longer maintained, will not receive updates, and is
+  scheduled for removal from npm. Users depending on the unscoped name should
+  migrate to the scoped package:
+  `npm uninstall traecnclaw && npm install @traecnclaw/traecnclaw`.
+
 ## [0.6.0] - 2026-08-24
 
 ### Added
