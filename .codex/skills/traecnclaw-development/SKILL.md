@@ -13,6 +13,8 @@ Act as the repository maintainer. Reconstruct current truth from source and exec
 
 Read only the references relevant to the task:
 
+- [references/task-recovery.md](references/task-recovery.md): missing completion, accepted-task recovery, duplicate-send risk, and host/runtime evidence.
+
 - [references/project-audit.md](references/project-audit.md): current product state, selected work, tests, and experience paths.
 - [references/mcp-product-design.md](references/mcp-product-design.md): public MCP contract, metadata, schemas, annotations, task support, errors, and quality tests.
 - [references/distribution-promotion-plan.md](references/distribution-promotion-plan.md): package, registry, directory, browser-Agent, launch, and measurement plan.
@@ -62,7 +64,7 @@ Do not convert every possible feature or directory into required work.
 
 ### Completion campaign
 
-Use when asked to finish all selected work. Build a dependency-ordered ledger, implement every unblocked `confirmed-bug`, `missing-required`, and explicitly `selected-next` item with coherent commits, and continue after each green patch. Stop only when no local selected item remains, relevant gates pass, and every external blocker has exact resume steps and expected evidence.
+Use when asked to finish all selected work. Build a dependency-ordered ledger, implement every unblocked `confirmed-bug`, `missing-required`, and explicitly `selected-next` item as coherent changes; create commits only when the user authorizes them, and continue after each green patch. Stop only when no local selected item remains, relevant gates pass, and every external blocker has exact resume steps and expected evidence.
 
 ### Browser-Agent channel handoff
 
@@ -80,8 +82,8 @@ Glama uses its dedicated runbook. Other directories and launch platforms use `di
 
 Before substantial work:
 
-1. Read `AGENTS.md`, `package.json`, recent commits, open PRs/issues, `CHANGELOG.md`, current tag, downloadable Releases, this Skill, and owning source/tests.
-2. Compare canonical source, tag, private provenance Release, public mirror Release, ClawHub, Glama, skills.sh, Smithery, npm, Official MCP Registry, PulseMCP, Homebrew, and other directories separately.
+1. Read `AGENTS.md`, this Skill, and the affected source/tests or documentation. Inspect package metadata, recent history, PRs/issues, changelog, tags, and Releases when needed to resolve the current task.
+2. For distribution or current channel claims, compare the affected canonical source, tags, Releases, packages, and directories separately. Unrelated local work does not require a survey of every channel.
 3. Continue matching branches/PRs rather than creating duplicates.
 4. Run the nearest baseline test; for broad work run `npm run verify:static` early.
 5. Treat invisible private CI as missing evidence, not a code blocker; run local equivalent gates.
@@ -110,20 +112,11 @@ At the 2026-08-21 review, source line 0.5.6 is publicly distributed through the 
 
 Extend the existing owner and delete the previous path after moving callers.
 
-## Current development order
+## Select current work
 
-Unless the user selects another target:
+Use the current request, current source/tests and the affected issue or release state to choose work. `references/project-audit.md` and earlier channel plans are dated evidence, not a standing instruction to resume promotion, submit listings, publish packages, or rebuild unrelated surfaces. Reconcile completed milestones before choosing the next one.
 
-1. **Complete Glama readiness.** Validate PR #21 and public PR #7, sync the mirror, then run claim, sync, schema inspection, and score review.
-2. **MCP metadata quality pass.** Preserve 20 names/semantics while adding accurate titles, descriptions, reusable output schemas, annotations, explicit task support, structured errors, and metadata tests.
-3. **Immediate Skill/MCP discovery.** Verify skills.sh installation and submit AwesomeSkills.dev plus MCP.Directory Skill and Server listings; then selected secondary directories.
-4. **MCPB and Smithery.** Build a reproducible one-click local bundle, install it in a real host, and publish through Smithery's local/MCPB flow.
-5. **Authoritative package and Registry.** Deliberately resolve the old npm 0.3.1 surface, publish a current public package, then publish to the Official MCP Registry and verify PulseMCP ingestion.
-6. **Homebrew Mac install.** Add a trusted third-party tap only after the current package/archive path is stable and testable.
-7. **Web Control Console v1.** Productize the existing page as the single human control surface over existing APIs.
-8. **First-run and CLI reduction.** Lead with MCP setup for agents and web for humans; demote duplicate CLI commands without breaking compatibility.
-9. **Promotion campaign.** Produce the canonical demo/tutorial/architecture kit, launch first in the TRAE community and visual channels, then global developer channels when trial friction is low.
-10. **Evidence-driven maintenance and architecture.** Fix reproduced regressions; move another Gateway lifecycle slice only when characterization tests prove a maintenance benefit.
+For task acceptance, restart, notification or duplicate-send failures, use [task recovery](references/task-recovery.md). Diagnose the owning layer before creating another task or broadening the public tool contract.
 
 ## MCP design rules
 
@@ -143,7 +136,7 @@ Follow `mcp-product-design.md`. In particular:
 
 Follow `distribution-promotion-plan.md`.
 
-- Public GitHub mirror + ClawHub remain the current verified pair.
+- Public GitHub mirror and ClawHub have historical verification records; recheck the exact release and install path before making a current claim.
 - Glama, skills.sh, AwesomeSkills.dev, MCP.Directory, MCPB/Smithery, the Official Registry, PulseMCP, Homebrew, curated lists, and secondary directories are separate milestones with separate evidence.
 - The Official Registry requires a current public installation method; never point it at npm 0.3.1.
 - Smithery uses the local MCPB flow unless a real Streamable HTTP product is selected.
@@ -163,6 +156,8 @@ Follow `distribution-promotion-plan.md`.
 - MCP contributor communities are for technical collaboration, not unsolicited launch marketing.
 
 ## Verification ladder
+
+Start with the affected behavior and expand for risk, failures, or changed contracts. This is an evidence ladder, not a requirement to run every level for every task. Preserve full protocol/package/release gates when those contracts are affected; documentation-only changes use focused content checks.
 
 1. `node path/to/focused.test.js`
 2. subsystem tests such as MCP conformance, adapters, system, stdio smoke, mirror, MCPB, package, or web tests

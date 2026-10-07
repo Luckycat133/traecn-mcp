@@ -743,14 +743,51 @@ function formatResult(result) {
   return output;
 }
 
+function resolveClientOptions(pluginConfig = {}) {
+  const options = {};
+  if (typeof pluginConfig.token === 'string') {
+    options.token = pluginConfig.token;
+  }
+  if (typeof pluginConfig.baseUrl === 'string' && pluginConfig.baseUrl.trim()) {
+    const url = new URL(pluginConfig.baseUrl);
+    if (url.protocol !== 'http:') {
+      throw new Error('TraeCNclaw baseUrl must use http://');
+    }
+    options.host = url.hostname;
+    options.port = Number(url.port || 80);
+  }
+  return options;
+}
+
+function toToolResult(result) {
+  return {
+    content: [{
+      type: 'text',
+      text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+    }],
+    details: result
+  };
+}
+
 function register(openClaw) {
+  const clientOptions = resolveClientOptions(openClaw.pluginConfig || {});
   if (typeof openClaw.registerTool === 'function') {
     for (const tool of toolDefinitions) {
       openClaw.registerTool({
         name: tool.name,
         description: tool.description,
         parameters: tool.parameters,
-        handler: tool.handler
+        async execute(_toolCallId, params) {
+          try {
+            return toToolResult(await tool.handler(params || {}, clientOptions));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return {
+              content: [{ type: 'text', text: `[TraeCN Error] ${message}` }],
+              isError: true
+            };
+          }
+        }
       });
     }
   }
@@ -760,9 +797,19 @@ function register(openClaw) {
   console.log(`[TraeCNclaw] Registered ${toolDefinitions.length} tools`);
 }
 
+const pluginEntry = {
+  id: PLUGIN_ID,
+  name: 'TraeCNclaw',
+  description: 'Delegate IDE tasks from OpenClaw to a local TraeCNclaw gateway.',
+  register
+};
+
 module.exports = {
+  ...pluginEntry,
+  default: pluginEntry,
   PLUGIN_ID,
   toolDefinitions,
   formatResult,
-  register
+  resolveClientOptions,
+  toToolResult
 };
