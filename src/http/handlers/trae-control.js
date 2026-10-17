@@ -6,7 +6,7 @@ const { getEnvWithFallback } = require('../../shared/utils');
 const { discoverTarget, describeCDPSurface } = require('../../cdp/discovery');
 const { getQuickstartConfig, restartTraeCNWithDebug } = require('../../config/quickstart');
 const { rejectBadRequest, hasDriverCapability } = require('./helpers');
-const { conversationId } = require('./unified-agent');
+const { conversationId, parseConversationId, stableConversationTitle } = require('./unified-agent');
 const { runtimeDefault } = require('../../config/runtime-schema');
 
 const defaultRestartDebugDeps = {
@@ -125,7 +125,13 @@ async function handleStopGeneration(req, res, ctx) {
     const listed = await ctx.driver.listSoloChats();
     const active = (listed.chats || []).find(chat => chat.active === true);
     const activeConversationId = active ? conversationId(active) : null;
-    if (!activeConversationId || activeConversationId !== requestedConversationId) {
+    const requested = parseConversationId(requestedConversationId);
+    const matching = requested ? (listed.chats || []).filter(chat => requested.sessionId
+      ? chat.sessionId === requested.sessionId
+      : requested.titleIncludes
+        ? stableConversationTitle(chat.title || chat.text) === requested.titleIncludes
+        : chat.index === requested.index) : [];
+    if (!activeConversationId || matching.length !== 1 || matching[0] !== active) {
       if (ctx.auditLogger && typeof ctx.auditLogger.log === 'function') {
         ctx.auditLogger.log({
           req,
@@ -224,6 +230,11 @@ async function handleRestartTraeDebug(req, res, ctx) {
   while (Date.now() - startedAt < cdpWaitMs) {
     try {
       surface = await restartDebugDeps.discoverTarget();
+      const target = surface?.target || surface;
+      if (!target?.id || !target.url || (target.type && target.type !== 'page')) {
+        throw new Error('No usable Trae CN page target after restart');
+      }
+      surface = { ...target, type: target.type || 'page' };
       connected = true;
       break;
     } catch (err) {
@@ -240,7 +251,7 @@ async function handleRestartTraeDebug(req, res, ctx) {
     restart,
     cdpWaitMs,
     connected,
-    surface: surface ? restartDebugDeps.describeCDPSurface([surface.target || surface]) : null,
+    surface: surface ? restartDebugDeps.describeCDPSurface([surface]) : null,
     error: connected ? null : (lastError || 'Timed out waiting for CDP')
   }, connected ? 200 : 504);
 }

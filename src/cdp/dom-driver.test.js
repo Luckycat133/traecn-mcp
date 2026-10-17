@@ -12,6 +12,72 @@ const { test, asyncTest, pendingAsyncTests, summary } = r;
 
 console.log('\n[dom-driver.test.js] Running tests...\n');
 
+function windowVisibilityFixture({ state = 'visible', activated = true, remainsHidden = false } = {}) {
+  let current = state;
+  let activations = 0;
+  const reads = [];
+  const driver = new DomDriver({ async send(method, params) {
+    reads.push({ method, expression: params.expression });
+    assert.strictEqual(method, 'Runtime.evaluate');
+    const value = vm.runInNewContext(params.expression, { document: { visibilityState: current } });
+    return { result: { value } };
+  } }, getConfig(), { activateWindow: async () => {
+    activations++;
+    if (activated && !remainsHidden) current = 'visible';
+    return activated;
+  } });
+  return { driver, reads, activations: () => activations };
+}
+
+asyncTest('visible window preparation leaves direct unconfigured drivers unchanged', async () => {
+  let reads = 0;
+  const driver = new DomDriver({ send: async () => { reads++; } }, getConfig());
+  await driver._ensureVisibleWindow();
+  assert.strictEqual(reads, 0);
+});
+
+asyncTest('visible windows do not trigger native activation', async () => {
+  const fixture = windowVisibilityFixture();
+  await fixture.driver._ensureVisibleWindow();
+  assert.strictEqual(fixture.activations(), 0);
+  assert.strictEqual(fixture.reads.length, 1);
+});
+
+asyncTest('hidden windows activate the existing application and confirm renderer visibility', async () => {
+  const fixture = windowVisibilityFixture({ state: 'hidden' });
+  await fixture.driver._ensureVisibleWindow();
+  await fixture.driver._ensureVisibleWindow();
+  assert.strictEqual(fixture.activations(), 1);
+  assert.strictEqual(fixture.reads.length, 3);
+});
+
+asyncTest('failed window activation blocks chat creation, sends and result collection before UI work', async () => {
+  for (const operation of ['newChat', 'sendMessage', 'collectResponse']) {
+    const fixture = windowVisibilityFixture({ state: 'hidden', activated: false });
+    await assert.rejects(() => fixture.driver[operation]('a new task'), error => error.code === 'WINDOW_NOT_VISIBLE');
+    assert.strictEqual(fixture.activations(), 1);
+    assert.strictEqual(fixture.reads.length, 1);
+  }
+});
+
+asyncTest('window activation success without visible renderer state still blocks the action', async () => {
+  const fixture = windowVisibilityFixture({ state: 'hidden', remainsHidden: true });
+  fixture.driver._waitForExpression = async (expression, timeoutMs, pollMs) => {
+    assert.strictEqual(timeoutMs, 5000);
+    assert.strictEqual(pollMs, 200);
+    return false;
+  };
+  await assert.rejects(() => fixture.driver._ensureVisibleWindow(), error => error.code === 'WINDOW_NOT_VISIBLE');
+  assert.strictEqual(fixture.activations(), 1);
+});
+
+asyncTest('unavailable renderer visibility cannot authorize a send', async () => {
+  const fixture = windowVisibilityFixture({ state: undefined });
+  fixture.driver.client.send = async () => ({ result: {} });
+  await assert.rejects(() => fixture.driver._ensureVisibleWindow(), error => error.code === 'WINDOW_NOT_VISIBLE');
+  assert.strictEqual(fixture.activations(), 0);
+});
+
 test('getConfig returns default composer selectors', () => {
   delete process.env.TRAECN_COMPOSER_SELECTORS;
   delete process.env.TRAE_COMPOSER_SELECTORS;
@@ -45,26 +111,42 @@ test('getConfig returns numeric timeout', () => {
   assert.ok(config.timeoutMs > 0);
 });
 
-asyncTest('getWorkspaceContext reports the open Trae folder from the workspace surface', async () => {
-  const fakeClient = {
-    async send(method, payload) {
-      assert.strictEqual(method, 'Runtime.evaluate');
-      assert.ok(payload.expression.includes('.explorer-folders-view'));
-      return {
-        result: {
-          value: {
-            title: 'gemini-web-mcp',
-            folderName: 'gemini-web-mcp',
-            rootPath: '~/Documents/gh-repos/gemini-web-mcp',
-            hasExplorer: true
-          }
-        }
-      };
+function workspaceFixture({ title, hasExplorer = false, childName = '', resourceLabel = '', configuration }) {
+  const resource = { getAttribute: name => name === 'aria-label' ? resourceLabel : null };
+  const row = {
+    getAttribute: name => name === 'aria-label' ? childName : null,
+    querySelector: selector => selector === '.explorer-item[aria-label]' ? resource : null
+  };
+  const explorer = {
+    querySelector: selector => selector === '[role="treeitem"][aria-level="1"]' ? row : null
+  };
+  const document = {
+    title,
+    querySelector: selector => selector === '.explorer-folders-view, .explorer-viewlet' && hasExplorer
+      ? explorer : null
+  };
+  const window = configuration === undefined ? {} : {
+    vscode: {
+      context: {
+        configuration: typeof configuration === 'function' ? configuration : () => configuration
+      }
     }
   };
-  const driver = new DomDriver(fakeClient, getConfig());
+  return new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      assert.strictEqual(payload.returnByValue, true);
+      const value = vm.runInNewContext(payload.expression, { document, window });
+      return { result: { value: JSON.parse(JSON.stringify(value)) } };
+    }
+  }, getConfig());
+}
 
-  const workspace = await driver.getWorkspaceContext();
+asyncTest('getWorkspaceContext reports the open Trae folder from the workspace surface', async () => {
+  const workspace = await workspaceFixture({
+    title: 'gemini-web-mcp', hasExplorer: true, childName: 'src',
+    resourceLabel: '~/Documents/gh-repos/gemini-web-mcp/src'
+  }).getWorkspaceContext();
 
   assert.deepStrictEqual(workspace, {
     title: 'gemini-web-mcp',
@@ -75,23 +157,7 @@ asyncTest('getWorkspaceContext reports the open Trae folder from the workspace s
 });
 
 asyncTest('getWorkspaceContext uses the workspace title when Solo hides the explorer', async () => {
-  const fakeClient = {
-    async send() {
-      return {
-        result: {
-          value: {
-            title: 'TRAECNclaw',
-            folderName: null,
-            rootPath: null,
-            hasExplorer: false
-          }
-        }
-      };
-    }
-  };
-  const driver = new DomDriver(fakeClient, getConfig());
-
-  const workspace = await driver.getWorkspaceContext();
+  const workspace = await workspaceFixture({ title: 'TRAECNclaw' }).getWorkspaceContext();
 
   assert.deepStrictEqual(workspace, {
     title: 'TRAECNclaw',
@@ -99,6 +165,163 @@ asyncTest('getWorkspaceContext uses the workspace title when Solo hides the expl
     rootPath: null,
     hasExplorer: false
   });
+});
+
+asyncTest('getWorkspaceContext recognizes the live editor-prefixed title with Explorer hidden', async () => {
+  const workspace = await workspaceFixture({ title: '更新日志 — TRAECNclaw' }).getWorkspaceContext();
+  assert.deepStrictEqual(workspace, {
+    title: '更新日志 — TRAECNclaw', folderName: 'TRAECNclaw', rootPath: null, hasExplorer: false
+  });
+});
+
+asyncTest('getWorkspaceContext prefers the Explorer resource root over a stale editor title', async () => {
+  const workspace = await workspaceFixture({
+    title: 'README.md — previous-repo', hasExplorer: true, childName: 'src',
+    resourceLabel: '/Users/example/projects/current-repo/src'
+  }).getWorkspaceContext();
+  assert.deepStrictEqual(workspace, {
+    title: 'README.md — previous-repo', folderName: 'current-repo',
+    rootPath: '/Users/example/projects/current-repo', hasExplorer: true
+  });
+});
+
+asyncTest('getWorkspaceContext keeps unreadable Explorer root unknown while parsing the title', async () => {
+  const workspace = await workspaceFixture({
+    title: '更新日志 — TRAECNclaw', hasExplorer: true, childName: 'src'
+  }).getWorkspaceContext();
+  assert.deepStrictEqual(workspace, {
+    title: '更新日志 — TRAECNclaw', folderName: 'TRAECNclaw', rootPath: null, hasExplorer: true
+  });
+});
+
+asyncTest('getWorkspaceContext preserves distinct resource paths with the same folder basename', async () => {
+  const roots = ['/Users/example/projects/TRAECNclaw', '/Users/example/other/TRAECNclaw'];
+  const contexts = await Promise.all(roots.map(root => workspaceFixture({
+    title: '更新日志 — TRAECNclaw', hasExplorer: true, childName: 'src', resourceLabel: `${root}/src`
+  }).getWorkspaceContext()));
+  assert.deepStrictEqual(contexts.map(context => context.folderName), ['TRAECNclaw', 'TRAECNclaw']);
+  assert.deepStrictEqual(contexts.map(context => context.rootPath), roots);
+});
+
+asyncTest('getWorkspaceContext reads the native single-folder file URI with the Explorer hidden', async () => {
+  const rootPath = '/Users/example/projects/recovery-fixture';
+  const workspace = await workspaceFixture({
+    title: 'README.md — previous-repo',
+    configuration: {
+      windowId: 1,
+      workspace: {
+        id: 'fixture-workspace',
+        uri: { scheme: 'file', authority: '', path: rootPath, _fsPath: rootPath }
+      }
+    }
+  }).getWorkspaceContext();
+  assert.deepStrictEqual(workspace, {
+    title: 'README.md — previous-repo', folderName: 'recovery-fixture', rootPath, hasExplorer: false
+  });
+});
+
+asyncTest('getWorkspaceContext prefers the native file URI over a stale Explorer resource', async () => {
+  const workspace = await workspaceFixture({
+    title: 'README.md — workspace', hasExplorer: true, childName: 'src',
+    resourceLabel: '/Users/example/campaign/workspace/src',
+    configuration: {
+      workspace: { uri: { scheme: 'file', authority: '', path: '/Users/example/recovery/workspace' } }
+    }
+  }).getWorkspaceContext();
+  assert.strictEqual(workspace.folderName, 'workspace');
+  assert.strictEqual(workspace.rootPath, '/Users/example/recovery/workspace');
+});
+
+asyncTest('getWorkspaceContext preserves distinct native paths with the same folder basename', async () => {
+  const roots = ['/Users/example/campaign/workspace', '/Users/example/recovery/workspace'];
+  const contexts = await Promise.all(roots.map(rootPath => workspaceFixture({
+    title: 'workspace',
+    configuration: { workspace: { uri: { scheme: 'file', authority: '', path: rootPath } } }
+  }).getWorkspaceContext()));
+  assert.deepStrictEqual(contexts.map(context => context.folderName), ['workspace', 'workspace']);
+  assert.deepStrictEqual(contexts.map(context => context.rootPath), roots);
+});
+
+asyncTest('getWorkspaceContext retains literal spaces and percent signs in the native URI path', async () => {
+  const rootPath = '/Users/example/projects/my project%20';
+  const workspace = await workspaceFixture({
+    title: 'my project%20',
+    configuration: { workspace: { uri: { scheme: 'file', authority: '', path: rootPath } } }
+  }).getWorkspaceContext();
+  assert.strictEqual(workspace.folderName, 'my project%20');
+  assert.strictEqual(workspace.rootPath, rootPath);
+});
+
+asyncTest('getWorkspaceContext keeps Explorer fallback when native configuration is unavailable', async () => {
+  const workspace = await workspaceFixture({
+    title: 'README.md — previous-repo', hasExplorer: true, childName: 'src',
+    resourceLabel: '/Users/example/current-repo/src',
+    configuration() { throw new Error('configuration is not yet available'); }
+  }).getWorkspaceContext();
+  assert.strictEqual(workspace.folderName, 'current-repo');
+  assert.strictEqual(workspace.rootPath, '/Users/example/current-repo');
+});
+
+asyncTest('getWorkspaceContext does not treat a multi-folder config URI as a single folder', async () => {
+  const workspace = await workspaceFixture({
+    title: 'current-repo', hasExplorer: true, childName: 'src',
+    resourceLabel: '/Users/example/current-repo/src',
+    configuration: {
+      workspace: { configPath: { scheme: 'file', authority: '', path: '/Users/example/multi.code-workspace' } }
+    }
+  }).getWorkspaceContext();
+  assert.strictEqual(workspace.folderName, 'current-repo');
+  assert.strictEqual(workspace.rootPath, '/Users/example/current-repo');
+});
+
+asyncTest('getWorkspaceContext leaves nonlocal or relative native URI paths unknown', async () => {
+  for (const uri of [
+    { scheme: 'vscode-remote', authority: 'ssh-remote+fixture', path: '/remote/workspace' },
+    { scheme: 'file', authority: 'remote-host', path: '/remote/workspace' },
+    { scheme: 'file', authority: '', path: 'relative/workspace', _fsPath: '/unobserved/workspace' }
+  ]) {
+    const workspace = await workspaceFixture({
+      title: 'workspace', configuration: { workspace: { uri } }
+    }).getWorkspaceContext();
+    assert.strictEqual(workspace.folderName, 'workspace');
+    assert.strictEqual(workspace.rootPath, null);
+  }
+});
+
+asyncTest('getWorkspaceContext preserves workspace names containing ordinary hyphens', async () => {
+  const workspace = await workspaceFixture({ title: 'README.md — my-project - tools' }).getWorkspaceContext();
+  assert.strictEqual(workspace.folderName, 'my-project - tools');
+  assert.strictEqual(workspace.rootPath, null);
+});
+
+asyncTest('getWorkspaceContext does not infer a workspace from the application-only title', async () => {
+  const workspace = await workspaceFixture({ title: 'Trae CN', hasExplorer: true }).getWorkspaceContext();
+  assert.deepStrictEqual(workspace, { title: 'Trae CN', folderName: null, rootPath: null, hasExplorer: true });
+});
+
+asyncTest('getWorkspaceContext keeps a relative resource label as an unknown root', async () => {
+  const workspace = await workspaceFixture({
+    title: 'README.md — TRAECNclaw', hasExplorer: true, childName: 'src', resourceLabel: 'TRAECNclaw/src'
+  }).getWorkspaceContext();
+  assert.strictEqual(workspace.folderName, 'TRAECNclaw');
+  assert.strictEqual(workspace.rootPath, null);
+});
+
+asyncTest('getWorkspaceContext retains the existing backslash resource path format', async () => {
+  const workspace = await workspaceFixture({
+    title: 'README.md — previous-repo', hasExplorer: true, childName: 'src',
+    resourceLabel: 'C:\\projects\\current-repo\\src'
+  }).getWorkspaceContext();
+  assert.strictEqual(workspace.folderName, 'current-repo');
+  assert.strictEqual(workspace.rootPath, 'C:\\projects\\current-repo');
+});
+
+asyncTest('getWorkspaceContext accepts an observed root named like the application', async () => {
+  const workspace = await workspaceFixture({
+    title: 'Trae CN', hasExplorer: true, childName: 'src', resourceLabel: '/Users/example/projects/Trae CN/src'
+  }).getWorkspaceContext();
+  assert.strictEqual(workspace.folderName, 'Trae CN');
+  assert.strictEqual(workspace.rootPath, '/Users/example/projects/Trae CN');
 });
 
 test('getConfig leaves queueMaxWaitMs unset by default', () => {
@@ -140,6 +363,7 @@ asyncTest('sendMessage verifies debug prompts containing angle brackets and arro
   const normalized = text.replace(/\s+/g, ' ').trim();
   const expressions = [];
   const insertTexts = [];
+  const mouseEvents = [];
   const fakeClient = {
     async send(method, payload = {}) {
       if (method === 'Runtime.evaluate') {
@@ -152,7 +376,7 @@ asyncTest('sendMessage verifies debug prompts containing angle brackets and arro
           return { result: { value: { ok: true, text: normalized, normalized } } };
         }
         if (expression.includes('button.chat-input-v2-send-button')) {
-          return { result: { value: 'send via mouse events' } };
+          return { result: { value: { ok: true, x: 726, y: 810 } } };
         }
         return { result: { value: {} } };
       }
@@ -161,6 +385,10 @@ asyncTest('sendMessage verifies debug prompts containing angle brackets and arro
         return {};
       }
       if (method === 'Input.dispatchKeyEvent') return {};
+      if (method === 'Input.dispatchMouseEvent') {
+        mouseEvents.push(payload);
+        return {};
+      }
       throw new Error(`unexpected CDP method ${method}`);
     }
   };
@@ -175,6 +403,7 @@ asyncTest('sendMessage verifies debug prompts containing angle brackets and arro
   assert.ok(verification.includes('\\u003C'));
   assert.ok(!verification.includes('normalized === ,'));
   assert.deepStrictEqual(insertTexts, [text]);
+  assert.deepStrictEqual(mouseEvents.map(event => event.type), ['mouseMoved', 'mousePressed', 'mouseReleased']);
 });
 
 asyncTest('sendMessage rejects a click that does not create a visible user message', async () => {
@@ -188,11 +417,11 @@ asyncTest('sendMessage rejects a click that does not create a visible user messa
           return { result: { value: { ok: true, text, normalized: text } } };
         }
         if (expression.includes('button.chat-input-v2-send-button')) {
-          return { result: { value: 'send via mouse events' } };
+          return { result: { value: { ok: true, x: 726, y: 810 } } };
         }
         return { result: { value: {} } };
       }
-      if (method === 'Input.insertText' || method === 'Input.dispatchKeyEvent') return {};
+      if (method === 'Input.insertText' || method === 'Input.dispatchKeyEvent' || method === 'Input.dispatchMouseEvent') return {};
       throw new Error(`unexpected CDP method ${method}`);
     }
   };
@@ -203,7 +432,7 @@ asyncTest('sendMessage rejects a click that does not create a visible user messa
 
   await assert.rejects(
     () => driver.sendMessage(text),
-    error => error && error.code === 'SEND_FAILED' && /did not appear/.test(error.message)
+    error => error && error.code === 'SEND_FAILED' && error.details.submissionDispatched === true && /did not appear/.test(error.message)
   );
 });
 
@@ -989,6 +1218,44 @@ test('newChat accepts an already blank composer as a fresh conversation', async 
   assert.strictEqual(calls, 1);
 });
 
+test('newChat clears a populated Trae 1.107 virtualized conversation', async () => {
+  const composer = { getBoundingClientRect: () => ({ width: 300, height: 50 }), offsetParent: {} };
+  const turn = { getBoundingClientRect: () => ({ width: 400, height: 100 }), offsetParent: {} };
+  const document = {
+    querySelectorAll(selector) {
+      if (selector === '[contenteditable="true"]') return [composer];
+      if (selector === '.virtualized-message-list-view__virtuoso .turn') return [turn];
+      return [];
+    }
+  };
+  const keyEvents = [];
+  const driver = new DomDriver({
+    async send(method, payload) {
+      if (method === 'Runtime.evaluate') {
+        return { result: { value: vm.runInNewContext(payload.expression, { document }) } };
+      }
+      assert.strictEqual(method, 'Input.dispatchKeyEvent');
+      keyEvents.push(payload);
+      return {};
+    }
+  }, { ...getConfig(), composerSelectors: ['[contenteditable="true"]'] });
+  let captures = 0;
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, reviewCount: 0 });
+  driver._captureIdePanelText = async () => (++captures === 1 ? 'previous task and response' : '');
+  driver._waitForExpression = async () => true;
+  driver.findNewChatButton = async () => null;
+  driver._lastTaskText = 'previous response';
+  driver._pendingUserTask = 'previous task';
+  driver._preSendSnapshot = 'previous transcript';
+
+  assert.strictEqual(await driver.newChat(), true);
+  assert.deepStrictEqual(keyEvents.map(event => event.type), ['keyDown', 'keyUp']);
+  assert.ok(captures >= 2);
+  assert.strictEqual(driver._lastTaskText, '');
+  assert.strictEqual(driver._pendingUserTask, '');
+  assert.strictEqual(driver._preSendSnapshot, '');
+});
+
 test('extractLatestIdeAssistantState waits for assistant turn after latest user turn', () => {
   const driver = new DomDriver(null, getConfig());
   const state = driver._extractLatestIdeAssistantState({
@@ -1067,6 +1334,528 @@ test('extractLatestIdeAssistantState can return the full trace on explicit reque
 
   assert.ok(state.text.includes('思考过程'));
   assert.ok(state.text.includes('工具调用'));
+});
+
+// Sanitized text and classes captured from TraeCN 1.107.1's IDE task surface.
+const capturedWorkbenchNoise = '点击重启以更新点击重启以更新650 新任务⌃⌘N插件市场任务1未命名任务进行中21:56 资源管理器文件calculator.jscalculator.test.jspackage.json.monaco-list.list_id_1 .monaco-list-rows { background: var(--vscode-var(--vscode-panel-background---vscode-sidebar-background)); } .monaco-list.list_id_1:focus .monaco-list-row.focused { background-color: var(--vscode-list-focusBackground); } .monaco-list.list_id_1:focus .monaco-list-row.focused:hover { background-color: var(--vscode-list-focusBackground); } .theme-icube .monaco-list.list_id_1:fo';
+const capturedFinishSummary = '测试已通过。注意：环境中的 Node 是 v24.13.0（无 Node 22 可用）。\n修改（calculator.js:4）：\nreturn unitPriceCents * quantity + shippingCents;\n测试结果：CALCULATOR_UAT_PASS: 3 cases\n三组断言均通过：1200*3+500=4100、875*4+0=3500、999*1+199=1198。';
+
+function responseDomElement(tag, attributes = {}, text = '', children = []) {
+  const element = {
+    tagName: tag.toUpperCase(), className: attributes.class || '', parentElement: null,
+    offsetParent: attributes.hidden ? null : {}, children,
+    getAttribute: name => name === 'class' ? element.className : (attributes[name] ?? null),
+    getBoundingClientRect: () => ({ width: 800, height: 400, y: 100 }),
+    get textContent() { return text + children.map(child => child.textContent).join(''); },
+    get innerText() { return tag === 'style' ? '' : text + children.map(child => child.innerText).join('\n'); },
+    contains(node) { return node === element || children.some(child => child.contains(node)); },
+    matches(selector) { return selector.split(',').some(part => responseDomMatches(element, part.trim())); },
+    closest(selector) {
+      for (let node = element; node; node = node.parentElement) if (node.matches(selector)) return node;
+      return null;
+    },
+    querySelectorAll(selector) {
+      const descendants = [];
+      const walk = node => { for (const child of node.children) { descendants.push(child); walk(child); } };
+      walk(element);
+      return descendants.filter(node => node.matches(selector));
+    },
+    querySelector(selector) { return element.querySelectorAll(selector)[0] || null; }
+  };
+  children.forEach(child => { child.parentElement = element; });
+  return element;
+}
+
+function responseDomMatches(element, selector) {
+  const parts = selector.match(/(?:\[[^\]]+\]|[^\s])+/g) || [];
+  const compoundMatches = (node, compound) => {
+    const tag = compound.match(/^[a-z][\w-]*/i);
+    if (tag && node.tagName !== tag[0].toUpperCase()) return false;
+    const outsideAttributes = compound.replace(/\[[^\]]+\]/g, '');
+    for (const match of outsideAttributes.matchAll(/\.([\w-]+)/g)) {
+      if (!String(node.className).split(/\s+/).includes(match[1])) return false;
+    }
+    for (const match of compound.matchAll(/\[([\w-]+)(?:([*]?=)["']?([^\]"']*)["']?)?\]/g)) {
+      const value = node.getAttribute(match[1]);
+      if (value === null) return false;
+      if (match[2] === '=' && value !== match[3]) return false;
+      if (match[2] === '*=' && !String(value).includes(match[3])) return false;
+    }
+    return true;
+  };
+  if (!parts.length || !compoundMatches(element, parts.pop())) return false;
+  let parent = element.parentElement;
+  while (parts.length) {
+    const compound = parts.pop();
+    while (parent && !compoundMatches(parent, compound)) parent = parent.parentElement;
+    if (!parent) return false;
+    parent = parent.parentElement;
+  }
+  return true;
+}
+
+function capturedResponseFixture({ finish = true, running = false, newUser = false, empty = false, panelSelectors = null } = {}) {
+  const node = responseDomElement;
+  const prompt = '请修复 calculator.js，并运行 calculator.test.js，返回实际修改和测试结果。';
+  const summary = node('div', { class: 'markdown-renderer' }, capturedFinishSummary);
+  const finishCard = node('div', { class: 'agent-plan-item', 'data-toolcall-type': 'finish' }, '', [
+    node('div', { class: 'core-finish-card' }, '', [node('div', { class: 'core-finish-card__summary' }, '', [summary])])
+  ]);
+  const user = node('div', {}, prompt);
+  const assistant = node('div', { class: 'turn__agent-message', 'data-role': 'assistant' }, '', [
+    node('div', { class: 'agent-message__header' }, 'Agent'),
+    node('div', { class: 'todo-progress-content' }, '思考过程：已完成第一步，将继续检查。'),
+    ...(finish ? [finishCard] : [node('div', { class: 'markdown-renderer' }, '已完成第一步，将继续检查。')])
+  ]);
+  const turns = empty ? [] : [node('div', { class: 'turn turn--last' }, '', [user, assistant])];
+  if (newUser) turns.push(node('div', { class: 'turn turn--last' }, '', [
+    node('div', {}, '现在处理下一项授权修复。')
+  ]));
+  if (running) turns.push(node('span', { class: 'codicon-stop-circle' }));
+  const viewport = node('div', { class: 'virtualized-message-list-view__virtuoso' }, '', turns);
+  const workbench = node('div', {
+    class: 'monaco-workbench nopanel icube-ai-chat-commercial-popup-anchor', role: 'application'
+  }, capturedWorkbenchNoise, [node('style', {}, '.monaco-list { background: var(--vscode-list-focusBackground); }'.repeat(20)), viewport]);
+  const body = node('body', {}, '', [workbench]);
+  const html = node('html', {}, '', [body]);
+  const document = {
+    body, documentElement: html,
+    querySelector: selector => html.querySelector(selector),
+    querySelectorAll: selector => html.querySelectorAll(selector)
+  };
+  const config = { ...getConfig(), timeoutMs: 1000, pollIntervalMs: 1 };
+  if (panelSelectors) config.ideTaskPanelSelectors = panelSelectors;
+  const driver = new DomDriver({
+    async send(method, payload) {
+      if (method === 'Log.enable') return {};
+      assert.strictEqual(method, 'Runtime.evaluate');
+      const value = vm.runInNewContext(payload.expression, { document });
+      return { result: { value: JSON.parse(JSON.stringify(value)) } };
+    }, on() {}, off() {}
+  }, config);
+  driver.detectMode = async () => ({ mode: 'ide' });
+  driver.checkForApprovalDialog = async () => ({ needsApproval: false });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, taskCompleted: false });
+  driver._pendingUserTask = prompt;
+  return { driver, summary, assistant, workbench };
+}
+
+asyncTest('captured IDE DOM returns the current assistant finish summary instead of workbench CSS', async () => {
+  const { driver, assistant } = capturedResponseFixture();
+  const state = await driver._queryTaskSource('');
+  assert.strictEqual(state.text, capturedFinishSummary);
+  assert.strictEqual(state.traceText, assistant.innerText.trim());
+  assert.strictEqual(state.isComplete, true);
+  assert.strictEqual(state.inProgress, false);
+  assert.ok(!state.text.includes('.monaco-list'));
+});
+
+asyncTest('captured IDE DOM preserves the assistant trace only when requested', async () => {
+  const { driver } = capturedResponseFixture();
+  const state = await driver._queryTaskSource('', { detailLevel: 'trace' });
+  assert.ok(state.text.includes('思考过程'));
+  assert.ok(state.text.includes('v24.13.0'));
+  assert.ok(!state.text.includes('点击重启以更新'));
+});
+
+asyncTest('captured IDE DOM waits at a newer turn without an assistant instead of reusing an old finish card', async () => {
+  const { driver } = capturedResponseFixture({ newUser: true });
+  const state = await driver._pollResponseState();
+  assert.strictEqual(state.awaitingAssistant, true);
+  assert.strictEqual(state.taskComplete, false);
+  assert.strictEqual(state.responseText, '');
+  assert.strictEqual(state.traceText, undefined);
+});
+
+asyncTest('captured IDE DOM does not equate an ordinary assistant message with task completion', async () => {
+  const { driver } = capturedResponseFixture({ finish: false });
+  const state = await driver._queryTaskSource('');
+  assert.strictEqual(state.inProgress, true);
+  assert.strictEqual(state.isComplete, false);
+  assert.strictEqual(state.hasResponse, false);
+  assert.strictEqual(state.traceText, undefined);
+});
+
+asyncTest('captured IDE DOM keeps a finish card pending while a visible stop control is active', async () => {
+  const { driver } = capturedResponseFixture({ running: true });
+  const state = await driver._queryTaskSource('');
+  assert.strictEqual(state.inProgress, true);
+  assert.strictEqual(state.isComplete, false);
+  assert.strictEqual(state.traceText, undefined);
+});
+
+asyncTest('captured empty message viewport cannot complete from surrounding workbench text', async () => {
+  const { driver } = capturedResponseFixture({ empty: true });
+  const state = await driver._pollResponseState();
+  assert.strictEqual(state.awaitingAssistant, true);
+  assert.strictEqual(state.taskText, '');
+  assert.strictEqual(state.responseText, '');
+});
+
+asyncTest('IDE capture rejects the observed workbench class-substring false match even when configured', async () => {
+  const { driver, workbench } = capturedResponseFixture({ panelSelectors: ['[class*="panel"][class*="chat"]'] });
+  assert.strictEqual(workbench.matches('[class*="panel"][class*="chat"]'), true);
+  assert.strictEqual(await driver._queryIdeTaskPanel(''), null);
+  assert.strictEqual(await driver._captureIdePanelText(), '');
+});
+
+asyncTest('collectResponse uses the captured finish summary and preserves its actual Node version', async () => {
+  const { driver, assistant } = capturedResponseFixture();
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.stable, true);
+  assert.strictEqual(result.text, capturedFinishSummary.replace(/\s+/g, ' ').trim());
+  assert.ok(result.text.includes('v24.13.0'));
+  assert.strictEqual(result.traceText, assistant.innerText.trim());
+});
+
+asyncTest('collectResponse exits a cancelled empty turn and removes its CDP listeners', async () => {
+  const listeners = new Set();
+  const config = getConfig();
+  config.timeoutMs = 60000;
+  const driver = new DomDriver({
+    send: async () => ({}),
+    on: name => listeners.add(name),
+    off: name => listeners.delete(name)
+  }, config);
+  driver._ensureVisibleWindow = async () => {};
+  driver.checkForApprovalDialog = async () => ({ needsApproval: false });
+  driver.detectMode = async () => ({ mode: 'solo' });
+  let cancelled = false;
+  let polls = 0;
+  driver._pollResponseState = async () => {
+    polls++;
+    await Promise.resolve();
+    cancelled = true;
+    return { awaitingAssistant: true, taskText: '' };
+  };
+  driver.checkTaskReviewGate = async () => { throw new Error('cancelled turn must not process another UI gate'); };
+  const start = Date.now();
+  const result = await driver.collectResponse({ shouldStop: () => cancelled });
+  assert.strictEqual(result.cancelled, true);
+  assert.strictEqual(result.stable, false);
+  assert.strictEqual(result.text, '');
+  assert.strictEqual(polls, 1);
+  assert.strictEqual(listeners.size, 0);
+  assert.ok(Date.now() - start < 1000, 'cancelled collection must not wait for the response timeout');
+});
+
+asyncTest('response polling carries the trace and final summary from the same captured assistant', async () => {
+  const { driver, assistant } = capturedResponseFixture();
+  const state = await driver._pollResponseState();
+  assert.strictEqual(state.taskText, capturedFinishSummary);
+  assert.strictEqual(state.taskComplete, true);
+  assert.strictEqual(state.traceText, assistant.innerText.trim());
+  assert.ok(!state.traceText.includes('.monaco-list'));
+});
+
+const capturedInterruptedPartial = 'Agent\n思考过程\nAll complete. Summary:\nImplementation\nrecovery-sum.js exports sumSafeIntegers(values).\nBarrier flow\nready.json written by wait-for-release.js (status BLOCKED_WAITING_FOR_ROOT_RELEASE, module';
+
+function interruptedResponseFixture({
+  mode = 'solo', legacy = false, statusText = '手动终止输出', statusHidden = false,
+  previousInterrupted = false, finish = false, quoted = false, userOnly = false, embeddedStatus = false
+} = {}) {
+  const node = responseDomElement;
+  const bar = (text, hidden = false) => node('div', { class: 'latest-assistant-bar latest-assistant-bar-stage-0', hidden }, '', [
+    node('div', { class: 'latest-assistant-bar-left-part', hidden }, '', [
+      node('div', { class: 'status', hidden }, '', [node('span', { class: 'status-text', hidden }, text)])
+    ]),
+    node('span', { hidden }, '19%')
+  ]);
+  const prompt = quoted ? '请解释“手动终止输出”并测试对应代码。' : 'Implement safe integer sum with tests.';
+  const user = node('div', { class: legacy ? 'chat-turn user' : 'turn__user-message', 'data-role': 'user' }, prompt);
+  const text = quoted ? '代码已完成：const label = "手动终止输出"; 断言全部通过。' : capturedInterruptedPartial;
+  const summary = finish ? node('div', { class: 'core-finish-card__summary' }, '', [
+    node('div', { class: 'markdown-renderer' }, text)
+  ]) : node('div', { class: legacy ? 'chat-markdown' : 'markdown-renderer' }, text, embeddedStatus ? [bar('手动终止输出')] : []);
+  const assistant = node('div', {
+    class: legacy ? 'chat-turn assistant' : 'turn__agent-message', 'data-role': 'assistant'
+  }, '', [summary, ...(statusText ? [bar(statusText, statusHidden)] : [])]);
+  const oldAssistant = node('div', {
+    class: legacy ? 'chat-turn assistant' : 'turn__agent-message', 'data-role': 'assistant'
+  }, 'previous interrupted response', [bar('手动终止输出')]);
+  const currentTurns = legacy
+    ? [...(previousInterrupted ? [oldAssistant] : []), user, ...(userOnly ? [] : [assistant])]
+    : [
+        ...(previousInterrupted ? [node('div', { class: 'turn' }, '', [oldAssistant])] : []),
+        node('div', { class: 'turn turn--last' }, '', [user, ...(userOnly ? [] : [assistant])])
+      ];
+  const sidebar = node('div', { class: 'soloaisidebar' }, '历史会话 任务中断', [
+    node('div', { class: 'chat-turn assistant' }, 'previous sidebar assistant', [bar('手动终止输出')])
+  ]);
+  const viewport = node('div', { class: 'virtualized-message-list-view__virtuoso' }, '', currentTurns);
+  const body = node('body', {}, '页面引用：手动终止输出', [sidebar, viewport]);
+  const html = node('html', {}, '', [body]);
+  const document = {
+    body, documentElement: html,
+    querySelector: selector => html.querySelector(selector),
+    querySelectorAll: selector => html.querySelectorAll(selector)
+  };
+  const listeners = new Set();
+  const expressions = [];
+  const driver = new DomDriver({
+    async send(method, payload) {
+      if (method === 'Log.enable') return {};
+      assert.strictEqual(method, 'Runtime.evaluate');
+      expressions.push(payload.expression);
+      const value = vm.runInNewContext(payload.expression, { document });
+      return { result: { value: JSON.parse(JSON.stringify(value)) } };
+    },
+    on(name) { listeners.add(name); },
+    off(name) { listeners.delete(name); }
+  }, { ...getConfig(), timeoutMs: 1000, pollIntervalMs: 1 });
+  driver.detectMode = async () => ({ mode });
+  driver.checkForApprovalDialog = async () => ({ needsApproval: false });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, taskCompleted: false });
+  driver._pendingUserTask = prompt;
+  return { driver, listeners, expressions };
+}
+
+asyncTest('current assistant interruption detects the observed native SOLO status bar', async () => {
+  const { driver } = interruptedResponseFixture();
+  const state = await driver._queryTaskSource('');
+  assert.strictEqual(state.interrupted, true);
+  assert.strictEqual(state.inProgress, false);
+  assert.strictEqual(state.isComplete, false);
+  assert.strictEqual(state.hasResponse, false);
+  assert.strictEqual(state.traceText, undefined);
+  assert.ok(state.text.includes('BLOCKED_WAITING_FOR_ROOT_RELEASE'));
+});
+
+asyncTest('current assistant interruption detects a legacy SOLO assistant status bar', async () => {
+  const { driver } = interruptedResponseFixture({ legacy: true });
+  const state = await driver._queryTaskSource('');
+  assert.strictEqual(state.interrupted, true);
+  assert.strictEqual(state.inProgress, false);
+  assert.strictEqual(state.isComplete, false);
+  assert.strictEqual(state.hasResponse, false);
+});
+
+asyncTest('current assistant interruption ignores previous assistant and sidebar status bars', async () => {
+  for (const legacy of [false, true]) {
+    const { driver } = interruptedResponseFixture({ previousInterrupted: true, statusText: '', legacy });
+    const state = await driver._queryTaskSource('');
+    assert.notStrictEqual(state.interrupted, true);
+    assert.ok(!state.text.includes('previous interrupted response'));
+  }
+});
+
+asyncTest('current assistant interruption does not complete from an interrupted previous turn after a new user', async () => {
+  const { driver } = interruptedResponseFixture({ previousInterrupted: true, userOnly: true, quoted: true });
+  const state = await driver._pollResponseState();
+  assert.strictEqual(state.awaitingAssistant, true);
+  assert.notStrictEqual(state.interrupted, true);
+  assert.strictEqual(state.taskText, '');
+});
+
+asyncTest('current assistant interruption ignores quoted user text and completed code mentioning termination', async () => {
+  const { driver } = interruptedResponseFixture({ finish: true, quoted: true, statusText: '任务完成' });
+  const state = await driver._queryTaskSource('');
+  assert.notStrictEqual(state.interrupted, true);
+  assert.strictEqual(state.isComplete, true);
+  assert.strictEqual(state.hasResponse, true);
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.stable, true);
+  assert.notStrictEqual(result.interrupted, true);
+  assert.ok(result.text.includes('const label = "手动终止输出"'));
+});
+
+asyncTest('current assistant interruption requires a visible exact native status label', async () => {
+  for (const options of [{ statusHidden: true }, { statusText: '手动终止输出（示例）' }]) {
+    const { driver } = interruptedResponseFixture(options);
+    const state = await driver._queryTaskSource('');
+    assert.notStrictEqual(state.interrupted, true);
+  }
+});
+
+asyncTest('current assistant interruption ignores status-shaped HTML rendered inside assistant markdown', async () => {
+  for (const legacy of [false, true]) {
+    const { driver } = interruptedResponseFixture({ statusText: '', embeddedStatus: true, legacy });
+    const state = await driver._queryTaskSource('');
+    assert.notStrictEqual(state.interrupted, true);
+  }
+});
+
+asyncTest('current assistant interruption polling excludes unrelated body text and completed traces', async () => {
+  const { driver } = interruptedResponseFixture();
+  driver._scanContentArea = async () => { throw new Error('interrupted turn must not scan unrelated content'); };
+  driver._captureVisibleText = async () => { throw new Error('interrupted turn must not scan the page body'); };
+  const state = await driver._pollResponseState();
+  assert.strictEqual(state.interrupted, true);
+  assert.strictEqual(state.taskComplete, false);
+  assert.strictEqual(state.taskInProgress, false);
+  assert.strictEqual(state.responseText, '');
+  assert.strictEqual(state.traceText, undefined);
+});
+
+asyncTest('current assistant interruption collection returns a failure promptly and removes its listeners', async () => {
+  const { driver, listeners } = interruptedResponseFixture();
+  let gateChecks = 0;
+  let gateActions = 0;
+  driver.checkTaskReviewGate = async () => {
+    gateChecks++;
+    return { awaitingReview: true, taskCompleted: true };
+  };
+  driver.resolveTaskReviewGate = async () => { gateActions++; return { success: true }; };
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.stable, false);
+  assert.strictEqual(result.interrupted, true);
+  assert.match(result.error, /interrupted/i);
+  assert.ok(result.elapsedMs < driver.config.timeoutMs);
+  assert.strictEqual(result.timedOut, undefined);
+  assert.strictEqual(result.traceText, undefined);
+  assert.strictEqual(gateChecks, 0);
+  assert.strictEqual(gateActions, 0);
+  assert.strictEqual(listeners.size, 0);
+});
+
+asyncTest('current assistant interruption keeps cancellation ahead of a detected native stop', async () => {
+  const { driver, listeners } = interruptedResponseFixture();
+  let cancelled = false;
+  const originalPoll = driver._pollResponseState.bind(driver);
+  driver._pollResponseState = async () => {
+    const state = await originalPoll();
+    cancelled = true;
+    return state;
+  };
+  const result = await driver.collectResponse({ shouldStop: () => cancelled });
+  assert.strictEqual(result.cancelled, true);
+  assert.strictEqual(result.stable, false);
+  assert.strictEqual(result.interrupted, undefined);
+  assert.strictEqual(listeners.size, 0);
+});
+
+test('local legacy transcript compaction recognizes a standalone Chinese finish heading', () => {
+  const transcript = 'Agent\n思考过程\n工具调用和中间步骤\n完成总结\n最终改动和测试结果\n任务完成';
+  assert.strictEqual(cleanAssistantResultText(transcript), '完成总结\n最终改动和测试结果');
+});
+
+test('local compaction retains ordinary sentences mentioning the Chinese finish heading', () => {
+  const text = '保留工具输出。\n这次完成总结需要包含思考过程的可见记录。\n最终结论保持完整。';
+  assert.strictEqual(cleanAssistantResultText(text), text);
+});
+
+asyncTest('collectResponse resolves the current finish-card review without a body completion label', async () => {
+  const { driver, assistant } = capturedResponseFixture();
+  driver.config.postActionDelayMs = 0;
+  let reviewPending = true;
+  const actions = [];
+  driver.checkTaskReviewGate = async () => ({
+    awaitingReview: reviewPending, taskCompleted: false, reviewCount: 1
+  });
+  driver.resolveTaskReviewGate = async action => {
+    actions.push(action);
+    reviewPending = false;
+    return { success: true };
+  };
+
+  const result = await driver.collectResponse();
+
+  assert.deepStrictEqual(actions, ['keep_all']);
+  assert.strictEqual(result.stable, true);
+  assert.strictEqual(reviewPending, false);
+  assert.strictEqual(result.text, capturedFinishSummary.replace(/\s+/g, ' ').trim());
+  assert.strictEqual(result.traceText, assistant.innerText.trim());
+});
+
+asyncTest('collectResponse keeps an unresolved finish-card review pending and retries the same result', async () => {
+  for (const taskCompleted of [false, true]) {
+    const { driver, assistant } = capturedResponseFixture();
+    driver.config.postActionDelayMs = 0;
+    let resolved = false;
+    const actions = [];
+    driver.checkTaskReviewGate = async () => ({
+      awaitingReview: !resolved, taskCompleted, reviewCount: 1
+    });
+    driver.resolveTaskReviewGate = async action => {
+      actions.push(action);
+      if (actions.length === 1) return { success: false, reason: 'review_gate_persisted' };
+      resolved = true;
+      return { success: true };
+    };
+
+    const pending = await driver.collectResponse();
+    assert.strictEqual(pending.stable, false);
+    assert.strictEqual(pending.reviewGatePending, true);
+    assert.strictEqual(pending.timedOut, false);
+    assert.strictEqual(pending.traceText, undefined);
+    assert.strictEqual(pending.text, capturedFinishSummary.replace(/\s+/g, ' ').trim());
+    assert.deepStrictEqual(actions, ['keep_all']);
+
+    const result = await driver.collectResponse();
+    assert.strictEqual(result.stable, true);
+    assert.strictEqual(result.reviewGatePending, undefined);
+    assert.strictEqual(result.text, pending.text);
+    assert.strictEqual(result.traceText, assistant.innerText.trim());
+    assert.deepStrictEqual(actions, ['keep_all', 'keep_all']);
+  }
+});
+
+asyncTest('collectResponse does not resolve a review from historical body completion while the current turn is running', async () => {
+  const { driver } = capturedResponseFixture({ finish: false });
+  let resolutions = 0;
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: true, taskCompleted: true, reviewCount: 1 });
+  driver.resolveTaskReviewGate = async () => {
+    resolutions++;
+    return { success: false, reason: 'review_gate_persisted' };
+  };
+
+  const result = await driver.collectResponse();
+
+  assert.strictEqual(resolutions, 0);
+  assert.strictEqual(result.stable, false);
+  assert.strictEqual(result.traceText, undefined);
+});
+
+asyncTest('collectResponse does not resolve a review for a stale finish summary', async () => {
+  const { driver } = capturedResponseFixture();
+  driver._preSendSnapshot = capturedFinishSummary.replace(/\s+/g, ' ').trim();
+  let resolutions = 0;
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: true, taskCompleted: true, reviewCount: 1 });
+  driver.resolveTaskReviewGate = async () => {
+    resolutions++;
+    return { success: false, reason: 'review_gate_persisted' };
+  };
+
+  const result = await driver.collectResponse();
+
+  assert.strictEqual(resolutions, 0);
+  assert.strictEqual(result.stable, false);
+  assert.strictEqual(result.traceText, undefined);
+});
+
+asyncTest('collectResponse preserves the completed SOLO task route when resolving review', async () => {
+  const { driver } = capturedResponseFixture();
+  driver.config.postActionDelayMs = 0;
+  driver.detectMode = async () => ({ mode: 'solo' });
+  driver._pollResponseState = async () => ({
+    taskComplete: true, taskInProgress: false,
+    taskText: 'Agent 修改和测试已完成，三个断言均通过。任务完成', responseText: ''
+  });
+  const actions = [];
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: actions.length === 0, taskCompleted: false, reviewCount: 1 });
+  driver.resolveTaskReviewGate = async action => { actions.push(action); return { success: true }; };
+
+  const result = await driver.collectResponse();
+
+  assert.deepStrictEqual(actions, ['keep_all']);
+  assert.strictEqual(result.stable, true);
+  assert.strictEqual(result.text, '修改和测试已完成，三个断言均通过。');
+});
+
+asyncTest('collectResponse does not finish the captured ordinary message merely because no stop button exists', async () => {
+  const { driver } = capturedResponseFixture({ finish: false });
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.stable, false);
+  assert.strictEqual(result.timedOut, true);
+});
+
+test('extractLatestIdeAssistantState retains an observed running flag without recognized turns', () => {
+  const driver = new DomDriver(null, getConfig());
+  const state = driver._extractLatestIdeAssistantState({
+    fullText: capturedWorkbenchNoise, turns: [], taskInProgress: true, taskComplete: false
+  }, '');
+  assert.strictEqual(state.inProgress, true);
+  assert.strictEqual(state.isComplete, false);
 });
 
 asyncTest('queryTaskSource reads the current Solo assistant turn instead of an older sidebar row', async () => {
@@ -1785,6 +2574,417 @@ test('listSoloChats returns Solo sidebar conversations from runtime evaluation',
   assert.ok(expression.includes("scanned: 'scroll'"));
 });
 
+function nativeSoloSidebarFixture() {
+  const actions = [];
+  const sidebar = {
+    className: 'soloaisidebar', offsetParent: {}, clientHeight: 200, scrollHeight: 200, scrollTop: 0,
+    parentElement: null,
+    getBoundingClientRect: () => ({ x: 0, y: 0, width: 250, height: 200, right: 250 }),
+    querySelectorAll: () => rows
+  };
+  const makeRow = (sessionId, active = false) => ({
+    sessionId, className: `index-module__task-item___zOpfg ${active ? 'index-module__selected___VDArP' : ''}`,
+    innerText: 'Same title 任务中断 09:41', textContent: 'Same title 任务中断 09:41',
+    offsetParent: sidebar, parentElement: sidebar, clientHeight: 0, scrollHeight: 0,
+    getAttribute: name => name === 'data-session-id' ? sessionId : null,
+    querySelectorAll: () => [],
+    querySelector: selector => selector.includes('title') ? { innerText: 'Same title', textContent: 'Same title' } :
+      selector.includes('action') ? { getBoundingClientRect: () => ({ x: 220, y: 100, width: 20, height: 20 }),
+        click: () => actions.push(['menu', sessionId]) } : null,
+    getBoundingClientRect: () => ({ x: 0, y: 80, left: 0, top: 80, width: 250, height: 40 }),
+    scrollIntoView() {},
+    dispatchEvent: () => actions.push(['select', sessionId]),
+    click: () => actions.push(['select', sessionId])
+  });
+  const rows = [makeRow('6ac05d3c1407a4b5492e7496', true), makeRow('6ac05c911407a4b5492e7476')];
+  const page = { clientHeight: 800, scrollHeight: 800, offsetParent: {}, querySelectorAll: () => [] };
+  const sandbox = {
+    document: { querySelector: selector => selector.includes('sidebar') ? sidebar : null,
+      body: page, documentElement: page, scrollingElement: page },
+    window: { innerHeight: 800, getComputedStyle: () => ({ overflow: 'visible', overflowY: 'visible' }) },
+    requestAnimationFrame: callback => callback(),
+    PointerEvent: class {}, MouseEvent: class {}
+  };
+  const client = { async send(method, params) {
+    assert.strictEqual(method, 'Runtime.evaluate');
+    return { result: { value: await vm.runInNewContext(params.expression, sandbox) } };
+  } };
+  return { driver: new DomDriver(client, { ...getConfig(), postActionDelayMs: 1 }), client, rows, actions };
+}
+
+test('listSoloChats keeps duplicate titles separate through native sessions and reads the title node', async () => {
+  const fixture = nativeSoloSidebarFixture();
+  const result = await fixture.driver.listSoloChats();
+  assert.strictEqual(result.count, 2);
+  assert.deepStrictEqual(Array.from(result.chats, chat => chat.sessionId), fixture.rows.map(row => row.sessionId));
+  assert.ok(result.chats.every(chat => chat.title === 'Same title'));
+});
+
+function soloSidebarRafFixture({ scrollable = true, raf = 'never', native = true,
+  activeIndex = 1, bothActive = false, activate, sameTitle = true, sidebarPresent = true } = {}) {
+  const events = { raf: 0, cancelledFrames: [], scrollWrites: [], clicks: [], activations: 0, evaluate: 0 };
+  let scrollTop = scrollable ? 150 : 0;
+  let mountedTop = scrollTop;
+  const sidebar = {
+    tagName: 'DIV', className: 'soloaisidebar', offsetParent: {}, parentElement: null,
+    clientHeight: 200, scrollHeight: scrollable ? 400 : 200,
+    get scrollTop() { return scrollTop; },
+    set scrollTop(value) { scrollTop = value; events.scrollWrites.push(value); },
+    getBoundingClientRect: () => ({ x: 0, y: 0, left: 0, top: 0, right: 250, width: 250, height: 200 }),
+    querySelectorAll: () => scrollable ? [rows[mountedTop === 0 ? 0 : 1]] : rows
+  };
+  const rows = ['6ac05c911407a4b5492e7476', '6ac05d3c1407a4b5492e7496'].map((sessionId, index) => {
+    const title = sameTitle ? 'Same title' : `Legacy title ${index}`;
+    return {
+      sessionId, className: `index-module__task-item___zOpfg ${bothActive || index === activeIndex ? 'index-module__selected___VDArP' : ''}`,
+      innerText: `${title} 进行中 09:41`, textContent: `${title} 进行中 09:41`,
+      offsetParent: sidebar, parentElement: sidebar, clientHeight: 0, scrollHeight: 0,
+      getAttribute: name => name === 'data-session-id' ? (native ? sessionId : null) : null,
+      querySelectorAll: () => [],
+      querySelector: selector => selector.includes('title') ? { innerText: title, textContent: title } : null,
+      getBoundingClientRect: () => ({ x: 0, y: 80, left: 0, top: 80, width: 250, height: 40 }),
+      scrollIntoView() {},
+      dispatchEvent: () => events.clicks.push(sessionId), click: () => events.clicks.push(sessionId)
+    };
+  });
+  const page = { clientHeight: 800, scrollHeight: 800, offsetParent: {}, querySelectorAll: () => [] };
+  const document = {
+    hidden: raf !== 'normal', visibilityState: raf === 'normal' ? 'visible' : 'hidden',
+    querySelector: selector => selector.includes('sidebar') && sidebarPresent ? sidebar : null,
+    body: page, documentElement: page, scrollingElement: page
+  };
+  const sandbox = {
+    document,
+    window: { innerHeight: 800, getComputedStyle: () => ({ overflow: 'visible', overflowY: 'visible' }) },
+    requestAnimationFrame: raf === 'absent' ? undefined : callback => {
+      const id = ++events.raf;
+      if (raf === 'normal' || document.visibilityState === 'visible' ||
+        (raf === 'first-only' && id === 1) || (raf === 'after-first-settle' && id <= 2)) {
+        queueMicrotask(() => { mountedTop = scrollTop; callback(); });
+      }
+      return id;
+    },
+    cancelAnimationFrame: frame => events.cancelledFrames.push(frame), setTimeout, clearTimeout,
+    PointerEvent: class {}, MouseEvent: class {}
+  };
+  const client = { async send(method, params) {
+    assert.strictEqual(method, 'Runtime.evaluate', 'the fixture never connects to CDP or dispatches native input');
+    events.evaluate++;
+    return { result: { value: await vm.runInNewContext(params.expression, sandbox) } };
+  } };
+  const options = activate ? { activateWindow: async () => {
+    events.activations++;
+    assert.deepStrictEqual(events.scrollWrites, [], 'visibility is prepared before changing the sidebar scroll');
+    return activate(document);
+  } } : {};
+  return { driver: new DomDriver(client, { ...getConfig(), postActionDelayMs: 1 }, options), sidebar, rows, events, document };
+}
+
+async function withinSidebarDeadline(promise) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error('sidebar call did not settle within 1000ms')), 1000); })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+test('listSoloChats rejects an unpainted hidden virtualized scan and restores scroll', async () => {
+  for (const raf of ['never', 'first-only', 'after-first-settle', 'absent']) {
+    const fixture = soloSidebarRafFixture({ raf });
+    await assert.rejects(withinSidebarDeadline(fixture.driver.listSoloChats()), error => error.code === 'CDP_TIMEOUT');
+    assert.strictEqual(fixture.sidebar.scrollTop, 150);
+    assert.deepStrictEqual(fixture.events.clicks, []);
+    if (raf !== 'absent') assert.ok(fixture.events.cancelledFrames.length > 0);
+  }
+});
+
+test('listSoloChats still scans painted virtualized native rows and restores scroll', async () => {
+  const fixture = soloSidebarRafFixture({ raf: 'normal' });
+  const result = await withinSidebarDeadline(fixture.driver.listSoloChats());
+  assert.strictEqual(result.mode, 'solo');
+  assert.strictEqual(result.scanned, 'scroll');
+  assert.strictEqual(result.count, 2);
+  assert.deepStrictEqual(Array.from(result.chats, chat => chat.sessionId), fixture.rows.map(row => row.sessionId));
+  assert.ok(result.chats.every(chat => chat.title === 'Same title'));
+  assert.strictEqual(fixture.sidebar.scrollTop, 150);
+});
+
+test('getActiveSoloChat reads the mounted native identity without scroll, RAF, or window activation', async () => {
+  const fixture = soloSidebarRafFixture({ activate: () => { throw new Error('active identity must not activate a window'); } });
+  const result = await withinSidebarDeadline(fixture.driver.getActiveSoloChat());
+  assert.strictEqual(result.mode, 'solo');
+  assert.strictEqual(result.active.sessionId, fixture.rows[1].sessionId);
+  assert.strictEqual(result.active.title, 'Same title');
+  assert.strictEqual(result.active.text, 'Same title 进行中 09:41');
+  assert.strictEqual(result.active.status, 'running');
+  assert.strictEqual(result.active.scanned, 'visible');
+  assert.strictEqual(result.count, 1, 'fast snapshots count only the mounted conversations');
+  assert.strictEqual(fixture.events.evaluate, 1);
+  assert.strictEqual(fixture.events.raf, 0);
+  assert.strictEqual(fixture.events.activations, 0);
+  assert.deepStrictEqual(fixture.events.scrollWrites, []);
+});
+
+test('getActiveSoloChat safely rejects conflicting active native identities', async () => {
+  const fixture = soloSidebarRafFixture({ scrollable: false, bothActive: true });
+  const result = await withinSidebarDeadline(fixture.driver.getActiveSoloChat());
+  assert.strictEqual(result.active, null);
+  assert.strictEqual(result.reason, 'active_solo_chat_ambiguous');
+  assert.strictEqual(result.count, 2);
+  assert.strictEqual(fixture.events.evaluate, 1);
+  assert.deepStrictEqual(fixture.events.scrollWrites, []);
+});
+
+test('getActiveSoloChat keeps the full legacy scan response without fabricating native IDs from titles', async () => {
+  const fixture = soloSidebarRafFixture({ scrollable: false, native: false, sameTitle: false });
+  const legacy = { index: 5, sessionId: null, title: 'Legacy title 1', text: 'Legacy title 1 进行中', active: true, status: 'running' };
+  let scans = 0;
+  fixture.driver.listSoloChats = async () => { scans++; return { mode: 'solo', chats: [legacy], count: 6 }; };
+  const result = await withinSidebarDeadline(fixture.driver.getActiveSoloChat());
+  assert.strictEqual(result.active, legacy);
+  assert.strictEqual(result.active.sessionId, null);
+  assert.strictEqual(result.count, 6);
+  assert.strictEqual(scans, 1);
+  assert.strictEqual(fixture.events.raf, 0);
+});
+
+test('getActiveSoloChat can still find an unmounted native active row through a confirmed full scan', async () => {
+  const fixture = soloSidebarRafFixture({ raf: 'normal', activeIndex: 0 });
+  const result = await withinSidebarDeadline(fixture.driver.getActiveSoloChat());
+  assert.strictEqual(result.active.sessionId, fixture.rows[0].sessionId);
+  assert.strictEqual(result.count, 2);
+  assert.strictEqual(result.active.scanned, 'scroll');
+  assert.strictEqual(fixture.sidebar.scrollTop, 150);
+});
+
+test('getActiveSoloChat preserves the non-Solo reason without guessing from a title', async () => {
+  const fixture = soloSidebarRafFixture({ sidebarPresent: false });
+  const result = await fixture.driver.getActiveSoloChat();
+  assert.strictEqual(result.mode, 'not_solo');
+  assert.strictEqual(result.active, null);
+  assert.strictEqual(result.reason, 'sidebar_element_not_found');
+  assert.strictEqual(fixture.events.evaluate, 1);
+});
+
+test('getActiveSoloChat returns unavailable when runtime has no snapshot', async () => {
+  const driver = new DomDriver({ send: async () => ({ result: {} }) }, getConfig());
+  const result = await driver.getActiveSoloChat();
+  assert.strictEqual(result.active, null);
+  assert.strictEqual(result.mode, 'unknown');
+  assert.strictEqual(result.reason, 'solo_chats_unavailable');
+});
+
+test('listSoloChats keeps no-scroll legacy reads independent of RAF and window activation', async () => {
+  const fixture = soloSidebarRafFixture({ scrollable: false, native: false,
+    activate: () => { throw new Error('no-scroll reads must not activate a window'); } });
+  const result = await fixture.driver.listSoloChats();
+  assert.strictEqual(result.scanned, 'visible');
+  assert.strictEqual(result.count, 1);
+  assert.strictEqual(result.chats[0].sessionId, null);
+  assert.strictEqual(fixture.events.raf, 0);
+  assert.strictEqual(fixture.events.activations, 0);
+  assert.deepStrictEqual(fixture.events.scrollWrites, []);
+});
+
+test('listSoloChats prepares a hidden renderer once through the existing hook before a full scan', async () => {
+  const fixture = soloSidebarRafFixture({ activate: document => {
+    document.visibilityState = 'visible'; document.hidden = false;
+    return true;
+  } });
+  const result = await withinSidebarDeadline(fixture.driver.listSoloChats());
+  assert.strictEqual(result.count, 2);
+  assert.strictEqual(result.scanned, 'scroll');
+  assert.strictEqual(fixture.events.activations, 1);
+  assert.strictEqual(fixture.sidebar.scrollTop, 150);
+});
+
+test('listSoloChats fails before scrolling when native activation fails or leaves the renderer hidden', async () => {
+  for (const activationResult of [false, true]) {
+    const fixture = soloSidebarRafFixture({ activate: () => activationResult });
+    fixture.driver._waitForExpression = async (expression, timeout, poll) => {
+      assert.strictEqual(expression, 'document.visibilityState === "visible"');
+      assert.strictEqual(timeout, 5000);
+      assert.strictEqual(poll, 200);
+      return false;
+    };
+    await assert.rejects(withinSidebarDeadline(fixture.driver.listSoloChats()), error => error.code === 'WINDOW_NOT_VISIBLE');
+    assert.strictEqual(fixture.events.activations, 1);
+    assert.strictEqual(fixture.events.raf, 0);
+    assert.deepStrictEqual(fixture.events.scrollWrites, []);
+    assert.strictEqual(fixture.sidebar.scrollTop, 150);
+  }
+});
+
+test('native row location with missing RAF stops safely and restores scroll without selecting a legacy match', async () => {
+  const fixture = soloSidebarRafFixture();
+  const result = await withinSidebarDeadline(fixture.driver.switchSoloChat({ sessionId: 'missing-native-session', index: 0, titleIncludes: 'Same title' }));
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.reason, 'sidebar_scan_timeout');
+  assert.strictEqual(fixture.sidebar.scrollTop, 150);
+  assert.deepStrictEqual(fixture.events.clicks, []);
+});
+
+test('native deletion cannot proceed after an unconfirmed virtualized row scan', async () => {
+  const fixture = soloSidebarRafFixture();
+  const result = await withinSidebarDeadline(fixture.driver.deleteSoloChats({ candidates: [
+    { sessionId: 'missing-native-session', index: 0, title: 'Same title' }
+  ] }));
+  assert.strictEqual(result.deleted, 0);
+  assert.strictEqual(result.attempts[0].reason, 'sidebar_scan_timeout');
+  assert.deepStrictEqual(fixture.events.clicks, []);
+  assert.strictEqual(fixture.sidebar.scrollTop, 150);
+});
+
+test('native row location prepares the hidden renderer once and selects only the painted exact ID', async () => {
+  const fixture = soloSidebarRafFixture({ activate: document => {
+    document.visibilityState = 'visible'; document.hidden = false;
+    return true;
+  } });
+  const result = await withinSidebarDeadline(fixture.driver.switchSoloChat({ sessionId: fixture.rows[0].sessionId, index: 1 }));
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.sessionId, fixture.rows[0].sessionId);
+  assert.strictEqual(fixture.events.activations, 1);
+  assert.ok(fixture.events.clicks.length > 0);
+  assert.ok(fixture.events.clicks.every(sessionId => sessionId === fixture.rows[0].sessionId));
+});
+
+test('native row location restores scroll after a complete painted scan finds no exact ID', async () => {
+  const fixture = soloSidebarRafFixture({ raf: 'normal' });
+  const result = await withinSidebarDeadline(fixture.driver.switchSoloChat({ sessionId: 'missing-native-session' }));
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.reason, 'candidate_not_found');
+  assert.strictEqual(fixture.sidebar.scrollTop, 150);
+  assert.deepStrictEqual(fixture.events.clicks, []);
+});
+
+test('listSoloChats never reports a complete list after reaching the virtualized scan limit', async () => {
+  const fixture = soloSidebarRafFixture({ raf: 'normal' });
+  fixture.sidebar.scrollHeight = 40000;
+  await assert.rejects(withinSidebarDeadline(fixture.driver.listSoloChats()), error => error.code === 'CDP_TIMEOUT');
+  assert.strictEqual(fixture.sidebar.scrollTop, 150);
+  assert.ok(fixture.events.scrollWrites.at(-2) < 39800);
+});
+
+test('native row location safely distinguishes an incomplete bounded scan from proven absence', async () => {
+  const fixture = soloSidebarRafFixture({ raf: 'normal' });
+  fixture.sidebar.scrollHeight = 40000;
+  const result = await withinSidebarDeadline(fixture.driver.switchSoloChat({ sessionId: 'missing-native-session' }));
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.reason, 'sidebar_scan_incomplete');
+  assert.strictEqual(fixture.sidebar.scrollTop, 150);
+  assert.deepStrictEqual(fixture.events.clicks, []);
+});
+
+function fractionalSoloSidebarFixture(actualMax = 114.5, originalTop = 0) {
+  const fixture = soloSidebarRafFixture({ raf: 'normal' });
+  const descriptor = Object.getOwnPropertyDescriptor(fixture.sidebar, 'scrollTop');
+  // Exact geometry from live record0250: integer height807/clientHeight692,
+  // requested bottom115 and confirmed physical bottom114.5 after painting.
+  fixture.sidebar.clientHeight = 692;
+  fixture.sidebar.scrollHeight = 807;
+  Object.defineProperty(fixture.sidebar, 'scrollTop', {
+    get: descriptor.get,
+    set(value) { descriptor.set(Math.max(0, Math.min(actualMax, value))); }
+  });
+  fixture.sidebar.scrollTop = originalTop;
+  fixture.events.scrollWrites.length = 0;
+  return fixture;
+}
+
+test('listSoloChats accepts the measured fractional bottom and the exact one-pixel boundary', async () => {
+  for (const actualMax of [114.5, 114]) {
+    const fixture = fractionalSoloSidebarFixture(actualMax);
+    const result = await withinSidebarDeadline(fixture.driver.listSoloChats());
+    assert.strictEqual(result.scanned, 'scroll');
+    assert.strictEqual(result.count, 2);
+    assert.deepStrictEqual(Array.from(result.chats, chat => chat.sessionId), fixture.rows.map(row => row.sessionId));
+    assert.strictEqual(fixture.sidebar.scrollTop, 0);
+    assert.strictEqual(fixture.events.scrollWrites.at(-2), actualMax);
+  }
+});
+
+test('native row location at the measured fractional bottom proves absence without a title fallback click', async () => {
+  const fixture = fractionalSoloSidebarFixture();
+  const result = await withinSidebarDeadline(fixture.driver.switchSoloChat({ sessionId: 'missing-native-session', index: 0, titleIncludes: 'Same title' }));
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.reason, 'candidate_not_found');
+  assert.strictEqual(fixture.sidebar.scrollTop, 0);
+  assert.deepStrictEqual(fixture.events.clicks, []);
+});
+
+test('fractional bottom tolerance cannot accept a true shortfall beyond one pixel', async () => {
+  for (const actualMax of [113.99, 110]) {
+    const fixture = fractionalSoloSidebarFixture(actualMax);
+    await assert.rejects(withinSidebarDeadline(fixture.driver.listSoloChats()), error => error.code === 'CDP_TIMEOUT');
+    assert.strictEqual(fixture.sidebar.scrollTop, 0);
+    const located = await withinSidebarDeadline(fixture.driver.switchSoloChat({ sessionId: 'missing-native-session' }));
+    assert.strictEqual(located.success, false);
+    assert.strictEqual(located.reason, 'sidebar_scan_incomplete');
+    assert.strictEqual(fixture.sidebar.scrollTop, 0);
+    assert.deepStrictEqual(fixture.events.clicks, []);
+  }
+});
+
+test('a confirmed fractional-bottom full list restores an original nonzero scroll position', async () => {
+  const fixture = fractionalSoloSidebarFixture(114.5, 75);
+  await withinSidebarDeadline(fixture.driver.listSoloChats());
+  assert.strictEqual(fixture.sidebar.scrollTop, 75);
+});
+
+test('switchSoloChat selects only the exact native session even when legacy criteria match another row', async () => {
+  const fixture = nativeSoloSidebarFixture();
+  const sessionId = fixture.rows[1].sessionId;
+  const result = await fixture.driver.switchSoloChat({ sessionId, index: 0, titleIncludes: 'Same title' });
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.sessionId, sessionId);
+  assert.ok(fixture.actions.length > 0);
+  assert.ok(fixture.actions.every(action => action[1] === sessionId));
+});
+
+test('switchSoloChat never falls back from a missing native session to title or index', async () => {
+  const fixture = nativeSoloSidebarFixture();
+  const result = await fixture.driver.switchSoloChat({ sessionId: 'missing-native-session', index: 0, titleIncludes: 'Same title' });
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(fixture.actions.length, 0);
+});
+
+test('deleteSoloChats never opens another row menu when the native session is missing', async () => {
+  const fixture = nativeSoloSidebarFixture();
+  const result = await fixture.driver.deleteSoloChats({ candidates: [
+    { sessionId: 'missing-native-session', index: 0, title: 'Same title' }
+  ] });
+  assert.strictEqual(result.deleted, 0);
+  assert.strictEqual(result.attempts[0].reason, 'candidate_not_found');
+  assert.strictEqual(fixture.actions.length, 0);
+});
+
+test('deleteSoloChats verifies exact native identity when titles change or duplicate titles remain', async () => {
+  for (const targetRemains of [true, false]) {
+    const fixture = nativeSoloSidebarFixture();
+    const sessionId = fixture.rows[1].sessionId;
+    const evaluate = fixture.client.send;
+    fixture.client.send = async (method, params) => {
+      if (method === 'Input.dispatchMouseEvent') return {};
+      if (params.expression.includes('[role="dialog"]') || params.expression.includes("querySelectorAll('.context-menu-container")) {
+        return { result: { value: { x: 100, y: 100 } } };
+      }
+      return evaluate(method, params);
+    };
+    fixture.driver.listSoloChats = async () => ({ mode: 'solo', chats: [targetRemains
+      ? { sessionId, title: 'Renamed after the menu opened' }
+      : { sessionId: fixture.rows[0].sessionId, title: 'Same title' }] });
+    const result = await fixture.driver.deleteSoloChats({ candidates: [{ sessionId, index: 0, title: 'Same title' }] });
+    assert.strictEqual(result.deleted, targetRemains ? 0 : 1);
+    assert.strictEqual(result.attempts[0].reason, targetRemains ? 'delete_verification_failed' : null);
+    assert.ok(fixture.actions.length > 0);
+    assert.ok(fixture.actions.every(action => action[1] === sessionId), 'only the native target row menu may open');
+  }
+});
+
 test('switchSoloChat clicks matching Solo conversation and clears task state', async () => {
   let expression = '';
   const driver = new DomDriver({
@@ -2027,6 +3227,25 @@ test('deleteSoloChats does not treat menu text insertion as deletion success', a
   assert.strictEqual(result.deleted, 0);
   assert.strictEqual(result.attempts[0].success, false);
   assert.strictEqual(result.attempts[0].reason, 'delete_verification_failed');
+});
+
+asyncTest('Settings operations reject a hidden window before changing preferences', async () => {
+  let inputCalls = 0;
+  const driver = new DomDriver({ send: async () => { inputCalls++; throw new Error('Unexpected UI operation'); } }, getConfig());
+  driver._ensureVisibleWindow = async () => {
+    const error = new Error('Renderer stayed hidden');
+    error.code = 'WINDOW_NOT_VISIBLE';
+    throw error;
+  };
+  for (const operation of [
+    () => driver.settings.switchTab('通用'),
+    () => driver.settings.setDropdown('Markdown 文件的默认打开方式', '代码编辑器'),
+    () => driver.settings.setToggle('动态 UI', false),
+    () => driver.settings.typeText('字体大小', '15')
+  ]) {
+    await assert.rejects(operation, { code: 'WINDOW_NOT_VISIBLE' });
+  }
+  assert.strictEqual(inputCalls, 0);
 });
 
 test('getConfig respects TRAECN_COMPOSER_SELECTORS env var', () => {

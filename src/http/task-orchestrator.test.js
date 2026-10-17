@@ -168,6 +168,85 @@ test('TaskOrchestrator rejects an idempotency key reused for different work', ()
   assert.strictEqual(dependencies.taskQueue.size, 1);
 });
 
+test('TaskOrchestrator fingerprints every supported conversation target alias', () => {
+  const dependencies = createDependencies();
+  const orchestrator = createOrchestrator(dependencies, {
+    normalizeSoloChatTarget: (value) => value && Number.isInteger(value.index)
+      ? { index: value.index }
+      : null
+  });
+  const request = { task: 'work in the selected conversation', soloChatIndex: 2 };
+  const task = orchestrator.createQueuedTask({ ...request, idempotencyKey: 'conversation-key' });
+
+  assert.strictEqual(task.idempotencyFingerprint, orchestrator.fingerprintTaskRequest({
+    task: request.task,
+    soloChat: { index: 2 }
+  }));
+  const replay = orchestrator.resolveIdempotentTask('conversation-key', {
+    ...request,
+    soloChatIndex: 3
+  });
+  assert.strictEqual(replay.statusCode, 409, 'another conversation changes the accepted work');
+});
+
+test('TaskOrchestrator fingerprints normalized queue limits and model probe intervals', () => {
+  const dependencies = createDependencies();
+  const orchestrator = createOrchestrator(dependencies, {
+    modelProbeIntervalMs: value => Number(value) || 60000
+  });
+  const request = {
+    task: 'work with bounded queue waiting',
+    idempotencyKey: 'queue-options-key',
+    maxQueueWaitMs: 3000,
+    modelProbeIntervalMs: 15000
+  };
+  orchestrator.createQueuedTask(request);
+
+  assert.strictEqual(orchestrator.fingerprintTaskRequest(request), orchestrator.fingerprintTaskRequest({
+    ...request,
+    maxQueueWaitMs: undefined,
+    queueMaxWaitMs: '3000',
+    modelProbeIntervalMs: '15000'
+  }));
+  assert.strictEqual(orchestrator.resolveIdempotentTask('queue-options-key', {
+    ...request,
+    maxQueueWaitMs: 9000
+  }).statusCode, 409);
+  assert.strictEqual(orchestrator.resolveIdempotentTask('queue-options-key', {
+    ...request,
+    modelProbeIntervalMs: 30000
+  }).statusCode, 409);
+});
+
+test('TaskOrchestrator replays legacy fingerprints while enforcing the fields they recorded', () => {
+  const dependencies = createDependencies();
+  const orchestrator = createOrchestrator(dependencies, {
+    isTerminalStatus: status => status === 'done'
+  });
+  const request = { task: 'work accepted before the upgrade', idempotencyKey: 'legacy-key' };
+  const task = orchestrator.createQueuedTask(request);
+  task.idempotencyFingerprint = orchestrator.fingerprintTaskRequest(request, 1);
+  delete task.idempotencyFingerprintVersion;
+  assert.strictEqual(orchestrator.resolveIdempotentTask('legacy-key', request).statusCode, 202);
+  assert.strictEqual(orchestrator.resolveIdempotentTask('legacy-key', {
+    ...request,
+    task: 'different work after the upgrade'
+  }).statusCode, 409);
+
+  dependencies.taskQueue.clear();
+  dependencies.queueService.getTerminalReplay = () => ({
+    taskId: task.taskId,
+    status: 'done',
+    fingerprint: task.idempotencyFingerprint,
+    result: { text: 'legacy result' }
+  });
+  assert.strictEqual(orchestrator.resolveIdempotentTask('legacy-key', request).statusCode, 200);
+  assert.strictEqual(orchestrator.resolveIdempotentTask('legacy-key', {
+    ...request,
+    task: 'different terminal work after the upgrade'
+  }).statusCode, 409);
+});
+
 test('TaskOrchestrator rejects different work against a terminal replay', () => {
   const dependencies = createDependencies();
   const orchestrator = createOrchestrator(dependencies, {
@@ -210,12 +289,43 @@ test('TaskOrchestrator resolveIdempotentTask reports the real terminal status on
     { queued: true }
   );
   task.status = 'done';
+  task.result = { text: 'original finished result', stable: true };
 
   const replay = orchestrator.resolveIdempotentTask('terminal-replay-2');
   assert.ok(replay);
   assert.strictEqual(replay.taskId, task.taskId);
   assert.strictEqual(replay.status, 'done');
-  assert.strictEqual(replay.statusCode, 202);
+  assert.strictEqual(replay.statusCode, 200);
+  assert.strictEqual(replay.terminal, true);
+  assert.deepStrictEqual(replay.result, task.result);
+  assert.strictEqual(replay.error, null);
+});
+
+test('TaskOrchestrator terminal replays keep stored traces internal without changing the original result', () => {
+  for (const persistedReplay of [false, true]) {
+    const dependencies = createDependencies();
+    const orchestrator = createOrchestrator(dependencies, {
+      isTerminalStatus: status => status === 'done'
+    });
+    const task = orchestrator.createQueuedTask(
+      { task: 'finished trace task', idempotencyKey: 'stored-trace-replay' },
+      { queued: true }
+    );
+    const result = { text: 'final answer', stable: true, traceText: 'original process' };
+    task.status = 'done';
+    task.result = result;
+    if (persistedReplay) {
+      dependencies.taskQueue.delete(task.taskId);
+      dependencies.queueService.getTerminalReplay = () => ({
+        taskId: task.taskId, status: 'done', result, error: null
+      });
+    }
+    const replay = orchestrator.resolveIdempotentTask('stored-trace-replay');
+    assert.strictEqual(replay.taskId, task.taskId);
+    assert.strictEqual(replay.terminal, true);
+    assert.deepStrictEqual(replay.result, { text: 'final answer', stable: true });
+    assert.strictEqual(result.traceText, 'original process');
+  }
 });
 
 test('TaskOrchestrator resolveIdempotentTask returns null for an unknown or empty key', () => {

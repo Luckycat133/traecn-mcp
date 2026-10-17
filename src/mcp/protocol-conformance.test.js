@@ -2,7 +2,9 @@
 
 const assert = require('assert');
 const { spawn } = require('child_process');
+const fs = require('fs');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const { Client } = require('@modelcontextprotocol/client');
 const { StdioClientTransport } = require('@modelcontextprotocol/client/stdio');
@@ -51,12 +53,12 @@ async function withOfficialClient(options, callback) {
   }
 }
 
-function startFakeGateway() {
+function startFakeGateway(taskResult) {
   const server = http.createServer((request, response) => {
     response.setHeader('Content-Type', 'application/json');
     if (request.method === 'GET' && request.url === '/api/task/conformance-task') {
       response.writeHead(200);
-      response.end(JSON.stringify({
+      response.end(JSON.stringify(taskResult ? taskResult() : {
         taskId: 'conformance-task',
         status: 'done',
         result: { text: 'independent client result', stable: true }
@@ -72,13 +74,13 @@ function startFakeGateway() {
 }
 
 class RawStdioPeer {
-  constructor() {
+  constructor(options = {}) {
     this.buffer = Buffer.alloc(0);
     this.frames = [];
     this.waiters = [];
     this.child = spawn(process.execPath, [serverEntry], {
       cwd: path.resolve(__dirname, '..', '..'),
-      env: serverEnvironment(),
+      env: serverEnvironment(options.env),
       stdio: ['pipe', 'pipe', 'pipe']
     });
     this.stderr = '';
@@ -219,6 +221,95 @@ function assertSurface(result) {
     }
   });
 
+  await asyncTest('official SDK accepts persisted ISO completion times and preserves epoch/null compatibility', async () => {
+    let completedAt = '2026-10-02T16:31:44.993Z';
+    const gateway = await startFakeGateway(() => ({
+      taskId: 'conformance-task', status: 'done', createdAt: 1790958672386,
+      completedAt, fromHistory: typeof completedAt === 'string',
+      result: { text: 'durable task answer', stable: true }
+    }));
+    try {
+      await withOfficialClient({
+        name: 'conformance-history-timestamps',
+        supportedProtocolVersions: ['2026-07-28'],
+        versionNegotiation: { mode: { pin: '2026-07-28' }, probe: { timeoutMs: 2000 } },
+        env: { TRAECN_GATEWAY_PORT: String(gateway.address().port), TRAECN_GATEWAY_TOKEN: '' }
+      }, async client => {
+        const listing = await client.listTools(undefined, { cacheMode: 'bypass' });
+        assertSurface(listing);
+        const toolDefinition = listing.tools.find(tool => tool.name === 'traecn_get_task');
+        for (const value of ['2026-10-02T16:31:44.993Z', 1790958704993, null]) {
+          completedAt = value;
+          const result = await client.callTool({
+            name: 'traecn_get_task', arguments: { taskId: 'conformance-task' }
+          }, { timeout: 3000, toolDefinition });
+          assert.strictEqual(result.isError, false);
+          assert.strictEqual(result.structuredContent.completedAt, value);
+          assert.strictEqual(result.structuredContent.result.text, 'durable task answer');
+          assert.deepStrictEqual(JSON.parse(result.content[0].text), result.structuredContent);
+        }
+      });
+    } finally { await new Promise(resolve => gateway.close(resolve)); }
+  });
+
+  await asyncTest('official SDK validates workspace identity without inventing an unknown root path', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-workspace-schema-')));
+    const workspacePath = path.join(root, 'workspace');
+    fs.mkdirSync(workspacePath);
+    const requests = [];
+    let gatewayPayload;
+    const gateway = http.createServer((request, response) => {
+      response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'POST' && request.url === '/api/open-project') {
+        let body = '';
+        request.setEncoding('utf8');
+        request.on('data', chunk => { body += chunk; });
+        request.on('end', () => {
+          requests.push(JSON.parse(body));
+          response.end(JSON.stringify(gatewayPayload));
+        });
+        return;
+      }
+      response.writeHead(404);
+      response.end(JSON.stringify({ error: 'not found' }));
+    });
+    await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve));
+    try {
+      await withOfficialClient({
+        name: 'conformance-workspace-output',
+        supportedProtocolVersions: ['2026-07-28'],
+        versionNegotiation: { mode: { pin: '2026-07-28' }, probe: { timeoutMs: 2000 } },
+        env: { TRAECN_GATEWAY_PORT: String(gateway.address().port), TRAECN_GATEWAY_TOKEN: '' }
+      }, async client => {
+        const listing = await client.listTools(undefined, { cacheMode: 'bypass' });
+        const toolDefinition = listing.tools.find(tool => tool.name === 'traecn_open_workspace');
+        assert.ok(toolDefinition);
+        for (const payload of [
+          { alreadyRunning: true, reusedWindow: true,
+            verifiedWorkspace: { folderName: 'workspace', rootPath: null } },
+          { alreadyRunning: true, alreadyOpen: true, reusedWindow: false,
+            verifiedWorkspace: { folderName: 'workspace', rootPath: workspacePath } },
+          { verifiedWorkspace: workspacePath },
+          { started: true, cdpReady: true }
+        ]) {
+          gatewayPayload = { success: true, projectPath: workspacePath, ...payload };
+          const result = await client.callTool({
+            name: 'traecn_open_workspace', arguments: { path: workspacePath }
+          }, { timeout: 3000, toolDefinition });
+          assert.strictEqual(result.isError, false);
+          assert.deepStrictEqual(result.structuredContent, gatewayPayload);
+          assert.deepStrictEqual(JSON.parse(result.content[0].text), gatewayPayload);
+        }
+      });
+      assert.strictEqual(requests.length, 4);
+      assert.ok(requests.every(request => request.projectPath === workspacePath));
+    } finally {
+      gateway.closeAllConnections();
+      await new Promise(resolve => gateway.close(resolve));
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   await asyncTest('official client observes strict missing and extra tool arguments', async () => {
     await withOfficialClient({
       name: 'conformance-arguments',
@@ -310,6 +401,79 @@ function assertSurface(result) {
       assert.strictEqual(unknown.message.error.code, -32601);
     } finally {
       await peer.close();
+    }
+  });
+
+  await asyncTest('modern stdio task cancellation closes its subscription and aborts the HTTP long poll', async () => {
+    let beginLongPoll;
+    let finishLongPoll;
+    const started = new Promise(resolve => { beginLongPoll = resolve; });
+    const aborted = new Promise(resolve => { finishLongPoll = resolve; });
+    const gateway = http.createServer((request, response) => {
+      response.setHeader('Content-Type', 'application/json');
+      const url = new URL(request.url, 'http://localhost');
+      if (url.pathname === '/api/task/task-subscribed') {
+        response.end(JSON.stringify({
+          taskId: 'task-subscribed', status: 'done',
+          result: { text: 'subscription result', stable: true }
+        }));
+        return;
+      }
+      if (url.pathname === '/api/task-events') {
+        if (Number(url.searchParams.get('waitMs')) > 0) {
+          beginLongPoll();
+          response.once('close', finishLongPoll);
+        } else {
+          response.end(JSON.stringify({ events: [], clientKnown: true, hasMore: false }));
+        }
+        return;
+      }
+      response.writeHead(404);
+      response.end(JSON.stringify({ error: 'not found' }));
+    });
+    await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve));
+    const peer = new RawStdioPeer({ env: {
+      TRAECN_GATEWAY_PORT: String(gateway.address().port),
+      TRAECN_GATEWAY_TIMEOUT_MS: '5000'
+    } });
+    const metadata = {
+      'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+      'io.modelcontextprotocol/clientCapabilities': {
+        extensions: { 'io.modelcontextprotocol/tasks': {} }
+      }
+    };
+    const withTimeout = promise => {
+      let timer;
+      return Promise.race([
+        promise,
+        new Promise((resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Task subscription HTTP lifecycle timed out')), 3000);
+        })
+      ]).finally(() => clearTimeout(timer));
+    };
+    try {
+      peer.send({
+        jsonrpc: '2.0', id: 'listen-modern', method: 'subscriptions/listen',
+        params: { notifications: { taskIds: ['task-subscribed'] }, _meta: metadata }
+      });
+      await peer.waitFor(frame => frame.message.method === 'notifications/subscriptions/acknowledged');
+      const snapshot = await peer.waitFor(frame => frame.message.method === 'notifications/tasks');
+      assert.strictEqual(snapshot.message.params.status, 'completed');
+      assert.deepStrictEqual(
+        JSON.parse(snapshot.message.params.result.content[0].text),
+        snapshot.message.params.result.structuredContent
+      );
+      await withTimeout(started);
+      peer.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: {
+        requestId: 'listen-modern', _meta: metadata
+      } });
+      const closed = await peer.waitFor(frame => frame.message.id === 'listen-modern');
+      assert.strictEqual(closed.message.result.resultType, 'complete');
+      await withTimeout(aborted);
+    } finally {
+      await peer.close();
+      gateway.closeAllConnections();
+      await new Promise(resolve => gateway.close(resolve));
     }
   });
 

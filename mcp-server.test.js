@@ -180,7 +180,8 @@ async function test(name, fn) {
       });
       assert.strictEqual(completed.resultType, 'complete');
       assert.strictEqual(completed.status, 'completed');
-      assert.strictEqual(completed.result.content[0].text, 'extension result');
+      assert.strictEqual(JSON.parse(completed.result.content[0].text).text, 'extension result');
+      assert.deepStrictEqual(JSON.parse(completed.result.content[0].text), completed.result.structuredContent);
 
       const fallback = await handlers.handle({
         jsonrpc: '2.0',
@@ -211,7 +212,7 @@ async function test(name, fn) {
             }
           }
         }),
-        error => error.code === -32003
+        error => error.code === -32021
       );
     } finally {
       await new Promise(resolve => server.close(resolve));
@@ -278,6 +279,115 @@ async function test(name, fn) {
     });
     assert.strictEqual(invalid.isError, true);
     assert.match(invalid.structuredContent.error, /taskId/);
+  });
+
+  await test('MCP rejects malformed arguments before any gateway mutation', async () => {
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      requests++;
+      res.end(JSON.stringify({ success: true }));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const handlers = createMcpHandlers({ host: '127.0.0.1', port: server.address().port, timeout: 1000 });
+      for (const args of [null, [], 'unexpected', false, 0]) {
+        const result = await handlers.handle({
+          method: 'tools/call', params: { name: 'traecn_create_conversation', arguments: args }
+        });
+        assert.strictEqual(result.isError, true);
+        assert.strictEqual(result.structuredContent.code, 'INVALID_ARGUMENTS');
+      }
+      assert.strictEqual(requests, 0);
+      for (const name of ['constructor', 'toString', '__proto__']) {
+        await assert.rejects(() => handlers.handle({ method: 'tools/call', params: { name } }),
+          error => error.code === -32602);
+      }
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
+  await test('MCP validates capability objects and subscription task identities', async () => {
+    const handlers = createMcpHandlers({ test: true });
+    const metadata = {
+      'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+      'io.modelcontextprotocol/clientCapabilities': {
+        extensions: { 'io.modelcontextprotocol/tasks': {} }
+      }
+    };
+    await assert.rejects(() => handlers.handle({
+      method: 'tools/list', params: { _meta: { ...metadata, 'io.modelcontextprotocol/clientCapabilities': [] } }
+    }), error => error.code === -32602);
+    await assert.rejects(() => handlers.handle({
+      method: 'tasks/get',
+      params: {
+        taskId: 'task-1',
+        _meta: { ...metadata, 'io.modelcontextprotocol/clientCapabilities': {
+          extensions: { 'io.modelcontextprotocol/tasks': [] }
+        } }
+      }
+    }), error => error.code === -32021);
+    for (const taskIds of [[1], [null], [{}], [' ']]) {
+      assert.throws(() => handlers.subscribe({
+        method: 'subscriptions/listen', params: { notifications: { taskIds }, _meta: metadata }
+      }), error => error.code === -32602);
+    }
+    assert.deepStrictEqual(handlers.subscribe({
+      method: 'subscriptions/listen', params: { notifications: { taskIds: ['task-1', 'task-1'] }, _meta: metadata }
+    }), { taskIds: ['task-1'] });
+    await assert.rejects(() => handlers.handle({
+      method: 'tasks/get', params: { taskId: 'task-1', _meta: {
+        'io.modelcontextprotocol/clientCapabilities': metadata['io.modelcontextprotocol/clientCapabilities']
+      } }
+    }), error => error.code === -32022);
+  });
+
+  await test('MCP authorization failures remain structured and actionable', async () => {
+    const manager = new ApiKeyManager({ enabled: true });
+    const { keyId } = manager.createKey({ name: 'reader', permissions: ['read'] });
+    const result = await callTool('traecn_create_conversation', {}, { test: true }, {
+      apiKeyManager: manager, keyId
+    });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(result.structuredContent.required, 'write');
+    assert.strictEqual(result.structuredContent.code, 'MCP_AUTH_DENIED');
+    assert.strictEqual(result.structuredContent.retryable, false);
+    assert.ok(result.structuredContent.nextAction);
+    assert.strictEqual(result.structuredContent.message, result.structuredContent.error);
+    assert.deepStrictEqual(JSON.parse(result.content[0].text), result.structuredContent);
+  });
+
+  await test('Tasks methods and subscriptions enforce the existing tool permissions', async () => {
+    const manager = new ApiKeyManager({ enabled: true });
+    const { keyId } = manager.createKey({ name: 'reader', permissions: ['read'] });
+    let mutations = 0;
+    const taskAdapter = {
+      async get(taskId) { return { taskId, status: 'working' }; },
+      async update() { mutations++; return {}; },
+      async cancel() { mutations++; return {}; }
+    };
+    const metadata = {
+      'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+      'io.modelcontextprotocol/clientCapabilities': {
+        extensions: { 'io.modelcontextprotocol/tasks': {} }
+      }
+    };
+    const handlers = createMcpHandlers({ test: true }, { apiKeyManager: manager, keyId, taskAdapter });
+    const read = await handlers.handle({ method: 'tasks/get', params: { taskId: 'task-1', _meta: metadata } });
+    assert.strictEqual(read.taskId, 'task-1');
+    for (const method of ['tasks/update', 'tasks/cancel']) {
+      await assert.rejects(() => handlers.handle({
+        method, params: { taskId: 'task-1', inputResponses: {}, _meta: metadata }
+      }), error => error.data?.code === 'MCP_AUTH_DENIED' && error.data.required === 'delegate');
+    }
+    assert.strictEqual(mutations, 0);
+    const unauthenticated = createMcpHandlers({ test: true }, { apiKeyManager: manager, taskAdapter });
+    await assert.rejects(() => unauthenticated.handle({
+      method: 'tasks/get', params: { taskId: 'task-1', _meta: metadata }
+    }), error => error.data?.code === 'MCP_AUTH_REQUIRED');
+    assert.throws(() => unauthenticated.subscribe({
+      method: 'subscriptions/listen', params: { notifications: { taskIds: ['task-1'] }, _meta: metadata }
+    }), error => error.data?.code === 'MCP_AUTH_REQUIRED');
   });
 
   await test('get_task forwards one explicit status lookup', async () => {

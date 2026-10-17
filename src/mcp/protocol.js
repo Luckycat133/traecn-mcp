@@ -25,6 +25,7 @@ class McpProtocolError extends Error {
 
 function requestMeta(message = {}) {
   return message.params && message.params._meta && typeof message.params._meta === 'object'
+    && !Array.isArray(message.params._meta)
     ? message.params._meta
     : null;
 }
@@ -50,7 +51,8 @@ function assertModernRequest(message = {}) {
     });
   }
   if (!meta[CLIENT_CAPABILITIES_META_KEY]
-      || typeof meta[CLIENT_CAPABILITIES_META_KEY] !== 'object') {
+      || typeof meta[CLIENT_CAPABILITIES_META_KEY] !== 'object'
+      || Array.isArray(meta[CLIENT_CAPABILITIES_META_KEY])) {
     throw new McpProtocolError(-32602, 'Missing required client capabilities metadata');
   }
   return meta;

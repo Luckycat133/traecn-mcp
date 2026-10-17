@@ -30,6 +30,7 @@ const CODE_TO_STATUS = Object.freeze({
 
   // 409 — request valid but blocked by policy/state
   REVIEW_GATE_BLOCKED: 409,
+  WINDOW_NOT_VISIBLE: 409,
   OPERATION_CONFIRMATION_REQUIRED: 409,
   INVALID_SOLO_CHAT_QUERY: 409,
   PROJECT_NOT_OPEN: 409,

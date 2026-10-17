@@ -17,14 +17,14 @@ TRAECNclaw is split into maintained components with explicit ownership:
 - `integrations/openclaw-traecn-plugin`: OpenClaw tool and slash command registration.
 
 The production path is `MCP/CLI/web/OpenClaw -> HTTP gateway -> CDP WebSocket -> TraeCN DOM`.
-The MCP Skill is the primary Agent entry point; `traecnclaw` is the developer
-and live-validation CLI, the built-in web UI is diagnostic, and OpenClaw is an
-ecosystem adapter.
+The MCP Skill is the primary Agent entry point. The Web Control Console is the
+single human control surface, with diagnostics in Advanced; `traecnclaw` handles
+operator setup and live validation, and OpenClaw remains an ecosystem adapter.
 
 ## Local Development
 
 ```sh
-npm install
+npm ci
 cp .env.example .env
 npm run lint
 npm test
@@ -129,6 +129,22 @@ With the current defaults the gateway will also:
   server validation, stdout JSON, help, safe file creation, overwrite refusal,
   and missing-server behavior.
 
+For a bounded local HTTP load measurement, run:
+
+```sh
+npm run bench:gateway -- 2000 --concurrency 8 --json
+```
+
+The benchmark starts a real loopback Gateway with the Mock driver, a local
+CDP HTTP fixture, and disposable state directories. It validates every
+response and reports successful requests, throughput, p50/p95/p99 latency,
+sampled RSS/heap use, and event-loop delay. Repeat each workload in a fresh
+process and compare the same request count and concurrency; these results
+measure local HTTP behavior, not real TraeCN/model throughput. The existing
+`startup_ms` and `status_req_avg_us` fields remain; startup now includes module
+loading. Invalid counts, HTTP failures, incomplete responses and timeouts
+fail the run. Large runs can hit the retained 10,000-request rate limit.
+
 Executable non-quota release gate:
 
 ```sh
@@ -167,8 +183,16 @@ npm run check:versions
 Use `npm run version:minor` or `npm run version:major` only when the release
 meets the policy below. The version commands update `package.json` without
 creating a Git tag, then copy the package version to `package-lock.json`, the
-portable MCP Skill, and both OpenClaw plugin manifests. Do not hand-edit those
-copies during a normal release.
+portable MCP Skill, and both OpenClaw plugin manifests, and regenerate the
+complete project-local Skill copy. Do not hand-edit those copies during a
+normal release.
+
+The public MCP Skill source is `skills/traecnclaw-mcp`. Its project-local
+`.codex/skills/traecnclaw-mcp` copy is generated as a complete package, including
+UI metadata, references and helpers. After source changes, run
+`npm run sync:skill-contracts` when MCP metadata changed, then
+`npm run sync:local-skill`. `verify:static` checks both generated surfaces
+without modifying them.
 
 Until `1.0.0`, prefer the smallest meaningful increment:
 
@@ -190,7 +214,8 @@ alone is not evidence that a public package exists.
 
 ## Adding API Endpoints
 
-1. Implement the handler in `src/http/gateway.js`.
+1. Implement behavior in the owning handler or service under `src/http`; keep
+   routing and lifecycle ownership in the gateway.
 2. Add or update a plugin client method in `integrations/openclaw-traecn-plugin/lib/traecnapi-client.js` when OpenClaw needs it.
 3. Update `src/http/openapi.js`.
 4. Add unit, integration, or system coverage depending on behavior.

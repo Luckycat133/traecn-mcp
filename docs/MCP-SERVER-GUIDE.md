@@ -6,7 +6,7 @@ maintenance operations remain gateway or operator facilities.
 
 ## Protocol compatibility
 
-The current 0.5.x server is dual-era:
+The server supports both protocol eras:
 
 | MCP revision | Lifecycle | TRAECNclaw behavior |
 | --- | --- | --- |
@@ -34,8 +34,10 @@ npm run --silent setup:mcp
 
 Use `npm run setup:mcp -- --output ./traecnclaw-mcp.json` to atomically create
 a new mode-0600 file; it refuses to replace an existing configuration. A
-standalone Skill installation can run `node scripts/setup-mcp.js`. Merge the
-resulting `mcpServers.traecn` entry into the host and reconnect it. The direct
+standalone Skill installation can run `node scripts/setup-mcp.js`. For hosts
+using `mcpServers` JSON, merge the resulting `traecn` entry and reconnect.
+Other formats need the same absolute command, arguments and environment in
+that client's native configuration. The direct
 server entry below remains a fallback:
 
 ```json

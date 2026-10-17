@@ -149,7 +149,7 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_create_conversation',
-    description: 'Create a new TraeCN conversation and make it the active target. Every call creates an additional conversation, so call at most once per genuinely new context. Returns the created conversation identity.',
+    description: 'Prepare a fresh TraeCN conversation for a genuinely new context. Returns a native conversation identity when TraeCN has allocated it; an empty draft returns conversationId=null and creationDeferred=true until its first message. Reuses an already-empty draft; otherwise creates another context. Call once per new context.',
     inputSchema: schema()
   },
   {
@@ -227,7 +227,7 @@ const MCP_TOOL_INTERNAL_NAMES = Object.freeze({
 });
 
 function internalMcpToolName(toolName) {
-  return MCP_TOOL_INTERNAL_NAMES[toolName] || null;
+  return Object.hasOwn(MCP_TOOL_INTERNAL_NAMES, toolName) ? MCP_TOOL_INTERNAL_NAMES[toolName] : null;
 }
 
 function asMcpContent(value) {
@@ -249,6 +249,14 @@ const TOOL_ERROR_PATTERNS = Object.freeze([
   { test: /required argument|must be|must contain|Unexpected argument|required/i, code: 'INVALID_ARGUMENTS', retryable: false, nextAction: 'Fix the arguments per the input schema and retry.' }
 ]);
 
+const STABLE_ERROR_CODE_PATTERN = /^([A-Z][A-Z0-9_]+|[a-z][a-z0-9_]*)$/;
+const TOOL_ERROR_GUIDANCE = Object.freeze({
+  WINDOW_NOT_VISIBLE: {
+    retryable: true,
+    nextAction: 'Unlock the Mac and make the existing TraeCN window visible, then retry only the blocked UI operation. Keep any accepted taskId and read its status; do not resubmit that task.'
+  }
+});
+
 function describeToolExecutionError(error) {
   const message = error instanceof Error ? error.message : String(error);
   const fallback = { code: 'TRAECN_OPERATION_FAILED', message, retryable: false, nextAction: 'Check gateway diagnostics before retrying.' };
@@ -256,14 +264,15 @@ function describeToolExecutionError(error) {
   // TraeCNAutomationError or gateway rejection identifiers), along with any
   // characterized retry guidance carried on the error.
   if (error && typeof error.code === 'string'
-      && /^([A-Z][A-Z0-9_]+|[a-z][a-z0-9_]*)$/.test(error.code)) {
+      && STABLE_ERROR_CODE_PATTERN.test(error.code)) {
+    const guidance = Object.hasOwn(TOOL_ERROR_GUIDANCE, error.code) ? TOOL_ERROR_GUIDANCE[error.code] : undefined;
     return {
       code: error.code,
       message,
-      retryable: typeof error.retryable === 'boolean' ? error.retryable : false,
+      retryable: typeof error.retryable === 'boolean' ? error.retryable : guidance?.retryable || false,
       nextAction: typeof error.nextAction === 'string' && error.nextAction
         ? error.nextAction
-        : fallback.nextAction
+        : guidance?.nextAction || fallback.nextAction
     };
   }
   const matched = TOOL_ERROR_PATTERNS.find(entry => entry.test.test(message));
@@ -294,6 +303,8 @@ function unwrapGatewayResult(result) {
   const body = payload && typeof payload === 'object' ? payload : {};
   const identifier = typeof body.error === 'string' ? body.error.trim() : '';
   const tokenLike = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(identifier);
+  const explicitCode = typeof body.code === 'string' ? body.code.trim() : '';
+  const hasExplicitCode = explicitCode.length <= 64 && STABLE_ERROR_CODE_PATTERN.test(explicitCode);
   const gatewayClass = GATEWAY_STATUS_CLASSES[status]
     || (status >= 500
       ? { code: 'GATEWAY_UNAVAILABLE', retryable: true, nextAction: 'Verify gateway health (traecnclaw doctor), then retry once.' }
@@ -303,9 +314,10 @@ function unwrapGatewayResult(result) {
       || (!tokenLike && identifier)
       || `Gateway request failed with status ${status}`
   );
-  failure.code = tokenLike ? identifier : gatewayClass.code;
-  failure.retryable = gatewayClass.retryable;
-  failure.nextAction = gatewayClass.nextAction;
+  failure.code = hasExplicitCode ? explicitCode : tokenLike ? identifier : gatewayClass.code;
+  const guidance = Object.hasOwn(TOOL_ERROR_GUIDANCE, failure.code) ? TOOL_ERROR_GUIDANCE[failure.code] : gatewayClass;
+  failure.retryable = guidance.retryable;
+  failure.nextAction = guidance.nextAction;
   throw failure;
 }
 
@@ -326,7 +338,10 @@ function asMcpError(error) {
 }
 
 function validateMcpToolArguments(tool, value) {
-  const args = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Tool arguments must be an object');
+  }
+  const args = value;
   const schema = tool && tool.inputSchema ? tool.inputSchema : {};
   const properties = schema.properties || {};
   for (const name of schema.required || []) {

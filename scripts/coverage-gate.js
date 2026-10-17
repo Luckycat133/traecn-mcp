@@ -6,8 +6,8 @@
  * 1. Runs the project's test suite under c8 (V8 native coverage).
  * 2. Parses the JSON summary c8 emits.
  * 3. Fails the build when line/branch/function coverage drops below the
- *    thresholds defined in COVERAGE_THRESHOLDS, or when a tracked source
- *    file ends up with 0% coverage (we don't ship entirely-untested code).
+ *    thresholds defined in COVERAGE_THRESHOLDS. Warns when a tracked source
+ *    file ends up with 0% coverage.
  *
  * Configuration is intentionally environment-driven so CI can loosen or
  * tighten the gates without code edits:
@@ -67,7 +67,7 @@ function runTests() {
     '--reporter=text-summary',
     `--report-dir=${tmpCoverageDir}`,
     '--include=' + INCLUDE,
-    '--exclude=' + EXCLUDE.join(' --exclude='),
+    ...EXCLUDE.map(pattern => `--exclude=${pattern}`),
     '--check-coverage=false',
     ...TEST_COMMAND
   ];

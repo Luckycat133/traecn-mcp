@@ -1,6 +1,6 @@
 ---
 name: traecnclaw-development
-description: Audit, design, develop, test, simplify, distribute, and promote TRAECNclaw. Use for the local gateway, public MCP Skill, human Web Control Console, operator CLI, TraeCN adapters, marketplaces, package channels, launch campaigns, CI, architecture, or completing selected engineering work. Do not use merely to operate TraeCN through MCP.
+description: Audit, develop, test, package, distribute, or promote TRAECNclaw's local gateway, MCP Skill, Web Control Console, CLI, and adapters. Use for repository engineering and selected product or channel work; use traecnclaw-mcp to operate TraeCN.
 license: MIT
 metadata:
   author: TRAECNclaw
@@ -9,194 +9,122 @@ metadata:
 
 # TRAECNclaw Development
 
-Act as the repository maintainer. Reconstruct current truth from source and executable evidence, then complete the requested engineering, product, distribution, or promotion outcome without reopening settled work.
+Maintain the requested outcome using current source and executable evidence.
+Preserve existing capabilities and ownership; remove duplication only after
+its callers and behavior are characterized. The user's explicit scope and
+existing authorization take precedence over suggested work below.
 
-Read only the references relevant to the task:
+Repository paths in this Skill are relative to the checkout root. Read only
+the reference required by the task:
 
-- [references/task-recovery.md](references/task-recovery.md): missing completion, accepted-task recovery, duplicate-send risk, and host/runtime evidence.
+- [task-recovery.md](references/task-recovery.md): accepted-task recovery, missing completion, duplicate-send risk, and host/runtime evidence.
+- [project-audit.md](references/project-audit.md): capability coverage, ownership, audit classification, and acceptance paths.
+- [mcp-product-design.md](references/mcp-product-design.md): the 20-tool contract, schemas, annotations, Tasks, errors, metadata, and MCP tests.
+- [distribution-promotion-plan.md](references/distribution-promotion-plan.md): selected packaging, channel, canonical listing, and launch procedures.
+- [glama-browser-runbook.md](references/glama-browser-runbook.md): Glama claim, sync, build inspection, and evidence.
+- `docs/agent-verification.md`: maintained focused, repository, package, and live verification commands.
 
-- [references/project-audit.md](references/project-audit.md): current product state, selected work, tests, and experience paths.
-- [references/mcp-product-design.md](references/mcp-product-design.md): public MCP contract, metadata, schemas, annotations, task support, errors, and quality tests.
-- [references/distribution-promotion-plan.md](references/distribution-promotion-plan.md): package, registry, directory, browser-Agent, launch, and measurement plan.
-- [references/glama-browser-runbook.md](references/glama-browser-runbook.md): exact Glama registration, claim, sync, score, and build-inspection procedure.
+## Product and ownership
 
-## Product model
+TRAECNclaw is one local macOS runtime using Node.js 22+ and CommonJS. Distribution
+channels install that runtime; adapters keep its gateway ownership intact.
 
-TRAECNclaw is one local macOS runtime with distinct surfaces:
+| Surface | Role |
+| --- | --- |
+| Gateway | Owns CDP/DOM control, task lifecycle, durable state, approvals, HTTP, and events |
+| MCP Skill | Primary agent product; 20 focused tools over the gateway |
+| Web Control Console | Single human product for local or authenticated private access |
+| CLI | Setup, doctor, service, scripting, recovery, logs, and verification |
+| OpenClaw, REST, JavaScript API | Thin adapters over the same application behavior |
+| Releases, packages, registries, directories | Discovery and installation of the local product |
 
-1. **Local gateway — runtime core.** Runs beside TraeCN and owns CDP/DOM control, task lifecycle, durability, approvals, HTTP APIs, and WebSocket events.
-2. **MCP Skill — primary Agent product.** The focused 20-tool contract is the normal way for agents to operate TraeCN.
-3. **Web Control Console — human product.** One responsive interface for a person to observe and control their own TraeCN locally or through an authenticated private connection.
-4. **CLI — operator/developer tool.** Setup, doctor, service lifecycle, scripting, recovery, logs, release checks, and live UAT; not a second human chat product.
-5. **OpenClaw, REST, and JavaScript API — adapters.** Preserve thin integration layers over the same gateway application behavior.
-6. **GitHub Release, ClawHub, Glama, skills.sh, Smithery, registries, directories, and catalogs — distribution.** They help users discover or install the local product; they are not independent runtimes.
+Extend the owning store, driver, service, or adapter. Characterize stable IDs,
+persisted fields, events, and responses before moving lifecycle code; migrate
+callers and remove the superseded path together. Use the ownership map in
+`project-audit.md` when the owner is unclear.
 
-## Deliberate subtraction
+## Select work from the request
 
-- Keep MCP contract v5 at exactly 20 ordered tools unless an explicit migration is approved.
-- Do not add Agent-facing wait, poll, recovery, event-acknowledgement, process, proof, or generic command tools.
-- Do not duplicate task, conversation, setting, approval, or recovery logic in clients.
-- Do not grow CLI and web into competing human products.
-- Keep normal web flows separate from Advanced/Diagnostics details.
-- Do not create a cloud execution architecture merely to satisfy a marketplace.
-- Do not claim Windows, another TraeCN version, another IDE, Streamable HTTP, npm, MCPB, Registry, or hosted support before that exact scope is selected and proven.
-- Do not chase directory count while public install instructions are stale or contradictory.
+For a scoped bug, feature, refactor, onboarding, MCP, web, package, or channel
+change, reproduce the issue, implement it in its owner, and stop when its
+acceptance criteria and relevant gates pass.
 
-## Select the mode
+For a broad audit or optimization, inventory the existing capabilities first.
+Classify findings as `implemented`, `confirmed-bug`, `missing-required`,
+`selected-next`, `optional-scope`, `blocked-external`, or `obsolete`. An
+implemented capability still needs evidence for the exact claim being made;
+an optional feature or directory is not required work by default.
 
-### Scoped engineering
+For a completion campaign, order confirmed defects, required gaps, and
+explicitly selected work by dependency. Complete every unblocked selected item
+and record exact resume actions for genuine external blockers. Continue after
+the first green patch when the request covers more work. Do not revive a dated
+release campaign or fixed channel order unless it remains relevant to the
+current request. Create commits only when the user authorizes them.
 
-Use when one bug, feature, refactor, test, onboarding, web-console, MCP, package, or channel target is named. Reproduce it, implement it in the owning component, add executable evidence, synchronize affected surfaces, and stop when its acceptance criteria pass.
-
-### Repository or product audit
-
-Use when asked what remains, what is broken, how the MCP should work, which product forms exist, where to distribute, or how to promote. Inspect live source and public channels and classify findings as:
-
-- `implemented`
-- `confirmed-bug`
-- `missing-required`
-- `selected-next`
-- `optional-scope`
-- `blocked-external`
-- `obsolete`
-
-Do not convert every possible feature or directory into required work.
-
-### Completion campaign
-
-Use when asked to finish all selected work. Build a dependency-ordered ledger, implement every unblocked `confirmed-bug`, `missing-required`, and explicitly `selected-next` item as coherent changes; create commits only when the user authorizes them, and continue after each green patch. Stop only when no local selected item remains, relevant gates pass, and every external blocker has exact resume steps and expected evidence.
-
-### Browser-Agent channel handoff
-
-Before giving work to a browser Agent:
-
-1. finish repository/package preflight;
-2. provide the exact public repository, canonical listing copy, and no secrets;
-3. identify actions requiring separate authorization, payment, publication, or account scopes;
-4. require evidence using the report format in the relevant runbook;
-5. fix findings in canonical source/templates, not generated public Skill bytes.
-
-Glama uses its dedicated runbook. Other directories and launch platforms use `distribution-promotion-plan.md`.
+For task acceptance, restart, notification or duplicate-send failures, use
+[task recovery](references/task-recovery.md) to diagnose the owning layer before
+creating another task or broadening the public tool contract.
 
 ## Establish current truth
 
-Before substantial work:
+- Read `AGENTS.md` and the affected source/tests or documentation. Inspect package metadata, history, changelog, PRs/issues, tags and Releases when needed for the current task. Preserve existing changes and continue a relevant branch/PR rather than creating duplicates.
+- Run the nearest baseline test; for broad engineering run `npm run verify:static` early.
+- When a release or public channel is in scope, compare source, tags, canonical/private provenance Releases, public mirror Releases, and the specific channel separately. Inspect the published page and generated install path before making a current claim.
+- `docs/CHANNEL-LEDGER.md` is dated channel evidence. Skill snapshots and runbooks are historical evidence, not current status or a standing work queue. Recheck only the surfaces relevant to the requested outcome.
+- Private CI visibility is not a code blocker: run its local equivalent. Treat live desktop, login, credentials, payment, or unavailable platforms as external only when needed for the selected acceptance path.
 
-1. Read `AGENTS.md`, this Skill, and the affected source/tests or documentation. Inspect package metadata, recent history, PRs/issues, changelog, tags, and Releases when needed to resolve the current task.
-2. For distribution or current channel claims, compare the affected canonical source, tags, Releases, packages, and directories separately. Unrelated local work does not require a survey of every channel.
-3. Continue matching branches/PRs rather than creating duplicates.
-4. Run the nearest baseline test; for broad work run `npm run verify:static` early.
-5. Treat invisible private CI as missing evidence, not a code blocker; run local equivalent gates.
-6. Treat live TraeCN, browser login, package credentials, payment, and unavailable platforms as external only when genuinely required.
+## Preserve the contracts
 
-At the 2026-08-21 review, source line 0.5.6 is publicly distributed through the public mirror and ClawHub. Glama preparation is in PR #21 and public-mirror PR #7. Recheck before making a current claim.
+- Keep MCP contract v5 at exactly 20 ordered tools unless the user authorizes a migration. Preserve names, semantics, text/structured parity, schemas, and task support; one tool represents one user intent.
+- `traecn_send_message` creates durable delegated work. Context tools are conditional, settings require discovery, and exceptional decisions remain bound to exact visible identities and existing authorization.
+- Do not add agent-facing wait/poll, recovery, event acknowledgement, process, proof, generic command, or profile tools. Do not duplicate lifecycle logic in clients.
+- Keep normal web tasks separate from Advanced/Diagnostics. CLI remains the operator interface. Add MCP resources, prompts, icons, or Apps only for a concrete host/user need.
+- Make compatibility claims only for the exact tested host, version, transport, and channel. Static metadata, schema-inspection containers, and mock tasks cannot prove live TraeCN behavior.
+- Keep the gateway on loopback unless remote access is deliberately authenticated. Use `src/config/runtime-schema.js` and sanitization helpers; exclude credentials, raw profiles, `.env`, logs, state, dependencies, and build outputs from commits.
 
-## Architecture owners
+## Distribution and promotion when selected
 
-- `src/mcp/contract.js`: frozen public tool names/order.
-- `src/mcp/tools.js`, `src/mcp/tool-metadata.js`, `src/mcp/handler.js`: public tool definitions, schemas, annotations, validation, and results.
-- `src/mcp/protocol.js`, `src/mcp/stdio-server.js`, `src/mcp/task-extension.js`: protocol eras, framing, Tasks/subscriptions, cancellation, and request lifetime.
-- `src/http/task-orchestrator.js`: task acceptance identity, semantic fingerprints, and active/terminal idempotency replay.
-- `src/http/task-store.js`: active tasks and terminal replay persistence.
-- `src/shared/task-event-store.js`: completion events and client cursors.
-- `src/shared/task-history.js`: durable diagnostic history.
-- `src/http/completion-signal.js`: durable completion event followed by external delivery.
-- `src/http/queue-state-machine.js`, `src/http/task-queue-service.js`, `src/http/recovery-helper.js`: queue and restart support.
-- `src/http/route-table.js`, `src/http/handlers/*`: application HTTP composition.
-- `src/http/chat-ui.js` and related assets: human Web Control Console presentation.
-- `src/trae-adapters`: versioned TraeCN detection and fixtures.
-- `src/config/runtime-schema.js`: canonical runtime configuration.
-- setup/operator scripts: Quickstart, doctor, CLI, service, live UAT, and `setup:mcp`.
-- `distribution/public-mirror/*`, package scripts, mirror generator, release workflows: public distribution and provenance.
-- maintainer Skill references: selected product/channel strategy and browser-Agent procedures.
+Fix canonical source/templates and regenerate public surfaces. Publish the
+public mirror, never the private canonical repository; preserve source
+provenance and canonical install copy. Search for existing listings and
+reconcile them instead of duplicating submissions.
 
-Extend the existing owner and delete the previous path after moving callers.
+`skills/traecnclaw-mcp` owns the public Skill. After changing that package,
+run `npm run sync:local-skill` to refresh the complete `.codex/skills` copy
+used by Codex discovery; `npm run check:local-skill` detects drift without
+writing. Update generated tool schemas with `npm run sync:skill-contracts`
+before synchronizing the package when MCP metadata changes.
 
-## Select current work
+Never direct current listings to `traecnclaw@0.3.1`. MCPB and Smithery Local
+serve local stdio; URL/cloud execution requires an actual supported HTTP
+product. Package publication, Registry publication, and each generated install
+path need independent evidence. Homebrew installs the operator/server layer
+and must be paired with Skill/host setup.
 
-Use the current request, current source/tests and the affected issue or release state to choose work. `references/project-audit.md` and earlier channel plans are dated evidence, not a standing instruction to resume promotion, submit listings, publish packages, or rebuild unrelated surfaces. Reconcile completed milestones before choosing the next one.
+Use the distribution reference for channel-specific dependencies and launch
+copy. Glama uses its dedicated runbook. A browser-agent handoff receives the
+exact public repository, canonical payload, package preflight, authorized
+actions, and expected evidence; secrets stay local. Promotion asks for
+feedback, uses reviewed real media and honest limitations, and measures trial
+outcomes rather than directory count. Sending messages, posting, payment, and
+publication remain within the user's actual authorization.
 
-For task acceptance, restart, notification or duplicate-send failures, use [task recovery](references/task-recovery.md). Diagnose the owning layer before creating another task or broadening the public tool contract.
+## Verify and finish
 
-## MCP design rules
+Select gates from `docs/agent-verification.md` for the changed surface:
+focused test, relevant subsystem tests, broad non-live verification, and
+release/installation checks when packaging is affected. Broaden or repeat
+checks only for new changes, failures, required gates, or unresolved concerns.
 
-Follow `mcp-product-design.md`. In particular:
+For user-facing behavior, exercise the relevant path from `project-audit.md`.
+Documentation-only changes need contract/link validation, not a model task.
+A real desktop or target-host claim requires the corresponding real experience;
+an unavailable check remains unverified with its exact resume step.
 
-- one tool equals one user intent;
-- `traecn_send_message` is the only normal durable work-creation tool;
-- context tools are called only when necessary;
-- settings use discovery before mutation;
-- irreversible/exceptional tools remain identity-bound and explicit;
-- text and `structuredContent` remain semantically equivalent;
-- output schemas must validate real results;
-- annotations and `execution.taskSupport` describe characterized behavior rather than using broad defaults;
-- resources, prompts, icons, or MCP Apps require a named host/user need, not marketplace score pressure.
-
-## Distribution rules
-
-Follow `distribution-promotion-plan.md`.
-
-- Public GitHub mirror and ClawHub have historical verification records; recheck the exact release and install path before making a current claim.
-- Glama, skills.sh, AwesomeSkills.dev, MCP.Directory, MCPB/Smithery, the Official Registry, PulseMCP, Homebrew, curated lists, and secondary directories are separate milestones with separate evidence.
-- The Official Registry requires a current public installation method; never point it at npm 0.3.1.
-- Smithery uses the local MCPB flow unless a real Streamable HTTP product is selected.
-- Homebrew installs the Mac operator/server layer; pair it with Skill/host setup.
-- Search for existing listings before submitting and reconcile rather than duplicate.
-- Store canonical listing copy and provenance in source; do not improvise descriptions or install commands in browser forms.
-- A channel is not verified until its public page and generated install path are inspected after publication.
-
-## Promotion rules
-
-- Lead Chinese promotion with the TRAE official community and a real Bilibili demo.
-- Lead global promotion with GitHub/YouTube; use Show HN only when users can try the project easily.
-- Defer Product Hunt until Web Control Console and onboarding form a coherent human product.
-- Ask for feedback, never coordinated upvotes.
-- Use one canonical launch narrative and honest limitations; do not mass-post identical copy.
-- Measure aggregate public installs, downloads, setup failures, and real task evidence rather than directory count.
-- MCP contributor communities are for technical collaboration, not unsolicited launch marketing.
-
-## Verification ladder
-
-Start with the affected behavior and expand for risk, failures, or changed contracts. This is an evidence ladder, not a requirement to run every level for every task. Preserve full protocol/package/release gates when those contracts are affected; documentation-only changes use focused content checks.
-
-1. `node path/to/focused.test.js`
-2. subsystem tests such as MCP conformance, adapters, system, stdio smoke, mirror, MCPB, package, or web tests
-3. `npm run verify:static`
-4. `npm run verify`
-5. `npm run test:release`
-6. doctor, inspect, and strict live UAT for current TraeCN behavior
-7. real target-host installation/call for host claims
-8. public listing, package, registry, marketplace, or launch evidence for the exact channel claimed
-
-Static checks prove declarations. Mock tests prove process integration. Clean-room tests prove built packages. Only live UAT proves current TraeCN desktop behavior. Marketplace scores prove their scan, not local execution.
-
-## Real experience requirement
-
-For user-facing work, exercise at least one relevant path from `project-audit.md`:
-
-- real MCP host task and completion;
-- local or authenticated remote Web Control Console;
-- CLI setup/doctor/live validation;
-- Release/MCPB/Homebrew clean installation;
-- directory registration and generated install test;
-- launch post/video feedback loop.
-
-Report the exact path. Never label mock, Docker schema inspection, or directory metadata as a real TraeCN task.
-
-## External blockers
-
-Record the blocked item, why repository tests cannot prove it, exact command/manual action, expected evidence, and the next code step. Browser login, ownership approval, package credentials, payment, live desktop access, and unavailable platforms may be external. Complexity, test failures, or invisible CI are not.
-
-## Completion standard
-
-Before finishing:
-
-1. the requirement or defect has executable evidence;
-2. focused and relevant wider tests pass;
-3. the affected real experience works or is precisely externally blocked;
-4. generated/public surfaces are synchronized when affected;
-5. no ownership, durability, protocol, compatibility, product-surface, or provenance invariant is weakened;
-6. the current audit/channel ledger is updated;
-7. the final report states changes, tests, experience evidence, channel state, and remaining uncertainty.
-
-Do not stop at analysis when a safe local change is possible. Do not stop after the first patch when the request covers the selected remaining work.
+A completed change has characterized behavior, passing required checks,
+synchronized affected generated surfaces, and preserved ownership,
+durability, security, and provenance. Update the relevant audit/channel ledger
+when its evidence changes. Report the files, actual tests and experience,
+remaining uncertainty, and precise external blocker; do not substitute a mock
+or historical result for a missing current check.

@@ -37,6 +37,13 @@
     unknown: '状态未知',
   });
 
+  function taskStatusLabel(task) {
+    if (State.isPersistencePending(task)) {
+      return task.cancelPersistencePending ? '取消等待确认' : '等待保存状态';
+    }
+    return STATUS_LABELS[task.status] || task.status;
+  }
+
   class ApiError extends Error {
     constructor(message, options = {}) {
       super(message);
@@ -45,6 +52,13 @@
       this.code = options.code || null;
       this.retryAfter = options.retryAfter || null;
       this.payload = options.payload || null;
+    }
+  }
+
+  class SessionChangedError extends Error {
+    constructor() {
+      super('The connection session changed');
+      this.name = 'SessionChangedError';
     }
   }
 
@@ -284,6 +298,10 @@
       this.pollTimer = null;
       this.reconnectAttempt = 0;
       this.disconnectedByUser = false;
+      this.sessionVersion = 0;
+      this.sessionAbort = new AbortController();
+      this.submissionInFlight = false;
+      this.pendingSubmission = null;
       this.startedAt = Date.now();
       this.historyPage = 1;
       this.taskDrafts = new Map();
@@ -292,6 +310,52 @@
       this.lastFocus = null;
       this.drawerOpen = false;
       this.refs = {};
+    }
+
+    resetSession() {
+      this.sessionVersion += 1;
+      this.submissionInFlight = false;
+      this.sessionAbort.abort();
+      this.sessionAbort = new AbortController();
+      this.stopRealtime();
+    }
+
+    async request(path, options = {}) {
+      const sessionVersion = this.sessionVersion;
+      if (this.disconnectedByUser) throw new SessionChangedError();
+      try {
+        const payload = await this.api.request(path, {
+          ...options,
+          signal: options.signal
+            ? AbortSignal.any([options.signal, this.sessionAbort.signal])
+            : this.sessionAbort.signal,
+        });
+        if (sessionVersion !== this.sessionVersion) throw new SessionChangedError();
+        return payload;
+      } catch (error) {
+        if (sessionVersion !== this.sessionVersion) throw new SessionChangedError();
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          this.lockProtected();
+        }
+        throw error;
+      }
+    }
+
+    clearCatalog() {
+      for (const key of Object.keys(this.catalog)) {
+        this.catalog[key] = Array.isArray(this.catalog[key]) ? [] : null;
+      }
+      this.taskDrafts.clear();
+      this.lastStatuses.clear();
+    }
+
+    lockProtected() {
+      this.resetSession();
+      this.storage.clear();
+      this.token = '';
+      this.api.setToken('');
+      this.clearCatalog();
+      this.dispatch({ type: 'LOCK_PROTECTED' });
     }
 
     byId(id) {
@@ -457,12 +521,14 @@
     }
 
     async connect(token, options = {}) {
+      this.resetSession();
+      const sessionVersion = this.sessionVersion;
       this.disconnectedByUser = false;
       this.token = safeText(token, '');
       this.api.setToken(this.token);
       this.dispatch({ type: 'CONNECTION', connection: { auth: 'checking', stale: true } });
       try {
-        await this.api.request('/api/queue/status');
+        await this.request('/api/queue/status');
         this.storage.save(this.token);
         this.dispatch({
           type: 'CONNECTION',
@@ -470,13 +536,11 @@
         });
         if (this.refs['connection-dialog'].open) this.refs['connection-dialog'].close();
         await this.hydrate({ announce: !options.quiet });
+        if (sessionVersion !== this.sessionVersion) return;
         this.openSocket();
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-          this.storage.clear();
-          this.token = '';
-          this.api.setToken('');
-          this.dispatch({ type: 'LOCK_PROTECTED' });
           this.setInlineError('connection-error', safeErrorMessage(error));
           if (!this.refs['connection-dialog'].open)
             this.openDialog(this.refs['connection-dialog'], this.refs['open-connection']);
@@ -489,15 +553,13 @@
 
     disconnect() {
       this.disconnectedByUser = true;
+      this.resetSession();
       this.storage.clear();
       this.token = '';
       this.api.setToken('');
-      this.stopRealtime();
       this.state = State.createInitialState();
       this.state.connection.auth = 'locked';
-      this.catalog.workspace = null;
-      this.catalog.models = [];
-      this.catalog.conversations = [];
+      this.clearCatalog();
       this.refs['gateway-token'].value = '';
       if (this.refs['connection-dialog'].open) this.refs['connection-dialog'].close();
       this.render();
@@ -509,6 +571,7 @@
       if (this.pollTimer) this.root.clearTimeout(this.pollTimer);
       this.socketReconnectTimer = null;
       this.pollTimer = null;
+      this.subscribedTaskIds.clear();
       if (this.socket) {
         const socket = this.socket;
         this.socket = null;
@@ -521,13 +584,15 @@
     }
 
     async hydrate(options = {}) {
+      const sessionVersion = this.sessionVersion;
       try {
-        const runtime = await this.api.request('/api/status');
+        const runtime = await this.request('/api/status');
         this.dispatch({ type: 'RUNTIME', runtime });
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.notice('runtime-status-failed', 'warning', '状态不可用', safeErrorMessage(error));
       }
-      if (this.state.connection.auth !== 'ready') return;
+      if (sessionVersion !== this.sessionVersion || this.state.connection.auth !== 'ready') return;
 
       const requests = [
         ['workspace', '/api/workspace'],
@@ -542,7 +607,8 @@
         ['metrics', '/metrics.json'],
         ['openapi', '/openapi.json'],
       ];
-      const results = await Promise.allSettled(requests.map(([, path]) => this.api.request(path)));
+      const results = await Promise.allSettled(requests.map(([, path]) => this.request(path)));
+      if (sessionVersion !== this.sessionVersion) return;
       for (let index = 0; index < requests.length; index += 1) {
         const [kind] = requests[index];
         const result = results[index];
@@ -605,11 +671,9 @@
     }
 
     handleHydrationError(kind, error) {
+      if (error instanceof SessionChangedError) return;
       if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-        this.storage.clear();
-        this.token = '';
-        this.api.setToken('');
-        this.dispatch({ type: 'LOCK_PROTECTED' });
+        if (this.state.connection.auth !== 'locked') this.lockProtected();
         return;
       }
       if (kind === 'workspace') this.catalog.workspace = { verified: false };
@@ -645,11 +709,12 @@
     async loadHistory(page, append) {
       if (this.state.connection.auth !== 'ready') return;
       try {
-        const payload = await this.api.request(`/api/tasks/history?page=${page}&limit=20`);
+        const payload = await this.request(`/api/tasks/history?page=${page}&limit=20`);
         this.historyPage = page;
         this.dispatch({ type: 'HISTORY', page: payload, append });
         this.mergeHistoryTasks(payload?.tasks || []);
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.notice('history-failed', 'warning', '历史加载失败', safeErrorMessage(error));
       }
     }
@@ -669,6 +734,7 @@
         });
         const socket = new this.root.WebSocket(buildWebSocketUrl(this.location), protocols);
         this.socket = socket;
+        this.subscribedTaskIds.clear();
         socket.addEventListener('open', () => {
           if (this.socket !== socket) return;
           this.reconnectAttempt = 0;
@@ -677,15 +743,19 @@
           if (this.pollTimer) this.root.clearTimeout(this.pollTimer);
           this.pollTimer = null;
         });
-        socket.addEventListener('message', (event) => this.handleSocketMessage(event.data));
+        socket.addEventListener('message', (event) => {
+          if (this.socket === socket) this.handleSocketMessage(event.data);
+        });
         socket.addEventListener('close', () => {
-          if (this.socket === socket) this.socket = null;
+          if (this.socket !== socket) return;
+          this.socket = null;
           if (this.disconnectedByUser) return;
           this.dispatch({ type: 'SOCKET_CLOSED', attempt: this.reconnectAttempt });
           this.scheduleReconnect();
           this.startFallbackPolling();
         });
         socket.addEventListener('error', () => {
+          if (this.socket !== socket) return;
           this.dispatch({
             type: 'DIAGNOSTIC',
             code: 'socket_error',
@@ -693,6 +763,7 @@
           });
         });
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.dispatch({
           type: 'DIAGNOSTIC',
           code: 'socket_open_failed',
@@ -721,22 +792,33 @@
         this.state.connection.auth !== 'ready'
       )
         return;
+      const sessionVersion = this.sessionVersion;
       const tick = async () => {
+        if (sessionVersion !== this.sessionVersion) return;
         this.pollTimer = null;
         if (
           this.disconnectedByUser ||
           this.document.hidden ||
+          this.state.connection.auth !== 'ready' ||
           this.state.connection.socket === 'open'
         )
           return;
         try {
-          const queue = await this.api.request('/api/queue/status');
+          const queue = await this.request('/api/queue/status');
           const tasks = Array.isArray(queue?.tasks) ? queue.tasks : [];
           this.dispatch({ type: 'HYDRATE_TASKS', tasks, authoritativeActive: true });
           await Promise.allSettled(tasks.map((task) => this.fetchTask(task.taskId)));
         } catch (error) {
+          if (error instanceof SessionChangedError) return;
           this.handleHydrationError('queue', error);
         }
+        if (
+          sessionVersion !== this.sessionVersion ||
+          this.document.hidden ||
+          this.state.connection.auth !== 'ready' ||
+          this.state.connection.socket === 'open'
+        )
+          return;
         const interval = Date.now() - this.startedAt < 300000 ? 5000 : 15000;
         this.pollTimer = this.root.setTimeout(tick, interval);
       };
@@ -752,6 +834,7 @@
 
     subscribeTask(taskId) {
       if (!taskId || !this.socket || this.socket.readyState !== 1) return;
+      if (this.subscribedTaskIds.has(taskId)) return;
       this.socket.send(JSON.stringify({ type: 'subscribe', taskId }));
       this.subscribedTaskIds.add(taskId);
     }
@@ -782,7 +865,7 @@
     async fetchTask(taskId) {
       if (!taskId) return null;
       try {
-        const payload = await this.api.request(`/api/task/${encodeURIComponent(taskId)}`);
+        const payload = await this.request(`/api/task/${encodeURIComponent(taskId)}`);
         const prior = this.state.tasks[taskId];
         const draft = this.taskDrafts.get(taskId);
         const history = this.state.history.items.find((item) => item.taskId === taskId);
@@ -806,6 +889,7 @@
         }
         return task;
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         if (!(error instanceof ApiError && error.status === 404))
           this.handleHydrationError('task', error);
         return null;
@@ -834,14 +918,15 @@
       const projectPath = this.refs['workspace-input'].value.trim();
       this.setInlineError('workspace-error', '');
       try {
-        await this.api.request('/api/open-project', { method: 'POST', body: { projectPath } });
-        const workspace = await this.api.request('/api/workspace');
+        await this.request('/api/open-project', { method: 'POST', body: { projectPath } });
+        const workspace = await this.request('/api/workspace');
         this.applyHydration('workspace', workspace);
         if (!workspace?.verified)
           throw new ApiError('工作区切换后未通过精确路径验证', { status: 409 });
         this.refs['workspace-dialog'].close();
         this.announce(`工作区已验证：${workspace.rootPath}`);
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.setInlineError('workspace-error', safeErrorMessage(error));
       }
     }
@@ -851,13 +936,14 @@
       if (!model || model === this.state.context.model) return;
       this.setContextBusy(true);
       try {
-        const result = await this.api.request('/api/switch-model', {
+        const result = await this.request('/api/switch-model', {
           method: 'POST',
           body: { model, waitForQueue: false },
         });
         this.dispatch({ type: 'CONTEXT', context: { model: result?.model || model } });
         this.announce(`模型已切换为 ${result?.model || model}。`);
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.notice('model-switch-failed', 'danger', '模型切换失败', safeErrorMessage(error));
       } finally {
         this.setContextBusy(false);
@@ -869,7 +955,7 @@
       if (!mode || mode === this.state.context.mode) return;
       this.setContextBusy(true);
       try {
-        const result = await this.api.request('/api/switch-mode', {
+        const result = await this.request('/api/switch-mode', {
           method: 'POST',
           body: { mode },
         });
@@ -877,10 +963,11 @@
           type: 'CONTEXT',
           context: { mode: result?.mode || mode, conversation: null },
         });
-        const conversations = await this.api.request('/api/conversations');
+        const conversations = await this.request('/api/conversations');
         this.applyHydration('conversations', conversations);
         this.announce(`模式已切换为 ${mode.toUpperCase()}。`);
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.notice('mode-switch-failed', 'danger', '模式切换失败', safeErrorMessage(error));
       } finally {
         this.setContextBusy(false);
@@ -891,14 +978,15 @@
       const conversationId = this.refs['conversation-select'].value;
       if (conversationId === '__new__') {
         try {
-          await this.api.request('/api/conversations/manage', {
+          await this.request('/api/conversations/manage', {
             method: 'POST',
             body: { action: 'create' },
           });
-          const conversations = await this.api.request('/api/conversations');
+          const conversations = await this.request('/api/conversations');
           this.applyHydration('conversations', conversations);
           this.announce('已创建新的 TraeCN 对话。');
         } catch (error) {
+          if (error instanceof SessionChangedError) return;
           this.notice(
             'conversation-create-failed',
             'danger',
@@ -910,13 +998,14 @@
       }
       if (!conversationId || conversationId === this.state.context.conversation) return;
       try {
-        await this.api.request('/api/conversations/manage', {
+        await this.request('/api/conversations/manage', {
           method: 'POST',
           body: { action: 'select', conversationId },
         });
         this.dispatch({ type: 'CONTEXT', context: { conversation: conversationId } });
         this.announce('TraeCN 对话已切换。');
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.notice(
           'conversation-switch-failed',
           'danger',
@@ -933,9 +1022,10 @@
     }
 
     async submitTask(event) {
+      const sessionVersion = this.sessionVersion;
       event.preventDefault();
       const message = this.refs['task-message'].value.trim();
-      if (!message || !this.catalog.workspace?.verified) return;
+      if (!message || !this.catalog.workspace?.verified || this.submissionInFlight) return;
       const context = { ...this.state.context };
       const body = {
         message,
@@ -945,17 +1035,26 @@
         conversationId: context.conversation,
         reviewRequired: this.refs['review-required'].checked,
       };
+      const fingerprint = JSON.stringify(body);
+      if (this.pendingSubmission?.fingerprint !== fingerprint) {
+        this.pendingSubmission = {
+          fingerprint,
+          key: createIdempotencyKey({
+            randomUUID: this.root.crypto?.randomUUID?.bind(this.root.crypto),
+          }),
+        };
+      }
+      this.submissionInFlight = true;
       this.refs['submit-task'].disabled = true;
       try {
-        const response = await this.api.request('/api/tasks/submit', {
+        const response = await this.request('/api/tasks/submit', {
           method: 'POST',
           headers: {
-            'Idempotency-Key': createIdempotencyKey({
-              randomUUID: this.root.crypto?.randomUUID?.bind(this.root.crypto),
-            }),
+            'Idempotency-Key': this.pendingSubmission.key,
           },
           body,
         });
+        this.pendingSubmission = null;
         this.taskDrafts.set(response.taskId, { message, context });
         this.dispatch({
           type: 'UPSERT_TASK',
@@ -970,29 +1069,34 @@
         this.refs['task-message'].value = '';
         this.subscribeTask(response.taskId);
         await this.fetchTask(response.taskId);
+        if (sessionVersion !== this.sessionVersion) return;
         this.announce(`任务已提交，任务 ID ${response.taskId}。`);
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.notice('submit-failed', 'danger', '任务提交失败', safeErrorMessage(error));
       } finally {
+        if (sessionVersion === this.sessionVersion) this.submissionInFlight = false;
         this.render();
       }
     }
 
     async taskAction(task, action, body) {
       try {
-        await this.api.request(`/api/task/${encodeURIComponent(task.taskId)}/${action}`, {
+        await this.request(`/api/task/${encodeURIComponent(task.taskId)}/${action}`, {
           method: 'POST',
           body,
         });
         await this.fetchTask(task.taskId);
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.notice(
           `task-action-${task.taskId}`,
           'danger',
           '任务操作未完成',
           safeErrorMessage(error)
         );
-        if (error instanceof ApiError && error.status === 409) await this.fetchTask(task.taskId);
+        if (error instanceof ApiError && [409, 503].includes(error.status))
+          await this.fetchTask(task.taskId);
       }
     }
 
@@ -1022,13 +1126,13 @@
     }
 
     renderTaskDetail(task) {
-      this.refs['task-detail-state'].textContent = STATUS_LABELS[task.status] || task.status;
+      this.refs['task-detail-state'].textContent = taskStatusLabel(task);
       this.refs['task-detail-title'].textContent = `任务 ${task.taskId}`;
       const body = this.refs['task-detail-body'];
       body.replaceChildren();
       const grid = this.element('div', 'detail-grid');
       const fields = [
-        ['状态', STATUS_LABELS[task.status] || task.status],
+        ['状态', taskStatusLabel(task)],
         ['任务 ID', task.taskId],
         ['创建时间', formattedTime(task.createdAt || task.createdAtMs)],
         ['Workspace', task.context?.workspace || '未知'],
@@ -1068,7 +1172,7 @@
 
     async refreshTaskDetail(task) {
       try {
-        const payload = await this.api.request(`/api/task/${encodeURIComponent(task.taskId)}`);
+        const payload = await this.request(`/api/task/${encodeURIComponent(task.taskId)}`);
         if (!this.refs['task-detail-dialog'].open) return;
         if (this.refs['task-detail-title'].textContent !== `任务 ${task.taskId}`) return;
         const exact = State.normalizeTask(
@@ -1081,6 +1185,7 @@
         );
         if (exact) this.renderTaskDetail(exact);
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.dispatch({
           type: 'DIAGNOSTIC',
           code: 'task_detail_refresh_failed',
@@ -1091,9 +1196,7 @@
 
     async loadReplay(task) {
       try {
-        const replay = await this.api.request(
-          `/api/tasks/${encodeURIComponent(task.taskId)}/replay`
-        );
+        const replay = await this.request(`/api/tasks/${encodeURIComponent(task.taskId)}/replay`);
         const section = this.element('section', 'detail-section');
         section.append(
           this.element('h3', '', '持久化回放'),
@@ -1101,6 +1204,7 @@
         );
         this.refs['task-detail-body'].append(section);
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.notice(`replay-${task.taskId}`, 'warning', '回放不可用', safeErrorMessage(error));
       }
     }
@@ -1140,6 +1244,7 @@
         label = '需要连接';
         tone = 'warning';
       }
+      if (auth === 'ready' && this.state.runtime?.mockBridge === true) label = `Mock · ${label}`;
       this.refs['runtime-status'].dataset.tone = tone;
       this.refs['runtime-status-label'].textContent = label;
       const locked = auth !== 'ready';
@@ -1216,12 +1321,14 @@
       this.refs['conversation-select'].disabled = !ready || this.state.context.mode !== 'solo';
       const canSubmit = ready && verified;
       this.refs['task-message'].disabled = !canSubmit;
-      this.refs['submit-task'].disabled = !canSubmit || !this.refs['task-message'].value.trim();
+      this.refs['submit-task'].disabled =
+        this.submissionInFlight || !canSubmit || !this.refs['task-message'].value.trim();
       this.refs['submit-hint'].textContent = canSubmit
         ? '任务将绑定当前精确上下文'
         : '连接并验证工作区后可提交';
       this.refs['task-message'].oninput = () => {
-        this.refs['submit-task'].disabled = !canSubmit || !this.refs['task-message'].value.trim();
+        this.refs['submit-task'].disabled =
+          this.submissionInFlight || !canSubmit || !this.refs['task-message'].value.trim();
       };
     }
 
@@ -1282,10 +1389,7 @@
         this.element('strong', '', compactTaskMessage(task)),
         this.element('span', 'task-id', task.taskId)
       );
-      header.append(
-        title,
-        this.element('span', 'task-state', STATUS_LABELS[task.status] || task.status)
-      );
+      header.append(title, this.element('span', 'task-state', taskStatusLabel(task)));
       card.append(header);
       const context = this.element('div', 'task-context-row');
       const contextValues = [
@@ -1296,7 +1400,8 @@
       ].filter(Boolean);
       for (const value of contextValues) context.append(this.element('span', '', value));
       card.append(context);
-      if (task.status === 'approval_required') this.renderInteraction(card, task);
+      if (task.status === 'approval_required' && !State.isPersistencePending(task))
+        this.renderInteraction(card, task);
       else if (task.result?.text || task.error)
         card.append(this.element('p', 'task-summary', task.error || task.result.text));
       const actions = this.element('div', 'task-card-actions');
@@ -1304,11 +1409,17 @@
         actions.append(
           this.button('刷新', 'button button-quiet', () => this.fetchTask(task.taskId))
         );
-        actions.append(
-          this.button('取消', 'button button-danger', () => this.taskAction(task, 'cancel'))
-        );
+        if (!State.isPersistencePending(task) || task.cancelPersistencePending) {
+          actions.append(
+            this.button(
+              task.cancelPersistencePending ? '重试取消' : '取消',
+              'button button-danger',
+              () => this.taskAction(task, 'cancel')
+            )
+          );
+        }
       }
-      if (task.status === 'awaiting_review') {
+      if (task.status === 'awaiting_review' && !State.isPersistencePending(task)) {
         actions.append(
           this.button('拒绝', 'button button-danger', () =>
             this.taskAction(task, 'review', {
@@ -1447,6 +1558,15 @@
       const readiness = this.catalog.readiness || {};
       this.renderDefinitionList(this.refs['runtime-diagnostics'], [
         [
+          'Runtime',
+          runtime.mockBridge === true
+            ? 'Mock'
+            : runtime.mockBridge === false
+              ? 'Live TraeCN'
+              : 'unknown',
+        ],
+        ['Adapter', runtime.traeAdapter?.adapter || 'unknown'],
+        [
           'Gateway',
           runtime.status ||
             runtime.state ||
@@ -1540,7 +1660,7 @@
     async downloadProtectedJson(event, path, filename) {
       event.preventDefault();
       try {
-        const payload = await this.api.request(path);
+        const payload = await this.request(path);
         const blob = new this.root.Blob([JSON.stringify(payload, null, 2)], {
           type: 'application/json',
         });
@@ -1551,6 +1671,7 @@
         anchor.click();
         this.root.URL.revokeObjectURL(url);
       } catch (error) {
+        if (error instanceof SessionChangedError) return;
         this.notice(
           'openapi-download-failed',
           'warning',

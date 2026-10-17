@@ -951,6 +951,38 @@
         "type": "object",
         "properties": {}
       }
+    },
+    {
+      "name": "traecn_task_status",
+      "description": "Query the status of an async TraeCN task by taskId. Use after traecn_delegate returns a taskId with status \"queued\". Returns: done/queued/executing/error/cancelled/queue_timeout.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "taskId"
+        ],
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "description": "The taskId returned from traecn_delegate when the model is queued"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_cancel_task",
+      "description": "Cancel a queued TraeCN task. Only works for tasks in \"queued\" state.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "taskId"
+        ],
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "description": "The taskId returned from traecn_delegate when the model is queued"
+          }
+        }
+      }
     }
   ],
   "slashCommands": [
@@ -964,5 +996,36 @@
       "description": "Create a new chat and delegate a task to TraeCN, returning the full output including process information",
       "usage": "/TraeCN process <task>"
     }
-  ]
+  ],
+  "contracts": {
+    "tools": [
+      "traecn_capabilities",
+      "traecn_command_set",
+      "traecn_preflight",
+      "traecn_command",
+      "traecn_vibe_workflow",
+      "traecn_plan_operation",
+      "traecn_task_status",
+      "traecn_cancel_task",
+      "traecn_settings_action",
+      "traecn_settings_read",
+      "traecn_settings_set",
+      "traecn_status",
+      "traecn_new_chat",
+      "traecn_delegate",
+      "traecn_switch_mode",
+      "traecn_switch_model",
+      "traecn_queue_status",
+      "traecn_cleanup_queue",
+      "traecn_cleanup_watch_status",
+      "traecn_long_queue_proof_start",
+      "traecn_long_queue_proof_status",
+      "traecn_long_queue_proof_cancel",
+      "traecn_open_project",
+      "traecn_chat",
+      "traecn_update_self",
+      "traecn_approve",
+      "traecn_dialog_status"
+    ]
+  }
 }

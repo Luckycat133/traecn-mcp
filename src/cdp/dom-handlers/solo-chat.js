@@ -15,7 +15,35 @@
 const { TraeCNAutomationError } = require('../errors');
 const { sleep, safeJsValue } = require('../../shared/utils');
 
-async function listSoloChats(driver) {
+// Hidden Electron renderers may never run RAF. A timer bounds the wait, but
+// cannot certify a virtualized list rendered: callers must stop that scan.
+const SIDEBAR_SETTLE_EXPRESSION = `
+  function settle() {
+    return new Promise(function(resolve) {
+      var settled = false;
+      var frames = [];
+      var timer = setTimeout(function() { finish(false); }, 200);
+      function finish(rendered) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (typeof cancelAnimationFrame === 'function') {
+          frames.forEach(function(frame) { cancelAnimationFrame(frame); });
+        }
+        resolve(rendered);
+      }
+      if (typeof requestAnimationFrame !== 'function') return finish(false);
+      frames.push(requestAnimationFrame(function() {
+        if (settled) return;
+        frames.push(requestAnimationFrame(function() { finish(true); }));
+      }));
+    });
+  }
+`;
+
+async function listSoloChats(driver, { visibleOnly = false, visibilityPrepared = false } = {}) {
+  const canPrepareVisibility = !visibleOnly && !visibilityPrepared &&
+    typeof driver._activateWindow === 'function' && typeof driver._ensureVisibleWindow === 'function';
   const result = await driver.client.send('Runtime.evaluate', {
     expression: `
       (async function() {
@@ -54,11 +82,7 @@ async function listSoloChats(driver) {
             ? { host: candidates[0].el, scanned: 'scroll' }
             : { host: null, scanned: 'visible' };
         }
-        function settle() {
-          return new Promise(function(resolve) {
-            requestAnimationFrame(function() { requestAnimationFrame(resolve); });
-          });
-        }
+        ${SIDEBAR_SETTLE_EXPRESSION}
         var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
         if (!sidebar) {
           return { mode: 'not_solo', chats: [], count: 0, reason: 'sidebar_element_not_found' };
@@ -92,8 +116,12 @@ async function listSoloChats(driver) {
         function collectVisible(scrollInfo) {
           visibleChatNodes().forEach(function(el) {
             var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-            if (!text || seen.has(text)) return;
-            seen.add(text);
+            var sessionId = (el.getAttribute('data-session-id') || '').trim();
+            var identity = sessionId || text;
+            if (!text || seen.has(identity)) return;
+            seen.add(identity);
+            var titleNode = el.querySelector('[class*="task-title___"], [class*="task-item-title"], [class*="conversation-item-title"], [class*="chat-item-title"]');
+            var title = titleNode ? (titleNode.innerText || titleNode.textContent || '').replace(/\\s+/g, ' ').trim() : text;
             var cls = (el.className || '').toString();
             var active = /active|selected|current|focus/i.test(cls) || el.getAttribute('aria-selected') === 'true';
             var status = text.includes('进行中') || text.includes('思考中') ? 'running'
@@ -101,8 +129,9 @@ async function listSoloChats(driver) {
             var scrollTop = scrollInfo.host ? scrollInfo.host.scrollTop : 0;
             chats.push({
               index: chats.length,
+              sessionId: sessionId || null,
               text: text.slice(0, 500),
-              title: text.slice(0, 120),
+              title: title.slice(0, 120),
               status: status,
               active: active,
               className: cls.slice(0, 200),
@@ -112,10 +141,13 @@ async function listSoloChats(driver) {
             });
           });
         }
-        var scrollInfo = findScrollHost(sidebar);
+        var scrollInfo = ${visibleOnly ? "{ host: null, scanned: 'visible' }" : 'findScrollHost(sidebar)'};
         if (!scrollInfo.host) {
           collectVisible(scrollInfo);
           return { mode: 'solo', chats: chats, count: chats.length, scanned: 'visible' };
+        }
+        if (document.visibilityState === 'hidden' && ${canPrepareVisibility}) {
+          return { error: 'sidebar_visibility_required' };
         }
         var scrollHost = scrollInfo.host;
         var originalTop = scrollHost.scrollTop;
@@ -123,16 +155,19 @@ async function listSoloChats(driver) {
         var step = Math.max(120, Math.floor(scrollHost.clientHeight * 0.75));
         try {
           scrollHost.scrollTop = 0;
-          await settle();
+          if (!await settle()) return { error: 'sidebar_scan_timeout' };
           collectVisible(scrollInfo);
           var previousTop = -1;
-          for (var guard = 0; guard < 80 && scrollHost.scrollTop < maxTop && scrollHost.scrollTop !== previousTop; guard++) {
+          // Integer scrollHeight/clientHeight can differ from the physical
+          // fractional scrollTop at the bottom by up to one CSS pixel.
+          for (var guard = 0; guard < 80 && maxTop - scrollHost.scrollTop > 1 && scrollHost.scrollTop !== previousTop; guard++) {
             previousTop = scrollHost.scrollTop;
             scrollHost.scrollTop = Math.min(maxTop, scrollHost.scrollTop + step);
-            await settle();
+            if (!await settle()) return { error: 'sidebar_scan_timeout' };
             collectVisible(scrollInfo);
             maxTop = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
           }
+          if (maxTop - scrollHost.scrollTop > 1) return { error: 'sidebar_scan_incomplete' };
         } finally {
           scrollHost.scrollTop = originalTop;
         }
@@ -142,15 +177,45 @@ async function listSoloChats(driver) {
     returnByValue: true,
     awaitPromise: true
   });
-  return result.result?.value || { mode: 'unknown', chats: [], count: 0 };
+  const value = result.result?.value;
+  if (value?.error === 'sidebar_visibility_required') {
+    await driver._ensureVisibleWindow();
+    return listSoloChats(driver, { visibleOnly, visibilityPrepared: true });
+  }
+  if (value?.error === 'sidebar_scan_timeout') {
+    throw TraeCNAutomationError.cdpTimeout('Solo sidebar did not confirm a rendered scroll position', 200);
+  }
+  if (value?.error === 'sidebar_scan_incomplete') {
+    throw TraeCNAutomationError.cdpTimeout('Solo sidebar scan could not reach the end of the list');
+  }
+  return value || { mode: 'unknown', chats: [], count: 0 };
 }
 
 async function getActiveSoloChat(driver) {
-  const result = await driver.listSoloChats();
+  // A mounted native identity does not require scrolling the whole history.
+  // Keep legacy scans for rows without a native ID or an unmounted active row.
+  const current = await driver.listSoloChats({ visibleOnly: true });
+  if (!current || current.mode !== 'solo' || !Array.isArray(current.chats)) {
+    return { mode: current?.mode || 'unknown', active: null, reason: current?.reason || 'solo_chats_unavailable' };
+  }
+  const currentActive = current.chats.filter(chat => chat.active);
+  if (currentActive.length > 1) {
+    return { mode: 'solo', active: null, count: current.count || current.chats.length, reason: 'active_solo_chat_ambiguous' };
+  }
+  if (currentActive.length === 1 && currentActive[0].sessionId) {
+    return { mode: 'solo', active: currentActive[0], count: current.count || current.chats.length };
+  }
+  // Overrides may ignore the internal option and already return a complete
+  // snapshot. Only our explicit visible snapshot needs the legacy full scan.
+  const result = current.scanned === 'visible' ? await driver.listSoloChats() : current;
   if (!result || result.mode !== 'solo' || !Array.isArray(result.chats)) {
     return { mode: result?.mode || 'unknown', active: null, reason: result?.reason || 'solo_chats_unavailable' };
   }
-  const active = result.chats.find(chat => chat.active) || null;
+  const activeChats = result.chats.filter(chat => chat.active);
+  if (activeChats.length > 1) {
+    return { mode: 'solo', active: null, count: result.count || result.chats.length, reason: 'active_solo_chat_ambiguous' };
+  }
+  const active = activeChats[0] || null;
   return {
     mode: 'solo',
     active,
@@ -159,17 +224,23 @@ async function getActiveSoloChat(driver) {
 }
 
 async function switchSoloChat(driver, criteria = {}) {
+  const sessionId = typeof criteria.sessionId === 'string' ? criteria.sessionId.trim() : '';
   const index = Number.isInteger(criteria.index) ? criteria.index : null;
   const textIncludes = typeof criteria.textIncludes === 'string' ? criteria.textIncludes.trim() : '';
   const titleIncludes = typeof criteria.titleIncludes === 'string' ? criteria.titleIncludes.trim() : '';
-  if (index === null && !textIncludes && !titleIncludes) {
+  if (!sessionId && index === null && !textIncludes && !titleIncludes) {
     throw TraeCNAutomationError.soloChatQueryInvalid('switchSoloChat requires index, textIncludes, or titleIncludes');
+  }
+  if (sessionId) {
+    const located = await _locateCandidateRow(driver, { sessionId });
+    if (!located || located.error) return { success: false, reason: located?.error || 'chat_not_found' };
   }
 
   const result = await driver.client.send('Runtime.evaluate', {
     expression: `
       (function() {
         var targetIndex = ${index === null ? 'null' : String(index)};
+        var sessionId = ${safeJsValue(sessionId)};
         var textIncludes = ${safeJsValue(textIncludes)};
         var titleIncludes = ${safeJsValue(titleIncludes)};
         var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
@@ -193,12 +264,18 @@ async function switchSoloChat(driver, criteria = {}) {
         var seen = new Set();
         for (var i = 0; i < nodes.length; i++) {
           var text = (nodes[i].innerText || nodes[i].textContent || '').replace(/\\s+/g, ' ').trim();
-          if (!text || seen.has(text)) continue;
-          seen.add(text);
-          items.push({ el: nodes[i], text: text, index: items.length });
+          var nativeId = (nodes[i].getAttribute('data-session-id') || '').trim();
+          var identity = nativeId || text;
+          if (!text || seen.has(identity)) continue;
+          seen.add(identity);
+          var titleNode = nodes[i].querySelector('[class*="task-title___"], [class*="task-item-title"], [class*="conversation-item-title"], [class*="chat-item-title"]');
+          var title = titleNode ? (titleNode.innerText || titleNode.textContent || '').trim() : text.slice(0, 120);
+          items.push({ el: nodes[i], text: text, title: title, sessionId: nativeId, index: items.length });
         }
         var match = null;
-        if (targetIndex !== null) {
+        if (sessionId) {
+          match = items.find(function(item) { return item.sessionId === sessionId; });
+        } else if (targetIndex !== null) {
           match = items.find(function(item) { return item.index === targetIndex; });
         } else if (textIncludes) {
           match = items.find(function(item) { return item.text.includes(textIncludes); });
@@ -220,7 +297,8 @@ async function switchSoloChat(driver, criteria = {}) {
         return {
           success: true,
           index: match.index,
-          title: match.text.slice(0, 120),
+          sessionId: match.sessionId || null,
+          title: match.title.slice(0, 120),
           text: match.text.slice(0, 500)
         };
       })()
@@ -280,9 +358,11 @@ async function _openRowContextMenu(driver, candidate) {
       var target = null;
       for (var i = 0; i < items.length; i++) {
         var text = (items[i].innerText || items[i].textContent || '').replace(/\\s+/g, ' ').trim();
-        if (candidate && candidate.title && text.indexOf(candidate.title) !== -1) { target = items[i]; break; }
+        if (candidate && candidate.sessionId) {
+          if (items[i].getAttribute('data-session-id') === candidate.sessionId) { target = items[i]; break; }
+        } else if (candidate && candidate.title && text.indexOf(candidate.title) !== -1) { target = items[i]; break; }
       }
-      if (!target && candidate && Number.isInteger(candidate.index) && items[candidate.index]) target = items[candidate.index];
+      if (!target && candidate && !candidate.sessionId && Number.isInteger(candidate.index) && items[candidate.index]) target = items[candidate.index];
       if (!target) return { success: false, reason: 'row_not_found', count: items.length };
 
       var actionButton = target.querySelector('[class*="task-item-action___"], [class*="task-item-actions-wrap___"], [class*="conversation-item-action"], [class*="chat-item-action"]');
@@ -331,7 +411,9 @@ async function _openRowContextMenu(driver, candidate) {
  * It then walks up to find the nearest scroll container so that the
  * element is on-screen before recording the action point.
  */
-async function _locateCandidateRow(driver, candidate) {
+async function _locateCandidateRow(driver, candidate, visibilityPrepared = false) {
+  const canPrepareVisibility = !visibilityPrepared &&
+    typeof driver._activateWindow === 'function' && typeof driver._ensureVisibleWindow === 'function';
   const expression = `
     (async function() {
       function findScrollHost(el) {
@@ -367,11 +449,7 @@ async function _locateCandidateRow(driver, candidate) {
         });
         return candidates.length && candidates[0].scrollable > 24 ? candidates[0].el : document.scrollingElement;
       }
-      function settle() {
-        return new Promise(function(resolve) {
-          requestAnimationFrame(function() { requestAnimationFrame(resolve); });
-        });
-      }
+      ${SIDEBAR_SETTLE_EXPRESSION}
       function norm(value) {
         return String(value || '').replace(/[\\u00a0\\t\\r\\n]+/g, ' ').replace(/\\s+/g, ' ').trim().toLowerCase();
       }
@@ -400,15 +478,18 @@ async function _locateCandidateRow(driver, candidate) {
         var items = [];
         for (var i = 0; i < nodes.length; i++) {
           var text = (nodes[i].innerText || nodes[i].textContent || '').replace(/\\s+/g, ' ').trim();
-          if (!text || seen.has(text)) continue;
-          seen.add(text);
-          items.push({ el: nodes[i], text: text, index: items.length });
+          var sessionId = (nodes[i].getAttribute('data-session-id') || '').trim();
+          var identity = sessionId || text;
+          if (!text || seen.has(identity)) continue;
+          seen.add(identity);
+          items.push({ el: nodes[i], text: text, sessionId: sessionId, index: items.length });
         }
         return items;
       }
       function findTarget() {
         var items = visibleItems();
         var target = null;
+        if (candidate.sessionId) return items.find(function(item) { return item.sessionId === candidate.sessionId; }) || null;
         if (candidate.title) target = items.find(function(item) { return norm(item.text).indexOf(norm(candidate.title)) !== -1; });
         if (!target && candidate.text) target = items.find(function(item) { return norm(item.text).indexOf(norm(candidate.text)) !== -1; });
         if (!target && Number.isInteger(candidate.index)) target = items.find(function(item) { return item.index === candidate.index; });
@@ -431,6 +512,7 @@ async function _locateCandidateRow(driver, candidate) {
         var scrollTop = scrollHost ? scrollHost.scrollTop : 0;
         return {
           index: target.index,
+          sessionId: target.sessionId || null,
           title: target.text.slice(0, 120),
           actionPoint: actionPoint,
           rowPoint: rowPoint,
@@ -441,28 +523,33 @@ async function _locateCandidateRow(driver, candidate) {
       var target = findTarget();
       if (target) return pointForTarget(target);
       var scrollHost = findScrollHost(sidebar);
-      if (!scrollHost || (!candidate.title && !candidate.text)) {
+      if (!scrollHost || (!candidate.sessionId && !candidate.title && !candidate.text)) {
         return { error: 'candidate_not_found', count: visibleItems().length };
       }
       var originalTop = scrollHost.scrollTop;
       var maxTop = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
+      if (maxTop === 0) return { error: 'candidate_not_found', count: visibleItems().length };
+      if (document.visibilityState === 'hidden' && ${canPrepareVisibility}) {
+        return { error: 'sidebar_visibility_required' };
+      }
       var step = Math.max(120, Math.floor(scrollHost.clientHeight * 0.75));
       try {
         scrollHost.scrollTop = 0;
-        await settle();
+        if (!await settle()) return { error: 'sidebar_scan_timeout' };
         target = findTarget();
         if (target) return pointForTarget(target);
         var previousTop = -1;
-        for (var guard = 0; guard < 80 && scrollHost.scrollTop < maxTop && scrollHost.scrollTop !== previousTop; guard++) {
+        for (var guard = 0; guard < 80 && maxTop - scrollHost.scrollTop > 1 && scrollHost.scrollTop !== previousTop; guard++) {
           previousTop = scrollHost.scrollTop;
           scrollHost.scrollTop = Math.min(maxTop, scrollHost.scrollTop + step);
-          await settle();
+          if (!await settle()) return { error: 'sidebar_scan_timeout' };
           target = findTarget();
           if (target) return pointForTarget(target);
           maxTop = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
         }
+        if (maxTop - scrollHost.scrollTop > 1) return { error: 'sidebar_scan_incomplete' };
       } finally {
-        scrollHost.scrollTop = originalTop;
+        if (!candidate.sessionId || !target) scrollHost.scrollTop = originalTop;
       }
       return { error: 'candidate_not_found', count: visibleItems().length };
     })()
@@ -472,7 +559,12 @@ async function _locateCandidateRow(driver, candidate) {
     returnByValue: true,
     awaitPromise: true
   });
-  return result.result?.value || null;
+  const value = result.result?.value;
+  if (value?.error === 'sidebar_visibility_required') {
+    await driver._ensureVisibleWindow();
+    return _locateCandidateRow(driver, candidate, true);
+  }
+  return value || null;
 }
 
 /**
@@ -666,8 +758,15 @@ async function deleteSoloChats(driver, options = {}) {
 
       // 4. Verify the candidate is no longer in the sidebar.
       const after = await driver.listSoloChats();
+      if (!Array.isArray(after?.chats)) {
+        attempt.reason = 'delete_verification_unavailable';
+        attempts.push(attempt);
+        continue;
+      }
       const stillThere = Array.isArray(after.chats) && after.chats.some(chat =>
-        chat && typeof chat.title === 'string' && _isTitleMatch(candidate.title, chat.title)
+        candidate.sessionId
+          ? chat?.sessionId === candidate.sessionId
+          : chat && typeof chat.title === 'string' && _isTitleMatch(candidate.title, chat.title)
       );
       if (stillThere) {
         attempt.reason = 'delete_verification_failed';

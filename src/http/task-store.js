@@ -74,7 +74,9 @@ class TaskStore {
       return false;
     }
     const tasks = Array.from(taskQueue.entries())
-      .filter(([, task]) => !this.isTerminalStatus(task.status))
+      .filter(([, task]) => !this.isTerminalStatus(task.status)
+        || task.statePersistencePending
+        || (task.status === 'cancelled' && task.cancelPersistencePending))
       .filter(([, task]) => !isGenericQueueProbeTask(task && task.task))
       .map(([taskId, task]) => ({ taskId, ...task }));
     this._pruneTerminalReplays();
@@ -86,12 +88,14 @@ class TaskStore {
       ? task.idempotencyKey.trim()
       : '';
     if (!idempotencyKey) return true;
+    const previousReplay = this.terminalReplays.get(idempotencyKey);
     const now = this.now();
     this.terminalReplays.set(idempotencyKey, {
       idempotencyKey,
       fingerprint: typeof task.idempotencyFingerprint === 'string'
         ? task.idempotencyFingerprint
         : null,
+      fingerprintVersion: task.idempotencyFingerprintVersion || 1,
       taskId: task.taskId,
       status: task.status,
       result: task.result ?? null,
@@ -99,7 +103,21 @@ class TaskStore {
       completedAt: task.completedAt || new Date(now).toISOString(),
       expiresAt: now + this.terminalReplayTtlMs
     });
-    return this.persist(taskQueue);
+    try {
+      const persisted = this.persist(taskQueue);
+      if (persisted) return true;
+    } catch (error) {
+      if (!this.lastPersistError?.snapshotCommitted) {
+        if (previousReplay) this.terminalReplays.set(idempotencyKey, previousReplay);
+        else this.terminalReplays.delete(idempotencyKey);
+      }
+      throw error;
+    }
+    if (!this.lastPersistError?.snapshotCommitted) {
+      if (previousReplay) this.terminalReplays.set(idempotencyKey, previousReplay);
+      else this.terminalReplays.delete(idempotencyKey);
+    }
+    return false;
   }
 
   getTerminalReplay(idempotencyKey) {
@@ -117,6 +135,7 @@ class TaskStore {
     const dirPath = path.dirname(primaryPath);
     const document = this._createDocument(Array.isArray(tasks) ? tasks : []);
     const serialized = `${JSON.stringify(document, null, 2)}\n`;
+    let snapshotCommitted = false;
 
     try {
       fs.mkdirSync(dirPath, { recursive: true });
@@ -138,6 +157,7 @@ class TaskStore {
       }
 
       fs.renameSync(tempPath, primaryPath);
+      snapshotCommitted = true;
       this._emitWritePhase('primary_committed');
       this._fsyncDirectory(dirPath);
       this._emitWritePhase('directory_fsynced');
@@ -147,8 +167,8 @@ class TaskStore {
       this.lastPersistError = null;
       return true;
     } catch (err) {
+      this._recordWriteFailure(err, snapshotCommitted);
       this.logger.error('[TaskStore] Failed to persist active queue:', err.message);
-      this._recordWriteFailure(err);
       return false;
     }
   }
@@ -196,6 +216,17 @@ class TaskStore {
     const primaryPath = this.persistencePath;
     const backupPath = `${primaryPath}.bak`;
     const tempPath = `${primaryPath}.tmp`;
+
+    if (![primaryPath, backupPath, tempPath].some(filePath => fs.existsSync(filePath))) return null;
+    // Recovery can remove temporary files or quarantine a snapshot. Claim
+    // the same single-writer lock before touching another process's files.
+    try {
+      this._acquireLock();
+    } catch (error) {
+      this._recordWriteFailure(error);
+      this.logger.error('[TaskStore] Failed to acquire active queue for restore:', error.message);
+      return null;
+    }
 
     const primary = this._loadCandidate(primaryPath, 'primary');
     if (primary) {
@@ -386,11 +417,12 @@ class TaskStore {
     if (this.onWritePhase) this.onWritePhase(phase);
   }
 
-  _recordWriteFailure(error = {}) {
+  _recordWriteFailure(error = {}, snapshotCommitted = false) {
     this.taskStoreWritable = false;
     this.lastPersistError = {
       code: typeof error.code === 'string' && error.code ? error.code : 'WRITE_FAILED',
       message: 'Active task queue persistence is unavailable',
+      snapshotCommitted,
       at: new Date().toISOString()
     };
   }

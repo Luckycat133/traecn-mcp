@@ -1,4 +1,4 @@
 interface:
   display_name: "TRAECNclaw Development"
-  short_description: "Design the MCP, web product, distribution, and launch"
-  default_prompt: "Use $traecnclaw-development to inspect current TRAECNclaw source and public channels, then complete the requested engineering or distribution outcome. Preserve the split: focused MCP Skill for agents, one Web Control Console for humans, CLI for setup/operations, and one local gateway as runtime. For MCP changes follow the product-design reference; for packages, registries, directories, and promotion follow the distribution plan and exact browser runbooks. Keep the 20-tool contract stable, test actual outputs and installs, fix canonical sources before mirrors, and never misrepresent marketplace inspection as control of a user's local TraeCN."
+  short_description: "Audit and develop TRAECNclaw and its Skills"
+  default_prompt: "Use $traecnclaw-development to complete the requested TRAECNclaw work within its scope, using current source and verification evidence."

@@ -27,12 +27,18 @@ class RecoveryHelper {
     taskHistoryStore = null,
     isMockBridge = () => false,
     isTerminalStatus = () => false,
+    isCancellationConfirmed = () => false,
+    isTaskFinalizationConfirmed = () => false,
     taskStore = null,
   } = {}) {
     this.logger = logger;
     this.taskHistoryStore = taskHistoryStore;
     this.isMockBridge = typeof isMockBridge === 'function' ? isMockBridge : () => Boolean(isMockBridge);
     this.isTerminalStatus = typeof isTerminalStatus === 'function' ? isTerminalStatus : () => Boolean(isTerminalStatus);
+    this.isCancellationConfirmed = typeof isCancellationConfirmed === 'function'
+      ? isCancellationConfirmed : () => false;
+    this.isTaskFinalizationConfirmed = typeof isTaskFinalizationConfirmed === 'function'
+      ? isTaskFinalizationConfirmed : () => false;
     this._pollingTimer = null;
     this.taskStore = taskStore || new TaskStore({
       logger,
@@ -67,6 +73,15 @@ class RecoveryHelper {
    * the service stays decoupled from any specific Gateway instance.
    */
   persist(taskQueue) {
+    // Carry the parent's confirmed completion in the same snapshot that
+    // removes it. History and events can be delayed or deliberately trimmed.
+    for (const task of taskQueue?.values() || []) {
+      if (!task.workflowParentTaskId) continue;
+      const parent = taskQueue.get(task.workflowParentTaskId);
+      if (parent?.status === 'done' && !parent.statePersistencePending && !parent.cancelPersistencePending) {
+        task.workflowParentCompleted = true;
+      }
+    }
     return this.taskStore.persist(taskQueue);
   }
 
@@ -78,6 +93,8 @@ class RecoveryHelper {
     if (!task || !task.taskId || !this.taskHistoryStore || typeof this.taskHistoryStore.ensureTask !== 'function') {
       return;
     }
+    const existingMetadata = typeof this.taskHistoryStore.getTask === 'function'
+      ? this.taskHistoryStore.getTask(task.taskId)?.metadata : null;
     const historyStatusMap = {
       queued: 'queued',
       executing: 'executing',
@@ -89,7 +106,9 @@ class RecoveryHelper {
       review_rejected: 'cancelled',
       cancelled: 'cancelled'
     };
-    const status = historyStatusMap[task.status] || task.status || 'running';
+    const effectiveStatus = task.cancelPersistencePending?.previousStatus
+      || task.statePersistencePending?.previousStatus || task.status;
+    const status = historyStatusMap[effectiveStatus] || effectiveStatus || 'running';
     const isTerminal = ['completed', 'failed', 'cancelled'].includes(status);
     const completedAt = isTerminal ? (task.completedAt || new Date().toISOString()) : null;
     const elapsedMs = task.createdAt ? Math.max(0, Date.now() - task.createdAt) : null;
@@ -102,6 +121,8 @@ class RecoveryHelper {
       completedAt,
       elapsedMs,
       metadata: {
+        ...(existingMetadata && typeof existingMetadata === 'object' && !Array.isArray(existingMetadata) ? existingMetadata : {}),
+        ...(task.metadata && typeof task.metadata === 'object' && !Array.isArray(task.metadata) ? task.metadata : {}),
         source: 'delegate_async_restore',
         reviewRequired: task.reviewRequired === true,
         autoContinue: task.autoContinue === true,
@@ -114,7 +135,10 @@ class RecoveryHelper {
         lastModelProbeAt: task.lastModelProbeAt || null,
         submittedToTrae: task.submittedToTrae === true,
         submittedAt: task.submittedAt || null,
-        soloChat: task.soloChat || null
+        soloChat: task.soloChat || null,
+        ...(typeof task.nextTaskId === 'string' && task.nextTaskId.trim() ? { nextTaskId: task.nextTaskId } : {}),
+        ...(typeof task.workflowParentTaskId === 'string' && task.workflowParentTaskId.trim()
+          ? { workflowParentTaskId: task.workflowParentTaskId } : {})
       }
     });
   }
@@ -140,16 +164,55 @@ class RecoveryHelper {
       let restored = 0;
       let skippedQueueProbes = 0;
       let skippedInvalidTasks = 0;
+      let confirmedCheckpoints = 0;
       for (const item of tasks) {
-        if (!item || !item.taskId || this.isTerminalStatus(item.status)) {
+        const pendingState = item?.statePersistencePending?.status === item?.status
+          && ['queued', 'executing', 'approval_required', 'awaiting_review'].includes(item?.statePersistencePending?.previousStatus);
+        const pendingCancellation = item?.status === 'cancelled'
+          && ['queued', 'executing', 'approval_required', 'awaiting_review'].includes(item.cancelPersistencePending?.previousStatus);
+        if (!item || !item.taskId || (this.isTerminalStatus(item.status) && !pendingCancellation && !pendingState)) {
           skippedInvalidTasks++;
           continue;
+        }
+        const pendingNativeStop = pendingCancellation && item.cancelRequested === true
+          && item.cancelPersistencePending.previousStatus === 'executing' && item.submittedToTrae === true
+          && !Object.prototype.hasOwnProperty.call(item, 'stopResult');
+        if (pendingCancellation && !pendingNativeStop && this.isCancellationConfirmed(item.taskId)) {
+          const confirmedTask = { ...item };
+          delete confirmedTask.cancelPersistencePending;
+          delete confirmedTask.statePersistencePending;
+          this.syncHistoryMirror(confirmedTask);
+          skippedInvalidTasks++;
+          continue;
+        }
+        let confirmedState = null;
+        if (pendingState && !pendingNativeStop
+          && this.isTaskFinalizationConfirmed(item.taskId, item.status, item.interactionRequestId)) {
+          confirmedState = { ...item };
+          delete confirmedState.statePersistencePending;
+          this.syncHistoryMirror(confirmedState);
+          if (this.isTerminalStatus(item.status)) {
+            skippedInvalidTasks++;
+            continue;
+          }
+          confirmedCheckpoints++;
         }
         if (isGenericQueueProbeTask(item.task)) {
           skippedQueueProbes++;
           continue;
         }
-        const task = { ...item };
+        const task = { ...(confirmedState || item) };
+        if (pendingNativeStop) {
+          task.cancelPersistencePending = { ...task.cancelPersistencePending, verifyNativeIdentity: true };
+        }
+        // Upgrade earlier snapshots while their completion evidence still
+        // exists, then retain it independently of history/event retention.
+        if (task.workflowParentTaskId && task.workflowParentCompleted !== true
+          && (this.isTaskFinalizationConfirmed(task.workflowParentTaskId, 'done')
+            || this.taskHistoryStore?.getTask(task.workflowParentTaskId)?.status === 'completed')) {
+          task.workflowParentCompleted = true;
+          confirmedCheckpoints++;
+        }
         if (task.status === 'executing' && task.submittedToTrae !== true) {
           task.status = 'queued';
         }
@@ -177,7 +240,7 @@ class RecoveryHelper {
       if (skippedQueueProbes > 0) {
         this.logger.warn(`[QueuePersistence] Dropped ${skippedQueueProbes} generic queue-probe task(s) from active queue restore`);
       }
-      if (snapshot.needsRewrite || skippedQueueProbes > 0 || skippedInvalidTasks > 0) {
+      if (snapshot.needsRewrite || skippedQueueProbes > 0 || skippedInvalidTasks > 0 || confirmedCheckpoints > 0) {
         this.taskStore.persist(taskQueue);
       }
       return restored;

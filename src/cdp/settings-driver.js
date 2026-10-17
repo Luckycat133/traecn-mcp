@@ -218,45 +218,10 @@ async function _listSettingsSidebarSections(client) {
 async function _waitForContent(client, maxWait = 8000) {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
-    let items;
-    try {
-      items = await evaluateJSON(
-        client,
-        `() => {
-          const containerEls = document.querySelectorAll('.icb-setting-item-container');
-          if (containerEls.length === 0) return [];
-          const results = [];
-          for (let i = 0; i < containerEls.length; i++) {
-            const el = containerEls[i];
-            const r = el.getBoundingClientRect();
-            const style = getComputedStyle(el);
-            if (r.width <= 0 || r.height <= 0
-              || style.visibility === 'hidden'
-              || style.display === 'none') continue;
-            const labelEl = el.querySelector('.icb-setting-item-label');
-            const descEl = el.querySelector('.icb-setting-item-description');
-            const toggleEl = el.querySelector('input[type="checkbox"]');
-            const dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
-            const textInputEl = el.querySelector('input[type="text"], input:not([type]), textarea, input[type="search"], input[type="number"]');
-            results.push({
-              label: labelEl ? labelEl.innerText.trim() : '',
-              desc: descEl ? descEl.innerText.trim() : '',
-              currentValue: dropdownEl ? dropdownEl.innerText.trim() : '',
-              hasToggle: !!toggleEl,
-              hasDropdown: !!dropdownEl,
-              hasTextInput: !!textInputEl,
-              toggleChecked: toggleEl ? toggleEl.checked : null,
-              y: Math.round(r.y),
-              visible: true
-            });
-          }
-          return results;
-        }`
-      );
-    } catch {
-      items = [];
-    }
+    const parsed = await _inspectSettingsContent(client);
+    const items = Array.isArray(parsed) ? parsed : parsed.items;
     if (Array.isArray(items) && items.length > 0) return items;
+    if (parsed.type === 'model-table') return [];
     await sleep(500);
   }
   return [];
@@ -269,7 +234,7 @@ async function _waitForContent(client, maxWait = 8000) {
  * Migration: page-side function now returns a plain object directly;
  * `evaluateJSON` handles the JSON-stringify/parse transport round-trip.
  */
-async function _readSettingsContent(client, waitMs = 8000) {
+async function _inspectSettingsContent(client) {
   let parsed;
   try {
     parsed = await evaluateJSON(
@@ -292,7 +257,8 @@ async function _readSettingsContent(client, waitMs = 8000) {
           '.codeIndex-list-item',
           '.user-entitlement-credits-overview-card',
           '.user-entitlement-credits-item',
-          '.icd-docset-list'
+          '.icd-docset-list',
+          '.icube-settings-content-body .permission-approval-settings .permission-approval-settings-card'
         ].join(','));
 
         // Prefer whichever strategy returned more items
@@ -316,7 +282,8 @@ async function _readSettingsContent(client, waitMs = 8000) {
             containerResults.push({
               label: labelEl ? labelEl.innerText.trim() : '',
               desc: descEl ? descEl.innerText.trim() : '',
-              currentValue: dropdownEl ? dropdownEl.innerText.trim() : '',
+              currentValue: dropdownEl ? dropdownEl.innerText.trim()
+                : (textInputEl ? String(textInputEl.value ?? '') : ''),
               hasToggle: !!toggleEl,
               hasDropdown: !!dropdownEl,
               hasTextInput: !!textInputEl,
@@ -368,6 +335,50 @@ async function _readSettingsContent(client, waitMs = 8000) {
             const text = String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
             if (!text) continue;
 
+            // The native permission page displays modes, but its radios and
+            // configuration action are not writable setting controls.
+            if (className.includes('permission-approval-settings-card')) {
+              function visible(node) {
+                if (!node) return false;
+                const rect = node.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return false;
+                for (let current = node; current; current = current.parentElement) {
+                  const style = getComputedStyle(current);
+                  if (style.visibility === 'hidden' || style.display === 'none') return false;
+                }
+                return true;
+              }
+              function read(node, selector) {
+                const target = node.querySelector(selector);
+                return visible(target) ? String(target.innerText || target.textContent || '').replace(/\\s+/g, ' ').trim() : '';
+              }
+              function addDisplay(node, label, desc, currentValue = '') {
+                if (!label) return;
+                customResults.push({
+                  label, desc, currentValue,
+                  hasToggle: false, hasDropdown: false, hasTextInput: false,
+                  toggleChecked: null, y: Math.round(node.getBoundingClientRect().y), visible: true
+                });
+              }
+              if (!visible(el)) continue;
+              const modes = Array.from(el.querySelectorAll('.permission-approval-settings-mode-item')).filter(visible);
+              const checked = modes.filter(mode => {
+                const radio = mode.querySelector('.permission-approval-settings-mode-radio');
+                return visible(radio) && radio.getAttribute('data-checked') === 'true';
+              });
+              const selected = checked.length === 1 ? checked[0] : null;
+              addDisplay(el, read(el, '.permission-approval-settings-card-header-title'),
+                selected ? read(selected, '.permission-approval-settings-mode-desc')
+                  : read(el, '.permission-approval-settings-card-header-desc'),
+                selected ? read(selected, '.permission-approval-settings-mode-label') : '');
+              for (const mode of modes) {
+                if (!visible(mode.querySelector('.permission-approval-settings-mode-action'))) continue;
+                addDisplay(mode, read(mode, '.permission-approval-settings-mode-label'),
+                  read(mode, '.permission-approval-settings-mode-desc'));
+              }
+              continue;
+            }
+
             let label = text;
             let desc = '';
             let currentValue = '';
@@ -410,20 +421,34 @@ async function _readSettingsContent(client, waitMs = 8000) {
         const chosen = candidates[0].items;
         const strategy = candidates[0].type;
 
-        if (chosen.length === 0) return { count: 0, type: 'none' };
+        if (chosen.length === 0) {
+          const emptyModels = document.querySelectorAll('.icube-settings-container .custom-model-no-data');
+          const emptyModelVisible = Array.from(emptyModels).some(el => {
+            const r = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            return r.width > 0 && r.height > 0
+              && style.visibility !== 'hidden' && style.display !== 'none';
+          });
+          return { count: 0, items: [], type: emptyModelVisible ? 'model-table' : 'none' };
+        }
         return { count: chosen.length, items: chosen, type: strategy };
       }`
     ) || { count: 0, items: [], type: 'none' };
   } catch {
     parsed = { count: 0, items: [], type: 'none' };
   }
+  return parsed;
+}
+
+async function _readSettingsContent(client, waitMs = 8000) {
+  const parsed = await _inspectSettingsContent(client);
 
   if (parsed.count > 0) {
     return { sections: [], items: parsed.items };
   }
 
-  // For standard items, wait up to 8s for async content. Skip for model tables
-  // (which load synchronously from the DOM above).
+  // Wait for every supported content shape after a loading snapshot. Explicit
+  // empty-model UI is already readable and does not need standard setting rows.
   if (parsed.type !== 'model-table') {
     const waitedItems = await _waitForContent(client, waitMs);
     return { sections: [], items: waitedItems };
@@ -436,111 +461,116 @@ async function _readSettingsContent(client, waitMs = 8000) {
  * Find a setting item by label text and click its dropdown (if it has one).
  * Then select the option matching `value`.
  *
- * Migration: now uses `clickByTextEx` for both stages — exact-match for
- * the labelled item, then exact/startsWith then substring for the option.
+ * Bind the exact labelled row's combobox to its aria-controls portal.
+ * Current-value text under other triggers is never an option candidate.
  */
-async function _setDropdown(client, labelText, value) {
-  await _ensureClickHelper(client);
-
-  const openResult = await clickByTextEx(
-    client,
-    [
-      '.icb-settings-container .icb-setting-item-container',
-      '.part.solo_settings .icb-setting-item-container',
-      '[class*="settings-content"] .icb-setting-item-container',
-      '.icb-setting-item-container'
-    ],
-    labelText,
-    {
-      strategies: ['text'],
-      exact: true,
-      click: 'radix'
-    }
-  );
-  if (!openResult.ok) {
-    return 'item not found: ' + labelText;
-  }
-  await sleep(600);
-
-  // Try exact/startsWith match first, then substring.
-  const exactStartResult = await clickByTextEx(
-    client,
-    ['[class*="auto-test-select-option"]'],
-    value,
-    {
-      strategies: ['text'],
-      exact: false,
-      click: 'radix'
-    }
-  );
-  let selectedText = '';
-  if (exactStartResult.ok) {
-    selectedText = exactStartResult.matchedText;
-  } else {
-    // Substring fallback.
-    const partialResult = await clickByTextEx(
-      client,
-      ['[class*="auto-test-select-option"]'],
-      value,
-      {
-        strategies: ['text'],
-        exact: false,
-        click: 'radix'
+async function _openSettingsDropdown(client, labelText) {
+  const point = await evaluateJSON(client, `(labelText) => {
+    function visible(el) {
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 4 || r.height <= 4) return false;
+      for (let node = el; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (style.visibility === 'hidden' || style.display === 'none') return false;
       }
-    );
-    if (partialResult.ok) selectedText = '(partial) ' + partialResult.matchedText;
+      return true;
+    }
+    const rows = document.querySelectorAll('.icb-setting-item-container');
+    for (const row of rows) {
+      const label = row.querySelector('.icb-setting-item-label');
+      if (String(label?.innerText || label?.textContent || '').trim() !== labelText || !visible(row)) continue;
+      const trigger = row.querySelector('button[role="combobox"], [role="combobox"]');
+      if (!visible(trigger) || trigger.disabled || trigger.getAttribute('aria-disabled') === 'true') return null;
+      const controlsId = trigger.getAttribute('aria-controls');
+      if (!controlsId) return null;
+      const r = trigger.getBoundingClientRect();
+      return { controlsId, x: r.left + r.width / 2, y: r.top + r.height / 2,
+        alreadyOpen: trigger.getAttribute('aria-expanded') === 'true' };
+    }
+    return null;
+  }`, [labelText]);
+  if (!point) return null;
+  if (!point.alreadyOpen) {
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1
+    });
+    await sleep(300);
   }
-  await sleep(400);
-  if (!selectedText) return 'option not found: ' + value;
-  return 'selected: ' + selectedText;
+  return point.controlsId;
+}
+
+async function _settingsDropdownOptions(client, controlsId) {
+  return evaluateJSON(client, `(controlsId) => {
+    const portal = document.getElementById(controlsId);
+    if (!portal || portal.getAttribute('role') !== 'listbox') return [];
+    const pr = portal.getBoundingClientRect();
+    const ps = getComputedStyle(portal);
+    if (pr.width <= 4 || pr.height <= 4 || ps.display === 'none' || ps.visibility === 'hidden') return [];
+    return Array.from(portal.querySelectorAll('[role="option"]')).flatMap(option => {
+      const r = option.getBoundingClientRect();
+      const style = getComputedStyle(option);
+      const label = String(option.innerText || option.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (!label || r.width <= 4 || r.height <= 4 || style.visibility === 'hidden' || style.display === 'none'
+        || option.getAttribute('aria-disabled') === 'true' || option.getAttribute('data-disabled') !== null) return [];
+      return [{ label, x: r.left + r.width / 2, y: r.top + r.height / 2 }];
+    });
+  }`, [controlsId]);
+}
+
+async function _closeSettingsDropdown(client, controlsId) {
+  const open = await evaluate(client, `(controlsId) => {
+    const portal = document.getElementById(controlsId);
+    if (!portal) return false;
+    const r = portal.getBoundingClientRect();
+    const style = getComputedStyle(portal);
+    return r.width > 4 && r.height > 4 && style.display !== 'none' && style.visibility !== 'hidden';
+  }`, [controlsId]);
+  if (!open) return;
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27
+  });
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27
+  });
+}
+
+async function _setDropdown(client, labelText, value) {
+  const controlsId = await _openSettingsDropdown(client, labelText);
+  if (!controlsId) return 'item not found: ' + labelText;
+  try {
+    const options = await _settingsDropdownOptions(client, controlsId);
+    const match = options.find(option => option.label === value);
+    if (!match) return 'option not found: ' + value;
+    // Radix ignores the first pointerup after opening until the pointer moves.
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: match.x, y: match.y, button: 'none', buttons: 0
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: match.x, y: match.y, button: 'left', buttons: 1, clickCount: 1
+    });
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: match.x, y: match.y, button: 'left', buttons: 0, clickCount: 1
+    });
+    await sleep(400);
+    return 'selected: ' + match.label;
+  } finally {
+    await _closeSettingsDropdown(client, controlsId);
+  }
 }
 
 async function _listDropdownOptions(client, labelText) {
-  await _ensureClickHelper(client);
-  const openResult = await clickByTextEx(
-    client,
-    [
-      '.icb-settings-container .icb-setting-item-container',
-      '.part.solo_settings .icb-setting-item-container',
-      '[class*="settings-content"] .icb-setting-item-container',
-      '.icb-setting-item-container'
-    ],
-    labelText,
-    { strategies: ['text'], exact: true, click: 'radix' }
-  );
-  if (!openResult.ok) return [];
-  await sleep(300);
-  let options;
+  const controlsId = await _openSettingsDropdown(client, labelText);
+  if (!controlsId) return [];
   try {
-    options = await evaluateJSON(
-      client,
-      `() => {
-        const selectors = ['[class*="auto-test-select-option"]', '[role="option"]'];
-        const seen = new Set();
-        const values = [];
-        for (const selector of selectors) {
-          for (const el of document.querySelectorAll(selector)) {
-            const rect = el.getBoundingClientRect();
-            const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-            if (rect.width > 4 && rect.height > 4 && text && !seen.has(text)) {
-              seen.add(text);
-              values.push(text);
-            }
-          }
-        }
-        return values;
-      }`
-    );
+    const options = await _settingsDropdownOptions(client, controlsId);
+    return [...new Set(options.map(option => option.label))];
   } finally {
-    await evaluate(
-      client,
-      `() => {
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
-        return 'closed';
-      }`
-    );
+    await _closeSettingsDropdown(client, controlsId);
   }
-  return Array.isArray(options) ? options : [];
 }
 
 function normalizeSettingItem(item) {
@@ -611,7 +641,7 @@ async function _setToggle(client, labelText, checked) {
         if (!toggleEl) return 'no toggle found';
         if (toggleEl.checked !== targetChecked) {
           window.__radixClick(toggleEl);
-          return 'toggled to: ' + !toggleEl.checked;
+          return 'toggled';
         }
         return 'already in desired state: ' + toggleEl.checked;
       }
@@ -620,6 +650,18 @@ async function _setToggle(client, labelText, checked) {
     [labelText, !!checked]
   );
   await sleep(400);
+  if (toggleOutcome === 'toggled') {
+    const actualChecked = await evaluate(client, `(labelText) => {
+      for (const label of document.querySelectorAll('.icb-setting-item-label')) {
+        if (String(label.innerText || label.textContent || '').trim() !== labelText) continue;
+        const input = label.closest('.icb-setting-item-container')?.querySelector('input[type="checkbox"]');
+        return input ? input.checked : null;
+      }
+      return null;
+    }`, [labelText]);
+    if (actualChecked !== !!checked) return 'toggle not applied: expected ' + !!checked + ', observed ' + actualChecked;
+    return 'toggled to: ' + actualChecked;
+  }
   return toggleOutcome || 'unknown';
 }
 
@@ -761,9 +803,11 @@ async function _ensureClickHelper(client) {
  *   await driver.settings.readAll();
  */
 class SettingsDriver {
-  constructor(client, config) {
+  constructor(client, config, options = {}) {
     this.client = client;
     this.config = config || {};
+    this._ensureVisibleWindow = typeof options.ensureVisibleWindow === 'function'
+      ? options.ensureVisibleWindow : async () => {};
     this._currentTab = null; // 'chat' | 'settings' | 'agents' | 'mcp'
   }
 
@@ -772,6 +816,7 @@ class SettingsDriver {
    * @param {string} [section] - Optional sidebar section to click (e.g. '通用', '模型')
    */
   async switchTab(section) {
+    await this._ensureVisibleWindow();
     await _ensureClickHelper(this.client);
 
     const settingsOpen = await evaluate(
@@ -790,7 +835,8 @@ class SettingsDriver {
               || editorTab.textContent
               || ''
           ).trim();
-          return label === '设置' || label.startsWith('设置,');
+          return editorTab.getAttribute('data-resource-name') === 'icube-settings'
+            || /^设置(?:[,，]|$)/.test(label);
         }
         const sidebar = document.querySelector('.icube-settings-sidebar-container, [class*="settings-sidebar"]');
         return !!(sidebar && sidebar.offsetParent !== null);
@@ -823,6 +869,7 @@ class SettingsDriver {
   }
 
   async listOptions(label) {
+    await this._ensureVisibleWindow();
     return _listDropdownOptions(this.client, label);
   }
 
@@ -959,6 +1006,7 @@ class SettingsDriver {
    * @param {string} value - Value to select
    */
   async setDropdown(label, value) {
+    await this._ensureVisibleWindow();
     return _setDropdown(this.client, label, value);
   }
 
@@ -968,6 +1016,7 @@ class SettingsDriver {
    * @param {boolean} checked - true = on, false = off
    */
   async setToggle(label, checked) {
+    await this._ensureVisibleWindow();
     return _setToggle(this.client, label, checked);
   }
 
@@ -977,6 +1026,7 @@ class SettingsDriver {
    * @param {string} text - The text to type
    */
   async typeText(label, text) {
+    await this._ensureVisibleWindow();
     await _ensureClickHelper(this.client);
     return _typeIntoInput(this.client, label, text);
   }
@@ -986,6 +1036,7 @@ class SettingsDriver {
    * @param {string} text - The visible text of the element to click
    */
   async click(text) {
+    await this._ensureVisibleWindow();
     await _ensureClickHelper(this.client);
     const clicked = await clickByTextRadix(this.client, ['.settings-sidebar-menu-item'], text);
     if (clicked === 'radix_click_unavailable') return 'radix_click_unavailable';
@@ -997,6 +1048,7 @@ class SettingsDriver {
    * @param {string} tabText - Tab label text
    */
   async clickTab(tabText) {
+    await this._ensureVisibleWindow();
     await _ensureClickHelper(this.client);
     const result = await clickByTextEx(
       this.client,
@@ -1059,6 +1111,38 @@ class SettingsDriver {
    * Navigate back to the Chat tab.
    */
   async backToChat() {
+    const closePoint = await evaluateJSON(this.client, `() => {
+      function visible(el) {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      }
+      const solo = document.querySelector('.icube-solo-mode-tab-item.active[data-tab-key="solo_settings"]');
+      const ide = document.querySelector('.tab.active[data-resource-name="icube-settings"]');
+      const tab = visible(solo) ? solo : (visible(ide) ? ide : null);
+      const close = tab === solo
+        ? tab?.querySelector('.icube-solo-mode-tab-close-half')
+        : tab?.querySelector('.tab-actions .action-label.codicon-icube-SmallClose[aria-label^="关闭"]');
+      if (!close) return null;
+      const r = close.getBoundingClientRect();
+      const style = getComputedStyle(close);
+      if (r.width <= 0 || r.height <= 0
+        || style.visibility === 'hidden' || style.display === 'none') return null;
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }`);
+    if (closePoint) {
+      await this.client.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed', x: closePoint.x, y: closePoint.y, button: 'left', clickCount: 1
+      });
+      await this.client.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: closePoint.x, y: closePoint.y, button: 'left', clickCount: 1
+      });
+      await sleep(800);
+      if (!await this._settingsSurfaceHidden()) return 'settings still visible';
+      this._currentTab = 'chat';
+      return 'closed: 设置';
+    }
     const result = await clickByTextEx(
       this.client,
       ['.icube-solo-mode-tab-item'],
@@ -1070,10 +1154,29 @@ class SettingsDriver {
       }
     );
     await sleep(800);
-    this._currentTab = 'chat';
-    if (result.ok) return 'clicked: 编辑器';
+    if (result.ok) {
+      if (!await this._settingsSurfaceHidden()) return 'settings still visible';
+      this._currentTab = 'chat';
+      return 'clicked: 编辑器';
+    }
     if (result.reason === 'not_found') return 'not found';
     return result.reason || 'unknown';
+  }
+
+  async _settingsSurfaceHidden() {
+    return evaluate(this.client, `() => {
+      const roots = [
+        document.querySelector('.icube-solo-mode-tab-item.active[data-tab-key="solo_settings"]'),
+        document.querySelector('.tab.active[data-resource-name="icube-settings"]'),
+        ...document.querySelectorAll('.icube-settings-container, .icb-settings-container, .part.solo_settings, .icube-settings-content-body')
+      ];
+      return !roots.some(el => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      });
+    }`);
   }
 }
 

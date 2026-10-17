@@ -74,6 +74,16 @@ function execFilePromise(command, args = [], options = {}) {
   });
 }
 
+async function activateTraeCN(options = {}) {
+  const platform = options.platform || process.platform;
+  if (platform !== 'darwin') return { ok: false, reason: 'window activation is unavailable on this platform' };
+  const binPath = options.binPath || findTraeCNBinary();
+  if (!binPath) throw new Error('TraeCN binary not found. Set TRAECN_BIN environment variable.');
+  const execute = options.execFileImpl || execFilePromise;
+  await execute('open', ['-a', binPath], { encoding: 'utf8', timeout: 5000 });
+  return { ok: true };
+}
+
 async function waitForTraeCNExit(timeoutMs = 15000, pollMs = 500) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -285,6 +295,7 @@ function getQuickstartConfig() {
 }
 
 module.exports = {
+  activateTraeCN,
   buildStartCommand,
   buildReuseWindowCommand,
   findTraeCNBinary,

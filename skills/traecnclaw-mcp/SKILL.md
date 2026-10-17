@@ -1,6 +1,6 @@
 ---
 name: traecnclaw-mcp
-description: Operate TraeCN through TRAECNclaw's focused stdio MCP tools. Use when an MCP-capable agent must send or stop work, choose a workspace/model/mode/conversation, inspect or change Trae settings through its UI, manage conversations, or resolve an exceptional question or command approval. Queueing, waiting, recovery, notifications, routine non-command questions, and keep/revert gates are gateway-managed.
+description: Operate TraeCN through TRAECNclaw's stdio MCP tools. Use to delegate or stop work, choose a workspace/model/mode/conversation, inspect or change Trae settings, manage conversations, or resolve an exceptional question or command approval. The gateway owns task lifecycle and routine UI interactions.
 license: MIT-0
 metadata:
   author: TRAECNclaw
@@ -27,104 +27,123 @@ metadata:
 
 # TRAECNclaw MCP
 
-Compose focused tools around user intent. Do not call preflight, wait, poll,
-event acknowledgement, recovery, cleanup, proof, process, or generic command
-operations from the agent loop; the gateway owns those mechanics.
+Use the 20 focused tools for user intent. The gateway owns preparation, queues,
+waiting, recovery, persistence, notifications, routine non-command questions,
+and keep/revert gates. Do not recreate these mechanics with polling, shell,
+generic commands, or GUI control.
 
-## Setup
+## Setup when the host is not connected
 
-1. Install the matching TRAECNclaw server from its source checkout or release server archive. The launcher checks the repository, an installed `traecnclaw` package, then `traecnclaw-mcp` on `PATH`; it never executes a JavaScript path selected by an environment variable.
-2. Run `npm run doctor` in a source checkout. Then run `npm run --silent setup:mcp` from the checkout, or `node scripts/setup-mcp.js` from this Skill directory, to validate the server and print a resolved client entry. Use `--output FILE` to create a new mode-0600 file atomically; the command never overwrites an existing file. The JSON templates under [assets](assets) remain manual fallbacks.
-3. Start the gateway with `npm run start:gateway`, then reconnect the MCP client.
-4. Use mock mode only for development; never cite mock output as live TraeCN evidence.
+The local runtime requires macOS, Node.js 22+, and TraeCN. The Skill supplies a
+launcher and client configuration; install the matching server separately.
+
+1. Use a source checkout, release server archive, or current scoped package. The launcher checks the repository, `@luckycat133/traecnclaw`, the legacy installed `traecnclaw` package, then `traecnclaw-mcp` on `PATH`. It resolves symlinks to the server's directory and never accepts an environment-selected JavaScript entry point. Historical `traecnclaw@0.3.1` is not a current install target.
+2. Run `traecnclaw doctor` and `traecnclaw setup-mcp` for an installed server; a checkout uses `npm run doctor` and `npm run --silent setup:mcp`. Alternatively, run `node scripts/setup-mcp.js` from this Skill directory. Setup locates the server and prints an absolute launcher entry. `--output FILE` atomically creates a mode-0600 file and refuses existing files. [Client templates](assets) are manual fallbacks; a printed config does not prove a running gateway or host connection.
+3. Start/check the installed gateway with `traecnclaw quickstart`, or run `npm run start:gateway` in the checkout, then reconnect the MCP client.
+
+## Delegate and read the result
+
+Call `traecn_send_message` with the exact instruction and, when the target is
+ambiguous, the intended `conversationId`. Preserve the returned durable task
+identity and release the agent turn. A supporting host owns the Tasks
+subscription; other hosts use completion notifications or one intentional
+later `traecn_get_task` read. Do not send another message to probe progress.
+After a disconnect or gateway restart, reconnect and read that same task ID;
+do not recreate its conversation or resubmit its instruction.
+
+`traecn_send_message` accepts only `message` and optional `conversationId`.
+Prepare a new context with `traecn_create_conversation`, then omit an old ID
+when sending into its empty draft. Never pass `newConversation` to this tool.
+If the user's instructions explicitly require both a new context and reuse of
+an existing ID, resolve that target conflict before submitting.
+
+`traecn_get_task` defaults to `detailLevel: "result"`, which returns the final
+answer without the visible execution trace. Use `"trace"` for diagnosis. An
+accepted, queued, running, or input-required task is still unfinished; report
+the actual terminal status and returned result instead of treating acceptance
+as completion. Errors do not establish that the requested effect occurred.
+
+For an existing `awaiting_review` task, use the supporting host's Tasks review
+form for that task. Respond to its current `inputRequests` key with
+`action:"accept"` and `content:{decision:"approve"}` (or `"continue"`) through
+`tasks/update`; optional `notes` are review feedback. The gateway schedules
+already-planned follow-ups as linked tasks. Read the original task once for its
+returned `metadata.nextTaskId`, then track that child ID; the parent's completion does
+not establish that its follow-ups finished. Report a missing link instead of
+guessing one. Do not use `traecn_send_message`,
+`traecn_answer_question`, or command approval to resolve this review, and do not
+infer a new follow-up from notes. A host without Tasks input support cannot
+resolve it through these 20 tools: retain the ID and report the need for the
+user's existing Web Control Console review action.
+
+Use `traecn_cancel_task` for one known gateway task. Use
+`traecn_stop_generation` only for an explicitly requested stop of the visible
+Solo generation: first list conversations, pass its active `conversationId`,
+set `acknowledgeUntrackedWork:true`, and provide an audit `reason`. The gateway
+rejects a stale or different conversation; visible work may belong to the user
+or another agent.
 
 ## Choose only necessary context
 
-- Call `traecn_open_workspace` only when the requested folder is not already open.
-- Call `traecn_list_models` when the available choices matter; then call `traecn_select_model` once.
-- Call `traecn_select_mode` only when the task requires a different Solo/IDE mode.
-- Call `traecn_list_conversations` to read the current mode and stable conversation IDs.
-- Use `traecn_create_conversation`, `traecn_select_conversation`, or `traecn_delete_conversation` for exactly one conversation operation.
+- `traecn_open_workspace`: open the absolute requested folder when it differs. Do not repeat workspace paths in the model message.
+- `traecn_list_models` → `traecn_select_model`: discover exact names when model choice matters, then select once.
+- `traecn_select_mode`: change to `solo` or `ide` only when required.
+- `traecn_list_conversations`: discover the current mode, active conversation, and stable IDs when context is uncertain.
+- `traecn_create_conversation` or `traecn_select_conversation`: prepare one genuinely new context or select an existing ID. An empty draft returns `creationDeferred:true` and a null ID until its first message; submit once without a guessed ID. Listed native IDs remain valid when titles or statuses change.
 
-These tools change TraeCN context. Never repeat workspace paths in the model
-message.
-
-## Send and track work
-
-Call `traecn_send_message` with the exact message and, when concurrency makes
-the target ambiguous, an explicit `conversationId`. Clients without the Tasks
-extension receive the accepted `taskId` and status. When the host declares
-`io.modelcontextprotocol/tasks` on the request, the same call returns that
-durable gateway identity as `resultType: "task"`.
-
-Do not wait or busy-poll after sending. Legacy initialization-based clients
-receive compact task notifications that the stdio server acknowledges
-internally. Modern hosts can open `subscriptions/listen` for the returned task
-ID and receive a complete `notifications/tasks` snapshot; hosts without that
-extension call `traecn_get_task` only for an intentional later status/result
-read. If a modern task reports `input_required`, its elicitation and
-`tasks/update` response carry the same approval safeguards documented below.
-The first legacy connection for a client ID baselines retained history before
-notifications start. Reusing that stable ID later resumes only durably
-unacknowledged events; configure a distinct `TRAECN_MCP_CLIENT_ID` when the
-host-derived name is not unique.
-Use `traecn_cancel_task` for one known gateway task. Use
-`traecn_stop_generation` only when the user wants the
-generation currently visible in TraeCN stopped. First list conversations and
-pass the active `conversationId`; the gateway rejects a stale or different
-conversation. Because visible work may belong to the user or another agent,
-set `acknowledgeUntrackedWork:true` and include a short audit `reason`. Use
-`traecn_cancel_task` instead when the work has a gateway task ID.
-
-For a completed task, omit `detailLevel` or pass `"result"` to retrieve only
-the final answer. Pass `detailLevel: "trace"` only when the detailed visible
-execution process is needed to diagnose or trace an unexpected outcome.
+`traecn_delete_conversation` is permanent and requires an inactive target
+explicitly named or unambiguously identified for deletion in the user's
+authorized request. Read its listed ID and exact title, then pass
+`expectedTitle` and `acknowledgePermanentDeletion:true`. The gateway rejects
+title mismatches and active targets, records the attempt, and cannot restore a
+successful deletion. The existing deletion instruction supplies authorization;
+it does not require a second confirmation round trip.
 
 ## Inspect or change Trae settings
 
-Treat settings as a second-level capability. Call
+For settings work, call
 `traecn_list_setting_sections`, then `traecn_list_settings` for only the needed
-section. For dropdowns, call `traecn_list_setting_options` instead of guessing.
-Use exactly one matching mutation tool:
+section. Use the returned section, label, and `controlType`; call
+`traecn_list_setting_options` before selecting a dropdown value. Apply one
+matching tool:
 
 - `traecn_set_setting_toggle` for a boolean switch.
 - `traecn_select_setting_option` for a dropdown choice.
 - `traecn_set_setting_text` for a text or numeric input.
 
-These commands make the change through Trae's visible settings UI. The gateway
-serializes UI access and returns to chat automatically; do not navigate back
-manually or repeat reads after a successful write.
+The gateway serializes visible UI access, confirms the applied value, and
+returns to chat. Use that confirmed result; do not navigate back manually or
+repeat reads after a successful write.
 
 ## Resolve exceptional interactions
 
-The gateway never approves shell commands automatically, including commands
-classified as read-only. Command text alone cannot establish workspace scope,
-exclude sensitive-file reads, or account for Git configuration and external
-hooks. Every command is returned to the Agent with its risk classification.
+The gateway returns every shell command for agent review, including read-only
+classifications. Check the exact command, risk reasons, workspace, and the
+user-authorized scope; a classification alone is not authorization. Preserve
+decisions and authorization already given by the user. Ask only when the
+pending choice or command requires information or authority the task lacks.
 
-If a task reports an unresolved interaction:
+Resolve an unresolved interaction only on that task's current card. If
+conversation context is uncertain, select its recorded, freshly listed
+conversation and obtain a fresh task
+interaction before deciding. A denied command also acts on the visible card;
+do not deny an unrelated task's request.
 
-- Use `traecn_answer_question` for a returned question and one of its offered answers.
-- Use `traecn_decide_approval` only after checking the returned command and risk. Approval requires the exact `expectedCommand`, `acknowledgeRisk:true`, and a short audit `reason`; the gateway re-reads the visible card and rejects stale or changed commands. Denial needs no risk acknowledgement.
+- `traecn_answer_question`: answer the returned pending question using the user's decision or an offered answer determined by the authorized task.
+- `traecn_decide_approval`: approve with the exact `expectedCommand`, `acknowledgeRisk:true`, and a short audit `reason`. The gateway re-reads the visible card and rejects stale or changed commands. Denial needs only `decision: "deny"`.
 
-Conversation deletion is permanent. Delete only an inactive conversation and
-only when the current user request explicitly names or unambiguously identifies
-it for deletion. Re-read its listed ID and exact title, then pass the title with
-`acknowledgePermanentDeletion:true`; the gateway rejects title mismatches and
-the active conversation, records the attempt, and cannot restore a successful
-deletion. This uses the user's existing instruction and does not add a separate
-confirmation round trip.
+Modern Tasks elicitation and `tasks/update` retain the same safeguards.
 
 ## Safety
 
-- Keep the gateway on `127.0.0.1` unless remote access is secured.
+- Keep the gateway on `127.0.0.1` unless remote access is deliberately authenticated.
 - Never expose `.env`, tokens, authorization headers, or TraeCN profile data.
 - Keep the default security audit log enabled; high-impact approvals, stops,
   and deletions are written to date-based JSONL files with sensitive fields
   redacted and a default 30-day retention.
-- Treat mock results and non-terminal task states as incomplete.
-- Do not recreate removed low-level tools through shell, generic commands, or GUI control.
+- Use mock mode for development and report it as mock evidence.
 
 Read [references/mcp-surface.md](references/mcp-surface.md) only for exact
-schemas, protocol compatibility, notification behavior, and gateway ownership
-boundaries.
+inputs, result/error handling, protocol and Tasks compatibility, or notification
+reconnection behavior. Its generated contract and examples preserve all 20
+capabilities without adding lifecycle tools.

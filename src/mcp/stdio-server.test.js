@@ -2,10 +2,13 @@
 
 const assert = require('assert');
 const { EventEmitter } = require('events');
+const http = require('http');
+const { TraeCNApiClient } = require('../client/traecnapi-client');
 const {
   McpStdioDecoder,
   TaskEventPump,
   TaskSubscriptionPump,
+  assertJsonRpcRequest,
   encodeMessage,
   nextProtocolEra,
   startStdioServer,
@@ -17,7 +20,29 @@ const {
 const { createRunner } = require('../shared/test-runner');
 
 const runner = createRunner('stdio-server.test.js');
-const { test, pendingAsyncTests, summary } = runner;
+const { test, asyncTest, pendingAsyncTests, summary } = runner;
+
+function subscriptionRequest(id, method = 'subscriptions/listen') {
+  return {
+    jsonrpc: '2.0',
+    ...(id === undefined ? {} : { id }),
+    method,
+    params: {
+      notifications: { taskIds: ['task-owned'] },
+      _meta: {
+        'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+        'io.modelcontextprotocol/clientCapabilities': {
+          extensions: { 'io.modelcontextprotocol/tasks': {} }
+        }
+      }
+    }
+  };
+}
+
+function sendInput(input, request) {
+  input.emit('data', Buffer.from(encodeMessage(request)));
+  return new Promise(resolve => setImmediate(resolve));
+}
 
 test('stableMcpClientId prefers the configured IDE identity', () => {
   assert.strictEqual(stableMcpClientId({ name: 'Codex Desktop' }, { TRAECN_MCP_CLIENT_ID: 'codex-main' }), 'codex-main');
@@ -47,6 +72,49 @@ test('stdio decoder preserves compatibility with legacy Content-Length framing',
     message: { jsonrpc: '2.0', id: 2, method: 'initialize' }
   }]);
   assert.ok(encodeMessage({ jsonrpc: '2.0', id: 2, result: {} }, 'content-length').startsWith('Content-Length: '));
+});
+
+test('stdio decoder preserves valid frames around a malformed newline payload', () => {
+  const frames = new McpStdioDecoder().push('{"id":1}\n{malformed}\n{"id":2}\n');
+  assert.strictEqual(frames.length, 3);
+  assert.deepStrictEqual(frames[0].message, { id: 1 });
+  assert.ok(frames[1].error instanceof SyntaxError);
+  assert.strictEqual(frames[1].framing, 'newline');
+  assert.deepStrictEqual(frames[2].message, { id: 2 });
+});
+
+test('stdio decoder consumes malformed Content-Length JSON before the next frame', () => {
+  const decoder = new McpStdioDecoder();
+  const malformed = 'Content-Length: 4\r\n\r\n{bad';
+  const valid = encodeMessage({ id: 2, text: '中文' }, 'content-length');
+  const frames = decoder.push(malformed + valid);
+  assert.strictEqual(frames.length, 2);
+  assert.ok(frames[0].error instanceof SyntaxError);
+  assert.strictEqual(frames[0].framing, 'content-length');
+  assert.deepStrictEqual(frames[1].message, { id: 2, text: '中文' });
+  assert.deepStrictEqual(decoder.push(''), []);
+});
+
+test('stdio decoder recovers from an invalid Content-Length header without losing valid neighbors', () => {
+  const frames = new McpStdioDecoder().push(
+    encodeMessage({ id: 1 }, 'content-length')
+    + 'Content-Length: invalid\r\n\r\n'
+    + encodeMessage({ id: 2 }, 'content-length')
+  );
+  assert.strictEqual(frames.length, 3);
+  assert.deepStrictEqual(frames[0].message, { id: 1 });
+  assert.ok(frames[1].error instanceof SyntaxError);
+  assert.deepStrictEqual(frames[2].message, { id: 2 });
+});
+
+test('stdio rejects invalid request ids before dispatch', () => {
+  for (const id of [null, true, {}, [], 1.5]) {
+    assert.throws(() => assertJsonRpcRequest({ jsonrpc: '2.0', id, method: 'ping' }),
+      error => error.code === -32600);
+  }
+  for (const id of [0, 1, '1']) {
+    assert.strictEqual(assertJsonRpcRequest({ jsonrpc: '2.0', id, method: 'ping' }).id, id);
+  }
 });
 
 test('stdio selects one protocol era and rejects missing modern metadata', () => {
@@ -103,7 +171,7 @@ test('taskEventNotification emits a compact standard MCP logging notification', 
   });
 });
 
-test('TaskEventPump writes before acknowledging and resumes after the last event', async () => {
+asyncTest('TaskEventPump writes before acknowledging and resumes after the last event', async () => {
   const calls = [];
   const client = {
     async listTaskEvents(clientId, options) {
@@ -132,7 +200,7 @@ test('TaskEventPump writes before acknowledging and resumes after the last event
   ]);
 });
 
-test('TaskEventPump baselines retained history for a new MCP client', async () => {
+asyncTest('TaskEventPump baselines retained history for a new MCP client', async () => {
   const calls = [];
   let listCall = 0;
   const client = {
@@ -183,7 +251,7 @@ test('TaskEventPump baselines retained history for a new MCP client', async () =
   ]);
 });
 
-test('TaskEventPump preserves undelivered events for a returning MCP client', async () => {
+asyncTest('TaskEventPump preserves undelivered events for a returning MCP client', async () => {
   const calls = [];
   const client = {
     async listTaskEvents(clientId, options) {
@@ -220,7 +288,7 @@ test('TaskEventPump preserves undelivered events for a returning MCP client', as
   ]);
 });
 
-test('TaskEventPump does not acknowledge when the transport write fails', async () => {
+asyncTest('TaskEventPump does not acknowledge when the transport write fails', async () => {
   let acknowledged = false;
   const pump = new TaskEventPump({
     client: {
@@ -240,6 +308,188 @@ test('TaskEventPump does not acknowledge when the transport write fails', async 
   assert.strictEqual(pump.cursor, null);
 });
 
+asyncTest('event pumps reject non-200 reads without priming or consuming events', async () => {
+  for (const Pump of [TaskEventPump, TaskSubscriptionPump]) {
+    for (const status of [202, 204, 302, 304, 401, 429, 503]) {
+      const effects = [];
+      const pump = new Pump({
+        client: {
+          async listTaskEvents() {
+            return { status, data: {
+              clientKnown: false,
+              events: [{ eventId: 'evt_2', taskId: 'task-owned', status: 'done' }],
+              cursor: 'evt_2', hasMore: false
+            } };
+          },
+          async ackTaskEvent() { effects.push('ack'); return { status: 200 }; }
+        },
+        clientId: 'non-200-client', after: 'evt_1', taskIds: ['task-owned'],
+        taskAdapter: { async get() { effects.push('get'); return {}; } },
+        write() { effects.push('write'); }
+      });
+      await assert.rejects(() => pump.primeCursor(), new RegExp(`HTTP ${status}`));
+      await assert.rejects(() => pump.pollOnce(), new RegExp(`HTTP ${status}`));
+      assert.strictEqual(pump.historyPrimed, false);
+      assert.strictEqual(pump.cursor, 'evt_1');
+      assert.deepStrictEqual(effects, []);
+    }
+  }
+});
+
+asyncTest('event acknowledgements require HTTP 200 before advancing the cursor', async () => {
+  for (const method of ['primeCursor', 'pollOnce']) {
+    for (const status of [202, 302, 429, 503]) {
+      const pump = new TaskEventPump({
+        client: {
+          async listTaskEvents() {
+            return { status: 200, data: {
+              clientKnown: false,
+              events: [{ eventId: 'evt_2', taskId: 'task-owned', status: 'done' }],
+              hasMore: false
+            } };
+          },
+          async ackTaskEvent() { return { status, data: { acknowledged: true } }; }
+        },
+        clientId: 'non-200-ack-client', after: 'evt_1', write() {}
+      });
+      await assert.rejects(() => pump[method](), new RegExp(`HTTP ${status}`));
+      assert.strictEqual(pump.cursor, 'evt_1');
+      assert.strictEqual(pump.historyPrimed, false);
+    }
+  }
+});
+
+asyncTest('running event pumps back off for non-200 HTTP responses', async () => {
+  for (const Pump of [TaskEventPump, TaskSubscriptionPump]) {
+    for (const status of [429, 503, 302, 202, 204, 304]) {
+      let requests = 0;
+      let firstRequest;
+      let watchdog;
+      const first = new Promise(resolve => { firstRequest = resolve; });
+      const gateway = http.createServer((request, response) => {
+        requests++;
+        firstRequest();
+        response.writeHead(status, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ error: 'isolated event fixture failure' }));
+        if (requests >= 32) pump.stop();
+      });
+      await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve));
+      const pump = new Pump({
+        client: new TraeCNApiClient({
+          host: '127.0.0.1', port: gateway.address().port, token: '', timeout: 1000
+        }),
+        clientId: 'isolated-client', after: 'evt_1', taskIds: ['task-owned'],
+        taskAdapter: { async get() { assert.fail('rejected events must not read tasks'); } },
+        write() { assert.fail('rejected events must not emit notifications'); }
+      });
+      pump.historyPrimed = true;
+      pump.initialSnapshotsDelivered = true;
+      const loop = pump.start();
+      try {
+        await Promise.race([
+          first,
+          new Promise((resolve, reject) => {
+            watchdog = setTimeout(() => reject(new Error('Event fixture did not receive a request')), 2000);
+          })
+        ]);
+        clearTimeout(watchdog);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        pump.stop();
+        await loop;
+        assert.strictEqual(requests, 1,
+          `${Pump.name} retried HTTP ${status} before its default retry delay`);
+        assert.strictEqual(pump.cursor, 'evt_1');
+      } finally {
+        clearTimeout(watchdog);
+        pump.stop();
+        await loop;
+        gateway.closeAllConnections();
+        await new Promise(resolve => gateway.close(resolve));
+      }
+    }
+  }
+});
+
+asyncTest('stopped event pumps leave an in-flight response undelivered and unacknowledged', async () => {
+  for (const Pump of [TaskEventPump, TaskSubscriptionPump]) {
+    let releaseRead;
+    const calls = [];
+    const pump = new Pump({
+      client: {
+        listTaskEvents() { return new Promise(resolve => { releaseRead = resolve; }); },
+        async ackTaskEvent() { calls.push('ack'); }
+      },
+      clientId: 'stopped-client',
+      taskIds: ['task-owned'],
+      taskAdapter: { async get() { calls.push('get'); return {}; } },
+      write() { calls.push('write'); }
+    });
+    const pending = pump.pollOnce();
+    pump.stop();
+    releaseRead({ data: { events: [{ eventId: 'evt-stopped', taskId: 'task-owned' }] } });
+    assert.strictEqual(await pending, 0);
+    assert.deepStrictEqual(calls, []);
+    assert.strictEqual(pump.cursor, null);
+  }
+});
+
+asyncTest('stopped task subscriptions do not write a pending initial task snapshot', async () => {
+  let releaseSnapshot;
+  const writes = [];
+  const pump = new TaskSubscriptionPump({
+    client: {},
+    taskIds: ['task-owned'],
+    taskAdapter: {
+      get() { return new Promise(resolve => { releaseSnapshot = resolve; }); }
+    },
+    write(message) { writes.push(message); }
+  });
+  const pending = pump.deliverInitialSnapshots();
+  pump.stop();
+  releaseSnapshot({ taskId: 'task-owned', status: 'working' });
+  assert.strictEqual(await pending, 0);
+  assert.deepStrictEqual(writes, []);
+});
+
+asyncTest('running event pumps abort in-flight gateway requests on stop', async () => {
+  for (const Pump of [TaskEventPump, TaskSubscriptionPump]) {
+    let requestSignal;
+    const pump = new Pump({
+      client: {
+        listTaskEvents(clientId, options) {
+          requestSignal = options.signal;
+          return new Promise((resolve, reject) => {
+            requestSignal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          });
+        }
+      },
+      clientId: 'abort-client',
+      taskIds: [],
+      taskAdapter: {},
+      write() { assert.fail('stopped pump must not write'); }
+    });
+    const pending = pump.start();
+    assert.ok(requestSignal instanceof AbortSignal);
+    pump.stop();
+    await pending;
+    assert.strictEqual(requestSignal.aborted, true);
+    assert.strictEqual(pump.running, false);
+  }
+});
+
+asyncTest('stopping a pump also interrupts its retry delay', async () => {
+  const pump = new TaskEventPump({
+    client: { async listTaskEvents() { throw new Error('gateway offline'); } },
+    clientId: 'retry-client',
+    retryMs: 60000
+  });
+  const pending = pump.start();
+  await new Promise(resolve => setImmediate(resolve));
+  pump.stop();
+  await pending;
+  assert.strictEqual(pump.running, false);
+});
+
 test('modern task subscription acknowledgement is correlated to the listen request', () => {
   assert.deepStrictEqual(subscriptionAcknowledgedNotification(
     ['task-1', 'task-2'],
@@ -254,7 +504,7 @@ test('modern task subscription acknowledgement is correlated to the listen reque
   });
 });
 
-test('TaskSubscriptionPump never emits another task result', async () => {
+asyncTest('TaskSubscriptionPump never emits another task result', async () => {
   const calls = [];
   const client = {
     async listTaskEvents(clientId, options) {
@@ -304,7 +554,7 @@ test('TaskSubscriptionPump never emits another task result', async () => {
   ]);
 });
 
-test('TaskSubscriptionPump baselines history before emitting the current task snapshot', async () => {
+asyncTest('TaskSubscriptionPump baselines history before emitting the current task snapshot', async () => {
   const calls = [];
   let listCall = 0;
   let snapshotRead = 0;
@@ -378,7 +628,7 @@ test('TaskSubscriptionPump baselines history before emitting the current task sn
   ]);
 });
 
-test('TaskSubscriptionPump does not duplicate successful initial snapshots after a retry', async () => {
+asyncTest('TaskSubscriptionPump does not duplicate successful initial snapshots after a retry', async () => {
   const writes = [];
   let secondTaskAttempts = 0;
   const pump = new TaskSubscriptionPump({
@@ -411,7 +661,7 @@ test('TaskSubscriptionPump does not duplicate successful initial snapshots after
   assert.deepStrictEqual(writes, ['task-a', 'task-b']);
 });
 
-test('stdio opens and cancels a correlated modern task subscription', async () => {
+asyncTest('stdio opens and cancels a correlated modern task subscription', async () => {
   const input = new EventEmitter();
   const writes = [];
   let pumpOptions = null;
@@ -476,7 +726,7 @@ test('stdio opens and cancels a correlated modern task subscription', async () =
   assert.strictEqual(writes.length, 2);
 });
 
-test('stdio ignores an id-less subscription notification without starting a pump', async () => {
+asyncTest('stdio ignores an id-less subscription notification without starting a pump', async () => {
   const input = new EventEmitter();
   const writes = [];
   let subscribed = false;
@@ -518,7 +768,7 @@ test('stdio ignores an id-less subscription notification without starting a pump
   await server.stop();
 });
 
-test('stdio closes a live subscription with the standard graceful result', async () => {
+asyncTest('stdio closes a live subscription with the standard graceful result', async () => {
   const input = new EventEmitter();
   const writes = [];
   const taskMeta = {
@@ -565,6 +815,178 @@ test('stdio closes a live subscription with the standard graceful result', async
       }
     }
   });
+});
+
+asyncTest('stdio cancellation during a pending acknowledgement never starts the subscription', async () => {
+  const input = new EventEmitter();
+  const writes = [];
+  let releaseAck;
+  let started = 0;
+  const server = startStdioServer({
+    input,
+    handlers: { subscribe() { return { taskIds: ['task-owned'] }; }, async handle() {} },
+    write(message) {
+      writes.push(message);
+      if (message.method === 'notifications/subscriptions/acknowledged') {
+        return new Promise(resolve => { releaseAck = resolve; });
+      }
+    },
+    clientFactory() { return {}; },
+    taskSubscriptionPumpFactory() { return { start() { started++; }, stop() {} }; }
+  });
+
+  await sendInput(input, subscriptionRequest('listen-pending'));
+  const cancel = subscriptionRequest(undefined, 'notifications/cancelled');
+  cancel.params.requestId = 'listen-pending';
+  await sendInput(input, cancel);
+  releaseAck();
+  await new Promise(resolve => setImmediate(resolve));
+  await server.stop();
+
+  assert.strictEqual(started, 0);
+  assert.strictEqual(server.getTaskSubscriptions().size, 0);
+  assert.deepStrictEqual(writes[1], subscriptionClosedResult('listen-pending'));
+  assert.strictEqual(writes.length, 2);
+});
+
+asyncTest('stdio shutdown during acknowledgement detaches input and prevents later subscription work', async () => {
+  const input = new EventEmitter();
+  const writes = [];
+  let releaseAck;
+  let created = 0;
+  const server = startStdioServer({
+    input,
+    handlers: { subscribe() { return { taskIds: ['task-owned'] }; }, async handle() {} },
+    write(message) {
+      writes.push(message);
+      if (message.method === 'notifications/subscriptions/acknowledged') {
+        return new Promise(resolve => { releaseAck = resolve; });
+      }
+    },
+    clientFactory() { return {}; },
+    taskSubscriptionPumpFactory() { created++; return { start() {}, stop() {} }; }
+  });
+
+  await sendInput(input, subscriptionRequest('listen-shutdown'));
+  const stopped = server.stop();
+  releaseAck();
+  await stopped;
+  await sendInput(input, subscriptionRequest('listen-after-shutdown'));
+
+  assert.strictEqual(created, 0);
+  assert.strictEqual(input.listenerCount('data'), 0);
+  assert.strictEqual(server.getTaskSubscriptions().size, 0);
+  assert.deepStrictEqual(writes[1], subscriptionClosedResult('listen-shutdown'));
+  assert.strictEqual(writes.length, 2);
+});
+
+asyncTest('stdio reserves a subscription identity before awaiting acknowledgement', async () => {
+  const input = new EventEmitter();
+  const writes = [];
+  const acknowledgements = [];
+  let started = 0;
+  const server = startStdioServer({
+    input,
+    handlers: { subscribe() { return { taskIds: ['task-owned'] }; }, async handle() {} },
+    write(message) {
+      writes.push(message);
+      if (message.method === 'notifications/subscriptions/acknowledged') {
+        return new Promise(resolve => acknowledgements.push(resolve));
+      }
+    },
+    clientFactory() { return {}; },
+    taskSubscriptionPumpFactory() { return { start() { started++; }, stop() {} }; }
+  });
+
+  await sendInput(input, subscriptionRequest('listen-duplicate'));
+  await sendInput(input, subscriptionRequest('listen-duplicate'));
+  for (const resolve of acknowledgements) resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  await server.stop();
+
+  assert.strictEqual(started, 1);
+  assert.strictEqual(acknowledgements.length, 1);
+  assert.strictEqual(writes[1].error.code, -32600);
+});
+
+asyncTest('stdio keeps numeric and string subscription ids distinct', async () => {
+  const input = new EventEmitter();
+  const stoppedIds = [];
+  const writes = [];
+  const server = startStdioServer({
+    input,
+    handlers: { subscribe() { return { taskIds: ['task-owned'] }; }, async handle() {} },
+    write(message) { writes.push(message); },
+    clientFactory() { return {}; },
+    taskSubscriptionPumpFactory(options) {
+      return { start() {}, stop() { stoppedIds.push(options.subscriptionId); } };
+    }
+  });
+
+  await sendInput(input, subscriptionRequest(1));
+  await sendInput(input, subscriptionRequest('1'));
+  const count = server.getTaskSubscriptions().size;
+  const cancel = subscriptionRequest(undefined, 'notifications/cancelled');
+  cancel.params.requestId = 1;
+  await sendInput(input, cancel);
+  const afterCancel = server.getTaskSubscriptions().size;
+  await server.stop();
+
+  assert.strictEqual(count, 2);
+  assert.strictEqual(afterCancel, 1);
+  assert.deepStrictEqual(stoppedIds, [1, '1']);
+  assert.ok(!writes.some(message => message.error));
+});
+
+asyncTest('an empty task subscription does not poll the gateway', async () => {
+  const input = new EventEmitter();
+  const writes = [];
+  const server = startStdioServer({
+    input,
+    handlers: { subscribe() { return { taskIds: [] }; }, async handle() {} },
+    write(message) { writes.push(message); },
+    clientFactory() { assert.fail('an empty subscription must not contact the gateway'); }
+  });
+  await sendInput(input, subscriptionRequest('listen-empty'));
+  await server.stop();
+  assert.deepStrictEqual(writes[0], subscriptionAcknowledgedNotification([], 'listen-empty'));
+  assert.deepStrictEqual(writes[1], subscriptionClosedResult('listen-empty'));
+});
+
+asyncTest('stdio responds to null input and retains requests surrounding malformed JSON', async () => {
+  const input = new EventEmitter();
+  const writes = [];
+  const server = startStdioServer({
+    input,
+    handlers: { async handle() { return {}; } },
+    write(message) { writes.push(message); }
+  });
+  input.emit('data', Buffer.from('null\n'
+    + encodeMessage({ jsonrpc: '2.0', id: 'init', method: 'initialize' })
+    + '{malformed}\n'
+    + encodeMessage({ jsonrpc: '2.0', id: 'ping', method: 'ping' })));
+  await new Promise(resolve => setImmediate(resolve));
+  await server.stop();
+
+  assert.strictEqual(writes.length, 4);
+  assert.ok(writes.some(message => message.id === null && message.error?.code === -32600));
+  assert.ok(writes.some(message => message.id === null && message.error?.code === -32700));
+  assert.ok(writes.some(message => message.id === 'init' && message.result));
+  assert.ok(writes.some(message => message.id === 'ping' && message.result));
+});
+
+asyncTest('stdio permits legacy initialization after rejecting an unsupported modern version', async () => {
+  const input = new EventEmitter();
+  const writes = [];
+  const server = startStdioServer({ input, write(message) { writes.push(message); } });
+  const unsupported = subscriptionRequest('unsupported', 'server/discover');
+  unsupported.params._meta['io.modelcontextprotocol/protocolVersion'] = '2099-01-01';
+  await sendInput(input, unsupported);
+  await sendInput(input, { jsonrpc: '2.0', id: 'init', method: 'initialize', params: {} });
+  await server.stop();
+
+  assert.strictEqual(writes[0].error.code, -32022);
+  assert.strictEqual(writes[1].result.protocolVersion, '2025-11-25');
 });
 
 (async () => {

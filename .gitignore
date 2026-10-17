@@ -10,8 +10,9 @@ demo-output/
 dist/
 # Local skill evaluation runs and generated review artifacts
 skills/*-workspace/
-# Local test-only skill install dirs (not the distributable skill under skills/)
-.codex/skills/
+# Only the generated project MCP Skill is included from local installs.
+.codex/skills/*
+!.codex/skills/traecnclaw-mcp/
 .agents/skills/
 # Generated test coverage data
 .coverage/
@@ -21,5 +22,8 @@ coverage/
 inspect-report.json
 # IDE-local working state
 .trae/
+# Local Gemini prompt history and its writer lock
+.gemini/prompts.json
+.gemini/.prompts.json.lock
 # Local browser automation snapshots
 .playwright-cli/

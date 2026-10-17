@@ -1,22 +1,15 @@
 'use strict';
 
 const { parseBody } = require('../request-gate');
-const { isGenericQueueProbeTask } = require('../../shared/utils');
+const { isGenericQueueProbeTask, withoutTaskTrace } = require('../../shared/utils');
 const { rejectBadRequest } = require('./helpers');
 
 const MAX_BATCH_TASKS = 100;
 const MAX_TASK_TEXT_LENGTH = 100000;
 
 /**
- * batch handlers.
- *
- * Moved verbatim from src/http/gateway.js. Each handler is now an
- * exported function with signature `function handleX(req, res, ctx, ...pathParams)`
- * taking the gateway instance as `ctx`. Behavior is preserved 1:1.
- *
- * The Gateway retains thin delegating shims (e.g. `_handleCreateSession`) so
- * existing gateway.test.js cases that call `gateway._handleCreateSession(...)`
- * continue to work unchanged.
+ * REST batch compatibility handlers. Groups retain their original in-memory
+ * identities; dispatched items use the gateway's durable task lifecycle.
  */
 
 const ROUTES = [
@@ -54,7 +47,7 @@ const ROUTES = [
 
 async function handleBatchSubmit(req, res, ctx) {
   const body = await parseBody(req);
-  if (!body.tasks || !Array.isArray(body.tasks) || body.tasks.length === 0) {
+  if (!body || typeof body !== 'object' || !Array.isArray(body.tasks) || body.tasks.length === 0) {
     return rejectBadRequest(req, res, ctx, 'tasks array is required and must not be empty');
   }
   if (body.tasks.length > MAX_BATCH_TASKS) {
@@ -62,7 +55,7 @@ async function handleBatchSubmit(req, res, ctx) {
   }
   for (let idx = 0; idx < body.tasks.length; idx++) {
     const item = body.tasks[idx];
-    if (!item.task || typeof item.task !== 'string') {
+    if (!item || typeof item !== 'object' || !item.task || typeof item.task !== 'string') {
       return ctx._json(req, res, { error: 'Each task must have a task string' }, 400);
     }
     if (item.task.length > MAX_TASK_TEXT_LENGTH) {
@@ -75,6 +68,9 @@ async function handleBatchSubmit(req, res, ctx) {
         offendingIndex: idx
       }, 400);
     }
+    if (item.priority !== undefined && (typeof item.priority !== 'number' || !Number.isFinite(item.priority))) {
+      return ctx._json(req, res, { error: 'priority must be a finite number', offendingIndex: idx }, 400);
+    }
   }
 
   const strategy = body.strategy || 'parallel';
@@ -82,14 +78,18 @@ async function handleBatchSubmit(req, res, ctx) {
     return ctx._json(req, res, { error: 'strategy must be "parallel", "sequential", or "priority"' }, 400);
   }
 
-  const maxConcurrency = Math.min(Math.max(body.maxConcurrency || 5, 1), 20);
+  if (body.maxConcurrency !== undefined && (typeof body.maxConcurrency !== 'number'
+    || !Number.isFinite(body.maxConcurrency) || !Number.isInteger(body.maxConcurrency))) {
+    return ctx._json(req, res, { error: 'maxConcurrency must be a finite integer' }, 400);
+  }
+  const maxConcurrency = Math.min(Math.max(body.maxConcurrency ?? 5, 1), 20);
   const onComplete = body.onComplete || null;
 
   const batchId = 'batch_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   const tasks = body.tasks.map((item, index) => ({
     taskId: `${batchId}_${index}`,
     task: item.task,
-    priority: item.priority || 5,
+    priority: item.priority ?? 5,
     status: 'pending',
     result: null,
     error: null
@@ -109,6 +109,7 @@ async function handleBatchSubmit(req, res, ctx) {
     createdAt: Date.now(),
     completedCount: 0,
     failedCount: 0,
+    cancelledCount: 0,
     totalCount: tasks.length,
     results: []
   };
@@ -130,6 +131,7 @@ function handleBatchStatus(req, res, ctx, batchId) {
   if (!batch) {
     return ctx._json(req, res, { error: 'Batch not found' }, 404);
   }
+  if (typeof ctx._refreshBatchState === 'function') ctx._refreshBatchState(batch);
 
   const response = {
     batchId: batch.batchId,
@@ -139,21 +141,26 @@ function handleBatchStatus(req, res, ctx, batchId) {
     totalCount: batch.totalCount,
     completedCount: batch.completedCount,
     failedCount: batch.failedCount,
+    cancelledCount: batch.cancelledCount,
     pendingCount: batch.tasks.filter(t => t.status === 'pending').length,
-    executingCount: batch.tasks.filter(t => t.status === 'executing').length,
+    executingCount: batch.tasks.filter(t => ['executing', 'approval_required', 'awaiting_review'].includes(t.status)).length,
     createdAt: batch.createdAt,
     tasks: batch.tasks.map(t => ({
       taskId: t.taskId,
+      ...(t.gatewayTaskId ? { gatewayTaskId: t.gatewayTaskId, gatewayStatus: t.gatewayStatus } : {}),
       priority: t.priority,
       status: t.status,
-      result: t.result,
-      error: t.error
+      result: withoutTaskTrace(t.result),
+      error: t.error,
+      ...(t.interactionRequestId ? { interactionRequestId: t.interactionRequestId } : {}),
+      ...(t.statePersistencePending ? { statePersistencePending: true } : {}),
+      ...(t.cancelPersistencePending ? { cancelPersistencePending: true } : {})
     }))
   };
 
   ctx._json(req, res, response);
 }
-function handleBatchCancel(req, res, ctx, batchId) {
+async function handleBatchCancel(req, res, ctx, batchId) {
   const batch = ctx.batchTasks.get(batchId);
   if (!batch) {
     return ctx._json(req, res, { error: 'Batch not found' }, 404);
@@ -166,19 +173,46 @@ function handleBatchCancel(req, res, ctx, batchId) {
     }, 400);
   }
 
-  batch.status = 'cancelled';
-  batch._cancelled = true;
-  for (const task of batch.tasks) {
-    if (task.status === 'pending' || task.status === 'executing') {
-      task.status = 'cancelled';
-    }
+  // Freeze group scheduling while its existing durable tasks are cancelled.
+  // A storage failure leaves the same group and IDs available for retry.
+  batch._cancelling = true;
+  if (!batch._cancelPromise) {
+    batch._cancelPromise = (async () => {
+      for (const item of batch.tasks) {
+        if (!item.gatewayTaskId) {
+          if (item.status === 'pending' || item.status === 'executing') item.status = 'cancelled';
+          continue;
+        }
+        const owned = ctx.taskQueue.get(item.gatewayTaskId);
+        if (!owned) continue; // Confirmed terminals remain readable in history.
+        if (owned.statePersistencePending && ctx._isTerminalTaskStatus(owned.status) && owned.status !== 'cancelled') {
+          await ctx._finalizeBackgroundTask(owned.taskId, owned, owned.statePersistencePending.status);
+          continue;
+        }
+        if (ctx._isTerminalTaskStatus(owned.status) && !owned.cancelPersistencePending && !owned.statePersistencePending) continue;
+        if (owned.cancelPersistencePending?.previousStatus === 'executing' && owned.submittedToTrae === true
+          && !Object.prototype.hasOwnProperty.call(owned, 'stopResult') && !ctx.driver) await ctx._ensureConnection();
+        await ctx._finalizeBackgroundTask(owned.taskId, owned, 'cancelled', {
+          error: null, cancelRequested: true, cancelledAt: Date.now()
+        });
+        ctx.taskLocks.delete(owned.taskId);
+      }
+      if (typeof ctx._refreshBatchState === 'function') ctx._refreshBatchState(batch);
+      batch.status = 'cancelled';
+      batch._cancelled = true;
+      ctx.batchTasks.delete(batchId);
+    })();
   }
-
-  ctx.batchTasks.delete(batchId);
+  try {
+    await batch._cancelPromise;
+  } finally {
+    delete batch._cancelPromise;
+  }
 
   ctx._json(req, res, {
     batchId,
     status: 'cancelled',
+    ...(Number.isFinite(batch.cancelledCount) ? { cancelledCount: batch.cancelledCount } : {}),
     message: 'Batch cancelled'
   });
 }

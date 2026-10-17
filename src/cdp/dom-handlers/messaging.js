@@ -175,64 +175,98 @@ async function sendMessage(driver, text) {
   }
   await sleep(driver.config.postActionDelayMs * 2);
 
-  if (driver.config.sendTrigger === 'button') {
-    const sendBtn = await driver.findSendButton();
-    if (sendBtn && sendBtn.nodeId) {
+  let submissionDispatched = false;
+  try {
+    if (driver.config.sendTrigger === 'button') {
       const btnSels = buildSendButtonSelectorList(driver);
-      const clickResult = await driver.client.send('Runtime.evaluate', {
+      const buttonResult = await driver.client.send('Runtime.evaluate', {
         expression: `
           (function() {
             var sels = ${btnSels};
             var btn = null;
             for (var i = 0; i < sels.length; i++) {
-              btn = document.querySelector(sels[i]);
+              var candidates = document.querySelectorAll(sels[i]);
+              for (var j = 0; j < candidates.length; j++) {
+                var candidate = candidates[j];
+                var bounds = candidate.getBoundingClientRect();
+                var style = window.getComputedStyle(candidate);
+                if (bounds.width > 0 && bounds.height > 0 && style.display !== 'none' && style.visibility !== 'hidden') {
+                  btn = candidate;
+                  break;
+                }
+              }
               if (btn) break;
             }
-            if (!btn) return 'no button';
-            if (btn.classList.contains('disabled')) return 'button disabled: ' + btn.className;
+            if (!btn) return { ok: true, missing: true };
+            if (btn.disabled || btn.classList.contains('disabled') || btn.getAttribute('aria-disabled') === 'true') {
+              return { ok: true, disabled: true };
+            }
             var rect = btn.getBoundingClientRect();
-            var cx = rect.x + rect.width/2;
-            var cy = rect.y + rect.height/2;
-            btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true,clientX:cx,clientY:cy}));
-            btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true,cancelable:true,clientX:cx,clientY:cy}));
-            btn.dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,clientX:cx,clientY:cy}));
-            return 'send via mouse events';
+            var cx = rect.x + rect.width / 2;
+            var cy = rect.y + rect.height / 2;
+            var hit = document.elementFromPoint(cx, cy);
+            if (!hit || (hit !== btn && !btn.contains(hit))) {
+              return { ok: false, reason: 'send button is covered or outside the active viewport' };
+            }
+            return { ok: true, x: cx, y: cy };
           })()
         `,
         returnByValue: true
       });
-      if (clickResult.result?.value === 'no button') {
+      const buttonInfo = runtimeValue(buttonResult, 'send button inspection produced no result');
+      if (!buttonInfo.ok) {
+        throw TraeCNAutomationError.sendFailed(buttonInfo.reason || 'send button inspection failed');
+      }
+      if (buttonInfo.missing) {
+        submissionDispatched = true;
         await driver.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 2 });
         await driver.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
+      } else if (!buttonInfo.disabled) {
+        if (!Number.isFinite(buttonInfo.x) || !Number.isFinite(buttonInfo.y)) {
+          throw TraeCNAutomationError.sendFailed('send button inspection returned invalid coordinates');
+        }
+        const point = { x: buttonInfo.x, y: buttonInfo.y };
+        await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point, buttons: 0 });
+        // Pointer-down handlers may submit before mouse release. A lost
+        // acknowledgement at either stage cannot prove that nothing ran.
+        submissionDispatched = true;
+        await driver.client.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', buttons: 1, clickCount: 1 });
+        await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', buttons: 0, clickCount: 1 });
       }
     } else {
+      submissionDispatched = true;
       await driver.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 2 });
       await driver.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
     }
-  } else {
-    await driver.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 2 });
-    await driver.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 2 });
-  }
-  await sleep(driver.config.postActionDelayMs);
+    await sleep(driver.config.postActionDelayMs);
 
-  const submissionVisible = await driver._waitForExpression(
-    `(function() {
-      var expected = ${jsStringLiteral(normalizedExpected)};
-      var sels = ${composerSels};
-      var composer = null;
-      for (var i = 0; i < sels.length; i++) {
-        composer = document.querySelector(sels[i]);
-        if (composer) break;
-      }
-      var composerText = composer ? (composer.innerText || composer.textContent || '').replace(/\\s+/g, ' ').trim() : '';
-      var bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').replace(/\\s+/g, ' ').trim();
-      return composerText !== expected && bodyText.includes(expected);
-    })()`,
-    5000,
-    200
-  );
-  if (!submissionVisible) {
-    throw TraeCNAutomationError.sendFailed('message did not appear in the active conversation after submission');
+    const submissionVisible = await driver._waitForExpression(
+      `(function() {
+        var expected = ${jsStringLiteral(normalizedExpected)};
+        var sels = ${composerSels};
+        var composer = null;
+        for (var i = 0; i < sels.length; i++) {
+          composer = document.querySelector(sels[i]);
+          if (composer) break;
+        }
+        var composerText = composer ? (composer.innerText || composer.textContent || '').replace(/\\s+/g, ' ').trim() : '';
+        var bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').replace(/\\s+/g, ' ').trim();
+        return composerText !== expected && bodyText.includes(expected);
+      })()`,
+      5000,
+      200
+    );
+    if (!submissionVisible) {
+      throw TraeCNAutomationError.sendFailed('message did not appear in the active conversation after submission');
+    }
+  } catch (error) {
+    if (!submissionDispatched) throw error;
+    // Dispatch and later confirmation failures are uncertain, including lost
+    // acknowledgements. Preserve that boundary for the gateway retry guard.
+    const cause = error?.code === 'SEND_FAILED' && error.details?.cause !== undefined
+      ? error.details.cause
+      : error?.message || String(error);
+    throw TraeCNAutomationError.sendFailed(cause, { ...error?.details, submissionDispatched: true });
   }
 }
 
@@ -444,6 +478,7 @@ async function newChat(driver) {
           return Array.from(document.querySelectorAll(selector)).some(visible);
         });
         var turnSelectors = [
+          '.virtualized-message-list-view__virtuoso .turn',
           '.solo-chat-turn', 'section.chat-turn', 'section[class*="chat-turn"]',
           '.chat-message', '.agent-message', '[class*="chat-message"]',
           '[data-message-author-role]'

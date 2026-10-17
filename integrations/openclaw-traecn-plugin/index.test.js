@@ -3,7 +3,8 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { toolDefinitions, formatResult, PLUGIN_ID } = require('./index');
+const { toolDefinitions, formatResult, PLUGIN_ID, register } = require('./index');
+const { TraeCNApiClient } = require('../../src/client/traecnapi-client');
 const { listCommands, mapSettingsAction } = require('../../src/client/command-set');
 const { createRunner } = require('../../src/shared/test-runner');
 
@@ -29,6 +30,34 @@ test('all tools have name, description, parameters, and handler', () => {
     assert.ok(tool.description, `Tool ${tool.name} missing description`);
     assert.ok(tool.parameters, `Tool ${tool.name} missing parameters`);
     assert.ok(typeof tool.handler === 'function', `Tool ${tool.name} missing handler`);
+  }
+});
+
+test('manifest declares every existing runtime tool for current OpenClaw hosts', () => {
+  const names = toolDefinitions.map(tool => tool.name).sort();
+  assert.deepStrictEqual(manifest.tools.map(tool => tool.name).sort(), names);
+  assert.deepStrictEqual((manifest.contracts && manifest.contracts.tools || []).slice().sort(), names);
+});
+
+function registeredTools(pluginConfig = {}) {
+  const tools = [];
+  const originalLog = console.log;
+  try {
+    console.log = () => {};
+    register({ pluginConfig, registerTool: tool => tools.push(tool) });
+  } finally {
+    console.log = originalLog;
+  }
+  return tools;
+}
+
+test('registration preserves legacy handlers and supplies the current execute contract', () => {
+  assert.strictEqual(require('./index').default.register, register);
+  const tools = registeredTools();
+  assert.strictEqual(tools.length, toolDefinitions.length);
+  for (let index = 0; index < tools.length; index++) {
+    assert.strictEqual(tools[index].handler, toolDefinitions[index].handler);
+    assert.strictEqual(typeof tools[index].execute, 'function', `${tools[index].name} missing execute`);
   }
 });
 
@@ -288,5 +317,110 @@ test('formatResult handles empty response', () => {
   assert.ok(result.includes('No response'));
 });
 
-summary();
-process.exit(r.failed > 0 ? 1 : 0);
+async function runExecutionTests() {
+  await asyncTest('native execute returns tool errors without losing the error envelope', async () => {
+    const original = TraeCNApiClient.prototype.getStatus;
+    try {
+      TraeCNApiClient.prototype.getStatus = async () => { throw new Error('Owned gateway unavailable'); };
+      const status = registeredTools().find(tool => tool.name === 'traecn_status');
+      assert.deepStrictEqual(await status.execute('failed-call', {}), {
+        content: [{ type: 'text', text: '[TraeCN Error] Owned gateway unavailable' }],
+        isError: true
+      });
+    } finally {
+      TraeCNApiClient.prototype.getStatus = original;
+    }
+  });
+
+  await asyncTest('pre-aborted native calls reject before contacting the gateway', async () => {
+    const original = TraeCNApiClient.prototype.getStatus;
+    let calls = 0;
+    try {
+      TraeCNApiClient.prototype.getStatus = async () => { calls++; return { data: {} }; };
+      const status = registeredTools().find(tool => tool.name === 'traecn_status');
+      const controller = new AbortController();
+      controller.abort();
+      await assert.rejects(status.execute('cancelled-call', {}, controller.signal), { name: 'AbortError' });
+      assert.strictEqual(calls, 0);
+    } finally {
+      TraeCNApiClient.prototype.getStatus = original;
+    }
+  });
+
+  await asyncTest('execute wraps the legacy payload in native text content and details', async () => {
+    const commandSet = registeredTools().find(tool => tool.name === 'traecn_command_set');
+    const legacy = await commandSet.handler({}, {});
+    const result = await commandSet.execute('offline-call', {});
+    assert.deepStrictEqual(result.details, legacy);
+    assert.deepStrictEqual(result.content, [{ type: 'text', text: JSON.stringify(legacy, null, 2) }]);
+  });
+
+  await asyncTest('execute uses the configured gateway origin and token while handler keeps its context', async () => {
+    const original = TraeCNApiClient.prototype.getStatus;
+    const connections = [];
+    try {
+      TraeCNApiClient.prototype.getStatus = async function(allowAutoStart) {
+        connections.push({ host: this.host, port: this.port, token: this.token, allowAutoStart });
+        return { status: 200, data: { connected: true } };
+      };
+      const status = registeredTools({ baseUrl: 'http://localhost:54321/', token: 'test-only-token' })
+        .find(tool => tool.name === 'traecn_status');
+      const result = await status.execute('configured-call', { allowAutoStart: false });
+      assert.deepStrictEqual(connections[0], {
+        host: 'localhost', port: 54321, token: 'test-only-token', allowAutoStart: false
+      });
+      assert.deepStrictEqual(JSON.parse(result.content[0].text), result.details);
+      await status.handler({ allowAutoStart: false }, { host: 'legacy-host', port: 12345, token: 'legacy-token' });
+      assert.deepStrictEqual(connections[1], {
+        host: 'legacy-host', port: 12345, token: 'legacy-token', allowAutoStart: false
+      });
+    } finally {
+      TraeCNApiClient.prototype.getStatus = original;
+    }
+  });
+
+  await asyncTest('invalid gateway origins fail before registering executable tools', async () => {
+    for (const baseUrl of ['not-a-url', 'https://localhost:54321', 'http://localhost:54321/api',
+      'http://user:password@localhost:54321', 'http://localhost:54321?token=test']) {
+      assert.throws(() => registeredTools({ baseUrl }), /baseUrl/);
+    }
+  });
+
+  await asyncTest('delegate forwards completion checks through the asynchronous gateway path', async () => {
+    const originalAsync = TraeCNApiClient.prototype.delegateAsync;
+    const originalRequest = TraeCNApiClient.prototype._request;
+    const calls = [];
+    const completionChecks = {
+      requiredFiles: ['owned-fixture.txt'],
+      requiredText: [{ filePath: 'owned-fixture.txt', includes: ['COMPLETE', 'owned-marker'] }]
+    };
+    try {
+      TraeCNApiClient.prototype._request = () => { throw new Error('Network forbidden in offline regression'); };
+      TraeCNApiClient.prototype.delegateAsync = async function(task, options) {
+        calls.push({ task, options, host: this.host, port: this.port });
+        return { data: { taskId: 'offline-owned-task', status: 'queued' } };
+      };
+      const delegate = registeredTools({ baseUrl: 'http://localhost:54321' })
+        .find(tool => tool.name === 'traecn_delegate');
+      const params = { task: 'Verify the owned fixture', completionChecks };
+      const legacyResult = await delegate.handler(params, {});
+      assert.deepStrictEqual(calls[0].options.completionChecks, completionChecks);
+      const nativeResult = await delegate.execute('completion-check-call', params);
+      assert.strictEqual(calls.length, 2);
+      for (const call of calls) assert.deepStrictEqual(call.options.completionChecks, completionChecks);
+      assert.strictEqual(calls[1].port, 54321);
+      assert.deepStrictEqual(nativeResult.details, legacyResult);
+    } finally {
+      TraeCNApiClient.prototype.delegateAsync = originalAsync;
+      TraeCNApiClient.prototype._request = originalRequest;
+    }
+  });
+
+  summary();
+  process.exitCode = r.failed > 0 ? 1 : 0;
+}
+
+runExecutionTests().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

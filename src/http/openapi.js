@@ -1016,7 +1016,28 @@ function generateOpenAPISpec() {
             }
           ],
           responses: {
-            '200': { description: 'Task status' },
+            '200': {
+              description: 'Task status. An unconfirmed state or completion event retains its previous non-terminal status and sets statePersistencePending or cancelPersistencePending. The original task identity and captured result remain available; restoring storage lets the gateway confirm that same state without resubmitting model work. Retry pending cancellation with the same taskId.',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      taskId: { type: 'string' },
+                      status: { type: 'string' },
+                      cancelPersistencePending: {
+                        type: 'boolean',
+                        description: 'Present and true only while cancellation state or its event requires persistence confirmation.'
+                      },
+                      statePersistencePending: {
+                        type: 'boolean',
+                        description: 'Present and true only while a captured task state or its event requires persistence confirmation; no interaction should be offered until confirmed.'
+                      }
+                    }
+                  }
+                }
+              }
+            },
             '404': { description: 'Task not found' }
           }
         }
@@ -1064,6 +1085,7 @@ function generateOpenAPISpec() {
                             attentionRequired: { type: 'boolean' },
                             resultAvailable: { type: 'boolean' },
                             sessionId: { type: 'string', nullable: true },
+                            interactionRequestId: { type: 'string', description: 'Identity of the exact review or approval checkpoint, present for attention events.' },
                             summary: { type: 'string', maxLength: 240 }
                           }
                         }
@@ -1132,22 +1154,26 @@ function generateOpenAPISpec() {
           responses: {
             '200': { description: 'Review decision applied' },
             '400': { description: 'Invalid review request' },
-            '404': { description: 'Task not found' }
+            '404': { description: 'Task not found' },
+            '409': { description: 'A different review decision is already pending persistence' },
+            '503': { description: 'The review decision or its event cannot yet be confirmed. The original decision and followup identity are retained; retry the same decision after restoring storage.' }
           }
         }
       },
       '/api/task/{taskId}/cancel': {
         post: {
-          summary: 'Cancel a queued background task',
+          summary: 'Cancel a queued, executing or paused background task',
           operationId: 'cancelTask',
           security: [{ bearerAuth: [] }],
           parameters: [
             { name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }
           ],
           responses: {
-            '200': { description: 'Task cancelled' },
+            '200': { description: 'Cancellation persisted before generation stop and terminal notification' },
             '400': { description: 'Task cannot be cancelled' },
-            '404': { description: 'Task not found' }
+            '404': { description: 'Task not found' },
+            '409': { description: 'task_cancellation_conflict: recovery cannot verify the original native conversation. The original taskId and pending cancellation are retained without stopping generation. Select the original conversation and retry the same cancellation; a missing stored native session identity cannot be replaced by a title or index.' },
+            '503': { description: 'Cancellation state or its completion event is unconfirmed. A task-store failure prevents generation stop; if only event storage fails, stop may already have started. The original taskId remains retryable after restoring storage, and no terminal notification is sent until its event is recorded.' }
           }
         }
       },
@@ -1374,15 +1400,23 @@ function generateOpenAPISpec() {
         },
         delete: {
           summary: 'Clear task history',
+          description: 'Delete records matching all provided filters. Omitting every filter clears all history.',
           operationId: 'clearTasksHistory',
           security: [{ bearerAuth: [] }],
           parameters: [
-            { name: 'olderThanHours', in: 'query', required: false, schema: { type: 'integer' } },
+            {
+              name: 'olderThanHours',
+              in: 'query',
+              required: false,
+              description: 'Non-negative age in hours; zero includes records created up to the current time.',
+              schema: { type: 'integer', minimum: 0, maximum: Math.floor(Number.MAX_SAFE_INTEGER / 3600000) }
+            },
             { name: 'status', in: 'query', required: false, schema: { type: 'string' } },
             { name: 'beforeDate', in: 'query', required: false, schema: { type: 'string' } }
           ],
           responses: {
-            '200': { description: 'Clear result' }
+            '200': { description: 'Clear result' },
+            '400': { description: 'Invalid age, empty status, or invalid date filter; no records are deleted' }
           }
         }
       },
@@ -1417,6 +1451,7 @@ function generateOpenAPISpec() {
       '/api/tasks/batch': {
         post: {
           summary: 'Submit a batch of tasks',
+          description: 'Schedules existing gateway-managed tasks using the batch strategy. Batch groups remain in memory; created gatewayTaskId identities use the normal durable task lifecycle. Every item starts a new conversation when dispatched. Parallel and priority strategies cap outstanding tasks while all UI actions use the shared gateway lock.',
           operationId: 'submitTaskBatch',
           security: [{ bearerAuth: [] }],
           requestBody: {
@@ -1434,13 +1469,13 @@ function generateOpenAPISpec() {
                         required: ['task'],
                         properties: {
                           task: { type: 'string' },
-                          priority: { type: 'number' }
+                          priority: { type: 'number', description: 'Finite priority value; zero is retained. Defaults to 5.' }
                         }
                       }
                     },
                     strategy: { type: 'string', enum: ['parallel', 'sequential', 'priority'] },
-                    maxConcurrency: { type: 'integer' },
-                    onComplete: { type: 'string' }
+                    maxConcurrency: { type: 'integer', description: 'Finite integer, clamped to 1–20 (default 5). Maximum outstanding items, including tasks awaiting an interaction. Sequential batches dispatch one item at a time.' },
+                    onComplete: { type: 'string', description: 'Optional HTTP callback after every item reaches a confirmed terminal state; failed items are included without being counted as successful completions.' }
                   }
                 }
               }
@@ -1455,18 +1490,53 @@ function generateOpenAPISpec() {
       '/api/tasks/batch/{batchId}': {
         get: {
           summary: 'Get batch task status',
+          description: 'Original batch item IDs remain stable. Dispatched items expose gatewayTaskId for /api/task/{taskId} status, interaction and cancellation. Pending items have not been created in the durable queue. Approvals and incomplete results remain outstanding; captured partial results are retained. The group is unavailable after gateway restart, while previously created task IDs follow normal task recovery/history rules.',
           operationId: 'getBatchStatus',
           security: [{ bearerAuth: [] }],
           parameters: [
             { name: 'batchId', in: 'path', required: true, schema: { type: 'string' } }
           ],
           responses: {
-            '200': { description: 'Batch status' },
+            '200': {
+              description: 'Batch status; completedCount counts only confirmed done items, failedCount counts error, queue_timeout and review_rejected items, and cancelledCount counts confirmed cancellations or skipped undispatched items.',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      batchId: { type: 'string' },
+                      status: { type: 'string', enum: ['running', 'completed', 'cancelled'] },
+                      completedCount: { type: 'integer' }, failedCount: { type: 'integer' },
+                      cancelledCount: { type: 'integer' },
+                      pendingCount: { type: 'integer' }, executingCount: { type: 'integer', description: 'Outstanding dispatched items, including approval and review checkpoints.' },
+                      tasks: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            taskId: { type: 'string', description: 'Original batch item ID' },
+                            gatewayTaskId: { type: 'string', description: 'Durable gateway task ID; absent until dispatched' },
+                            gatewayStatus: { type: 'string', description: 'Gateway state; queued items occupy a batch slot with status executing. While persistence is pending this retains the previous state.' },
+                            status: { type: 'string', enum: ['pending', 'executing', 'approval_required', 'awaiting_review', 'done', 'error', 'queue_timeout', 'review_rejected', 'cancelled'] },
+                            result: { type: 'object', nullable: true, additionalProperties: true },
+                            error: { type: 'string', nullable: true },
+                            interactionRequestId: { type: 'string', description: 'Use the existing task interaction endpoint with gatewayTaskId; absent while state persistence is unconfirmed.' },
+                            statePersistencePending: { type: 'boolean', description: 'True while state or completion-event persistence is unconfirmed. The item remains executing until storage recovers.' },
+                            cancelPersistencePending: { type: 'boolean', description: 'True while cancellation persistence is unconfirmed; retry DELETE for the same batch after storage recovers.' }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
             '404': { description: 'Batch not found' }
           }
         },
         delete: {
           summary: 'Cancel a running batch',
+          description: 'Cancels created tasks through the normal durable gateway finalizer and skips undispatched items. The group is removed only after all cancellations are confirmed. A storage failure retains the original group and task IDs for retry; a late model result cannot overwrite confirmed cancellation.',
           operationId: 'cancelBatch',
           security: [{ bearerAuth: [] }],
           parameters: [
@@ -1475,7 +1545,8 @@ function generateOpenAPISpec() {
           responses: {
             '200': { description: 'Batch cancelled' },
             '400': { description: 'Batch cannot be cancelled' },
-            '404': { description: 'Batch not found' }
+            '404': { description: 'Batch not found' },
+            '503': { description: 'Task or event storage is unavailable; retry cancellation with the same batchId after storage recovers.' }
           }
         }
       },

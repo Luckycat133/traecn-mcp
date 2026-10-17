@@ -66,7 +66,8 @@ test('MockDriver constructor accepts custom responses', () => {
   await asyncTest('collectResponse returns default mock response', async () => {
     const driver = new MockDriver();
     const response = await driver.collectResponse();
-    assert.strictEqual(response.text, 'Mock response from TraeCN');
+    assert.ok(response.text.startsWith('Mock response from TraeCN.'));
+    assert.ok(response.text.includes('No TraeCN model was called'));
     assert.strictEqual(response.stable, true);
   });
 
@@ -121,6 +122,59 @@ test('MockDriver constructor accepts custom responses', () => {
     });
   });
 
+  await asyncTest('inherited getActiveSoloChat preserves mock SOLO state without a CDP client or activation', async () => {
+    const driver = new MockDriver();
+    const list = driver.listSoloChats;
+    const calls = [];
+    driver.listSoloChats = async options => { calls.push(options); return list.call(driver); };
+    driver._activateWindow = async () => { throw new Error('mock identity reads must never activate a native window'); };
+    assert.deepStrictEqual(await driver.getActiveSoloChat(), { mode: 'solo', active: null, count: 0 });
+    assert.deepStrictEqual(calls, [{ visibleOnly: true }]);
+    assert.strictEqual(driver.client, null);
+    assert.deepStrictEqual(driver.sentMessages, []);
+  });
+
+  await asyncTest('inherited getActiveSoloChat preserves mock IDE state without a CDP client', async () => {
+    const driver = new MockDriver({ mode: 'ide' });
+    assert.deepStrictEqual(await driver.getActiveSoloChat(), {
+      mode: 'not_solo', active: null, reason: 'solo_chats_unavailable'
+    });
+    assert.strictEqual(driver.client, null);
+    assert.deepStrictEqual(driver.sentMessages, []);
+  });
+
+  await asyncTest('inherited native active reads obey the list override and pass the internal visible option', async () => {
+    const driver = new MockDriver();
+    const active = { sessionId: '6ac0873891c6cca72cd4b656', title: 'Exact native context', active: true };
+    const calls = [];
+    driver.listSoloChats = async options => {
+      calls.push(options);
+      return { mode: 'solo', chats: [active], count: 1, scanned: 'visible' };
+    };
+    const result = await driver.getActiveSoloChat();
+    assert.strictEqual(result.active, active);
+    assert.strictEqual(result.count, 1);
+    assert.deepStrictEqual(calls, [{ visibleOnly: true }]);
+    assert.strictEqual(driver.client, null);
+    assert.deepStrictEqual(driver.sentMessages, []);
+  });
+
+  await asyncTest('inherited legacy active reads reuse the complete override snapshot once without a guessed native ID', async () => {
+    const driver = new MockDriver();
+    const active = { index: 5, sessionId: null, title: 'Legacy selected', active: true };
+    const calls = [];
+    driver.listSoloChats = async options => {
+      calls.push(options);
+      return { mode: 'solo', chats: [active], count: 6 };
+    };
+    const result = await driver.getActiveSoloChat();
+    assert.strictEqual(result.active, active);
+    assert.strictEqual(result.active.sessionId, null);
+    assert.strictEqual(result.count, 6);
+    assert.deepStrictEqual(calls, [{ visibleOnly: true }]);
+    assert.strictEqual(driver.client, null);
+  });
+
   await asyncTest('switchModel updates current model', async () => {
     const driver = new MockDriver();
     const result = await driver.switchModel('glm');
@@ -150,6 +204,23 @@ test('MockDriver constructor accepts custom responses', () => {
     assert.deepStrictEqual(tab, { tab: 'settings', section: 'general' });
     assert.strictEqual(content.items.length, 1);
     assert.strictEqual(setResult.success, true);
+  });
+
+  await asyncTest('settings mock reads back a disabled toggle without replacing false with its default', async () => {
+    const driver = new MockDriver();
+    const before = (await driver.settings.getContent()).items[0];
+    assert.strictEqual(before.controlType, 'toggle');
+    assert.strictEqual(before.toggleChecked, true);
+    await driver.settings.setToggle(before.label, false);
+    const disabled = (await driver.settings.getContent()).items.find(item => item.label === before.label);
+    assert.strictEqual(disabled.toggleChecked, false);
+    assert.strictEqual(disabled.currentValue, false);
+    await driver.settings.setToggle(before.label, true);
+    const enabled = (await driver.settings.getContent()).items.find(item => item.label === before.label);
+    assert.strictEqual(enabled.toggleChecked, true);
+    assert.strictEqual(enabled.currentValue, true);
+    const independent = (await new MockDriver().settings.getContent()).items[0];
+    assert.strictEqual(independent.toggleChecked, true);
   });
 
   await asyncTest('checkReadiness returns ready state', async () => {

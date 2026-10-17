@@ -116,6 +116,69 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     server.close();
   });
 
+  await asyncTest('HTTP responses preserve Unicode split across network chunks', async () => {
+    const expected = { text: '中文结果 🐱 café' };
+    const bytes = Buffer.from(JSON.stringify(expected));
+    const split = bytes.indexOf(Buffer.from('中')) + 1;
+    const port = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.write(bytes.subarray(0, split));
+      setTimeout(() => res.end(bytes.subarray(split)), 10);
+    });
+    try {
+      const client = new TraeCNApiClient({ port, timeout: 3000 });
+      const result = await client.getStatus();
+      assert.deepStrictEqual(result.data, expected);
+    } finally {
+      server.close();
+    }
+  });
+
+  await asyncTest('HTTP responses reject a premature connection close', async () => {
+    const port = await createMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': 100 });
+      res.write('{"text":"partial');
+      setTimeout(() => res.destroy(), 10);
+    });
+    let deadline;
+    try {
+      const client = new TraeCNApiClient({ port, timeout: 1000 });
+      await assert.rejects(Promise.race([
+        client.getStatus(),
+        new Promise((_resolve, reject) => {
+          deadline = setTimeout(() => reject(new Error('Response remained pending')), 200);
+        })
+      ]), /aborted|premature|reset/i);
+    } finally {
+      clearTimeout(deadline);
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
+  await asyncTest('task event long polls release the HTTP request when aborted', async () => {
+    let receivedRequest;
+    const received = new Promise(resolve => { receivedRequest = resolve; });
+    const port = await createMockServer(() => {
+      receivedRequest();
+    });
+    const controller = new AbortController();
+    try {
+      const client = new TraeCNApiClient({ port, timeout: 3000 });
+      const pending = client.listTaskEvents('abort-client', {
+        waitMs: 25000,
+        signal: controller.signal
+      });
+      const rejected = assert.rejects(pending, error => error.name === 'AbortError');
+      await received;
+      controller.abort();
+      await rejected;
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
   await asyncTest('getCapabilities sends GET to /api/capabilities', async () => {
     const port = await createMockServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -369,6 +432,26 @@ test('TraeCNApiClient constructor accepts custom options', () => {
     assert.strictEqual(result.wait.attempts, 2);
     assert.deepStrictEqual(snapshots.map(event => event.status), ['queued', 'done']);
     server.close();
+  });
+
+  await asyncTest('waitForTask awaits storage confirmation without approving pending interactions', async () => {
+    for (const flag of ['statePersistencePending', 'cancelPersistencePending']) {
+      for (const status of ['done', 'error', 'cancelled', 'queue_timeout', 'awaiting_review', 'approval_required']) {
+        const client = new TraeCNApiClient();
+        let reads = 0;
+        client.getTaskStatus = async () => ({
+          status: 200,
+          data: ++reads === 1
+            ? { taskId: 'pending-storage', status, [flag]: true }
+            : { taskId: 'pending-storage', status: 'done', result: { text: 'confirmed answer' } }
+        });
+        client.dialogStatus = async () => { throw new Error('pending interaction must not be inspected or approved'); };
+        const result = await client.waitForTask('pending-storage', { pollMs: 1, timeoutMs: 500, autoApproveDialog: 'auto' });
+        assert.strictEqual(reads, 2, `${flag}/${status}`);
+        assert.strictEqual(result.wait.terminal, true);
+        assert.strictEqual(result.result.text, 'confirmed answer');
+      }
+    }
   });
 
   await asyncTest('waitForTask can approve a dialog before continuing', async () => {

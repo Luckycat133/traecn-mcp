@@ -720,6 +720,63 @@ asyncTest('Gateway rejects a different workspace path even when the folder name 
   );
 });
 
+asyncTest('Gateway accepts an exact title-only workspace name containing the editor separator', async () => {
+  const gateway = new Gateway();
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: 'team — repo', folderName: 'repo', rootPath: null, hasExplorer: false
+    })
+  };
+
+  const context = await gateway._assertProjectWorkspace('/tmp/team — repo');
+  assert.strictEqual(context.currentFolder, 'team — repo');
+  assert.strictEqual(context.currentPath, null);
+});
+
+asyncTest('Gateway rejects a known different root despite an exact workspace title', async () => {
+  const gateway = new Gateway();
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: 'team — repo', folderName: 'team — repo',
+      rootPath: '/tmp/other/team — repo', hasExplorer: true
+    })
+  };
+
+  await assert.rejects(
+    () => gateway._assertProjectWorkspace('/tmp/team — repo'),
+    error => error && error.code === 'PROJECT_NOT_OPEN' &&
+      error.details.currentPath === '/tmp/other/team — repo'
+  );
+});
+
+asyncTest('Gateway rejects a title that only contains the requested folder name', async () => {
+  const gateway = new Gateway();
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: 'README.md — team — other-repo', folderName: 'other-repo', rootPath: null, hasExplorer: false
+    })
+  };
+
+  await assert.rejects(
+    () => gateway._assertProjectWorkspace('/tmp/team'),
+    error => error && error.code === 'PROJECT_NOT_OPEN'
+  );
+});
+
+asyncTest('Gateway keeps an application-only matching title unidentified', async () => {
+  const gateway = new Gateway();
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: 'Trae CN', folderName: null, rootPath: null, hasExplorer: false
+    })
+  };
+
+  await assert.rejects(
+    () => gateway._assertProjectWorkspace('/tmp/Trae CN'),
+    error => error && error.code === 'WORKSPACE_CONTEXT_UNAVAILABLE'
+  );
+});
+
 asyncTest('Gateway cleanup endpoint repeats passes for queue probes revealed after deletion', async () => {
   const gateway = new Gateway();
   let listCalls = 0;
@@ -1708,6 +1765,50 @@ asyncTest('Gateway falls back to stable Solo chat candidates when title changes 
   assert.strictEqual(task.status, 'done');
 });
 
+test('Gateway keeps native Solo session identity ahead of legacy title and index criteria', () => {
+  const gateway = new Gateway();
+  const sessionId = '6ac05d3c1407a4b5492e7496';
+  const target = { sessionId, titleIncludes: 'Same title', index: 0 };
+  assert.strictEqual(gateway._normalizeSoloChatTarget(target).sessionId, sessionId);
+  assert.deepStrictEqual(gateway._soloChatSwitchCriteria(target), { sessionId });
+  assert.strictEqual(gateway._soloChatMatchesActive(target, { sessionId, title: 'Renamed', index: 5 }), true);
+  assert.strictEqual(gateway._soloChatMatchesActive(target, { sessionId: 'different-session', title: 'Same title', index: 0 }), false);
+  assert.strictEqual(gateway._soloChatMatchesActive(target, { title: 'Same title', index: 0 }), false);
+});
+
+asyncTest('Gateway captures the real native Solo session for persisted task recovery', async () => {
+  const gateway = new Gateway();
+  const sessionId = '6ac05d3c1407a4b5492e7496';
+  const task = { taskId: 'native-session-capture', task: 'Owned fixture task', status: 'executing' };
+  gateway._persistActiveQueue = () => true;
+  gateway._syncTaskHistoryMirror = () => {};
+  gateway.driver = { getActiveSoloChat: async () => ({ active: {
+    sessionId, index: 2, title: 'Same title', text: 'Same title 任务中断 09:41'
+  } }) };
+  const captured = await gateway._captureTaskSoloChat(task);
+  assert.strictEqual(captured.sessionId, sessionId);
+  assert.strictEqual(JSON.parse(JSON.stringify(task.soloChat)).sessionId, sessionId);
+});
+
+asyncTest('Gateway never recovers a missing native Solo session through duplicate titles or stale indexes', async () => {
+  const gateway = new Gateway();
+  const attempts = [];
+  let activeReads = 0;
+  const task = { taskId: 'native-session-recovery', status: 'executing', submittedToTrae: true,
+    soloChat: { sessionId: 'missing-native-session', index: 0, titleIncludes: 'Same title', candidates: ['Same title'] } };
+  gateway.taskQueue.set(task.taskId, task);
+  gateway.driver = {
+    switchSoloChat: async criteria => {
+      attempts.push(criteria);
+      return criteria.sessionId ? { success: false, reason: 'chat_not_found' } : { success: true, index: 0 };
+    },
+    getActiveSoloChat: async () => { activeReads++; return { active: { active: true, index: 0, title: 'Same title' } }; }
+  };
+  await assert.rejects(() => gateway._switchToTaskSoloChat(task, 'collect_result'), error => error.code === 'SOLO_CHAT_SWITCH_FAILED');
+  assert.deepStrictEqual(attempts, [{ sessionId: 'missing-native-session' }]);
+  assert.strictEqual(activeReads, 0);
+});
+
 asyncTest('Gateway captures task-specific Solo chat candidates before generic project path text', async () => {
   const gateway = new Gateway();
   const task = {
@@ -1937,6 +2038,55 @@ asyncTest('Gateway schedules retry instead of final error for transient backgrou
     maxAttempts: 2
   });
   assert.strictEqual(exhausted, false);
+});
+
+asyncTest('Gateway never resubmits an unconfirmed post-dispatch send', async () => {
+  const gateway = new Gateway();
+  gateway.taskQueue = new Map();
+  let pollOnce;
+  let sends = 0;
+  let newChats = 0;
+  gateway._setInterval = fn => {
+    pollOnce = fn;
+    return { unref() {} };
+  };
+  gateway._clearInterval = () => {};
+  gateway._ensureConnection = async () => {};
+  gateway._prepareQueuedTask = async () => {};
+  gateway._ensureRequestedWorkspace = async () => {};
+  gateway.driver = {
+    checkQueueStatus: async () => ({ queued: false, running: false, canSubmit: true }),
+    newChat: async () => { newChats++; },
+    sendMessage: async () => {
+      sends++;
+      const { TraeCNAutomationError } = require('../cdp/errors');
+      const error = new TraeCNAutomationError(
+        'send was dispatched, but visible confirmation timed out',
+        'SEND_FAILED', { submissionDispatched: true }
+      );
+      throw error;
+    }
+  };
+  const task = {
+    taskId: 'task_unconfirmed_dispatch', task: 'verify dispatch once',
+    status: 'queued', createdAt: Date.now(), submittedToTrae: false,
+    attempts: 0, reviewRequired: false, followupTasks: []
+  };
+  gateway.taskQueue.set(task.taskId, task);
+  gateway._ensureBackgroundPolling();
+  try {
+    await pollOnce();
+    assert.strictEqual(task.status, 'error');
+    assert.strictEqual(task.attempts, 0);
+    assert.strictEqual(task.submittedToTrae, false);
+    assert.match(task.error, /confirmation timed out/);
+    assert.strictEqual(gateway.taskHistoryStore.getTask(task.taskId).status, 'failed');
+    await pollOnce();
+    assert.strictEqual(sends, 1);
+    assert.strictEqual(newChats, 1);
+  } finally {
+    gateway._stopBackgroundPolling();
+  }
 });
 
 asyncTest('Gateway finalizes submitted executing task after recovery retries are exhausted', async () => {
@@ -3103,6 +3253,256 @@ asyncTest('Gateway restart-debug confirmed branch uses restart dependencies and 
   assert.strictEqual(responseData.surface.count, 1);
 });
 
+asyncTest('Gateway restart-debug describes the flat discovered page target', async () => {
+  const traeControl = require('./handlers/trae-control');
+  const gateway = new Gateway();
+  const previousPort = process.env.TRAECN_REMOTE_DEBUGGING_PORT;
+  let response;
+  gateway._json = (_req, _res, data, status) => { response = { data, status }; };
+  traeControl.setRestartDebugDepsForTest({
+    getQuickstartConfig: () => ({ remoteDebuggingPort: '17777' }),
+    getEnvWithFallback: () => '17777',
+    restartTraeCNWithDebug: async () => ({ ok: true }),
+    discoverTarget: async () => ({ id: 'native-page', url: 'vscode-file://vscode-app/workbench/workbench.html',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:17777/devtools/page/native-page' })
+  });
+  try {
+    const req = Readable.from([JSON.stringify({
+      confirmationPhrase: 'restart-trae-cn-with-debug-existing-profile', cdpWaitMs: 5
+    })]);
+    req.headers = { 'content-type': 'application/json' };
+    await gateway._handleRestartTraeDebug(req, {});
+  } finally {
+    traeControl.setRestartDebugDepsForTest();
+    restoreEnv('TRAECN_REMOTE_DEBUGGING_PORT', previousPort);
+  }
+  assert.strictEqual(response.status, 200);
+  assert.strictEqual(response.data.surface.kind, 'workspace');
+  assert.strictEqual(response.data.surface.targetId, 'native-page');
+  assert.strictEqual(response.data.surface.totalPageTargets, 1);
+});
+
+asyncTest('Gateway records interrupted output as an error without submitting again', async () => {
+  const gateway = new Gateway();
+  const task = { taskId: 'owned-interrupted', task: 'TRAECN_INTERRUPT implement tests',
+    status: 'executing', submittedToTrae: true, attempts: 0, reviewRequired: true };
+  const result = { text: 'TRAECN_INTERRUPT\nAll tests passed, but the final summary stopped.',
+    stable: false, interrupted: true, error: 'Trae generation was interrupted' };
+  gateway._resultBelongsToSubmittedTask = () => true;
+  gateway._finalizeBackgroundTask = async (_id, selected, status, payload) => {
+    Object.assign(selected, { status, ...payload });
+  };
+  assert.strictEqual(gateway._backgroundResultRetryMode(result, task), null);
+  await gateway._finalizeCollectedBackgroundResult(task.taskId, task, result);
+  assert.strictEqual(task.status, 'error');
+  assert.strictEqual(task.attempts, 0);
+  assert.strictEqual(task.submittedToTrae, true);
+  assert.strictEqual(task.error, result.error);
+  assert.strictEqual(task.result, result);
+});
+
+// BEGIN task trace contract regressions
+function storedTraceFixture({ status = 'done', history = false, result = null, pending = null } = {}) {
+  const gateway = new Gateway();
+  gateway.taskQueue.clear();
+  const storedResult = result || {
+    text: '完成总结\n该任务最终结果',
+    traceText: 'Agent\n思考过程\n该任务工具调用\n完成总结\n该任务最终结果\n任务完成',
+    stable: true,
+    elapsedMs: 123
+  };
+  const task = {
+    taskId: 'task_stored_trace', task: '重复的相同指令', status, createdAt: Date.now() - 1000,
+    result: storedResult, followupTasks: [], interactionRequestId: 'interaction_1',
+    ...(pending ? { statePersistencePending: pending } : {})
+  };
+  let uiReads = 0;
+  gateway.driver = { findTaskResponse: async () => {
+    uiReads++;
+    return { text: '后来的相同指令任务的过程和最终结果', hasResponse: true, isComplete: true };
+  } };
+  gateway._ensureConnection = async () => { uiReads++; };
+  gateway._refreshQueuedTaskSnapshot = async () => {};
+  gateway._refreshExecutingTaskSnapshot = async () => {};
+  gateway.taskHistoryStore = {
+    getTask: () => history ? {
+      ...task, status: status === 'done' ? 'completed' : status,
+      createdAtMs: task.createdAt, completedAt: new Date().toISOString(), metadata: {}, steps: []
+    } : null
+  };
+  if (!history) gateway.taskQueue.set(task.taskId, task);
+  return {
+    gateway, task, uiReads: () => uiReads,
+    async read(detailLevel = 'result') {
+      let response;
+      gateway._json = (_req, _res, data) => { response = data; };
+      await gateway._handleTaskStatus({ url: `/api/task/${task.taskId}?detailLevel=${detailLevel}` }, {}, task.taskId);
+      return response;
+    }
+  };
+}
+
+asyncTest('Gateway exposes the active task stored trace only on an explicit trace request', async () => {
+  const fixture = storedTraceFixture();
+  const storedResult = structuredClone(fixture.task.result);
+  const trace = await fixture.read('trace');
+  assert.strictEqual(trace.status, 'done');
+  assert.strictEqual(trace.detailLevel, 'trace');
+  assert.strictEqual(trace.result.text, storedResult.traceText);
+  assert.strictEqual(trace.result.traceText, undefined);
+  assert.strictEqual(trace.result.stable, true);
+  assert.strictEqual(trace.result.elapsedMs, 123);
+  const normal = await fixture.read();
+  assert.strictEqual(normal.result.text, storedResult.text);
+  assert.strictEqual(normal.result.traceText, undefined);
+  assert.strictEqual(fixture.uiReads(), 0);
+  assert.deepStrictEqual(fixture.task.result, storedResult);
+  const content = require('../mcp/tools').asMcpContent(trace);
+  assert.deepStrictEqual(JSON.parse(content.content[0].text), content.structuredContent);
+});
+
+asyncTest('Gateway reads the requested task trace when a later task has the same prompt', async () => {
+  const fixture = storedTraceFixture();
+  fixture.gateway.taskQueue.set('task_later_same_prompt', {
+    ...fixture.task, taskId: 'task_later_same_prompt',
+    result: { text: '后来的最终结果', traceText: '后来的工具调用和最终结果', stable: true }
+  });
+  const response = await fixture.read('trace');
+  assert.strictEqual(response.taskId, fixture.task.taskId);
+  assert.strictEqual(response.result.text, fixture.task.result.traceText);
+  assert.strictEqual(fixture.uiReads(), 0);
+});
+
+asyncTest('Gateway historical trace reads preserve the stored final result and hide internal fields by default', async () => {
+  const fixture = storedTraceFixture({ history: true });
+  const original = structuredClone(fixture.task.result);
+  const trace = await fixture.read('trace');
+  assert.strictEqual(trace.fromHistory, true);
+  assert.strictEqual(trace.detailLevel, 'trace');
+  assert.strictEqual(trace.result.text, original.traceText);
+  assert.strictEqual(trace.result.traceText, undefined);
+  const normal = await fixture.read();
+  assert.strictEqual(normal.detailLevel, 'result');
+  assert.strictEqual(normal.result.text, original.text);
+  assert.strictEqual(normal.result.traceText, undefined);
+  assert.deepStrictEqual(fixture.task.result, original);
+  assert.strictEqual(fixture.uiReads(), 0);
+});
+
+asyncTest('Gateway retains interrupted partial output in active and historical task snapshots', async () => {
+  const result = { text: 'TRAECN_INTERRUPT partial current assistant output',
+    stable: false, interrupted: true, error: 'Trae task output was interrupted before completion' };
+  for (const history of [false, true]) {
+    const fixture = storedTraceFixture({ status: 'error', history, result });
+    fixture.task.error = result.error;
+    const response = await fixture.read();
+    assert.strictEqual(response.status, 'error');
+    assert.strictEqual(response.result.text, result.text);
+    assert.strictEqual(response.result.interrupted, true);
+    assert.strictEqual(response.result.stable, false);
+    assert.strictEqual(response.error, result.error);
+    assert.strictEqual(fixture.uiReads(), 0);
+  }
+});
+
+asyncTest('Gateway keeps the stored final result when a legacy task has no saved trace', async () => {
+  for (const history of [false, true]) {
+    for (const traceText of [undefined, '', ' \n ', null]) {
+      const result = { text: '该旧任务最终结果', stable: true, traceText };
+      const fixture = storedTraceFixture({ history, result });
+      const response = await fixture.read('trace');
+      assert.strictEqual(response.result.text, result.text);
+      assert.strictEqual(response.result.traceText, undefined);
+      assert.strictEqual(response.detailLevel, 'trace');
+      assert.match(response.detailWarning, /stored final result/i);
+      assert.strictEqual(fixture.uiReads(), 0);
+      assert.strictEqual(result.traceText, traceText);
+    }
+  }
+});
+
+asyncTest('Gateway trace queries preserve review state and interaction identity', async () => {
+  const fixture = storedTraceFixture({ status: 'awaiting_review' });
+  const response = await fixture.read('trace');
+  assert.strictEqual(response.status, 'awaiting_review');
+  assert.strictEqual(response.reviewRequired, true);
+  assert.strictEqual(response.interactionRequestId, 'interaction_1');
+  assert.strictEqual(response.result.text, fixture.task.result.traceText);
+  assert.strictEqual((await fixture.read()).result.text, fixture.task.result.text);
+});
+
+asyncTest('Gateway hides saved process data while tasks are unfinished or persistence is pending', async () => {
+  for (const status of ['queued', 'executing', 'approval_required']) {
+    const fixture = storedTraceFixture({ status });
+    const response = await fixture.read('trace');
+    assert.strictEqual(response.status, status);
+    assert.strictEqual(response.detailLevel, 'trace');
+    assert.ok(!JSON.stringify(response).includes('该任务工具调用'));
+    assert.match(response.detailWarning, /unavailable/i);
+  }
+  const fixture = storedTraceFixture({ pending: { previousStatus: 'executing', status: 'done' } });
+  const response = await fixture.read('trace');
+  assert.strictEqual(response.status, 'executing');
+  assert.strictEqual(response.statePersistencePending, true);
+  assert.strictEqual(response.result.text, fixture.task.result.text);
+  assert.strictEqual(response.result.traceText, undefined);
+  assert.match(response.detailWarning, /unavailable/i);
+  assert.strictEqual((await fixture.read()).result.traceText, undefined);
+});
+
+asyncTest('Gateway trace result survives existing queue and history persistence without a new schema', async () => {
+  const { TaskStore } = require('./task-store');
+  const { TaskHistoryStore } = require('../shared/task-history');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecnclaw-task-trace-'));
+  const stores = [];
+  try {
+    const result = { text: '持久化最终结果', traceText: '持久化的完整工具过程\n持久化最终结果', stable: true };
+    const options = { persistencePath: path.join(tempDir, 'queue.json'), isTerminalStatus: status => status === 'done' };
+    const queueStore = new TaskStore(options);
+    stores.push(queueStore);
+    const task = {
+      taskId: 'task_durable_trace', task: '重复指令', status: 'awaiting_review', result,
+      createdAt: Date.now() - 1000, idempotencyKey: 'trace_key', idempotencyFingerprint: 'trace_fingerprint'
+    };
+    const queue = new Map([[task.taskId, task]]);
+    assert.strictEqual(queueStore.persist(queue), true);
+    queueStore.close();
+    const restoredQueueStore = new TaskStore(options);
+    stores.push(restoredQueueStore);
+    assert.deepStrictEqual(restoredQueueStore.load().tasks[0].result, result);
+    task.status = 'done';
+    assert.strictEqual(restoredQueueStore.recordTerminalReplay(task, queue), true);
+    restoredQueueStore.close();
+    const restoredReplayStore = new TaskStore(options);
+    stores.push(restoredReplayStore);
+    assert.deepStrictEqual(restoredReplayStore.load().terminalReplays[0].result, result);
+    const historyPath = path.join(tempDir, 'history.json');
+    const history = new TaskHistoryStore({ persistencePath: historyPath });
+    stores.push(history);
+    history.ensureTask(task.taskId, task.task);
+    history.completeTask(task.taskId, result);
+    history.shutdown();
+    const restoredHistory = new TaskHistoryStore({ persistencePath: historyPath });
+    stores.push(restoredHistory);
+    assert.deepStrictEqual(restoredHistory.getTask(task.taskId).result, result);
+    const fixture = storedTraceFixture();
+    fixture.gateway.taskQueue.clear();
+    fixture.gateway.taskHistoryStore = restoredHistory;
+    let response;
+    fixture.gateway._json = (_req, _res, data) => { response = data; };
+    await fixture.gateway._handleTaskStatus({ url: `/api/task/${task.taskId}?detailLevel=trace` }, {}, task.taskId);
+    assert.strictEqual(response.result.text, result.traceText);
+    assert.strictEqual(response.result.traceText, undefined);
+    assert.strictEqual(fixture.uiReads(), 0);
+  } finally {
+    for (const store of stores) {
+      if (store.shutdown) store.shutdown();
+      else store.close();
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 asyncTest('Gateway task status falls back to history for cleaned terminal tasks', async () => {
   const gateway = new Gateway();
   gateway.taskQueue.clear();
@@ -3205,11 +3605,13 @@ asyncTest('Gateway rejects a stale historical page snapshot when no CDP driver i
   assert.strictEqual(responseData.result, undefined);
 });
 
-asyncTest('Gateway connects to Trae before recovering an unavailable historical result', async () => {
+asyncTest('Gateway avoids reconnecting to an unbound UI for unavailable historical results', async () => {
   const gateway = new Gateway();
   gateway.taskQueue.clear();
   gateway.driver = null;
+  let connections = 0;
   gateway._ensureConnection = async () => {
+    connections++;
     gateway.driver = {
       findTaskResponse: async () => ({
         text: 'Agent\n完成总结\n直接任务查询已恢复\n任务完成',
@@ -3238,20 +3640,25 @@ asyncTest('Gateway connects to Trae before recovering an unavailable historical 
 
   await gateway._handleTaskStatus({}, {}, 'task_connect_then_recover');
 
-  assert.strictEqual(responseData.errorCode, undefined);
-  assert.ok(responseData.result.text.includes('直接任务查询已恢复'));
+  assert.strictEqual(responseData.errorCode, 'TASK_RESULT_UNAVAILABLE');
+  assert.strictEqual(responseData.result, undefined);
+  assert.strictEqual(connections, 0);
 });
 
-asyncTest('Gateway recovers an unavailable historical result after its Trae conversation returns', async () => {
+asyncTest('Gateway does not overwrite unavailable history with another current UI result', async () => {
   const gateway = new Gateway();
   gateway.taskQueue.clear();
+  let uiReads = 0;
   gateway.driver = {
-    findTaskResponse: async () => ({
+    findTaskResponse: async () => {
+      uiReads++;
+      return {
       text: 'Agent\n完成总结\nMCP 更新完成\n任务完成',
       inProgress: false,
       isComplete: true,
       hasResponse: true
-    })
+      };
+    }
   };
   gateway.taskHistoryStore = {
     getTask: () => ({
@@ -3272,14 +3679,15 @@ asyncTest('Gateway recovers an unavailable historical result after its Trae conv
 
   await gateway._handleTaskStatus({}, {}, 'task_recovered_result');
 
-  assert.strictEqual(responseData.errorCode, undefined);
-  assert.ok(responseData.result.text.includes('MCP 更新完成'));
-  assert.strictEqual(responseData.result.stable, true);
+  assert.strictEqual(responseData.errorCode, 'TASK_RESULT_UNAVAILABLE');
+  assert.strictEqual(responseData.result, undefined);
+  assert.strictEqual(uiReads, 0);
 });
 
 asyncTest('Gateway compacts a persisted Solo process transcript to its final summary', async () => {
   const gateway = new Gateway();
   gateway.taskQueue.clear();
+  let uiReads = 0;
   gateway.driver = {
     findTaskResponse: async () => ({
       text: '完成总结\n最终改动和测试结果',
@@ -3304,13 +3712,17 @@ asyncTest('Gateway compacts a persisted Solo process transcript to its final sum
   };
   let responseData = null;
   gateway._json = (req, res, data) => { responseData = data; };
+  gateway.driver.findTaskResponse = async () => { uiReads++; throw new Error('Historical UI is unbound'); };
+  const originalText = gateway.taskHistoryStore.getTask().result.text;
 
   await gateway._handleTaskStatus({}, {}, 'task_uncompacted_transcript');
 
   assert.strictEqual(responseData.result.text, '完成总结\n最终改动和测试结果');
+  assert.strictEqual(uiReads, 0);
+  assert.strictEqual(gateway.taskHistoryStore.getTask().result.text, originalText);
 });
 
-asyncTest('Gateway returns the full live trace when task detailLevel is trace', async () => {
+asyncTest('Gateway returns the full stored trace when task detailLevel is trace', async () => {
   const gateway = new Gateway();
   gateway.taskQueue.clear();
   let requestedOptions = null;
@@ -3331,7 +3743,10 @@ asyncTest('Gateway returns the full live trace when task detailLevel is trace', 
       status: 'completed',
       createdAtMs: Date.now() - 1000,
       completedAt: new Date().toISOString(),
-      result: { text: '完成总结\n最终结果', stable: true },
+      result: {
+        text: '完成总结\n最终结果', stable: true,
+        traceText: 'Agent\n思考过程\n工具调用\n完成总结\n最终结果\n任务完成'
+      },
       metadata: {},
       steps: []
     })
@@ -3341,10 +3756,11 @@ asyncTest('Gateway returns the full live trace when task detailLevel is trace', 
 
   await gateway._handleTaskStatus({ url: '/api/task/task_trace_result?detailLevel=trace' }, {}, 'task_trace_result');
 
-  assert.deepStrictEqual(requestedOptions, { detailLevel: 'trace' });
+  assert.strictEqual(requestedOptions, null);
   assert.ok(responseData.result.text.includes('思考过程'));
   assert.strictEqual(responseData.detailLevel, 'trace');
 });
+// END task trace contract regressions
 
 asyncTest('Gateway recovers review-gate persistence into awaiting_review result', async () => {
   const gateway = new Gateway();
@@ -4020,7 +4436,7 @@ asyncTest('Gateway _handleUpdateSelf returns 200 with success:false', async () =
   assert.ok(responseData.message);
 });
 
-test('Gateway _handleBatchCancel sets _cancelled flag and stops executing tasks', () => {
+asyncTest('Gateway _handleBatchCancel removes cancelled unscheduled compatibility items', async () => {
   const gateway = new Gateway();
   gateway.batchTasks.set('batch1', {
     batchId: 'batch1',
@@ -4033,7 +4449,7 @@ test('Gateway _handleBatchCancel sets _cancelled flag and stops executing tasks'
   });
   let responseData;
   gateway._json = (req, res, data) => { responseData = data; };
-  gateway._handleBatchCancel({ headers: {} }, {}, 'batch1');
+  await gateway._handleBatchCancel({ headers: {} }, {}, 'batch1');
   assert.strictEqual(responseData.status, 'cancelled');
   const batch = gateway.batchTasks.get('batch1');
   // Batch is deleted after cancel
@@ -4358,9 +4774,11 @@ asyncTest('Gateway open-project returns 400 when projectPath is missing', async 
 asyncTest('Gateway open-project reuses the active TraeCN window when it is already running', async () => {
   const gateway = new Gateway();
   const quickstart = require('../config/quickstart');
+  const origFindBinary = quickstart.findTraeCNBinary;
   const origIsRunning = quickstart.isTraeCNRunning;
   const origStart = quickstart.startTraeCN;
   const origOpenExisting = quickstart.openProjectInExistingWindow;
+  quickstart.findTraeCNBinary = () => '/test-only/trae-cn';
   quickstart.isTraeCNRunning = () => true;
   quickstart.startTraeCN = () => {
     throw new Error('startTraeCN must not be invoked when TraeCN is already running');
@@ -4369,7 +4787,7 @@ asyncTest('Gateway open-project reuses the active TraeCN window when it is alrea
   quickstart.openProjectInExistingWindow = async options => {
     openedWith = options;
     return {
-      command: '/Applications/Trae CN.app/Contents/Resources/app/bin/trae-cn',
+      command: options.binPath,
       args: ['--reuse-window', '/tmp/some-project']
     };
   };
@@ -4403,9 +4821,11 @@ asyncTest('Gateway open-project reuses the active TraeCN window when it is alrea
     assert.strictEqual(responseData.reusedWindow, true);
     assert.strictEqual(responseData.projectPath, '/tmp/some-project');
     assert.strictEqual(gateway._selectedWorkspacePath, '/tmp/some-project');
+    assert.strictEqual(openedWith.binPath, '/test-only/trae-cn');
     assert.strictEqual(openedWith.projectPath, '/tmp/some-project');
     assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/some-project');
   } finally {
+    quickstart.findTraeCNBinary = origFindBinary;
     quickstart.isTraeCNRunning = origIsRunning;
     quickstart.startTraeCN = origStart;
     quickstart.openProjectInExistingWindow = origOpenExisting;
@@ -4455,6 +4875,89 @@ asyncTest('Gateway open-project does not reload an already-open workspace', asyn
   } finally {
     quickstart.isTraeCNRunning = origIsRunning;
     quickstart.openProjectInExistingWindow = origOpenExisting;
+  }
+});
+
+asyncTest('Gateway open-project switches a same-name workspace when its current path is unknown', async () => {
+  const gateway = new Gateway();
+  const quickstart = require('../config/quickstart');
+  const originals = {
+    isTraeCNRunning: quickstart.isTraeCNRunning,
+    findTraeCNBinary: quickstart.findTraeCNBinary,
+    openProjectInExistingWindow: quickstart.openProjectInExistingWindow
+  };
+  quickstart.isTraeCNRunning = () => true;
+  quickstart.findTraeCNBinary = () => '/Applications/Trae CN.app';
+  let openedWith = null;
+  quickstart.openProjectInExistingWindow = async options => {
+    openedWith = options;
+    return { command: 'fixture-trae-cn', args: ['--reuse-window', options.projectPath] };
+  };
+  gateway._selectedWorkspacePath = '/tmp/campaign/workspace';
+  gateway._ensureConnection = async () => {};
+  gateway.driver = {
+    getWorkspaceContext: async () => ({
+      title: 'workspace', folderName: 'workspace',
+      rootPath: openedWith ? '/tmp/recovery/workspace' : null, hasExplorer: false
+    })
+  };
+  let responseData;
+  gateway._json = (req, res, data) => { responseData = data; };
+  try {
+    const req = new Readable({ read() {} });
+    req.headers = { 'content-type': 'application/json' };
+    req.push(JSON.stringify({ projectPath: '/tmp/recovery/workspace' }));
+    req.push(null);
+    await gateway._handleOpenProject(req, {});
+    assert.ok(openedWith, 'an unknown path must not be reported as already open');
+    assert.strictEqual(openedWith.projectPath, '/tmp/recovery/workspace');
+    assert.strictEqual(responseData.success, true);
+    assert.strictEqual(responseData.alreadyOpen, undefined);
+    assert.strictEqual(responseData.reusedWindow, true);
+    assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/recovery/workspace');
+    assert.strictEqual(gateway._selectedWorkspacePath, '/tmp/recovery/workspace');
+  } finally {
+    Object.assign(quickstart, originals);
+  }
+});
+
+asyncTest('Gateway open-project does not verify a switch from a same-name title alone', async () => {
+  const gateway = new Gateway();
+  const quickstart = require('../config/quickstart');
+  const originals = {
+    isTraeCNRunning: quickstart.isTraeCNRunning,
+    findTraeCNBinary: quickstart.findTraeCNBinary,
+    openProjectInExistingWindow: quickstart.openProjectInExistingWindow
+  };
+  quickstart.isTraeCNRunning = () => true;
+  quickstart.findTraeCNBinary = () => '/Applications/Trae CN.app';
+  let switchCount = 0;
+  quickstart.openProjectInExistingWindow = async options => {
+    switchCount++;
+    return { command: 'fixture-trae-cn', args: ['--reuse-window', options.projectPath] };
+  };
+  gateway._selectedWorkspacePath = '/tmp/campaign/workspace';
+  gateway._ensureConnection = async () => {};
+  gateway._setTimeout = callback => setTimeout(callback, 0);
+  gateway.driver = {
+    getWorkspaceContext: async () => ({ title: 'workspace', folderName: 'workspace', rootPath: null, hasExplorer: false })
+  };
+  let responseData;
+  gateway._json = (req, res, data) => { responseData = data; };
+  try {
+    const req = new Readable({ read() {} });
+    req.headers = { 'content-type': 'application/json' };
+    req.push(JSON.stringify({ projectPath: '/tmp/recovery/workspace', verifyTimeoutMs: 20 }));
+    req.push(null);
+    await gateway._handleOpenProject(req, {});
+    assert.strictEqual(switchCount, 1, 'the CLI switch should be attempted exactly once');
+    assert.strictEqual(responseData.success, false);
+    assert.match(responseData.error, /Timed out verifying TraeCN workspace switch/);
+    assert.strictEqual(responseData.alreadyOpen, undefined);
+    assert.strictEqual(responseData.verifiedWorkspace, undefined);
+    assert.strictEqual(gateway._selectedWorkspacePath, '/tmp/campaign/workspace');
+  } finally {
+    Object.assign(quickstart, originals);
   }
 });
 
@@ -4695,13 +5198,19 @@ asyncTest('Gateway lists one setting dropdown options from Trae UI and restores 
 asyncTest('Gateway dispatches each settings control kind to its exact Trae UI action', async () => {
   const gateway = new Gateway();
   const calls = [];
+  const values = new Map();
   gateway._ensureConnection = async () => {};
   gateway.driver = {
     settings: {
       switchTab: async section => calls.push(['section', section]),
-      setToggle: async (label, enabled) => calls.push(['toggle', label, enabled]),
-      setDropdown: async (label, value) => calls.push(['option', label, value]),
-      typeText: async (label, text) => calls.push(['text', label, text]),
+      getContent: async () => ({ items: [
+        { label: 'Auto Save', controlType: 'toggle', toggleChecked: values.get('Auto Save') || false },
+        { label: '语言', controlType: 'option', currentValue: values.get('语言') || '简体中文' },
+        { label: '服务器地址', controlType: 'text', currentValue: values.get('服务器地址') || '' }
+      ] }),
+      setToggle: async (label, enabled) => { values.set(label, enabled); calls.push(['toggle', label, enabled]); },
+      setDropdown: async (label, value) => { values.set(label, value); calls.push(['option', label, value]); },
+      typeText: async (label, text) => { values.set(label, text); calls.push(['text', label, text]); },
       backToChat: async () => calls.push(['back'])
     }
   };
@@ -4714,7 +5223,9 @@ asyncTest('Gateway dispatches each settings control kind to its exact Trae UI ac
 
   for (const body of cases) {
     const { req } = makeReqRes({}, '/api/settings/set', 'POST', { ...body, restoreChat: true });
-    await gateway._handleSettingsSet(req, {});
+    const result = await gateway._handleSettingsSet(req, {});
+    assert.strictEqual(result.verified, true);
+    assert.strictEqual(result.value, body.value);
   }
 
   assert.deepStrictEqual(calls, [
@@ -4722,6 +5233,47 @@ asyncTest('Gateway dispatches each settings control kind to its exact Trae UI ac
     ['section', '通用'], ['option', '语言', 'English'], ['back'],
     ['section', 'MCP'], ['text', '服务器地址', 'http://127.0.0.1'], ['back']
   ]);
+});
+
+asyncTest('Gateway reports the actual unchanged setting when a driver write did not apply', async () => {
+  const gateway = new Gateway();
+  let restored = false;
+  gateway._ensureConnection = async () => {};
+  gateway.driver = { settings: {
+    switchTab: async () => {},
+    getContent: async () => ({ items: [{ label: '字号', controlType: 'text', currentValue: '14' }] }),
+    typeText: async () => 'typed: 15',
+    backToChat: async () => { restored = true; }
+  } };
+  let responseStatus;
+  gateway._json = (req, res, data, status = 200) => { responseStatus = status; return data; };
+  const { req } = makeReqRes({}, '/api/settings/set', 'POST', {
+    section: '通用', label: '字号', kind: 'text', value: '15', restoreChat: true
+  });
+  const result = await gateway._handleSettingsSet(req, {});
+  assert.strictEqual(responseStatus, 409);
+  assert.strictEqual(result.code, 'SETTINGS_VALUE_NOT_APPLIED');
+  assert.strictEqual(result.value, '14');
+  assert.strictEqual(result.requestedValue, '15');
+  assert.strictEqual(result.verified, false);
+  assert.strictEqual(restored, true);
+});
+
+asyncTest('Gateway never writes a mismatched or missing settings control', async () => {
+  const gateway = new Gateway();
+  gateway._ensureConnection = async () => {};
+  gateway.driver = { settings: {
+    switchTab: async () => {},
+    getContent: async () => ({ items: [{ label: '语言', controlType: 'option', currentValue: '简体中文' }] }),
+    setToggle: async () => { throw new Error('must not mutate'); }
+  } };
+  let responseStatus;
+  gateway._json = (req, res, data, status = 200) => { responseStatus = status; return data; };
+  for (const [label, status] of [['语言', 400], ['缺失', 404]]) {
+    const { req } = makeReqRes({}, '/api/settings/set', 'POST', { section: '通用', label, kind: 'toggle', value: true });
+    await gateway._handleSettingsSet(req, {});
+    assert.strictEqual(responseStatus, status);
+  }
 });
 
 asyncTest('Gateway rejects a settings value that does not match its UI control kind', async () => {

@@ -104,6 +104,40 @@ test('CompletionSignal does not deliver notifications when the durable event wri
   ]]);
 });
 
+test('CompletionSignal isolates delivery failures across notification channels', async () => {
+  const calls = [];
+  const signal = new CompletionSignal({
+    getTaskEventStore: () => ({ append() { calls.push('event'); return { eventId: 'evt_1' }; } }),
+    getWebSocketHandler: () => ({
+      broadcastEvent() { calls.push('websocket'); throw new Error('socket offline'); }
+    }),
+    async notifyOpenClaw() { calls.push('openclaw'); throw new Error('OpenClaw offline'); },
+    async sendTaskWebhook() { calls.push('webhook'); },
+    logger: { error() {} }
+  });
+
+  const result = await signal.emit('task-isolated', {
+    status: 'done',
+    chatId: 'chat-isolated',
+    notifyUrl: 'https://example.invalid/task',
+    result: { text: 'The task completed successfully.' }
+  }, 'task.completed');
+
+  assert.deepStrictEqual(calls, ['event', 'websocket', 'openclaw', 'webhook']);
+  assert.deepStrictEqual(result, { recorded: true, delivered: false });
+});
+
+test('CompletionSignal records cancellation as a terminal event', async () => {
+  const events = [];
+  const signal = new CompletionSignal({
+    getTaskEventStore: () => ({ append(event) { events.push(event); return { eventId: 'evt_1' }; } })
+  });
+  await signal.emit('task-cancelled', { status: 'cancelled' }, 'task.cancelled');
+  assert.strictEqual(events.length, 1);
+  assert.strictEqual(events[0].terminal, true);
+  assert.strictEqual(events[0].attentionRequired, false);
+});
+
 (async () => {
   await pendingAsyncTests();
   summary();

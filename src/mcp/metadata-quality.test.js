@@ -10,13 +10,16 @@
  */
 
 const assert = require('assert');
+const http = require('http');
+const { fromJsonSchema } = require('@modelcontextprotocol/client');
+const { TaskOrchestrator } = require('../http/task-orchestrator');
+const { TraeCNAutomationError } = require('../cdp/errors');
+const { errorToBody } = require('../http/error-mapping');
 const { MCP_CONTRACT_VERSION, MCP_TOOL_NAMES } = require('./contract');
 const { MCP_TOOLS, TOOL_TITLES, TOOL_TASK_SUPPORT } = require('./tool-metadata');
 const { TOOL_OUTPUT_SCHEMAS, ERROR_RESULT_SCHEMA } = require('./output-schemas');
 const { asMcpContent, asMcpError, describeToolExecutionError, unwrapGatewayResult } = require('./tools');
 const { callTool } = require('../../mcp-server');
-
-const toolsByName = new Map(MCP_TOOLS.map(tool => [tool.name, tool]));
 
 function checkTypes(value, schema) {
   const problems = [];
@@ -57,14 +60,14 @@ const REPRESENTATIVE_RESULTS = {
   traecn_send_message: { taskId: 'task-1', status: 'accepted' },
   traecn_get_task: {
     taskId: 'task-1', status: 'done', historyStatus: 'completed', createdAt: 1755800000000,
-    elapsed: 4200, completedAt: 1755800004200, message: '完成', fromHistory: true,
+    elapsed: 4200, completedAt: new Date(1755800004200).toISOString(), message: '完成', fromHistory: true,
     metadata: {}, stepCount: 3, result: { text: 'done', stable: true },
     detailLevel: 'result'
   },
   traecn_cancel_task: { taskId: 'task-1', status: 'cancelled', stopResult: { success: true } },
   traecn_stop_generation: { success: true, conversationId: 'chat-1', scope: 'active_solo_conversation' },
   traecn_open_workspace: {
-    success: true, projectPath: '/tmp/demo', verifiedWorkspace: '/tmp/demo',
+    success: true, projectPath: '/tmp/demo', verifiedWorkspace: { folderName: 'demo', rootPath: null },
     alreadyRunning: true, reusedWindow: true, cdp: { host: '127.0.0.1', port: 9222 }
   },
   traecn_list_models: { current: 'GLM-5.1', models: ['GLM-5.1', 'DeepSeek-V3.1-Terminus'] },
@@ -168,6 +171,73 @@ const EXPECTED_ANNOTATIONS = {
   assert.strictEqual(TOOL_TASK_SUPPORT.traecn_send_message, 'optional');
   assert.strictEqual(new Set(MCP_TOOLS.map(tool => tool.title)).size, 20, 'titles must be unique');
 
+  // Completed history records retain ISO timestamps; active/legacy records
+  // may expose epoch milliseconds or no completion time. Use the official
+  // client's actual schema validator, including its date-time checks.
+  const taskOutput = fromJsonSchema(TOOL_OUTPUT_SCHEMAS.traecn_get_task)['~standard'];
+  for (const completedAt of ['2026-10-02T16:31:44.993Z', 1790958704993, 0, null]) {
+    const result = await taskOutput.validate({ ...REPRESENTATIVE_RESULTS.traecn_get_task, completedAt });
+    assert.strictEqual(result.issues, undefined, `valid completion timestamp rejected: ${JSON.stringify(result.issues)}`);
+  }
+  for (const completedAt of [true, {}, [], '', 'not-a-date', '2026-02-31T16:31:44.993Z']) {
+    const result = await taskOutput.validate({ completedAt });
+    assert.ok(result.issues?.length, 'malformed completion timestamp must not validate');
+  }
+
+  const workspaceSchema = TOOL_OUTPUT_SCHEMAS.traecn_open_workspace;
+  for (const verifiedWorkspace of [
+    { folderName: 'demo', rootPath: '/tmp/demo' },
+    { folderName: 'demo', rootPath: null },
+    '/tmp/demo'
+  ]) {
+    assert.deepStrictEqual(checkTypes({ verifiedWorkspace }, workspaceSchema), [],
+      'workspace output must preserve detected identity and compatible path results');
+  }
+  for (const verifiedWorkspace of [
+    false, [], { folderName: 123, rootPath: null }, { folderName: 'demo', rootPath: false }
+  ]) {
+    assert.ok(checkTypes({ verifiedWorkspace }, workspaceSchema).length > 0,
+      'workspace verification must reject malformed identity fields');
+  }
+
+  // A repeated submission can return the original terminal answer rather
+  // than a fresh acceptance. Exercise owner-produced payloads through the
+  // real MCP HTTP client so output metadata covers this existing behavior.
+  const terminalStates = ['done', 'error', 'cancelled', 'queue_timeout', 'review_rejected'];
+  let terminalPayload;
+  const replayServer = http.createServer((req, res) => {
+    assert.strictEqual(req.method, 'POST');
+    assert.strictEqual(req.url, '/api/tasks/submit');
+    assert.strictEqual(req.headers['idempotency-key'], 'metadata-replay-key');
+    req.resume();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(terminalPayload));
+  });
+  await new Promise(resolve => replayServer.listen(0, '127.0.0.1', resolve));
+  try {
+    for (const status of terminalStates) {
+      const task = {
+        taskId: 'original-task', idempotencyKey: 'metadata-replay-key', status,
+        result: status === 'done' ? { text: 'original terminal answer', stable: true } : null,
+        error: ['error', 'queue_timeout'].includes(status) ? 'original error' : null
+      };
+      const orchestrator = new TaskOrchestrator({
+        taskQueue: new Map([[task.taskId, task]]),
+        isTerminalStatus: candidate => terminalStates.includes(candidate)
+      });
+      const { statusCode, ...data } = orchestrator.resolveIdempotentTask(task.idempotencyKey);
+      assert.strictEqual(statusCode, 200);
+      terminalPayload = data;
+      const result = await callTool('traecn_send_message', { message: 'repeat authorized work' }, {
+        host: '127.0.0.1', port: replayServer.address().port, token: '', timeout: 1000
+      }, { idempotencyKey: task.idempotencyKey });
+      assert.deepStrictEqual(result.structuredContent, data);
+      assert.deepStrictEqual(JSON.parse(result.content[0].text), data);
+      assert.deepStrictEqual(checkTypes(data, TOOL_OUTPUT_SCHEMAS.traecn_send_message), [],
+        `${status} terminal replay violates send-message output metadata`);
+    }
+  } finally { await new Promise(resolve => replayServer.close(resolve)); }
+
   // Error paths share one structured, actionable shape.
   const timeoutError = describeToolExecutionError(new Error('Request timeout'));
   assert.strictEqual(timeoutError.code, 'GATEWAY_UNREACHABLE');
@@ -211,6 +281,66 @@ const EXPECTED_ANNOTATIONS = {
     error => error.code === 'GATEWAY_UNAVAILABLE' && error.retryable === true
   );
 
+  // Explicit stable codes take precedence over the legacy error token.
+  assert.throws(
+    () => unwrapGatewayResult({ status: 409, data: { code: 'WINDOW_NOT_VISIBLE', error: 'legacy_identifier' } }),
+    error => error.code === 'WINDOW_NOT_VISIBLE' && /unlock/i.test(error.nextAction)
+  );
+  for (const code of [false, {}, '', 'bad-code', 'malformed code', 'A'.repeat(65)]) {
+    assert.throws(
+      () => unwrapGatewayResult({ status: 409, data: { code, error: 'active_conversation_mismatch' } }),
+      error => error.code === 'active_conversation_mismatch',
+      'malformed explicit code must preserve the legacy error-token fallback'
+    );
+  }
+  for (const code of ['active_conversation_mismatch', 'constructor']) {
+    assert.throws(
+      () => unwrapGatewayResult({ status: 409, data: { code, error: 'human-readable failure' } }),
+      error => error.code === code && error.retryable === false && typeof error.nextAction === 'string'
+    );
+  }
+
+  // Replay the owner's actual hidden-renderer HTTP body through the real
+  // MCP HTTP adapter. It is a blocked UI operation, even on the old 502
+  // mapping, and cannot advise resubmitting already accepted task work.
+  const windowBody = errorToBody(TraeCNAutomationError.windowNotVisible('renderer stayed hidden after application activation'));
+  let windowStatus = 409;
+  let windowRequests = 0;
+  const windowServer = http.createServer((req, res) => {
+    assert.strictEqual(req.method, 'POST');
+    assert.strictEqual(req.url, '/api/conversations/manage');
+    windowRequests++;
+    req.resume();
+    res.writeHead(windowStatus, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(windowBody));
+  });
+  await new Promise(resolve => windowServer.listen(0, '127.0.0.1', resolve));
+  try {
+    for (const status of [409, 502]) {
+      windowStatus = status;
+      let failure;
+      try {
+        await callTool('traecn_create_conversation', {}, {
+          host: '127.0.0.1', port: windowServer.address().port, token: '', timeout: 1000
+        });
+      } catch (error) { failure = error; }
+      assert.ok(failure, 'blocked UI responses must reject the HTTP adapter call');
+      const result = asMcpError(failure);
+      const detail = result.structuredContent;
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(detail.code, 'WINDOW_NOT_VISIBLE');
+      assert.strictEqual(detail.message, windowBody.error);
+      assert.match(detail.nextAction, /unlock/i);
+      assert.match(detail.nextAction, /visible/i);
+      assert.match(detail.nextAction, /taskId/);
+      assert.doesNotMatch(detail.nextAction, /doctor/);
+      assert.deepStrictEqual(JSON.parse(result.content[0].text), detail);
+      assert.strictEqual((await fromJsonSchema(ERROR_RESULT_SCHEMA)['~standard'].validate(detail)).issues, undefined);
+      assert.strictEqual((await fromJsonSchema(TOOL_OUTPUT_SCHEMAS.traecn_create_conversation)['~standard'].validate(detail)).issues, undefined);
+    }
+    assert.strictEqual(windowRequests, 2, 'each blocked UI call must make exactly one HTTP attempt');
+  } finally { await new Promise(resolve => windowServer.close(resolve)); }
+
   const gatewayFailure = asMcpError(
     (() => {
       try {
@@ -224,6 +354,20 @@ const EXPECTED_ANNOTATIONS = {
   assert.strictEqual(gatewayFailure.isError, true);
   assert.deepStrictEqual(checkTypes(gatewayFailure.structuredContent, ERROR_RESULT_SCHEMA), []);
   assert.strictEqual(JSON.parse(gatewayFailure.content[0].text).code, 'STALE_IDENTITY');
+
+  // Authorization is a real execution-error path too; its single required
+  // scope must agree with the error schema and retain text/structured parity.
+  for (const keyId of [undefined, 'reader']) {
+    const denied = await callTool('traecn_create_conversation', {}, {}, {
+      apiKeyManager: { enabled: true, hasPermission: () => false }, keyId
+    });
+    assert.strictEqual(denied.isError, true);
+    assert.deepStrictEqual(checkTypes(denied.structuredContent, ERROR_RESULT_SCHEMA), []);
+    assert.deepStrictEqual(JSON.parse(denied.content[0].text), denied.structuredContent);
+    assert.strictEqual(denied.structuredContent.required, 'write');
+    assert.strictEqual(denied.structuredContent.retryable, false);
+    assert.ok(denied.structuredContent.nextAction);
+  }
 
   // Queue-probe submissions are rejected as structured errors offline.
   const rejected = await callTool('traecn_send_message', { message: 'queue status' }, {

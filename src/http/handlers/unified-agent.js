@@ -2,6 +2,7 @@
 
 const { parseBody } = require('../request-gate');
 const { isGenericQueueProbeTask } = require('../../shared/utils');
+const { TraeCNAutomationError } = require('../../cdp/errors');
 
 const ROUTES = [
   { method: 'POST', path: '/api/tasks/submit', handler: '_handleUnifiedSubmit', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
@@ -12,7 +13,19 @@ const ROUTES = [
 ];
 
 function parseConversationId(value) {
-  const match = /^solo:([A-Za-z0-9_-]+)$/.exec(String(value || '').trim());
+  const input = String(value || '').trim();
+  if (input.startsWith('solo-session:')) {
+    try {
+      const sessionId = decodeURIComponent(input.slice('solo-session:'.length));
+      return sessionId && sessionId.length <= 256
+        && Array.from(sessionId).every(character => character.charCodeAt(0) > 32 && character.charCodeAt(0) !== 127)
+        ? { sessionId }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  const match = /^solo:([A-Za-z0-9_-]+)$/.exec(input);
   if (!match) return null;
   if (/^\d+$/.test(match[1])) return { index: Number(match[1]) };
   try {
@@ -27,12 +40,15 @@ function stableConversationTitle(value) {
   return String(value || '')
     .replace(/\b\d{1,2}:\d{2}\b/g, ' ')
     .replace(/\d{1,2}月\d{1,2}日/g, ' ')
-    .replace(/任务完成|进行中|思考中|生成中|排队中|已完成/g, ' ')
+    .replace(/任务完成|任务中断|进行中|思考中|生成中|排队中|已完成/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 function conversationId(chat) {
+  if (typeof chat?.sessionId === 'string' && chat.sessionId.trim()) {
+    return `solo-session:${encodeURIComponent(chat.sessionId.trim())}`;
+  }
   const stableTitle = stableConversationTitle(chat?.title || chat?.text);
   return stableTitle
     ? `solo:${Buffer.from(stableTitle, 'utf8').toString('base64url')}`
@@ -45,7 +61,26 @@ function auditSecurityAction(ctx, req, action, resource, params, status = 'succe
 }
 
 function normalizeCommand(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim();
+  return String(value || '').trim();
+}
+
+async function currentInteractionContext(ctx) {
+  if (typeof ctx.driver.getActiveSoloChat !== 'function') return {};
+  const hasNativeBinding = Array.from(ctx.taskQueue?.values() || [])
+    .some(task => typeof task.soloChat?.sessionId === 'string' && task.soloChat.sessionId.trim());
+  const mode = typeof ctx.driver.detectMode === 'function' ? await ctx.driver.detectMode() : null;
+  if ((mode?.mode && mode.mode !== 'solo') || (mode?.mode !== 'solo' && !hasNativeBinding)) return {};
+  const active = await ctx.driver.getActiveSoloChat();
+  return { activeSessionId: typeof active?.active?.sessionId === 'string' ? active.active.sessionId.trim() : null };
+}
+
+function taskInteractionContextMatches(ctx, taskId, context, dialog = null) {
+  if (!taskId) return true;
+  const task = ctx.taskQueue?.get(taskId);
+  const boundSessionId = typeof task?.soloChat?.sessionId === 'string' ? task.soloChat.sessionId.trim() : '';
+  if (boundSessionId && boundSessionId !== context.activeSessionId) return false;
+  const storedCommand = normalizeCommand(task?.result?.command);
+  return !dialog || !storedCommand || storedCommand === normalizeCommand(dialog.command);
 }
 
 function normalizeSteps(steps) {
@@ -89,6 +124,9 @@ async function handleSubmit(req, res, ctx) {
   let desiredModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null;
   let projectPath = typeof body.workspace === 'string' && body.workspace.trim() ? body.workspace.trim() : null;
   let soloChat = parseConversationId(body.conversationId);
+  if (body.conversationId && !soloChat) {
+    return ctx._json(req, res, { error: 'valid conversationId is required' }, 400);
+  }
   const followupTasks = normalizeSteps(body.steps);
   const reviewRequired = body.reviewRequired === true;
   const requestIntent = {
@@ -100,6 +138,8 @@ async function handleSubmit(req, res, ctx) {
     newConversation: body.newConversation === true,
     followupTasks,
     ...(body.completionChecks ? { completionChecks: body.completionChecks } : {}),
+    // Keep the original submission identity; reviewRequired already identifies
+    // the user's review choice. Execution below must honor that choice.
     autoContinue: true,
     reviewRequired,
     autoApproveDialog: 'auto'
@@ -108,7 +148,7 @@ async function handleSubmit(req, res, ctx) {
     ? ctx._fingerprintTaskRequest(requestIntent)
     : null;
   if (idempotencyKey) {
-    const replay = ctx._resolveTaskIdempotency(idempotencyKey, idempotencyFingerprint);
+    const replay = ctx._resolveTaskIdempotency(idempotencyKey, requestIntent);
     if (replay) {
       return ctx._json(req, res, replay.data, replay.statusCode);
     }
@@ -136,8 +176,7 @@ async function handleSubmit(req, res, ctx) {
     const listed = await ctx.driver.listSoloChats();
     const active = (listed.chats || []).find(chat => chat.active === true);
     if (active) {
-      const titleIncludes = stableConversationTitle(active.title || active.text);
-      soloChat = titleIncludes ? { titleIncludes } : { index: active.index };
+      soloChat = parseConversationId(conversationId(active));
     }
   }
 
@@ -152,10 +191,17 @@ async function handleSubmit(req, res, ctx) {
     newConversation: body.newConversation === true,
     followupTasks,
     ...(body.completionChecks ? { completionChecks: body.completionChecks } : {}),
-    autoContinue: true,
+    autoContinue: !reviewRequired,
     reviewRequired,
     autoApproveDialog: 'auto'
   };
+  // Context discovery yields to other HTTP submissions. Recheck the original
+  // intent immediately before synchronous acceptance so one key creates one
+  // durable task even when several callers passed the early replay check.
+  if (idempotencyKey) {
+    const replay = ctx._resolveTaskIdempotency(idempotencyKey, requestIntent);
+    if (replay) return ctx._json(req, res, replay.data, replay.statusCode);
+  }
   const task = ctx._createQueuedTask(queuedBody, {
     queued: true,
     running: false,
@@ -189,10 +235,17 @@ async function handleListConversations(req, res, ctx) {
 
 async function handleListModels(req, res, ctx) {
   await ctx._ensureConnection();
-  if (typeof ctx.driver.listModels !== 'function') {
-    return ctx._json(req, res, { error: 'model listing is not supported by the active TraeCN driver' }, 501);
-  }
-  return ctx._json(req, res, await ctx.driver.listModels());
+  return ctx._withUiActionLock(async () => {
+    if (ctx._shutdownInProgress || !ctx.driver) {
+      throw TraeCNAutomationError.cdpDisconnected(ctx._shutdownInProgress
+        ? 'Gateway is shutting down'
+        : 'TraeCN driver is unavailable');
+    }
+    if (typeof ctx.driver.listModels !== 'function') {
+      return ctx._json(req, res, { error: 'model listing is not supported by the active TraeCN driver' }, 501);
+    }
+    return ctx._json(req, res, await ctx.driver.listModels());
+  });
 }
 
 async function handleManageConversation(req, res, ctx) {
@@ -214,8 +267,21 @@ async function handleManageConversation(req, res, ctx) {
   await ctx._ensureConnection();
   return ctx._withUiActionLock(async () => {
     if (action === 'create') {
+      const before = typeof ctx.driver.listSoloChats === 'function' ? await ctx.driver.listSoloChats() : null;
+      const existingSessions = new Set((before?.chats || []).map(chat => chat.sessionId).filter(Boolean));
       const success = await ctx.driver.newChat();
-      return ctx._json(req, res, { action, success: success !== false });
+      const after = success !== false && typeof ctx.driver.listSoloChats === 'function'
+        ? await ctx.driver.listSoloChats()
+        : null;
+      const active = (after?.chats || []).find(chat => chat.active === true && chat.sessionId
+        && !existingSessions.has(chat.sessionId));
+      return ctx._json(req, res, {
+        action,
+        success: success !== false,
+        fresh: success !== false,
+        conversationId: active ? conversationId(active) : null,
+        creationDeferred: success !== false && !active
+      });
     }
     const target = parseConversationId(body.conversationId);
     if (!target) return ctx._json(req, res, { error: 'valid conversationId is required' }, 400);
@@ -225,7 +291,9 @@ async function handleManageConversation(req, res, ctx) {
     }
     const listed = await ctx.driver.listSoloChats();
     const chat = (listed.chats || []).find(candidate => (
-      target.index !== undefined
+      target.sessionId
+        ? candidate.sessionId === target.sessionId
+        : target.index !== undefined
         ? candidate.index === target.index
         : stableConversationTitle(candidate.title || candidate.text) === target.titleIncludes
     ));
@@ -251,7 +319,11 @@ async function handleManageConversation(req, res, ctx) {
         message: 'Select a different conversation before permanently deleting this one.'
       }, 409);
     }
-    const result = await ctx.driver.deleteSoloChats({ candidates: [{ index: chat.index, title: chat.title || '' }] });
+    const result = await ctx.driver.deleteSoloChats({ candidates: [{
+      index: chat.index,
+      ...(chat.sessionId ? { sessionId: chat.sessionId } : {}),
+      title: chat.title || ''
+    }] });
     const deleted = result.deleted || 0;
     auditSecurityAction(ctx, req, 'conversation.delete', String(body.conversationId), {
       title: actualTitle,
@@ -268,6 +340,15 @@ async function handleManageConversation(req, res, ctx) {
 }
 
 async function resolveInteractionBody(body, req, res, ctx, options = {}) {
+  const pendingTask = options.taskId
+    ? ctx.taskQueue?.get(options.taskId)
+    : Array.from(ctx.taskQueue?.values() || []).find(task => (task.statePersistencePending || task.cancelPersistencePending) && task.status === 'approval_required');
+  if (pendingTask?.statePersistencePending || pendingTask?.cancelPersistencePending) {
+    return ctx._json(req, res, {
+      error: 'task_state_persistence_pending',
+      message: 'The task state is awaiting storage confirmation; retry after storage recovers.'
+    }, 409);
+  }
   const action = String(body.action || '');
   if (!['approve', 'deny', 'answer', 'dismiss'].includes(action)) {
     return ctx._json(req, res, { error: 'action must be approve, deny, answer, or dismiss' }, 400);
@@ -278,12 +359,17 @@ async function resolveInteractionBody(body, req, res, ctx, options = {}) {
     if (!body.answer || typeof ctx.driver.answerQuestionDialog !== 'function') {
       return ctx._json(req, res, { error: 'answer is required for question interactions' }, 400);
     }
+    const interactionContext = await currentInteractionContext(ctx);
+    if (!taskInteractionContextMatches(ctx, options.taskId, interactionContext)) {
+      return ctx._json(req, res, { error: 'task_interaction_conflict', message: 'The active conversation changed; refresh the task before deciding.' }, 409);
+    }
     result = await ctx.driver.answerQuestionDialog(body.answer);
     if (result.success === true && typeof ctx._resumeApprovalRequiredTasksAfterDialogAnswer === 'function') {
       result.resumedTaskIds = ctx._resumeApprovalRequiredTasksAfterDialogAnswer(
         body.answer,
         result,
-        options.taskId || null
+        options.taskId || null,
+        interactionContext
       );
     }
   } else {
@@ -319,13 +405,20 @@ async function resolveInteractionBody(body, req, res, ctx, options = {}) {
         }, 409);
       }
     }
-    result = await ctx.driver.approveDialog(action);
+    const interactionContext = await currentInteractionContext(ctx);
+    if (!taskInteractionContextMatches(ctx, options.taskId, interactionContext, dialog)) {
+      return ctx._json(req, res, { error: 'task_interaction_conflict', message: 'The visible interaction or active conversation changed; refresh the task before deciding.' }, 409);
+    }
+    result = action === 'approve'
+      ? await ctx.driver.approveDialog(action, { expectedCommand: body.expectedCommand })
+      : await ctx.driver.approveDialog(action);
     if (result.success === true && typeof ctx._resumeApprovalRequiredTasksAfterInteraction === 'function') {
       result.resumedTaskIds = ctx._resumeApprovalRequiredTasksAfterInteraction(
         action,
         dialog,
         result,
-        options.taskId || null
+        options.taskId || null,
+        interactionContext
       );
     }
     auditSecurityAction(ctx, req, 'interaction.approval_decision', options.taskId ? `trae:task:${options.taskId}` : 'trae:current-dialog', {

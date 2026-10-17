@@ -114,5 +114,10 @@ test('fetchCDPVersion rejects on connection failure', async () => {
   }
 });
 
-summary();
-if (runner.failed > 0) process.exit(1);
+pendingAsyncTests().then(() => {
+  summary();
+  if (runner.failed > 0) process.exitCode = 1;
+}).catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -29,6 +29,47 @@ function documentChecksum(document) {
   return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
+test('TaskEventStore preserves old pretty snapshots and checksummed Unicode data through compact writes', () => {
+  const target = tempStorePath();
+  try {
+    const first = {
+      eventId: 'evt_1', type: 'task.completed', taskId: '旧任务', status: 'done',
+      createdAt: '2026-10-02T00:00:00.000Z', summary: '旧结果：引号 "、换行\n和反斜杠 \\',
+      terminal: true, attentionRequired: false, resultAvailable: true, sessionId: null
+    };
+    const oldDocument = {
+      schemaVersion: 2, savedAt: '2026-10-02T00:00:00.000Z', sequence: 1,
+      acknowledged: { codex: 'evt_1' }, events: [first]
+    };
+    oldDocument.checksum = { algorithm: 'sha256', digest: documentChecksum(oldDocument) };
+    const oldBytes = `${JSON.stringify(oldDocument, null, 2)}\n`;
+    fs.writeFileSync(target.file, oldBytes);
+    const phases = [];
+    const store = new TaskEventStore({ persistencePath: target.file, onWritePhase: phase => phases.push(phase) });
+    assert.deepStrictEqual(store.list({ clientId: 'other' }).events, [first]);
+    assert.strictEqual(store.list({ clientId: 'codex' }).acknowledgedCursor, 'evt_1');
+    const appended = store.append({
+      taskId: '新任务', type: 'task.approval_required', status: 'approval_required',
+      interactionRequestId: '审批-2', attentionRequired: true,
+      summary: 'Unicode 🐈；"checksum":{}；换行\n反斜杠\\与结束符 }'
+    });
+    assert.ok(appended);
+    const bytes = fs.readFileSync(target.file, 'utf8');
+    const document = JSON.parse(bytes);
+    assert.strictEqual(document.schemaVersion, 2);
+    assert.strictEqual(document.checksum.digest, documentChecksum(document));
+    assert.deepStrictEqual(document.events, [first, appended]);
+    assert.strictEqual(fs.readFileSync(`${target.file}.bak`, 'utf8'), oldBytes);
+    assert.deepStrictEqual(phases, [
+      'temp_opened', 'temp_written', 'temp_fsynced', 'backup_committed',
+      'primary_committed', 'directory_fsynced'
+    ]);
+    const restarted = new TaskEventStore({ persistencePath: target.file });
+    assert.deepStrictEqual(restarted.list({ clientId: 'codex' }).events, [appended]);
+    assert.strictEqual(restarted.getHealth().durabilityDegraded, false);
+  } finally { fs.rmSync(target.dir, { recursive: true, force: true }); }
+});
+
 test('TaskEventStore keeps acknowledgements independent for each IDE client', () => {
   const store = new TaskEventStore({ persistencePath: null });
   const first = store.append({ type: 'task.completed', taskId: 'task-1', status: 'done' });
@@ -115,6 +156,35 @@ test('TaskEventStore reloads events and client cursors after restart', () => {
     const restarted = new TaskEventStore({ persistencePath: target.file });
     assert.deepStrictEqual(restarted.list({ clientId: 'codex' }).events, []);
     assert.deepStrictEqual(restarted.list({ clientId: 'other-ide' }).events.map(item => item.taskId), ['task-persisted']);
+  } finally {
+    fs.rmSync(target.dir, { recursive: true, force: true });
+  }
+});
+
+test('TaskEventStore persists client IDs that also name object prototype properties', () => {
+  const target = tempStorePath();
+  try {
+    const store = new TaskEventStore({ persistencePath: target.file });
+    const first = store.append({ type: 'task.completed', taskId: 'task-first', status: 'done' });
+    store.append({ type: 'task.completed', taskId: 'task-second', status: 'done' });
+    for (const clientId of ['__proto__', 'constructor', 'toString']) {
+      assert.deepStrictEqual(store.ack(clientId, first.eventId), {
+        acknowledged: true,
+        clientId,
+        eventId: first.eventId
+      });
+    }
+
+    const restarted = new TaskEventStore({ persistencePath: target.file });
+    for (const clientId of ['__proto__', 'constructor', 'toString']) {
+      const page = restarted.list({ clientId });
+      assert.strictEqual(page.clientKnown, true);
+      assert.strictEqual(page.acknowledgedCursor, first.eventId);
+      assert.deepStrictEqual(page.events.map(event => event.taskId), ['task-second']);
+    }
+    assert.deepStrictEqual(restarted.list({ clientId: 'another-client' }).events.map(event => event.taskId), [
+      'task-first', 'task-second'
+    ]);
   } finally {
     fs.rmSync(target.dir, { recursive: true, force: true });
   }
@@ -323,6 +393,50 @@ asyncTest('TaskEventStore long-poll wakes for a new event after an unknown futur
 
   const result = await waiting;
   assert.deepStrictEqual(result.events.map(event => event.taskId), ['task-wakes-future-client']);
+});
+
+asyncTest('TaskEventStore wakes 32 concurrent clients without one emitter listener per client', async () => {
+  const store = new TaskEventStore({ persistencePath: null });
+  const waits = Array.from({ length: 32 }, (_, index) => store.wait({ clientId: `parallel-${index}`, timeoutMs: 1000 }));
+  const listenerCount = store.emitter.listenerCount('append');
+  const event = store.append({ type: 'task.completed', taskId: 'parallel-result', status: 'done' });
+  const results = await Promise.all(waits);
+  assert.strictEqual(results.length, 32);
+  for (const result of results) assert.deepStrictEqual(result.events, [event]);
+  assert.ok(listenerCount <= 1, `${listenerCount} append listeners for concurrent waits`);
+  assert.strictEqual(store.emitter.listenerCount('append'), 0);
+});
+
+asyncTest('TaskEventStore abort releases one wait while other clients keep waiting', async () => {
+  const store = new TaskEventStore({ persistencePath: null });
+  const abortController = new AbortController();
+  let abortedResult = null;
+  const aborted = store.wait({ clientId: 'disconnected', signal: abortController.signal, timeoutMs: 1000 }).then(result => {
+    abortedResult = result;
+    return result;
+  });
+  const connected = store.wait({ clientId: 'connected', timeoutMs: 1000 });
+  abortController.abort();
+  await new Promise(resolve => setImmediate(resolve));
+  const releasedBeforeAppend = abortedResult !== null;
+  const event = store.append({ type: 'task.completed', taskId: 'connected-result', status: 'done' });
+  await aborted;
+  assert.deepStrictEqual((await connected).events, [event]);
+  assert.strictEqual(releasedBeforeAppend, true);
+  assert.deepStrictEqual(abortedResult.events, []);
+  assert.strictEqual(store.emitter.listenerCount('append'), 0);
+});
+
+asyncTest('TaskEventStore pre-aborted wait does not register an append listener', async () => {
+  const store = new TaskEventStore({ persistencePath: null });
+  const abortController = new AbortController();
+  abortController.abort();
+  const waiting = store.wait({ clientId: 'already-disconnected', signal: abortController.signal, timeoutMs: 1000 });
+  const listenerCount = store.emitter.listenerCount('append');
+  if (listenerCount > 0) store.append({ type: 'task.completed', taskId: 'test-cleanup', status: 'done' });
+  const result = await waiting;
+  assert.strictEqual(listenerCount, 0);
+  assert.deepStrictEqual(result.events, []);
 });
 
 (async () => {

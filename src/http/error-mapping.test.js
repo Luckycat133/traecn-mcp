@@ -5,7 +5,7 @@ const { TraeCNAutomationError } = require('../cdp/errors');
 const { errorToHttpStatus, errorToBody, safeErrorMessage, CODE_TO_STATUS, DEFAULT_STATUS } = require('./error-mapping');
 const { createRunner } = require('../shared/test-runner');
 const runner = createRunner('error-mapping.test.js');
-const { test, asyncTest, pendingAsyncTests, summary } = runner;
+const { test, summary } = runner;
 
 test('errorToHttpStatus: known TraeCNAutomationError code maps correctly', () => {
   assert.strictEqual(
@@ -34,6 +34,15 @@ test('errorToHttpStatus: unknown TraeCNAutomationError code falls back to DEFAUL
   const e = new TraeCNAutomationError('mystery', 'SOMETHING_NEW', {});
   assert.strictEqual(errorToHttpStatus(e), DEFAULT_STATUS);
   assert.strictEqual(errorToHttpStatus(e), 502);
+});
+
+test('hidden-window failures preserve their actionable code and block before submission', () => {
+  const error = TraeCNAutomationError.windowNotVisible('renderer stayed hidden after application activation');
+  assert.strictEqual(errorToHttpStatus(error), 409);
+  assert.deepStrictEqual(errorToBody(error), {
+    code: 'WINDOW_NOT_VISIBLE', error: error.message, details: error.details
+  });
+  assert.strictEqual(error.details.submissionDispatched, undefined);
 });
 
 test('errorToHttpStatus: HttpError-like statusCode is respected', () => {

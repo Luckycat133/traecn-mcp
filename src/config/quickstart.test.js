@@ -4,9 +4,9 @@ const assert = require('assert');
 const {
   buildStartCommand,
   buildReuseWindowCommand,
+  activateTraeCN,
   findTraeCNBinary,
   isTraeCNMainProcessCommand,
-  isTraeCNRunning,
   quitTraeCN,
   restartTraeCNWithDebug,
   getQuickstartConfig
@@ -14,9 +14,33 @@ const {
 const { createRunner } = require('../shared/test-runner');
 
 const r = createRunner('quickstart.test.js');
-const { test, asyncTest, summary } = r;
+const { test, asyncTest, pendingAsyncTests, summary } = r;
 
 console.log('\n[quickstart.test.js] Running tests...\n');
+
+asyncTest('activateTraeCN focuses the existing macOS application without launch or profile arguments', async () => {
+  let invocation;
+  const result = await activateTraeCN({ platform: 'darwin', binPath: '/Applications/Trae CN.app',
+    execFileImpl: async (command, args, options) => { invocation = { command, args, options }; return {}; } });
+  assert.strictEqual(result.ok, true);
+  assert.deepStrictEqual(invocation.args, ['-a', '/Applications/Trae CN.app']);
+  assert.strictEqual(invocation.command, 'open');
+  assert.strictEqual(invocation.options.timeout, 5000);
+});
+
+asyncTest('activateTraeCN does not run a process on an unsupported platform', async () => {
+  let invoked = false;
+  const result = await activateTraeCN({ platform: 'linux', binPath: '/tmp/Trae',
+    execFileImpl: async () => { invoked = true; } });
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(invoked, false);
+});
+
+asyncTest('activateTraeCN preserves process activation errors', async () => {
+  const failure = new Error('native activation unavailable');
+  await assert.rejects(() => activateTraeCN({ platform: 'darwin', binPath: '/Applications/Trae CN.app',
+    execFileImpl: async () => { throw failure; } }), error => error === failure);
+});
 
 test('getQuickstartConfig returns object with required keys', () => {
   const config = getQuickstartConfig();
@@ -168,8 +192,8 @@ test('startTraeCN command can include isolated profile args through dry-run help
   assert.ok(result.commandArgs.includes('--user-data-dir=/tmp/traecnclaw-profile-9222'));
 });
 
-summary();
-
-if (r.failed > 0) {
-  process.exit(1);
-}
+(async () => {
+  await pendingAsyncTests();
+  summary();
+  if (r.failed > 0) process.exitCode = 1;
+})().catch(error => { console.error(error); process.exitCode = 1; });

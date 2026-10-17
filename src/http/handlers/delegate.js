@@ -244,13 +244,19 @@ async function handleDelegateAsync(req, res, ctx) {
         })
         .catch(async (err) => {
           const liveTask = ctx.taskQueue.get(task.taskId);
-          if (!liveTask || ctx._isTerminalTaskStatus(liveTask.status)) return;
+          if (!liveTask || liveTask.statePersistencePending || ctx._isTerminalTaskStatus(liveTask.status)) return;
           if (await ctx._retryBackgroundTaskAfterError(task.taskId, liveTask, err)) {
             return;
           }
-          await ctx._finalizeBackgroundTask(task.taskId, liveTask, 'error', {
-            error: err.message
-          });
+          try {
+            await ctx._finalizeBackgroundTask(task.taskId, liveTask, 'error', {
+              error: err.message
+            });
+          } catch (finalizationError) {
+            if (finalizationError.code !== 'TASK_STORE_UNAVAILABLE') throw finalizationError;
+            // The captured error belongs to this submitted request. The
+            // existing poller retries its pending state, never the model.
+          }
         })
         .finally(() => {
           ctx.taskQueueService.release(task.taskId);

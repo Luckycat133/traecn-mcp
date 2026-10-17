@@ -62,6 +62,24 @@ function copyTree(sourceRoot, destinationRoot) {
   }
 }
 
+function synchronizeLocalSkill({
+  sourceRoot = canonicalSkillRoot,
+  destinationRoot = path.join(repoRoot, mirrorSkillPath),
+  check = false
+} = {}) {
+  const source = path.resolve(sourceRoot);
+  const destination = path.resolve(destinationRoot);
+  if (source === destination || source.startsWith(`${destination}${path.sep}`)
+    || destination.startsWith(`${source}${path.sep}`)) {
+    throw new Error('Local Skill source and destination must be separate trees');
+  }
+  if (!fs.existsSync(path.join(source, 'SKILL.md'))) {
+    throw new Error('Canonical local Skill is missing SKILL.md');
+  }
+  if (!check) copyTree(source, destination);
+  return compareTrees(source, destination);
+}
+
 function assertRevision(sourceRevision) {
   if (!/^[a-f0-9]{40}$/i.test(String(sourceRevision || ''))) {
     throw new Error('Public mirror source revision must be a full 40-character Git commit');
@@ -231,6 +249,20 @@ function currentRevision() {
 }
 
 function main() {
+  const syncLocal = process.argv.includes('--sync-local-skill');
+  const checkLocal = process.argv.includes('--check-local-skill');
+  if (syncLocal || checkLocal) {
+    const differences = synchronizeLocalSkill({ check: !syncLocal });
+    if (differences.length > 0) {
+      for (const difference of differences) {
+        console.error(`[public-mirror] Local Skill ${difference.reason}: ${difference.path}`);
+      }
+      process.exitCode = 1;
+    } else {
+      console.log('[public-mirror] Local MCP Skill matches the complete canonical package.');
+    }
+    return;
+  }
   const mirrorRoot = path.resolve(argValue('--mirror') || process.env.TRAECN_PUBLIC_MIRROR_PATH || '');
   if (!argValue('--mirror') && !process.env.TRAECN_PUBLIC_MIRROR_PATH) {
     throw new Error('Pass --mirror <checkout> or set TRAECN_PUBLIC_MIRROR_PATH');
@@ -260,6 +292,7 @@ if (require.main === module) {
 module.exports = {
   buildPublicMirror,
   compareTrees,
+  synchronizeLocalSkill,
   verifyPublicMirror,
   releaseManifest,
   sourceRevisionDocument,

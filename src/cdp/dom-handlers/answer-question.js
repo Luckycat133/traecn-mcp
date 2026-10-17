@@ -9,7 +9,7 @@
  *
  * Covers: the multi-choice "review scope" question card flow — picking
  * the option that matches a caller-supplied answer (with CN/EN alias
- * normalization) and clicking Next.
+ * normalization) and clicking Next or the final Submit.
  *
  * The DomDriver retains a thin delegating shim so existing
  * dom-driver.test.js cases that call `driver.answerQuestionDialog()`
@@ -17,6 +17,7 @@
  */
 
 const { sleep, safeJsValue } = require('../../shared/utils');
+const { REVIEW_QUESTION_CARD_SELECTOR, NATIVE_REVIEW_OPTION_SELECTOR, isReviewScopeQuestionCard, reviewQuestionButtonText } = require('./dialogs');
 
 async function answerQuestionDialog(driver, answer) {
   const selectedAnswer = String(answer || '').trim();
@@ -32,6 +33,8 @@ async function answerQuestionDialog(driver, answer) {
   const result = await driver.client.send('Runtime.evaluate', {
     expression: `
       (function() {
+        var reviewButtonText = ${reviewQuestionButtonText.toString()};
+        var isReviewScopeQuestionCard = ${isReviewScopeQuestionCard.toString()};
         var answer = ${safeJsValue(selectedAnswer)};
         var aliases = [answer];
         if (/current|uncommitted|workspace|staged|\\u672a\\u63d0\\u4ea4|\\u5de5\\u4f5c\\u533a/i.test(answer)) {
@@ -65,34 +68,37 @@ async function answerQuestionDialog(driver, answer) {
           el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
           el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
           el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
-          if (typeof el.click === 'function') el.click();
         }
 
-        var cards = document.querySelectorAll('.ask-user-question-card-container, [class*="ask-user-question-card"]');
+        var cards = document.querySelectorAll(${safeJsValue(REVIEW_QUESTION_CARD_SELECTOR)});
         var targetCard = null;
         for (var c = 0; c < cards.length; c++) {
           if (!isVisible(cards[c])) continue;
-          var cardText = cards[c].textContent || '';
-          if (/What would you like me to review\\?|Review Scope|Latest commit changes|Uncommitted changes|Specific files or folder/i.test(cardText)) {
+          if (isReviewScopeQuestionCard(cards[c])) {
             targetCard = cards[c];
             break;
           }
         }
         if (!targetCard) return { success: false, error: 'No visible question card found' };
 
-        var optionNodes = targetCard.querySelectorAll('.ask-user-single-choice-item, .icd-checkbox-item-container, [class*="single-choice"], [class*="checkbox-item"], [role="radio"], [role="option"], div');
+        // Native V2 puts the click handler on the inner checkbox item, not
+        // the enclosing single-choice item or its content wrappers.
+        var optionSelector = ${safeJsValue(NATIVE_REVIEW_OPTION_SELECTOR + ', .icd-checkbox-item-container, .icd-ask-user-question-option-container, [role="radio"], [role="option"]')};
+        var optionNodes = targetCard.querySelectorAll(optionSelector);
+        if (!optionNodes.length) optionNodes = targetCard.querySelectorAll('.ask-user-single-choice-item, [class*="single-choice"], [class*="checkbox-item"], div');
         var selectedOption = null;
         var selectedText = '';
-        for (var i = 0; i < optionNodes.length; i++) {
-          var option = optionNodes[i];
-          if (!isVisible(option)) continue;
-          var text = (option.innerText || option.textContent || '').replace(/\\s+/g, ' ').trim();
-          if (!text) continue;
-          for (var a = 0; a < aliases.length; a++) {
-            var alias = String(aliases[a] || '').replace(/\\s+/g, ' ').trim();
-            if (!alias) continue;
+        // Match the caller's original answer before trying category aliases.
+        for (var a = 0; a < aliases.length; a++) {
+          var alias = String(aliases[a] || '').replace(/\\s+/g, ' ').trim();
+          if (!alias) continue;
+          for (var i = 0; i < optionNodes.length; i++) {
+            var option = optionNodes[i];
+            if (!isVisible(option)) continue;
+            var text = (option.innerText || option.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!text) continue;
             if (text.toLowerCase().includes(alias.toLowerCase()) || alias.toLowerCase().includes(text.toLowerCase())) {
-              selectedOption = option.closest('.ask-user-single-choice-item, .icd-checkbox-item-container, [role="radio"], [role="option"]') || option;
+              selectedOption = option.closest(optionSelector + ', .ask-user-single-choice-item') || option;
               selectedText = text;
               break;
             }
@@ -102,20 +108,21 @@ async function answerQuestionDialog(driver, answer) {
         if (!selectedOption) return { success: false, error: 'No matching answer option found', answer: answer };
         clickElement(selectedOption);
 
-        var nextNodes = targetCard.querySelectorAll('button, [role="button"], [class*="button"], [class*="btn"], div, span');
+        var nextNodes = targetCard.querySelectorAll('button, [role="button"], [class*="button"], [class*="btn"]');
+        if (!nextNodes.length) nextNodes = targetCard.querySelectorAll('div, span');
         var nextButton = null;
         for (var n = 0; n < nextNodes.length; n++) {
           var node = nextNodes[n];
           if (!isVisible(node)) continue;
-          var nodeText = (node.innerText || node.textContent || '').trim();
-          if (/^(\\u4e0b\\u4e00\\u4e2a|Next)$/i.test(nodeText)) {
+          var nodeText = reviewButtonText(node);
+          if (/^(\\u4e0b\\u4e00\\u4e2a|\\u63d0\\u4ea4|Next|Submit)$/i.test(nodeText)) {
             nextButton = node.closest('button, a[role="button"], [role="button"], .monaco-button, .monaco-text-button, [class*="button"], [class*="btn"]') || node;
             break;
           }
         }
-        if (!nextButton) return { success: false, error: 'No next button found', selectedOption: selectedText };
+        if (!nextButton) return { success: false, error: 'No next or submit button found', selectedOption: selectedText };
         clickElement(nextButton);
-        return { success: true, selectedOption: selectedText, buttonClicked: (nextButton.innerText || nextButton.textContent || '').trim() };
+        return { success: true, selectedOption: selectedText, buttonClicked: reviewButtonText(nextButton) };
       })()
     `,
     returnByValue: true

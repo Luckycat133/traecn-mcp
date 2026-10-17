@@ -29,6 +29,65 @@ const DIALOG_BUTTON_SELECTOR = [
   '[role="button"]'
 ].join(', ');
 
+const REVIEW_QUESTION_CARD_SELECTOR = '.ask-user-question-bottom-panel, .ask-user-question-card-container, [class*="ask-user-question-card"]';
+const NATIVE_REVIEW_OPTION_SELECTOR = '[class*="optionItem-"]:not([class*="optionItemOther-"])';
+const NATIVE_COMMAND_PANEL_SELECTOR = '.panel-Byyvlz';
+const NATIVE_COMMAND_PANEL = Symbol('nativeCommandPanel');
+
+function nativeApprovalVisible(node, allowOffscreen = false) {
+  if (!node || node.offsetParent === null) return false;
+  const rect = node.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0
+    || (!allowOffscreen && (rect.bottom < 0 || rect.top > window.innerHeight))) return false; // eslint-disable-line no-undef -- Serialized page-side helper.
+  for (let current = node; current; current = current.parentElement) {
+    const style = getComputedStyle(current); // eslint-disable-line no-undef -- Serialized page-side helper.
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+  }
+  return true;
+}
+
+function inspectNativeCommandPanel(panel) {
+  if (!nativeApprovalVisible(panel)
+    || panel.closest('.notifications-toasts, .notifications-list-container, .notification-toast, .notification-toast-container, .notification-list-item, pre, code, .markdown-renderer')) return null;
+  const title = panel.querySelector('.titleText-riH9wY');
+  const warning = panel.querySelector('.permissionDesc-r9VNEE');
+  const block = panel.querySelector('.commandBlock-FOjqqZ');
+  const commandNode = block?.querySelector('.commandText-rHrSgO');
+  if (!nativeApprovalVisible(title) || !nativeApprovalVisible(warning) || !nativeApprovalVisible(commandNode)) return null;
+  const question = String(title.textContent || '').trim();
+  const command = String(commandNode.textContent || '').trim();
+  if (!/^是否允许运行这个命令[？?]$/.test(question)
+    || !/检测到高风险命令/.test(warning.textContent || '') || !command) return null;
+  const actions = Array.from(panel.querySelectorAll('.confirmActionItem-R9PwIE')).flatMap(node => {
+    const labelNode = node.querySelector('.confirmActionLabel-FBOWQC');
+    const label = nativeApprovalVisible(labelNode) ? String(labelNode.textContent || '').trim() : '';
+    return nativeApprovalVisible(node) && /^(运行|跳过)$/.test(label) ? [{ node, label }] : [];
+  });
+  if (!actions.some(item => item.label === '运行') || !actions.some(item => item.label === '跳过')
+    || actions.some(item => item.node.getAttribute('aria-busy') === 'true')) return null;
+  const enabled = actions.filter(item => !item.node.disabled && item.node.getAttribute('disabled') === null
+    && item.node.getAttribute('aria-disabled') !== 'true' && item.node.getAttribute('data-disabled') !== 'true');
+  return enabled.length ? { question, command, actions: enabled } : null;
+}
+
+function isReviewScopeQuestionCard(card) {
+  if (card.matches('.ask-user-question-bottom-panel')) {
+    const title = card.querySelector('[class*="title-"]');
+    return /What would you like me to review\?|Review Scope/i.test(title?.textContent || '');
+  }
+  return /What would you like me to review\?|Review Scope|Latest commit changes|Uncommitted changes|Specific files or folder/i.test(card.textContent || '');
+}
+
+function reviewQuestionButtonText(node) {
+  function textWithoutKeyboardHint(current) {
+    if (!current || current.tagName === 'KBD') return '';
+    if (current.nodeType === 3) return current.textContent || '';
+    const children = Array.from(current.childNodes || []);
+    return children.length ? children.map(textWithoutKeyboardHint).join('') : (current.innerText || current.textContent || '');
+  }
+  return textWithoutKeyboardHint(node).replace(/\s+/g, ' ').trim();
+}
+
 function _assessCommandApproval(command) {
   const value = String(command || '').replace(/\s+/g, ' ').trim();
   if (!value) {
@@ -102,21 +161,48 @@ async function checkForApprovalDialog(driver) {
     const result = await driver.client.send('Runtime.evaluate', {
       expression: `
         (function() {
-          var indicators = [
-            document.querySelector('[role="dialog"]'),
-            document.querySelector('[role="alertdialog"]'),
-            document.querySelector('.modal'),
-            document.querySelector('.modal-overlay'),
-            document.querySelector('[class*="dialog"]'),
-            document.querySelector('button[aria-label*="\\u6279\\u51c6"]'),
-            document.querySelector('button[aria-label*="Approve"]'),
-            document.querySelector('button[aria-label*="\\u5141\\u8bb8"]'),
-            document.querySelector('button[aria-label*="Allow"]'),
-            document.querySelector('button[class*="approve"]'),
-            document.querySelector('.ipc-overlay'),
-            document.querySelector('.monaco-dialog'),
-            document.querySelector('[aria-label*="\\u9700\\u8981\\u786e\\u8ba4"]')
+          var reviewButtonText = ${reviewQuestionButtonText.toString()};
+          var isReviewScopeQuestionCard = ${isReviewScopeQuestionCard.toString()};
+          var notificationSelector = '.notifications-toasts, .notifications-list-container, .notification-toast, .notification-toast-container, .notification-list-item';
+          var nativeApprovalVisible = ${nativeApprovalVisible.toString()};
+          var inspectNativeCommandPanel = ${inspectNativeCommandPanel.toString()};
+          var nativePanels = document.querySelectorAll(${safeJsValue(NATIVE_COMMAND_PANEL_SELECTOR)});
+          for (var np = 0; np < nativePanels.length; np++) {
+            var nativePanel = inspectNativeCommandPanel(nativePanels[np]);
+            if (nativePanel) return {
+              found: true, title: nativePanel.question,
+              command: nativePanel.command, buttons: nativePanel.actions.map(function(item) { return item.label; }),
+              type: 'command_execution', isCommandExec: true, canAutoApprove: false, nativePanel: true
+            };
+          }
+          function isApplicationNotification(el) {
+            return !!el && (!!el.closest(notificationSelector)
+              || (el.matches('.monaco-list-row') && !!el.querySelector('.notification-list-item')));
+          }
+          var indicatorSelectors = [
+            '[role="dialog"]',
+            '[role="alertdialog"]',
+            '.modal',
+            '.modal-overlay',
+            '[class*="dialog"]',
+            'button[aria-label*="\\u6279\\u51c6"]',
+            'button[aria-label*="Approve"]',
+            'button[aria-label*="\\u5141\\u8bb8"]',
+            'button[aria-label*="Allow"]',
+            'button[class*="approve"]',
+            '.ipc-overlay',
+            '.monaco-dialog',
+            '[aria-label*="\\u9700\\u8981\\u786e\\u8ba4"]'
           ];
+          var indicators = [];
+          indicatorSelectors.forEach(function(selector) {
+            document.querySelectorAll(selector).forEach(function(el) {
+              if (!isApplicationNotification(el)
+                && !el.closest('pre, code, .markdown-renderer, ' + ${safeJsValue(NATIVE_COMMAND_PANEL_SELECTOR)})
+                && !el.querySelector(${safeJsValue(NATIVE_COMMAND_PANEL_SELECTOR)})
+                && !indicators.includes(el)) indicators.push(el);
+            });
+          });
 
           for (var i = 0; i < indicators.length; i++) {
             var el = indicators[i];
@@ -149,28 +235,31 @@ async function checkForApprovalDialog(driver) {
             }
           }
 
-          var visibleReviewCards = document.querySelectorAll('.ask-user-question-card-container, [class*="ask-user-question-card"]');
+          var visibleReviewCards = document.querySelectorAll(${safeJsValue(REVIEW_QUESTION_CARD_SELECTOR)});
           for (var vc = 0; vc < visibleReviewCards.length; vc++) {
             var visibleCard = visibleReviewCards[vc];
-            if (!visibleCard || visibleCard.offsetParent === null) continue;
+            if (!visibleCard || visibleCard.offsetParent === null || isApplicationNotification(visibleCard)) continue;
             var visibleRect = visibleCard.getBoundingClientRect();
             if (visibleRect.width < 100 || visibleRect.height < 40) continue;
             if (visibleRect.bottom < 0 || visibleRect.top > window.innerHeight) continue;
             var visibleCardText = visibleCard.textContent || '';
-            var isReviewScopeCard = /What would you like me to review\\?|Review Scope|Latest commit changes|Uncommitted changes|Specific files or folder/i.test(visibleCardText);
+            var nativeBottomPanel = visibleCard.matches('.ask-user-question-bottom-panel');
+            var isReviewScopeCard = isReviewScopeQuestionCard(visibleCard);
             var isPendingQuestion = /\\u6b63\\u5728\\u7b49\\u5f85\\u4f60\\u7684\\u64cd\\u4f5c|Cancel|Next|\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a/i.test(visibleCardText);
-            if (!isReviewScopeCard || !isPendingQuestion) continue;
+            if (!isReviewScopeCard) continue;
             var visibleReviewButtons = [];
             var visibleOptions = [];
             var visibleReviewButtonNodes = visibleCard.querySelectorAll(${safeJsValue(`${DIALOG_BUTTON_SELECTOR}, [class*="button"], [class*="btn"], div, span`)});
             visibleReviewButtonNodes.forEach(function(b) {
               if (!b || b.offsetParent === null) return;
-              var text = (b.innerText || b.textContent || '').trim();
+              var text = reviewButtonText(b);
               if (!text) return;
-              if (/^(\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a|Cancel|Next)$/i.test(text) && !visibleReviewButtons.includes(text)) {
+              if (/^(\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a|\\u63d0\\u4ea4|Cancel|Next|Submit)$/i.test(text) && !visibleReviewButtons.includes(text)) {
+                if (/^(\\u63d0\\u4ea4|Submit)$/i.test(text) && !b.closest(${safeJsValue(`${DIALOG_BUTTON_SELECTOR}, [class*="button"], [class*="btn"]`)})) return;
                 visibleReviewButtons.push(text);
               }
             });
+            if (!isPendingQuestion && !visibleReviewButtons.some(function(text) { return /^(\\u63d0\\u4ea4|Submit)$/i.test(text); })) continue;
             var knownLabels = [
               'Latest commit changes',
               'Uncommitted changes',
@@ -182,7 +271,9 @@ async function checkForApprovalDialog(driver) {
               'Compare with a branch',
               '\\u5176\\u4ed6'
             ];
-            var optionNodes = visibleCard.querySelectorAll('.ask-user-single-choice-item, .icd-checkbox-item-container, [class*="single-choice"], [class*="checkbox-item"], [role="radio"], [role="option"]');
+            var optionNodes = visibleCard.querySelectorAll(nativeBottomPanel
+              ? ${safeJsValue(NATIVE_REVIEW_OPTION_SELECTOR)}
+              : '.ask-user-single-choice-item, .icd-checkbox-item-container, [class*="single-choice"], [class*="checkbox-item"], [role="radio"], [role="option"]');
             optionNodes.forEach(function(option) {
               if (!option || option.offsetParent === null) return;
               var rect = option.getBoundingClientRect();
@@ -197,7 +288,12 @@ async function checkForApprovalDialog(driver) {
                 }
               }
               if (!label) return;
-              var description = text.replace(label, '').trim();
+              var nativeLabel = nativeBottomPanel ? option.querySelector('[class*="optionLabel-"]') : null;
+              if (nativeLabel) label = (nativeLabel.innerText || nativeLabel.textContent || '').trim();
+              var nativeDescription = nativeBottomPanel ? option.querySelector('[class*="optionDescription-"]') : null;
+              var description = nativeDescription
+                ? (nativeDescription.innerText || nativeDescription.textContent || '').trim()
+                : text.replace(label, '').trim();
               if (!visibleOptions.some(function(item) { return item.label === label; })) {
                 visibleOptions.push({ label: label, description: description });
               }
@@ -221,7 +317,7 @@ async function checkForApprovalDialog(driver) {
                 parsedOptions.push({ label: hits[hi].label, description: desc });
               }
             }
-            if (parsedOptions.length >= 2) {
+            if (!nativeBottomPanel && parsedOptions.length >= 2) {
               visibleOptions = parsedOptions;
             }
             return {
@@ -236,6 +332,20 @@ async function checkForApprovalDialog(driver) {
           }
 
           var bodyText = document.body.textContent || '';
+          var legacyExcludedSelector = notificationSelector + ', pre, code, .markdown-renderer, ' + ${safeJsValue(NATIVE_COMMAND_PANEL_SELECTOR)};
+          if (document.querySelector(legacyExcludedSelector)) {
+            // Known panels and quoted/notification content must not become a
+            // pending approval through the legacy whole-page text fallback.
+            var textWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+              acceptNode: function(node) {
+                return isApplicationNotification(node.parentElement) || node.parentElement.closest(legacyExcludedSelector)
+                  ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+              }
+            });
+            bodyText = '';
+            var textNode;
+            while ((textNode = textWalker.nextNode())) bodyText += textNode.textContent;
+          }
           var reviewScopePatterns = [
             'What would you like me to review?',
             'Review Scope',
@@ -248,14 +358,16 @@ async function checkForApprovalDialog(driver) {
           for (var r = 0; r < reviewScopePatterns.length; r++) {
             if (bodyText.includes(reviewScopePatterns[r])) reviewScopeHits++;
           }
-          if (reviewScopeHits >= 2 && document.querySelector('.ask-user-question-card-status-pending')) {
+          var pendingReviewCard = Array.from(document.querySelectorAll('.ask-user-question-card-status-pending'))
+            .some(function(card) { return !isApplicationNotification(card); });
+          if (reviewScopeHits >= 2 && pendingReviewCard) {
             var reviewButtons = [];
             var reviewButtonNodes = document.querySelectorAll(${safeJsValue(DIALOG_BUTTON_SELECTOR)});
             reviewButtonNodes.forEach(function(b) {
-              if (!b || b.offsetParent === null) return;
+              if (!b || b.offsetParent === null || isApplicationNotification(b)) return;
               var text = (b.innerText || b.textContent || '').trim();
               if (!text) return;
-              if (/^(\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a|Cancel|Next)$/i.test(text) && !reviewButtons.includes(text)) {
+              if (/^(\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a|\\u63d0\\u4ea4|Cancel|Next|Submit)$/i.test(text) && !reviewButtons.includes(text)) {
                 reviewButtons.push(text);
               }
             });
@@ -272,7 +384,7 @@ async function checkForApprovalDialog(driver) {
           var inlineCommandButtons = document.querySelectorAll(${safeJsValue(DIALOG_BUTTON_SELECTOR)});
           for (var ic = 0; ic < inlineCommandButtons.length; ic++) {
             var runButton = inlineCommandButtons[ic];
-            if (!runButton || runButton.offsetParent === null) continue;
+            if (!runButton || runButton.offsetParent === null || isApplicationNotification(runButton)) continue;
             var runText = (runButton.innerText || runButton.textContent || '').replace(/\\s+/g, ' ').trim();
             if (!/^(\\u8fd0\\u884c|Run)$/i.test(runText)) continue;
             var commandCard = runButton;
@@ -324,7 +436,7 @@ async function checkForApprovalDialog(driver) {
       const commandAssessment = dialog.isCommandExec
         ? _assessCommandApproval(dialog.command)
         : null;
-      return {
+      const snapshot = {
         needsApproval: true,
         question: dialog.title || 'Trae\\u9700\\u8981\\u60a8\\u786e\\u8ba4',
         dialogType: dialog.type || 'approval',
@@ -332,11 +444,14 @@ async function checkForApprovalDialog(driver) {
         options: dialog.options || [],
         isCommandExec: dialog.isCommandExec || false,
         canAutoApprove: dialog.isCommandExec ? false : dialog.canAutoApprove === true,
-        command: dialog.command ? String(dialog.command).slice(0, 1200) : null,
+        command: dialog.command ? (dialog.nativePanel ? String(dialog.command) : String(dialog.command).slice(0, 1200)) : null,
         approvalDecision: commandAssessment?.decision || null,
         commandRisk: commandAssessment?.risk || null,
         riskReasons: commandAssessment?.reasonCodes || [],
       };
+      // Keep the observed DOM kind private; clients retain command_execution.
+      if (dialog.nativePanel) Object.defineProperty(snapshot, NATIVE_COMMAND_PANEL, { value: true });
+      return snapshot;
     }
     return { needsApproval: false };
   } catch (e) {
@@ -349,7 +464,7 @@ async function checkForApprovalDialog(driver) {
   }
 }
 
-async function approveDialog(driver, action) {
+async function approveDialog(driver, action, options = {}) {
   try {
     const dialog = await driver.checkForApprovalDialog();
     if (dialog.transient) {
@@ -360,12 +475,40 @@ async function approveDialog(driver, action) {
     }
 
     const targetLabels = _getButtonLabelsForAction(action);
+    const nativePanel = dialog[NATIVE_COMMAND_PANEL] === true;
+    const requestedCommand = options.expectedCommand === undefined ? dialog.command : options.expectedCommand;
+    const expectedCommand = typeof requestedCommand === 'string' ? requestedCommand.trim() : requestedCommand;
+    if (options.expectedCommand !== undefined
+      && (typeof expectedCommand !== 'string' || !expectedCommand
+        || typeof dialog.command !== 'string' || dialog.command.trim() !== expectedCommand)) {
+      return { success: false, action, error: 'Current command approval no longer matches the authorized command' };
+    }
+    if (nativePanel && (typeof expectedCommand !== 'string' || !expectedCommand)) {
+      return { success: false, action, error: 'Native command approval requires the complete expected command' };
+    }
 
     const result = await driver.client.send('Runtime.evaluate', {
       expression: `
         (function() {
+          var reviewButtonText = ${reviewQuestionButtonText.toString()};
           var targetLabels = ${JSON.stringify(targetLabels)};
           var action = ${JSON.stringify(action)};
+          if (${nativePanel}) {
+            var nativeApprovalVisible = ${nativeApprovalVisible.toString()};
+            var inspectNativeCommandPanel = ${inspectNativeCommandPanel.toString()};
+            var expectedCommand = ${safeJsValue(expectedCommand)};
+            var pendingPanels = Array.from(document.querySelectorAll(${safeJsValue(NATIVE_COMMAND_PANEL_SELECTOR)}))
+              .map(inspectNativeCommandPanel).filter(Boolean);
+            if (pendingPanels.length !== 1 || pendingPanels[0].command !== expectedCommand) {
+              return { clicked: false, error: 'Native command approval changed or is no longer pending' };
+            }
+            var target = pendingPanels[0].actions.find(function(item) {
+              return targetLabels.some(function(label) { return label.toLowerCase() === item.label.toLowerCase(); });
+            });
+            if (!target) return { clicked: false, error: 'No enabled native approval action found' };
+            target.node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+            return { clicked: true, buttonText: target.label };
+          }
           function isNegativeMatch(text) {
             if (!text) return false;
             if (action !== 'trust' && action !== 'approve') return false;
@@ -402,7 +545,7 @@ async function approveDialog(driver, action) {
             }
           }
 
-          var reviewCards = document.querySelectorAll('.ask-user-question-card-container, [class*="ask-user-question-card"]');
+          var reviewCards = document.querySelectorAll(${safeJsValue(REVIEW_QUESTION_CARD_SELECTOR)});
           for (var rc = 0; rc < reviewCards.length; rc++) {
             var card = reviewCards[rc];
             if (!card || card.offsetParent === null) continue;
@@ -412,7 +555,7 @@ async function approveDialog(driver, action) {
             for (var cn = 0; cn < cardNodes.length; cn++) {
               var node = cardNodes[cn];
               if (!node || node.offsetParent === null) continue;
-              var nodeText = (node.innerText || node.textContent || '').trim();
+              var nodeText = reviewButtonText(node);
               if (!/^(\\u53d6\\u6d88|\\u4e0b\\u4e00\\u4e2a|Cancel|Next)$/i.test(nodeText)) continue;
               var clickable = node.closest('button, a[role="button"], [role="button"], .monaco-button, .monaco-text-button, [class*="button"], [class*="btn"]') || node;
               var nodeRect = clickable.getBoundingClientRect();
@@ -452,7 +595,8 @@ async function approveDialog(driver, action) {
           for (var b = 0; b < buttonsToSearch.length; b++) {
             var btn = buttonsToSearch[b];
             if (btn.offsetParent === null) continue;
-            var text = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+            var text = (btn.closest(${safeJsValue(REVIEW_QUESTION_CARD_SELECTOR)})
+              ? reviewButtonText(btn) : (btn.innerText || btn.textContent || '').trim()).toLowerCase();
             if (isNegativeMatch(text)) continue;
             for (var t = 0; t < targetLabels.length; t++) {
               if (text === targetLabels[t].toLowerCase() || text.includes(targetLabels[t].toLowerCase())) {
@@ -515,13 +659,30 @@ async function approveDialog(driver, action) {
     const clickResult = result.result?.value || {};
     if (clickResult.clicked) {
       await sleep(driver.config.postActionDelayMs);
+      if (nativePanel) {
+        const remaining = await driver.client.send('Runtime.evaluate', {
+          expression: `(function() {
+            var nativeApprovalVisible = ${nativeApprovalVisible.toString()};
+            return Array.from(document.querySelectorAll(${safeJsValue(NATIVE_COMMAND_PANEL_SELECTOR)})).some(function(panel) {
+              var command = panel.querySelector('.commandText-rHrSgO');
+              return nativeApprovalVisible(panel, true) && command
+                && !panel.closest('.notifications-toasts, .notifications-list-container, .notification-toast, .notification-toast-container, .notification-list-item, pre, code, .markdown-renderer')
+                && String(command.textContent || '').trim() === ${safeJsValue(expectedCommand)};
+            });
+          })()`,
+          returnByValue: true
+        });
+        if (remaining.result?.value !== false) {
+          return { success: false, action, buttonClicked: clickResult.buttonText, error: 'Native command approval panel disappearance could not be confirmed' };
+        }
+      }
       const dialogAfter = await driver.checkForApprovalDialog();
-      if (dialogAfter.needsApproval) {
+      if (dialogAfter.transient || dialogAfter.needsApproval !== false) {
         return {
           success: false,
           action,
           buttonClicked: clickResult.buttonText,
-          error: 'Dialog remained visible after click'
+          error: dialogAfter.error || 'Dialog remained visible after click'
         };
       }
       return {
@@ -644,6 +805,10 @@ async function checkReadiness(driver) {
 }
 
 module.exports = {
+  REVIEW_QUESTION_CARD_SELECTOR,
+  NATIVE_REVIEW_OPTION_SELECTOR,
+  isReviewScopeQuestionCard,
+  reviewQuestionButtonText,
   checkForApprovalDialog,
   approveDialog,
   _assessCommandApproval,

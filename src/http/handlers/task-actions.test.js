@@ -4,7 +4,7 @@ const assert = require('assert');
 const { createRunner } = require('../../shared/test-runner');
 const { makeReqRes } = require('../../shared/test-helpers');
 const { generateOpenAPISpec } = require('../openapi');
-const { ROUTES, handleTaskInteraction, visibleInteractionMatches } = require('./task-actions');
+const { ROUTES, handleTaskStatus, handleTaskInteraction, visibleInteractionMatches } = require('./task-actions');
 
 const runner = createRunner('handlers/task-actions.test.js');
 const { test, asyncTest, pendingAsyncTests, summary } = runner;
@@ -76,6 +76,45 @@ test('task interaction route is authenticated, rate-limited, and task-bound', ()
   assert.strictEqual(route.requiresRateLimit, true);
   assert.strictEqual(route.requiresBody, true);
   assert.deepStrictEqual(route.pathParams, ['taskId']);
+});
+
+asyncTest('active task status exposes only actual workflow links in gateway metadata', async () => {
+  const createdAt = Date.now() - 1000;
+  for (const fields of [
+    { nextTaskId: 'task-real-child' },
+    { workflowParentTaskId: 'task-real-parent' },
+    { nextTaskId: 'task-real-child', workflowParentTaskId: 'task-real-parent' }
+  ]) {
+    const task = {
+      taskId: 'task-workflow-snapshot', status: 'done', createdAt,
+      metadata: { source: 'owned-workflow', custom: { retained: true } },
+      result: { text: 'Reviewed result', stable: true },
+      ...fields
+    };
+    const setup = makeContext(task);
+    const { req, res } = makeReqRes({}, `/api/task/${task.taskId}`, 'GET');
+    await handleTaskStatus(req, res, setup.ctx, task.taskId);
+    const response = JSON.parse(res._body);
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(response.metadata, { ...task.metadata, ...fields });
+    assert.strictEqual(response.taskId, task.taskId);
+    assert.strictEqual(response.status, 'done');
+    assert.strictEqual(response.result.text, task.result.text);
+    assert.deepStrictEqual(task.metadata, { source: 'owned-workflow', custom: { retained: true } });
+    assert.deepStrictEqual(setup.calls, [], 'snapshot projection must not perform UI actions');
+  }
+});
+
+asyncTest('task status does not invent workflow links for a standalone task', async () => {
+  const task = {
+    taskId: 'task-standalone-snapshot', status: 'done', createdAt: Date.now(),
+    result: { text: 'Standalone result', stable: true }
+  };
+  const setup = makeContext(task);
+  const { req, res } = makeReqRes({}, `/api/task/${task.taskId}`, 'GET');
+  await handleTaskStatus(req, res, setup.ctx, task.taskId);
+  const response = JSON.parse(res._body);
+  assert.strictEqual(response.metadata, undefined);
 });
 
 test('visible interaction matching is fail-closed for command and question identity', () => {

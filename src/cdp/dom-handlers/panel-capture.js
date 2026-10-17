@@ -24,13 +24,24 @@ async function getWorkspaceContext(driver) {
   const result = await driver.client.send('Runtime.evaluate', {
     expression: `(() => {
       var title = String(document.title || '').trim();
+      var rootPath = null;
+      try {
+        var context = typeof window !== 'undefined' && window.vscode && window.vscode.context;
+        var configuration = context && typeof context.configuration === 'function' && context.configuration();
+        var uri = configuration && configuration.workspace && configuration.workspace.uri;
+        if (uri && uri.scheme === 'file' && !uri.authority &&
+            typeof uri.path === 'string' && uri.path.startsWith('/')) {
+          rootPath = uri.path;
+        }
+      } catch {
+        // Older/preloading windows may not expose the native configuration yet.
+      }
       var explorer = document.querySelector('.explorer-folders-view, .explorer-viewlet');
       var firstRow = explorer && explorer.querySelector('[role="treeitem"][aria-level="1"]');
       var resource = firstRow && firstRow.querySelector('.explorer-item[aria-label]');
       var childName = firstRow ? String(firstRow.getAttribute('aria-label') || '').trim() : '';
       var resourceLabel = resource ? String(resource.getAttribute('aria-label') || '').trim() : '';
-      var rootPath = null;
-      if (resourceLabel && childName) {
+      if (!rootPath && resourceLabel && childName) {
         var slashSuffix = '/' + childName;
         var backslashSuffix = '\\\\' + childName;
         if (resourceLabel.endsWith(slashSuffix)) {
@@ -41,7 +52,7 @@ async function getWorkspaceContext(driver) {
       }
       return {
         title: title,
-        folderName: explorer && title ? title : null,
+        folderName: null,
         rootPath: rootPath,
         hasExplorer: !!explorer
       };
@@ -50,10 +61,19 @@ async function getWorkspaceContext(driver) {
   });
   const value = result.result?.value || { title: '', folderName: null, rootPath: null, hasExplorer: false };
   const title = String(value.title || '').trim();
-  if (!value.folderName && title && !/^Trae\s*CN$/i.test(title)) {
-    return { ...value, folderName: title };
-  }
-  return value;
+  const observedPath = String(value.rootPath || '').trim();
+  const rootPath = /^(?:\/|~\/|[A-Za-z]:[\\/]|\\\\)/.test(observedPath) ? observedPath : null;
+  const rootName = rootPath ? rootPath.replace(/\\/g, '/').split('/').filter(Boolean).pop() : null;
+  // Prefer the native single-folder URI, then the Explorer resource identity.
+  // The title may include an editor and cannot establish an absolute path.
+  const titleName = title.split(/\s+—\s+/).pop().trim();
+  const folderName = rootName || String(value.folderName || '').trim() || titleName;
+  return {
+    ...value,
+    title,
+    folderName: rootName || (folderName && !/^Trae\s*CN$/i.test(folderName) ? folderName : null),
+    rootPath
+  };
 }
 
 async function _captureSidebarText(driver) {
@@ -83,8 +103,9 @@ async function _captureIdePanelText(driver) {
           var sels = [${safeSels.join(', ')}];
           for (var i = 0; i < sels.length; i++) {
             var el = document.querySelector(sels[i]);
-            if (el && el.offsetParent !== null) {
-              var text = el.textContent.trim();
+            if (el && el.offsetParent !== null && el !== document.body && el !== document.documentElement
+              && !/(?:^|\\s)monaco-workbench(?:\\s|$)/.test(String(el.className || ''))) {
+              var text = (el.innerText || el.textContent || '').trim();
               if (text.length > 10) return text;
             }
           }
@@ -292,23 +313,48 @@ async function _queryIdeTaskPanel(driver, skipText, options = {}) {
         var panel = null;
         for (var i = 0; i < sels.length; i++) {
           var el = document.querySelector(sels[i]);
-          if (el && el.offsetParent !== null) {
+          if (el && el.offsetParent !== null && el !== document.body && el !== document.documentElement
+            && !/(?:^|\\s)monaco-workbench(?:\\s|$)/.test(String(el.className || ''))) {
             panel = el;
             break;
           }
         }
         if (!panel) return null;
 
-        var fullText = (panel.textContent || '').trim();
-        var turns = Array.from(panel.querySelectorAll(
-          'section.chat-turn, section[class*="chat-turn"], .chat-message, .agent-message, [class*="chat-message"]'
+        var fullText = (panel.innerText || panel.textContent || '').trim();
+        var structuredPanel = /(?:^|\\s)virtualized-message-list-view__virtuoso(?:\\s|$)/.test(String(panel.className || ''));
+        var turnSource = panel;
+        if (structuredPanel) {
+          var currentTurns = Array.from(panel.querySelectorAll('.turn')).filter(function(el) {
+            return el.offsetParent !== null;
+          });
+          if (currentTurns.length) turnSource = currentTurns[currentTurns.length - 1];
+        }
+        var turns = Array.from(turnSource.querySelectorAll(
+          'section.chat-turn, section[class*="chat-turn"], .chat-message, .agent-message, [class*="chat-message"], .turn__agent-message, [data-role="user"], [data-role="assistant"]'
         )).filter(function(el) {
           return el && el.offsetParent !== null;
         }).map(function(el) {
+          var className = (el.className || '').toString();
+          var structuredTask = /(?:^|\\s)turn__agent-message(?:\\s|$)/.test(className);
+          var summaries = Array.from(el.querySelectorAll('.core-finish-card__summary .markdown-renderer'))
+            .filter(function(summary) { return summary.offsetParent !== null; })
+            .map(function(summary) { return (summary.innerText || summary.textContent || '').trim(); })
+            .filter(Boolean);
+          var finalText = summaries.length ? summaries[summaries.length - 1] : '';
+          var interrupted = Array.from(el.querySelectorAll('.latest-assistant-bar .status-text'))
+            .some(function(status) {
+              return status.offsetParent !== null
+                && !status.closest('.markdown-renderer, .chat-markdown, pre, code')
+                && (status.innerText || status.textContent || '').trim() === '手动终止输出';
+            });
           return {
-            className: (el.className || '').toString(),
+            className: className + ' ' + (el.getAttribute('data-role') || ''),
             ariaLabel: (el.getAttribute('aria-label') || '').toString(),
-            text: ((el.innerText || el.textContent || '').trim() || '')
+            text: ((el.innerText || el.textContent || '').trim() || ''),
+            finalText: finalText,
+            taskComplete: structuredTask ? !!finalText : null,
+            interrupted: interrupted
           };
         }).filter(function(turn) {
           return !!turn.text;
@@ -333,6 +379,7 @@ async function _queryIdeTaskPanel(driver, skipText, options = {}) {
         return {
           fullText: fullText,
           turns: turns,
+          structuredPanel: structuredPanel,
           taskComplete: completeIndicator && !runningIndicator,
           taskInProgress: runningIndicator
         };
@@ -351,14 +398,17 @@ function _extractLatestIdeAssistantState(panelState, skipText, options = {}) {
   const fullText = String(panelState.fullText || '').trim();
   const normalizedSkip = String(skipText || '').replace(/\s+/g, ' ').trim();
   if (!turns.length) {
+    if (panelState.structuredPanel) {
+      return { text: '', inProgress: true, isComplete: false, hasResponse: false, awaitingAssistant: true };
+    }
     if (!fullText || (normalizedSkip && fullText.replace(/\s+/g, ' ').trim() === normalizedSkip)) {
       return null;
     }
     return {
       text: fullText.slice(0, 500),
-      inProgress: false,
-      isComplete: fullText.includes('任务完成') || fullText.includes('已完成'),
-      hasResponse: fullText.length > 20
+      inProgress: panelState.taskInProgress === true,
+      isComplete: panelState.taskInProgress !== true && (panelState.taskComplete === true || fullText.includes('任务完成') || fullText.includes('已完成')),
+      hasResponse: panelState.taskInProgress !== true && fullText.length > 20
     };
   }
 
@@ -367,7 +417,9 @@ function _extractLatestIdeAssistantState(panelState, skipText, options = {}) {
       className: String(turn.className || ''),
       ariaLabel: String(turn.ariaLabel || ''),
       text: String(turn.text || '').trim(),
-      finalText: String(turn.finalText || '').trim()
+      finalText: String(turn.finalText || '').trim(),
+      taskComplete: typeof turn.taskComplete === 'boolean' ? turn.taskComplete : null,
+      interrupted: turn.interrupted === true
     }))
     .filter(turn => turn.text);
 
@@ -408,10 +460,22 @@ function _extractLatestIdeAssistantState(panelState, skipText, options = {}) {
   if (!latestText || (normalizedSkip && normalizedLatest === normalizedSkip)) {
     return null;
   }
+  if (latestAssistant.interrupted) {
+    return {
+      text: latestAssistant.text,
+      inProgress: false,
+      isComplete: false,
+      hasResponse: false,
+      interrupted: true
+    };
+  }
 
   const latestLower = normalizedLatest.toLowerCase();
-  const structurallyComplete = panelState.taskComplete === true;
-  const structurallyInProgress = panelState.taskInProgress === true;
+  const hasTaskCompletionState = typeof latestAssistant.taskComplete === 'boolean';
+  const structurallyComplete = (hasTaskCompletionState ? latestAssistant.taskComplete : panelState.taskComplete) === true
+    && panelState.taskInProgress !== true;
+  const structurallyInProgress = panelState.taskInProgress === true
+    || (hasTaskCompletionState && !latestAssistant.taskComplete);
   const percentageProgress = `${fullText} ${latestText}`.match(/(?:\u4efb\u52a1\u5b8c\u6210|completed?)\s*[:：]?\s*(\d{1,3})\s*%/i);
   const hasIncompletePercentage = Boolean(!structurallyComplete && percentageProgress && Number(percentageProgress[1]) < 100);
   const inProgress = (
@@ -434,7 +498,7 @@ function _extractLatestIdeAssistantState(panelState, skipText, options = {}) {
     ))
   );
   const isComplete = (
-    structurallyComplete || (!hasIncompletePercentage && (
+    structurallyComplete || (!hasTaskCompletionState && !hasIncompletePercentage && (
       latestText.includes('任务完成') ||
       latestText.includes('已完成') ||
       fullText.includes('任务完成')
@@ -445,7 +509,11 @@ function _extractLatestIdeAssistantState(panelState, skipText, options = {}) {
     text: latestText,
     inProgress,
     isComplete: isComplete || (latestText.includes('完成') && !inProgress),
-    hasResponse: !inProgress && latestText.length > 20
+    hasResponse: !inProgress && latestText.length > 20,
+    // Keep the process and final summary from this one assistant snapshot.
+    // Completion collection decides when they can be persisted for the task.
+    ...(structurallyComplete && latestAssistant.finalText
+      ? { traceText: latestAssistant.text } : {})
   };
 }
 
@@ -510,11 +578,16 @@ async function _queryTaskSource(driver, skipText, options = {}) {
               .filter(block => block.offsetParent !== null && !block.parentElement?.closest('.chat-markdown'))
               .map(block => (block.innerText || block.textContent || '').trim())
               .filter(text => text.length > 20);
+            const interrupted = Array.from(el.querySelectorAll('.latest-assistant-bar .status-text'))
+              .some(status => status.offsetParent !== null
+                && !status.closest('.markdown-renderer, .chat-markdown, pre, code')
+                && (status.innerText || status.textContent || '').trim() === '手动终止输出');
             return {
               className: [el.className || '', el.getAttribute('data-role') || ''].join(' '),
               ariaLabel: el.getAttribute('aria-label') || '',
               text: (el.innerText || el.textContent || '').trim(),
-              finalText: finalBlocks[finalBlocks.length - 1] || ''
+              finalText: finalBlocks[finalBlocks.length - 1] || '',
+              interrupted
             };
           })
           .filter(turn => turn.text);

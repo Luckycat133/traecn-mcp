@@ -7,15 +7,147 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Fixed
+
+- Verified settings against their exact control type and actual applied value;
+  scoped dropdown choices to their native portal and supplied the pointer move
+  required by TraeCN's Radix selection guard.
+- Sent messages with native CDP mouse input and serialized model-picker reads
+  with other desktop actions, preserving uncertain-send duplicate protection.
+- Verified workspace switches by native folder URI, retained native conversation
+  identities across title changes, and reported deferred empty-draft creation.
+- Released cancelled response collection promptly and retained interrupted
+  partial output as a terminal failure across runtime and compatibility APIs.
+- Rechecked concurrent submission identities after context preparation, yielded
+  between durable polling commits, and closed late connections during shutdown.
+- Kept workflow parent/child links in terminal history across restart; restored
+  the OpenClaw adapter's existing task tools, execute interface and completion checks.
+- Accepted nullable errors in task snapshots and resolved native review-scope
+  questions through the real option and final Submit with a single click.
+- Routed legacy batches through the existing durable task queue, retaining
+  batch and item identities while exposing their gateway task IDs. Preserved
+  approval checkpoints, partial failures, UI serialization and confirmed
+  cancellation; completed counts no longer include unfinished output.
+- Read TraeCN's permission settings cards as display-only content, including
+  the actual selected mode, without exposing their controls as writable settings.
+- Resolved native command approval cards with one scoped click and exact full
+  command checks; bound command and question resumption to the active native
+  conversation while retaining the original task and partial output.
+- Bounded sidebar rendering waits on hidden TraeCN pages and read a unique
+  active native conversation without scanning the full history.
+  Preserved driver-specific sidebar implementations and allowed subpixel
+  scroll rounding at the list boundary.
+- Preserved Unicode HTTP responses across network chunks, rejected incomplete
+  responses, and released cancelled task-event long polls with AbortSignal.
+- Isolated Web Console requests, polling and WebSocket callbacks by connection
+  session; restored task subscriptions after reconnect and reused submission
+  identities after uncertain network responses to prevent duplicate work.
+- Recovered stdio framing after malformed messages without dropping valid
+  requests, and closed Tasks subscriptions reliably across acknowledgement,
+  cancellation, shutdown and HTTP long-poll races.
+- Applied existing API-key permissions to Tasks reads, cancellations,
+  interaction updates and subscriptions; validated protocol inputs and kept
+  final text and structured results equivalent.
+- Persisted cancellation before waiting for desktop stop, prevented late
+  results or retries from reviving cancelled work, and retained cancellation
+  events and idempotent results across restarts. Kept an interrupted native stop
+  pending even after its cancellation event committed; a retry verifies the
+  original native conversation under the UI lock before stopping it.
+- Retained unconfirmed completion, review/approval checkpoints and completion
+  events for storage retry; kept MCP, Web Console and JavaScript clients from
+  exposing unfinished state as a final result or reusing a stale interaction.
+- Saved reviewed workflow parents and their next-task identities together,
+  blocked children until the parent was confirmed, and bound repeated attention
+  events to the current interaction identity during restart recovery. Persisted
+  the parent's completion proof with its child so delayed or pruned history
+  cannot block a confirmed workflow after restart.
+- Covered conversation aliases and queue/model timing in versioned task
+  fingerprints while preserving replay compatibility for existing tasks.
+- Locked queue recovery against concurrent writers, persisted special client
+  event cursors, and ordered task history across restarts. History cleanup now
+  intersects all supplied filters and rejects invalid age filters.
+- Isolated completion notification failures and resolved symbolic-link MCP
+  launchers to the server directory so local configuration remains discoverable.
+- Made the default mock result usable in the console's review workflow and
+  displayed the mock runtime explicitly in connection and diagnostic state.
+- Honored the unified submission's requested manual review instead of
+  automatically approving the result, while preserving submission replay IDs.
+- Included runtime output schemas in the generated MCP Skill contract and
+  synchronized the complete Codex-discovered Skill from the public source,
+  so its instructions, UI metadata, references and helpers cannot drift.
+- Matched send-message output metadata to existing terminal idempotency
+  replays, including original results, terminal statuses and nullable errors.
+- Reported current desktop readiness blockers in live UAT, checked required
+  readiness before dependent UI/session requests, skipped unavailable UI checks
+  in diagnostic runs, and closed the full Gateway with graceful shutdown.
+- Released event waits when HTTP clients disconnect and broadcast appends
+  through one listener for concurrent clients. Bounded HTTP shutdown draining
+  so silent preconnections and stalled responses cannot prevent service exit.
+- Recognized editor-prefixed workspace titles and preferred observed Explorer
+  roots while retaining exact title-only folder identities and path guards.
+  Matched MCP workspace output schemas to detected identity objects, including
+  unknown root paths, without changing the 20-tool contract.
+- Bound IDE result capture to the current assistant turn and explicit finish
+  summary, excluding workbench text and prior turns from completion detection.
+  Retained unfinished review gates for collection retry instead of reporting
+  completion before the current edits were accepted.
+- Recognized loaded model settings and explicit empty states while waiting,
+  reused IDE settings preview tabs, and closed only the active settings tab
+  when restoring chat; preserved the SOLO navigation path.
+- Backed off task-event subscriptions on every non-200 HTTP response,
+  retaining event cursors and cancellation instead of spinning on empty
+  success or redirect responses.
+- Saved the current assistant's execution trace alongside its confirmed final
+  result and served trace requests from that task's persisted record. Default
+  task, replay and batch responses retain their concise result shape; older
+  records report unavailable traces without reading another conversation.
+- Recognized populated virtualized message lists before creating an IDE
+  conversation, preventing the existing conversation from being mistaken for
+  a blank composer and reused as new context.
+- Excluded application notification toasts from approval detection while
+  continuing to inspect other visible dialogs, inline command approvals and
+  review questions in the same window.
+- Classified confirmation timeouts after dispatch as uncertain sends and
+  retained their failed task identities without automatically resubmitting
+  work that may already be running, including lost RPC acknowledgements and
+  confirmation exceptions. Pre-send failures retain their retry path.
+- Activated an existing hidden macOS TraeCN window before chat creation,
+  sending or collection and confirmed renderer visibility, so suspended
+  background rendering cannot be mistaken for an unsent task.
+- Matched task completion metadata to persisted ISO timestamps as well as
+  queue timestamps and retained explicit gateway error codes with actionable
+  guidance when the desktop window is unavailable.
+
 ### Changed
 
+- Simplified both Skills around current source, preserved all 20 public tools,
+  and moved conditional protocol detail and dated channel evidence to references.
+- Isolated Gateway benchmarks from user state and real CDP, validated every
+  HTTP response, and added bounded concurrency, latency percentiles, memory
+  and event-loop measurements while retaining the existing metric names.
+- Reused the event snapshot's canonical checksum encoding for compact writes,
+  avoiding a second traversal of the retained log while preserving schema,
+  per-operation commits, validated backups, fsync and crash recovery.
+- Included all existing shared-module tests in repository verification, counted
+  asynchronous outcomes only after settlement, awaited queue/discovery tests,
+  failed process exits with unsettled asynchronous tests, and corrected
+  coverage exclusions without lowering thresholds.
+- Used the normal CDP probe timeout for functional Quickstart HTTP fixtures;
+  retained the dedicated 25 ms stalled-endpoint timeout check.
 - **Deprecated unscoped npm package `traecnclaw`** (versions `0.3.0`, `0.3.1`)
-  as of 2026-08-26. New work — including `v0.6.0` and all subsequent releases —
-  is published under the **scoped** package `@traecnclaw/traecnclaw`. The
+  as of 2026-08-26. The canonical public package is
+  `@luckycat133/traecnclaw`, matching the package builder and install paths. The
   unscoped name is no longer maintained, will not receive updates, and is
   scheduled for removal from npm. Users depending on the unscoped name should
   migrate to the scoped package:
-  `npm uninstall traecnclaw && npm install @traecnclaw/traecnclaw`.
+  `npm uninstall traecnclaw && npm install @luckycat133/traecnclaw`.
+
+### Security
+
+- Updated the locked development dependency `brace-expansion` to `5.0.12`
+  to resolve the reported resource-exhaustion advisories.
+- Updated the development MCP client and its core dependency to `2.2.0`
+  to address [GHSA-6qxp-vccf-f47h](https://github.com/advisories/GHSA-6qxp-vccf-f47h).
 
 ## [0.6.0] - 2026-08-24
 

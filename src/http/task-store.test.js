@@ -230,6 +230,49 @@ asyncTest('TaskQueueService reports each expected filesystem durability failure'
   }
 });
 
+asyncTest('failed terminal replay writes restore the previous replay only before primary commit', async () => {
+  for (const phase of ['temp_opened', 'primary_committed']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-terminal-replay-rollback-'));
+    const persistencePath = path.join(dir, 'queue.json');
+    let failWrites = false;
+    const service = createService(persistencePath, {
+      logger: { error() {}, warn() {} },
+      onWritePhase(currentPhase) {
+        if (failWrites && currentPhase === phase) {
+          throw Object.assign(new Error(`injected ${phase}`), { code: 'EIO' });
+        }
+      }
+    });
+    const original = {
+      taskId: 'original-replay', status: 'done', result: { text: 'original result' },
+      idempotencyKey: 'same-key', idempotencyFingerprint: 'original-fingerprint'
+    };
+    const replacement = {
+      taskId: 'replacement-replay', status: 'cancelled', result: { text: 'partial result' },
+      idempotencyKey: 'same-key', idempotencyFingerprint: 'replacement-fingerprint'
+    };
+    try {
+      assert.strictEqual(service.recordTerminalReplay(original, new Map()), true);
+      const previousReplay = service.getTerminalReplay('same-key');
+      failWrites = true;
+      assert.strictEqual(service.recordTerminalReplay(replacement, new Map()), false);
+      assert.strictEqual(service.getPersistenceHealth().lastPersistError.snapshotCommitted, phase === 'primary_committed');
+      const memoryReplay = service.getTerminalReplay('same-key');
+      const diskReplay = readJson(persistencePath).terminalReplays[0];
+      if (phase === 'temp_opened') {
+        assert.deepStrictEqual(memoryReplay, previousReplay);
+        assert.deepStrictEqual(diskReplay, previousReplay);
+      } else {
+        assert.strictEqual(memoryReplay.taskId, replacement.taskId);
+        assert.deepStrictEqual(diskReplay, memoryReplay);
+      }
+    } finally {
+      service.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 asyncTest('TaskQueueService prevents a second process from owning the same active store', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-task-store-lock-'));
   const persistencePath = path.join(dir, 'active-queue.json');
@@ -272,6 +315,52 @@ asyncTest('TaskQueueService prevents a second process from owning the same activ
     assert.strictEqual(readJson(persistencePath).tasks[0].taskId, 'task-owner');
   } finally {
     if (typeof service.close === 'function') service.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+asyncTest('TaskQueueService restore cannot delete another writer\'s in-flight snapshot', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-task-store-restore-lock-'));
+  const persistencePath = path.join(dir, 'active-queue.json');
+  const servicePath = require.resolve('./task-queue-service');
+  const childSource = `
+    'use strict';
+    const { TaskQueueService } = require(${JSON.stringify(servicePath)});
+    const service = new TaskQueueService({
+      persistencePath: process.argv[1],
+      logger: { error() {}, warn() {}, log() {} }
+    });
+    const queue = new Map();
+    const restored = service.restore(queue);
+    process.stdout.write(JSON.stringify({ restored, health: service.getPersistenceHealth() }));
+    service.close();
+  `;
+  let contenderResult = null;
+  const service = createService(persistencePath, {
+    logger: { error() {}, warn() {}, log() {} },
+    onWritePhase(phase) {
+      if (phase !== 'temp_fsynced') return;
+      const contender = spawnSync(process.execPath, ['-e', childSource, persistencePath], {
+        encoding: 'utf8'
+      });
+      assert.strictEqual(contender.status, 0, contender.stderr);
+      contenderResult = JSON.parse(contender.stdout);
+    }
+  });
+  try {
+    await writeTwoSnapshots(persistencePath);
+    const queue = new Map([['task-new-owner-snapshot', {
+      taskId: 'task-new-owner-snapshot',
+      status: 'queued',
+      task: 'must be committed even when another process tries to restore',
+      createdAt: Date.now()
+    }]]);
+    assert.strictEqual(service.persist(queue), true);
+    assert.strictEqual(contenderResult.restored, 0);
+    assert.strictEqual(contenderResult.health.lastPersistError.code, 'TASK_STORE_LOCKED');
+    assert.strictEqual(readJson(persistencePath).tasks[0].taskId, 'task-new-owner-snapshot');
+  } finally {
+    service.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

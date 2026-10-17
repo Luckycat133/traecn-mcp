@@ -145,7 +145,7 @@ async function handleOpenProject(req, res, ctx) {
       try {
         await ctx._ensureConnection();
         const current = await ctx._assertProjectWorkspace(projectPath);
-        if (current) {
+        if (current?.currentPath && current.currentPath === current.requestedPath) {
           ctx._selectedWorkspacePath = projectPath;
           ctx._json(req, res, {
             success: true,
@@ -193,6 +193,11 @@ async function handleOpenProject(req, res, ctx) {
         try {
           await ctx._ensureConnection();
           const verified = await ctx._assertProjectWorkspace(projectPath);
+          if (!verified?.currentPath || verified.currentPath !== verified.requestedPath) {
+            const error = new Error('TraeCN workspace root path is unavailable for exact verification');
+            error.code = 'WORKSPACE_CONTEXT_UNAVAILABLE';
+            throw error;
+          }
           verifiedWorkspace = {
             folderName: verified.currentFolder,
             rootPath: verified.currentPath

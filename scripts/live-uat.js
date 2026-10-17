@@ -72,21 +72,25 @@ function request(port, method, route, body = null, token = '', timeoutMs = 20000
 }
 
 function summarizeReadiness(data) {
-  if (!data || typeof data !== 'object') {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return { ready: false, reason: 'readiness response was not an object' };
   }
   if (data.ready === true) return { ready: true };
 
-  const missing = [];
+  const missing = new Set();
   for (const [key, value] of Object.entries(data.checks || {})) {
-    if (value === false || value === null || value === undefined) missing.push(key);
+    if (value === false || value === null || value === undefined) missing.add(key);
+  }
+  for (const key of ['composer', 'sendButton', 'responseRegion']) {
+    if (Object.hasOwn(data, key) && !data[key]) missing.add(key);
   }
 
   return {
     ready: false,
-    reason: data.reason || data.error || (missing.length ? `missing UI checks: ${missing.join(', ')}` : 'Trae CN UI is not ready for automation'),
-    missing,
-    currentMode: data.currentMode || null,
+    reason: data.reason || data.error || data.blocker || (missing.size ? `missing UI checks: ${Array.from(missing).join(', ')}` : 'Trae CN UI is not ready for automation'),
+    blocker: data.blocker || null,
+    missing: Array.from(missing),
+    currentMode: data.currentMode || data.mode?.mode || null,
     currentModel: data.currentModel || null
   };
 }
@@ -249,6 +253,13 @@ async function main() {
       );
     }
 
+    const diagnostics = buildDiagnostics(endpoint, lastStatusData, lastReadinessData);
+    if (requireReady || allowDelegate || exerciseBackgroundWorkflow) {
+      const gateName = requireReady ? '--require-ready' : allowDelegate ? '--delegate' : '--exercise-background-workflow';
+      assertReady(readiness.data, diagnostics, gateName);
+      if (requireReady) checks.push({ name: 'require-ready', ok: true });
+    }
+
     const queue = await request(port, 'GET', '/api/queue-status', null, token);
     assert.strictEqual(queue.status, 200, 'queue-status endpoint should return 200');
     checks.push({ name: 'queue-status', ok: true, queued: queue.data.queued === true });
@@ -340,22 +351,21 @@ async function main() {
     assert.ok(openClawTools.some(tool => tool.name === 'traecn_cleanup_queue'), 'OpenClaw runtime tools must include traecn_cleanup_queue');
     checks.push({ name: 'agent-discovery-surfaces', ok: true });
 
-    const sessionA = await request(port, 'POST', '/api/sessions', { projectPath: process.cwd() }, token);
-    const sessionB = await request(port, 'POST', '/api/sessions', { projectPath: process.cwd() }, token);
-    assert.strictEqual(sessionA.status, 201, 'session A should be created');
-    assert.strictEqual(sessionB.status, 201, 'session B should be created');
-    assert.notStrictEqual(sessionA.data.sessionId, sessionB.data.sessionId, 'multiple logical sessions must have distinct ids');
-    const sessions = await request(port, 'GET', '/api/sessions', null, token);
-    assert.strictEqual(sessions.status, 200, 'sessions list should return 200');
-    assert.ok(sessions.data.sessions.some(session => session.id === sessionA.data.sessionId), 'sessions list should include session A');
-    assert.ok(sessions.data.sessions.some(session => session.id === sessionB.data.sessionId), 'sessions list should include session B');
-    const sessionADetails = await request(port, 'GET', `/api/sessions/${encodeURIComponent(sessionA.data.sessionId)}`, null, token);
-    assert.strictEqual(sessionADetails.status, 200, 'session details should return 200');
-    assert.deepStrictEqual(sessionADetails.data.messages, [], 'new session should start with no messages');
-    checks.push({ name: 'logical-sessions', ok: true, created: 2 });
-
-    const diagnostics = buildDiagnostics(endpoint, lastStatusData, lastReadinessData);
     if (readiness.data && readiness.data.ready === true) {
+      const sessionA = await request(port, 'POST', '/api/sessions', { projectPath: process.cwd() }, token);
+      const sessionB = await request(port, 'POST', '/api/sessions', { projectPath: process.cwd() }, token);
+      assert.strictEqual(sessionA.status, 201, 'session A should be created');
+      assert.strictEqual(sessionB.status, 201, 'session B should be created');
+      assert.notStrictEqual(sessionA.data.sessionId, sessionB.data.sessionId, 'multiple logical sessions must have distinct ids');
+      const sessions = await request(port, 'GET', '/api/sessions', null, token);
+      assert.strictEqual(sessions.status, 200, 'sessions list should return 200');
+      assert.ok(sessions.data.sessions.some(session => session.id === sessionA.data.sessionId), 'sessions list should include session A');
+      assert.ok(sessions.data.sessions.some(session => session.id === sessionB.data.sessionId), 'sessions list should include session B');
+      const sessionADetails = await request(port, 'GET', `/api/sessions/${encodeURIComponent(sessionA.data.sessionId)}`, null, token);
+      assert.strictEqual(sessionADetails.status, 200, 'session details should return 200');
+      assert.deepStrictEqual(sessionADetails.data.messages, [], 'new session should start with no messages');
+      checks.push({ name: 'logical-sessions', ok: true, created: 2 });
+
       const settingsModel = await request(port, 'GET', '/api/settings/read?section=%E6%A8%A1%E5%9E%8B', null, token);
       assert.strictEqual(settingsModel.status, 200, 'settings model read should return 200 when UI is ready');
       assert.ok(Array.isArray(settingsModel.data.items), 'settings model read should return items array');
@@ -372,16 +382,11 @@ async function main() {
       assert.strictEqual(cleanupDryRun.data.support, 'delete_supported', 'cleanup dry-run should advertise delete support');
       await assertNoForeignQueueProbeChats(port, token, cleanupDryRun, checks);
     } else {
+      checks.push({ name: 'logical-sessions', ok: true, skipped: true, reason: diagnostics.readiness.reason });
       checks.push({ name: 'settings-and-solo-live-read', ok: true, skipped: true, reason: diagnostics.readiness.reason });
     }
 
-    if (requireReady) {
-      assertReady(readiness.data, diagnostics, '--require-ready');
-      checks.push({ name: 'require-ready', ok: true });
-    }
-
     if (allowDelegate) {
-      assertReady(readiness.data, diagnostics, '--delegate');
       const delegate = await request(port, 'POST', '/api/delegate-async', {
         task: delegateTask,
         waitForQueue: false,
@@ -464,8 +469,8 @@ async function main() {
     }, null, 2));
     process.exitCode = 1;
   } finally {
-    if (gateway && typeof gateway.shutdown === 'function') {
-      await gateway.shutdown();
+    if (gateway && typeof gateway.gracefulShutdown === 'function') {
+      await gateway.gracefulShutdown();
     } else if (server) {
       if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
@@ -475,7 +480,11 @@ async function main() {
   process.exit(process.exitCode || 0);
 }
 
-main().catch(err => {
-  console.error('[live-uat] FAIL:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[live-uat] FAIL:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { summarizeReadiness, buildDiagnostics, assertReady };

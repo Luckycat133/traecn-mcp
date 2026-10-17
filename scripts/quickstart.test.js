@@ -61,8 +61,7 @@ asyncTest('probeTraeCNCDP accepts a TraeCN CDP version response', async () => {
     const address = server.address();
     const version = await probeTraeCNCDP({
       host: '127.0.0.1',
-      port: address.port,
-      timeoutMs: 250
+      port: address.port
     });
     assert.strictEqual(version.Browser, 'Trae/1.107.1');
   } finally {
@@ -79,7 +78,7 @@ asyncTest('probeTraeCNCDP rejects a non-TraeCN CDP endpoint', async () => {
   try {
     const { probeTraeCNCDP } = require('./quickstart');
     await assert.rejects(
-      probeTraeCNCDP({ host: '127.0.0.1', port: server.address().port, timeoutMs: 250 }),
+      probeTraeCNCDP({ host: '127.0.0.1', port: server.address().port }),
       /does not identify TraeCN/i
     );
   } finally {
@@ -96,7 +95,7 @@ asyncTest('probeTraeCNCDP rejects invalid JSON from the CDP endpoint', async () 
   try {
     const { probeTraeCNCDP } = require('./quickstart');
     await assert.rejects(
-      probeTraeCNCDP({ host: '127.0.0.1', port: server.address().port, timeoutMs: 250 }),
+      probeTraeCNCDP({ host: '127.0.0.1', port: server.address().port }),
       /parse CDP version/i
     );
   } finally {
@@ -113,7 +112,7 @@ asyncTest('probeTraeCNCDP rejects a non-success HTTP response', async () => {
   try {
     const { probeTraeCNCDP } = require('./quickstart');
     await assert.rejects(
-      probeTraeCNCDP({ host: '127.0.0.1', port: server.address().port, timeoutMs: 250 }),
+      probeTraeCNCDP({ host: '127.0.0.1', port: server.address().port }),
       /HTTP 503/i
     );
   } finally {

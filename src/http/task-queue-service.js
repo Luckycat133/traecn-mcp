@@ -31,6 +31,8 @@ class TaskQueueService {
     taskHistoryStore = null,
     isMockBridge = () => false,
     isTerminalStatus = () => false,
+    isCancellationConfirmed = () => false,
+    isTaskFinalizationConfirmed = () => false,
     onWritePhase = null,
     terminalReplayTtlMs,
     now,
@@ -55,6 +57,8 @@ class TaskQueueService {
       taskHistoryStore,
       isMockBridge,
       isTerminalStatus,
+      isCancellationConfirmed,
+      isTaskFinalizationConfirmed,
       taskStore: this.taskStore,
     });
     this.batchExecutor = new BatchExecutor({

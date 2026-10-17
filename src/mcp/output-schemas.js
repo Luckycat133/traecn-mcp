@@ -35,21 +35,32 @@ function toolOutputSchema(description, properties) {
 
 const STRING_ARRAY = Object.freeze({ type: 'array', items: { type: 'string' } });
 
-// TaskAcceptedResult — traecn_send_message acceptance plus its rejection path.
+// TaskAcceptedResult — new acceptance, terminal idempotency replay, or rejection.
 const TASK_ACCEPTED_PROPERTIES = {
   ok: { type: 'boolean', description: 'False when the gateway rejected the submission.' },
   taskId: { type: 'string', description: 'Stable identifier used by traecn_get_task and traecn_cancel_task.' },
-  status: { type: 'string', enum: ['accepted'], description: 'Acceptance status reported by the gateway.' }
+  status: {
+    type: 'string', enum: ['accepted', 'done', 'error', 'cancelled', 'queue_timeout', 'review_rejected'],
+    description: 'Accepted for new work, or the original terminal status on an idempotent replay.'
+  },
+  terminal: { type: 'boolean', description: 'True when returning the original terminal task without submitting again.' },
+  result: { type: ['object', 'null'], description: 'Original captured result on a terminal replay.' },
+  error: { type: ['string', 'null'], description: 'Original task error on replay, or submission rejection diagnostic.' }
 };
 
 // TaskSnapshotResult — traecn_get_task status snapshots (active queue and history).
 const TASK_SNAPSHOT_PROPERTIES = {
   taskId: { type: 'string', description: 'Echoed task identifier.' },
   status: { type: 'string', description: 'Task status such as queued, executing, done, error, cancelled, awaiting_review, approval_required.' },
+  error: { type: ['string', 'null'], description: 'Original task error, or null when no execution error was recorded.' },
   historyStatus: { type: 'string', description: 'Internal history status when the task already left the active queue.' },
   createdAt: { type: ['number', 'null'], description: 'Epoch milliseconds when the task was created.' },
   elapsed: { type: ['number', 'null'], description: 'Milliseconds elapsed since creation.' },
-  completedAt: { type: ['number', 'null'], description: 'Epoch milliseconds when the task completed.' },
+  completedAt: {
+    type: ['number', 'string', 'null'],
+    format: 'date-time',
+    description: 'Task completion time: epoch milliseconds, an ISO 8601 timestamp from persisted history, or null when unavailable.'
+  },
   fromHistory: { type: 'boolean', description: 'True when served from persisted history instead of the active queue.' },
   metadata: { type: 'object', description: 'Gateway bookkeeping metadata recorded with the task.' },
   stepCount: { type: 'number', description: 'Number of recorded execution steps.' },
@@ -118,7 +129,10 @@ const SELECT_MODE_PROPERTIES = {
 const SETTINGS_WRITE_PROPERTIES = {
   label: { type: 'string', description: 'Setting label that was written.' },
   value: { description: 'Value applied to the setting.' },
-  result: { type: 'string', description: 'Driver-reported write outcome, including already-in-desired-state.' }
+  result: { type: 'string', description: 'Driver-reported write outcome, including already-in-desired-state.' },
+  requestedValue: { description: 'Value requested by the caller.' },
+  verified: { type: 'boolean', description: 'True only when the observed UI value equals the requested value.' },
+  controlType: { type: 'string', enum: ['toggle', 'option', 'text'], description: 'UI control whose value was read back.' }
 };
 const CONVERSATION_ACTION_PROPERTIES = {
   action: { type: 'string', enum: ['create', 'select', 'delete'], description: 'Conversation operation performed.' },
@@ -148,7 +162,15 @@ const STOP_GENERATION_PROPERTIES = {
 // Workspace verification.
 const OPEN_WORKSPACE_PROPERTIES = {
   projectPath: { type: 'string', description: 'Absolute folder path that was opened.' },
-  verifiedWorkspace: { type: 'string', description: 'Workspace path verified inside the TraeCN window.' },
+  verifiedWorkspace: {
+    type: ['string', 'object'],
+    description: 'Workspace identity detected in the TraeCN window, or a compatible gateway path string.',
+    properties: {
+      folderName: { type: 'string', description: 'Folder name detected in the TraeCN window.' },
+      rootPath: { type: ['string', 'null'], description: 'Detected absolute workspace root, or null when unavailable.' }
+    },
+    additionalProperties: true
+  },
   alreadyRunning: { type: 'boolean', description: 'Whether TraeCN was already running.' },
   reusedWindow: { type: 'boolean', description: 'Whether an existing window was reused instead of spawning one.' },
   binPath: { type: 'string', description: 'TraeCN binary path used by the gateway.' },
@@ -173,14 +195,14 @@ const ERROR_RESULT_SCHEMA = Object.freeze({
     message: { type: 'string', description: 'Human-readable error text.' },
     retryable: { type: 'boolean', description: 'Whether retrying the same call can succeed later.' },
     nextAction: { type: 'string', description: 'Concrete recovery step for the caller.' },
-    required: { type: 'array', items: { type: 'string' }, description: 'Missing authorization scopes when denied.' }
+    required: { type: 'string', description: 'Required authorization scope when denied.' }
   }),
   additionalProperties: true
 });
 
 const TOOL_OUTPUT_SCHEMAS = Object.freeze({
   traecn_send_message: toolOutputSchema(
-    'Accepted task identity, or the gateway rejection with reason.',
+    'Accepted task identity, original terminal replay, or gateway rejection with reason.',
     TASK_ACCEPTED_PROPERTIES
   ),
   traecn_get_task: toolOutputSchema(
@@ -240,8 +262,13 @@ const TOOL_OUTPUT_SCHEMAS = Object.freeze({
     LIST_CONVERSATIONS_PROPERTIES
   ),
   traecn_create_conversation: toolOutputSchema(
-    'Created conversation operation outcome.',
-    CONVERSATION_ACTION_PROPERTIES
+    'Fresh conversation or empty draft awaiting a native identity.',
+    {
+      ...CONVERSATION_ACTION_PROPERTIES,
+      conversationId: { type: ['string', 'null'], description: 'Native identity when allocated; null for an empty draft.' },
+      creationDeferred: { type: 'boolean', description: 'True when TraeCN will allocate the conversation identity on its first message.' },
+      fresh: { type: 'boolean', description: 'Whether the active context is ready for a first message.' }
+    }
   ),
   traecn_select_conversation: toolOutputSchema(
     'Confirmed active conversation identity.',

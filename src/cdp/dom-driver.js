@@ -11,6 +11,7 @@ const { DiagnosticsDriver } = require('./diagnostics-driver');
 const { SnapshotDriver } = require('./snapshot-driver');
 const { ExtensionDriver } = require('./extension-driver');
 const { getConfig } = require('./driver-config');
+const { TraeCNAutomationError } = require('./errors');
 const setupModule = require('./dom-handlers/setup');
 const modeModule = require('./dom-handlers/mode-detection');
 const panelModule = require('./dom-handlers/panel-capture');
@@ -28,6 +29,7 @@ class DomDriver {
     this.client = client;
     this.config = config || getConfig();
     this.traeAdapter = options.traeAdapter || null;
+    this._activateWindow = typeof options.activateWindow === 'function' ? options.activateWindow : null;
     this._lastTaskText = '';
     this._pendingUserTask = '';
     this._preSendSnapshot = ''; // body text snapshot before sending task
@@ -38,6 +40,26 @@ class DomDriver {
 
   getTraeAdapterCapabilities() {
     return this.traeAdapter ? { ...this.traeAdapter.capabilities } : null;
+  }
+
+  async _ensureVisibleWindow() {
+    if (!this._activateWindow) return;
+    const state = await this.client.send('Runtime.evaluate', {
+      expression: 'document.visibilityState', returnByValue: true
+    });
+    if (state.result?.value === 'visible') return;
+    if (state.result?.value !== 'hidden') {
+      throw TraeCNAutomationError.windowNotVisible('renderer visibility could not be verified');
+    }
+    let activated;
+    try {
+      activated = await this._activateWindow();
+    } catch (error) {
+      throw TraeCNAutomationError.windowNotVisible(error.message || 'application activation failed');
+    }
+    if (!activated) throw TraeCNAutomationError.windowNotVisible('the existing application could not be activated');
+    const visible = await this._waitForExpression('document.visibilityState === "visible"', 5000, 200);
+    if (!visible) throw TraeCNAutomationError.windowNotVisible('renderer stayed hidden after application activation');
   }
 
   // ── Mode detection ─────────────────────────────────────────────────────
@@ -207,6 +229,7 @@ class DomDriver {
   }
 
   async sendMessage(text) {
+    await this._ensureVisibleWindow();
     return messagingModule.sendMessage(this, text);
   }
 
@@ -242,8 +265,9 @@ class DomDriver {
    * In SOLO mode: reads sidebar + heuristics (existing logic).
    * In IDE mode: reads chat panel messages + body text diff.
    */
-  async collectResponse() {
-    return responseModule.collectResponse(this);
+  async collectResponse(options = {}) {
+    await this._ensureVisibleWindow();
+    return responseModule.collectResponse(this, options);
   }
 
 
@@ -252,8 +276,8 @@ class DomDriver {
    * @param {string} action - 'trust' | 'allow' | 'confirm' | 'approve' | 'deny' | 'cancel' | 'dismiss'
    * @returns {Promise<{success: boolean, action: string, buttonClicked?: string, error?: string}>}
    */
-  async approveDialog(action) {
-    return dialogsModule.approveDialog(this, action);
+  async approveDialog(action, options = {}) {
+    return dialogsModule.approveDialog(this, action, options);
   }
 
   async answerQuestionDialog(answer) {
@@ -299,11 +323,12 @@ class DomDriver {
   }
 
   async newChat() {
+    await this._ensureVisibleWindow();
     return messagingModule.newChat(this);
   }
 
-  async listSoloChats() {
-    return soloChatModule.listSoloChats(this);
+  async listSoloChats(options = {}) {
+    return soloChatModule.listSoloChats(this, options);
   }
 
   async getActiveSoloChat() {
@@ -369,7 +394,9 @@ class DomDriver {
 
   get settings() {
     if (!this._settingsDriver) {
-      this._settingsDriver = new SettingsDriver(this.client, this.config);
+      this._settingsDriver = new SettingsDriver(this.client, this.config, {
+        ensureVisibleWindow: () => this._ensureVisibleWindow()
+      });
     }
     return this._settingsDriver;
   }

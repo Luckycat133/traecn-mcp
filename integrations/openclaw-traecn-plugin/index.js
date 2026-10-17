@@ -442,6 +442,7 @@ const toolDefinitions = [
           reviewRequired: params.reviewRequired === true,
           autoContinue: params.autoContinue === true,
           followupTasks: params.followupTasks,
+          completionChecks: params.completionChecks,
           autoApproveDialog: params.autoApproveDialog,
           notifyUrl: params.notifyUrl,
           fallbackModels: params.fallbackModels,
@@ -743,19 +744,22 @@ function formatResult(result) {
   return output;
 }
 
-function resolveClientOptions(pluginConfig = {}) {
-  const options = {};
-  if (typeof pluginConfig.token === 'string') {
-    options.token = pluginConfig.token;
+function resolveClientOptions(config = {}) {
+  const options = { ...config };
+  if (config.baseUrl === undefined) return options;
+
+  let url;
+  try {
+    url = new URL(config.baseUrl);
+  } catch {
+    throw new Error('TraeCNclaw baseUrl must be a valid HTTP gateway origin');
   }
-  if (typeof pluginConfig.baseUrl === 'string' && pluginConfig.baseUrl.trim()) {
-    const url = new URL(pluginConfig.baseUrl);
-    if (url.protocol !== 'http:') {
-      throw new Error('TraeCNclaw baseUrl must use http://');
-    }
-    options.host = url.hostname;
-    options.port = Number(url.port || 80);
+  if (url.protocol !== 'http:' || url.username || url.password
+      || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('TraeCNclaw baseUrl must be an HTTP gateway origin without credentials, a path, query, or fragment');
   }
+  options.host = url.hostname.replace(/^\[|\]$/g, '');
+  options.port = Number(url.port || 80);
   return options;
 }
 
@@ -777,7 +781,9 @@ function register(openClaw) {
         name: tool.name,
         description: tool.description,
         parameters: tool.parameters,
-        async execute(_toolCallId, params) {
+        handler: tool.handler,
+        async execute(_toolCallId, params, signal) {
+          if (signal) signal.throwIfAborted();
           try {
             return toToolResult(await tool.handler(params || {}, clientOptions));
           } catch (error) {

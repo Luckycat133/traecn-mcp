@@ -1,11 +1,20 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
 const http = require('http');
+const os = require('os');
+const path = require('path');
+
+const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'traecnclaw-system-test-'));
 
 process.env.TRAECN_ENABLE_MOCK_BRIDGE = '1';
 process.env.TRAECN_GATEWAY_TOKEN = 'system-test-token';
 process.env.TRAECN_RATE_LIMIT_MAX_REQUESTS = '1000';
+process.env.TRAECN_ACTIVE_QUEUE_PERSISTENCE_PATH = path.join(dataRoot, 'queue.json');
+process.env.TRAECN_TASK_EVENT_PERSISTENCE_PATH = path.join(dataRoot, 'events.json');
+process.env.TRAECN_TASK_HISTORY_PERSISTENCE_PATH = path.join(dataRoot, 'history.json');
+process.env.TRAECN_AUDIT_LOG_DIR = path.join(dataRoot, 'audit');
 
 const { startGateway } = require('../src/http/gateway');
 
@@ -68,9 +77,16 @@ function request(port, method, path, body = null, headers = {}) {
     const unauthorized = await request(port, 'POST', '/api/sessions', {});
     assert.strictEqual(unauthorized.status, 401);
 
+    const discoveredSettings = await request(port, 'GET', '/api/settings/read?section=general', null, auth);
+    assert.strictEqual(discoveredSettings.status, 200);
+    const settingBefore = discoveredSettings.data.items.find(item => item.visible !== false
+      && item.controlType === 'toggle' && typeof item.toggleChecked === 'boolean');
+    assert.ok(settingBefore?.label, 'mock settings must expose a discoverable toggle');
+    const settingParams = { section: 'general', label: settingBefore.label, value: !settingBefore.toggleChecked };
+
     const confirmPlan = await request(port, 'POST', '/api/confirm/plan', {
       command: 'settings_set',
-      params: { label: 'Auto Save', value: true }
+      params: settingParams
     }, auth);
     assert.strictEqual(confirmPlan.status, 200);
     assert.strictEqual(confirmPlan.data.risk, 'high');
@@ -86,21 +102,48 @@ function request(port, method, path, body = null, headers = {}) {
     assert.ok(preflight.data.nextAction);
 
     const blockedSetting = await request(port, 'POST', '/api/settings/set', {
-      label: 'Auto Save',
-      value: true,
+      ...settingParams,
+      kind: 'toggle',
       requireConfirmation: true
     }, auth);
     assert.strictEqual(blockedSetting.status, 409);
     assert.strictEqual(blockedSetting.data.code, 'OPERATION_CONFIRMATION_REQUIRED');
 
     const confirmedSetting = await request(port, 'POST', '/api/settings/set', {
-      label: 'Auto Save',
-      value: true,
+      ...settingParams,
+      kind: 'toggle',
       requireConfirmation: true,
       confirmationId: confirmPlan.data.confirmationId
     }, auth);
     assert.strictEqual(confirmedSetting.status, 200);
-    assert.strictEqual(confirmedSetting.data.label, 'Auto Save');
+    assert.strictEqual(confirmedSetting.data.label, settingParams.label);
+    assert.strictEqual(confirmedSetting.data.controlType, 'toggle');
+    assert.strictEqual(confirmedSetting.data.requestedValue, settingParams.value);
+    assert.strictEqual(confirmedSetting.data.value, settingParams.value);
+    assert.strictEqual(confirmedSetting.data.verified, true);
+
+    const settingsReadback = await request(port, 'GET', '/api/settings/read?section=general', null, auth);
+    assert.strictEqual(settingsReadback.status, 200);
+    const settingAfter = settingsReadback.data.items.find(item => item.label === settingParams.label);
+    assert.strictEqual(settingAfter.toggleChecked, settingParams.value);
+    assert.notStrictEqual(settingAfter.toggleChecked, settingBefore.toggleChecked);
+
+    const missingParams = { ...settingParams, label: 'Missing system setting' };
+    const missingPlan = await request(port, 'POST', '/api/confirm/plan', {
+      command: 'settings_set', params: missingParams
+    }, auth);
+    assert.strictEqual(missingPlan.status, 200);
+    const missingSetting = await request(port, 'POST', '/api/settings/set', {
+      ...missingParams, kind: 'toggle', requireConfirmation: true,
+      confirmationId: missingPlan.data.confirmationId
+    }, auth);
+    assert.strictEqual(missingSetting.status, 404);
+    assert.strictEqual(missingSetting.data.error, 'setting_not_found');
+    const invalidToggle = await request(port, 'POST', '/api/settings/set', {
+      ...settingParams, kind: 'toggle', value: 'false'
+    }, auth);
+    assert.strictEqual(invalidToggle.status, 400);
+    assert.strictEqual(invalidToggle.data.error, 'toggle value must be boolean');
 
     const session = await request(port, 'POST', '/api/sessions', {}, auth);
     assert.strictEqual(session.status, 201);
@@ -114,11 +157,40 @@ function request(port, method, path, body = null, headers = {}) {
       auth
     );
     assert.strictEqual(delegate.status, 200);
-    assert.strictEqual(delegate.data.text, 'Mock response from TraeCN');
+    assert.match(delegate.data.text, /^Mock response from TraeCN\./);
+    assert.match(delegate.data.text, /No TraeCN model was called/);
 
     const asyncDelegate = await request(port, 'POST', '/api/delegate-async', { task: 'async task' }, auth);
     assert.strictEqual(asyncDelegate.status, 200);
-    assert.strictEqual(asyncDelegate.data.text, 'Mock response from TraeCN');
+    assert.strictEqual(asyncDelegate.data.text, delegate.data.text);
+
+    const reviewedSubmission = await request(port, 'POST', '/api/tasks/submit', {
+      message: 'Review the simulated system task',
+      reviewRequired: true
+    }, auth);
+    assert.strictEqual(reviewedSubmission.status, 202);
+    const reviewedTaskId = reviewedSubmission.data.taskId;
+    assert.ok(reviewedTaskId);
+    const reviewDeadline = Date.now() + 45000;
+    let reviewSnapshot;
+    do {
+      reviewSnapshot = await request(port, 'GET', `/api/task/${reviewedTaskId}`, null, auth);
+      assert.strictEqual(reviewSnapshot.status, 200);
+      if (reviewSnapshot.data.status !== 'queued' && reviewSnapshot.data.status !== 'executing') break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } while (Date.now() < reviewDeadline);
+    assert.strictEqual(reviewSnapshot.data.status, 'awaiting_review', 'manual review must not be automatically approved');
+    assert.strictEqual(reviewSnapshot.data.result.text, delegate.data.text);
+    const approved = await request(port, 'POST', `/api/task/${reviewedTaskId}/review`, {
+      decision: 'approve',
+      notes: 'Reviewed in the isolated mock system test'
+    }, auth);
+    assert.strictEqual(approved.status, 200);
+    assert.strictEqual(approved.data.taskId, reviewedTaskId);
+    assert.strictEqual(approved.data.status, 'done');
+    const finalSnapshot = await request(port, 'GET', `/api/task/${reviewedTaskId}`, null, auth);
+    assert.strictEqual(finalSnapshot.data.status, 'done');
+    assert.strictEqual(finalSnapshot.data.result.text, delegate.data.text);
 
     const queueStatus = await request(port, 'GET', '/api/queue-status', null, auth);
     assert.strictEqual(queueStatus.status, 200);
@@ -167,5 +239,6 @@ function request(port, method, path, body = null, headers = {}) {
       }
       await new Promise(resolve => server.close(resolve));
     }
+    fs.rmSync(dataRoot, { recursive: true, force: true });
   }
 })();

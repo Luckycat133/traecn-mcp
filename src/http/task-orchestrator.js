@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { isGenericQueueProbeTask } = require('../shared/utils');
+const { isGenericQueueProbeTask, withoutTaskTrace } = require('../shared/utils');
 const { TraeCNAutomationError } = require('../cdp/errors');
 
 /**
@@ -53,7 +53,7 @@ class TaskOrchestrator {
     this.taskStoreUnavailable = taskStoreUnavailable;
   }
 
-  createQueuedTask(body = {}, queueStatus = {}) {
+  createQueuedTask(body = {}, queueStatus = {}, { deferPersistence = false } = {}) {
     if (this.isGenericQueueProbeTask(body && body.task)) {
       throw TraeCNAutomationError.invalidInput(
         'task',
@@ -111,18 +111,14 @@ class TaskOrchestrator {
         typeof body.idempotencyFingerprint === 'string' && body.idempotencyFingerprint.trim()
           ? body.idempotencyFingerprint.trim()
           : this.fingerprintTaskRequest(body),
+      idempotencyFingerprintVersion: 2,
       chatId: body.chatId || null,
-      soloChat: this.normalizeSoloChatTarget(
-        body.soloChat ||
-          body.soloChatTarget || {
-            index: body.soloChatIndex,
-            titleIncludes: body.soloChatTitleIncludes,
-            textIncludes: body.soloChatTextIncludes,
-          }
-      ),
+      soloChat: this._soloChatTargetForRequest(body),
       task: body.task,
       projectPath,
-      desiredModel: typeof body.desiredModel === 'string' ? body.desiredModel : null,
+      desiredModel: typeof body.desiredModel === 'string' && body.desiredModel.trim()
+        ? body.desiredModel.trim()
+        : null,
       desiredMode:
         body.desiredMode === 'solo' || body.desiredMode === 'ide' ? body.desiredMode : null,
       newConversation: body.newConversation !== false,
@@ -173,6 +169,9 @@ class TaskOrchestrator {
     });
 
     this.taskQueue.set(historyTaskId, task);
+    // A workflow child is accepted by its parent's finalization snapshot so
+    // their identity and dependency are committed together.
+    if (deferPersistence) return task;
     if (!this.taskQueueService || typeof this.taskQueueService.persist !== 'function') {
       this.taskQueue.delete(historyTaskId);
       const error = this.taskStoreUnavailable({ taskStoreWritable: false });
@@ -210,7 +209,8 @@ class TaskOrchestrator {
     return task;
   }
 
-  fingerprintTaskRequest(input = {}) {
+  fingerprintTaskRequest(input = {}, version = 2) {
+    const queueMaxWaitMs = Number(input.maxQueueWaitMs ?? input.queueMaxWaitMs);
     const semantic = {
       task: typeof input.task === 'string' ? input.task : '',
       sessionId: typeof input.sessionId === 'string' && input.sessionId.trim()
@@ -227,7 +227,9 @@ class TaskOrchestrator {
         : null,
       newConversation: input.newConversation !== false,
       chatId: input.chatId || null,
-      soloChat: this.normalizeSoloChatTarget(input.soloChat || input.soloChatTarget || null),
+      soloChat: version === 1
+        ? this.normalizeSoloChatTarget(input.soloChat || input.soloChatTarget || null)
+        : this._soloChatTargetForRequest(input),
       includeProcessText: input.includeProcessText === true,
       reviewRequired: input.reviewRequired === true,
       autoContinue: input.autoContinue === true,
@@ -240,14 +242,34 @@ class TaskOrchestrator {
         input.autoModelFallback === true
       )
     };
+    if (version !== 1) {
+      semantic.maxQueueWaitMs = Number.isFinite(queueMaxWaitMs) && queueMaxWaitMs > 0 ? queueMaxWaitMs : null;
+      semantic.modelProbeIntervalMs = this.modelProbeIntervalMs(input.modelProbeIntervalMs);
+    }
     return crypto.createHash('sha256').update(canonicalJson(semantic)).digest('hex');
   }
 
+  _soloChatTargetForRequest(input) {
+    return this.normalizeSoloChatTarget(input.soloChat || input.soloChatTarget || {
+      index: input.soloChatIndex,
+      titleIncludes: input.soloChatTitleIncludes,
+      textIncludes: input.soloChatTextIncludes
+    });
+  }
+
   recordTerminalTask(task) {
-    if (!task || !this.isTerminalStatus(task.status)) return true;
-    if (!task.idempotencyKey) return true;
+    if (!task) return true;
+    if (!this.isTerminalStatus(task.status)) {
+      return this.taskQueueService?.persist?.(this.taskQueue) || false;
+    }
+    if (!task.idempotencyKey) {
+      return this.taskQueueService && typeof this.taskQueueService.persist === 'function'
+        ? this.taskQueueService.persist(this.taskQueue)
+        : false;
+    }
     if (!task.idempotencyFingerprint) {
       task.idempotencyFingerprint = this.fingerprintTaskRequest(task);
+      task.idempotencyFingerprintVersion = 2;
     }
     if (!this.taskQueueService || typeof this.taskQueueService.recordTerminalReplay !== 'function') {
       return false;
@@ -272,29 +294,52 @@ class TaskOrchestrator {
     const requestedFingerprint = typeof request === 'string'
       ? request
       : (request && typeof request === 'object' ? this.fingerprintTaskRequest(request) : null);
+    const legacyFingerprint = request && typeof request === 'object'
+      ? this.fingerprintTaskRequest(request, 1)
+      : null;
     const ownedTask = Array.from(this.taskQueue.values())
       .find(task => task && task.idempotencyKey === idempotencyKey);
     if (ownedTask) {
-      if (requestedFingerprint && ownedTask.idempotencyFingerprint
-        && requestedFingerprint !== ownedTask.idempotencyFingerprint) {
+      const legacy = ownedTask.idempotencyFingerprintVersion === undefined
+        || ownedTask.idempotencyFingerprintVersion === 1;
+      const expectedFingerprint = legacy ? (legacyFingerprint || requestedFingerprint) : requestedFingerprint;
+      if (expectedFingerprint && ownedTask.idempotencyFingerprint
+        && expectedFingerprint !== ownedTask.idempotencyFingerprint) {
         return idempotencyConflict(ownedTask.taskId);
+      }
+      if (ownedTask.cancelPersistencePending || ownedTask.statePersistencePending) {
+        const error = TraeCNAutomationError.taskStoreUnavailable(this.taskQueueService?.getPersistenceHealth?.() || {});
+        error.message = 'Task state persistence could not be confirmed. Retry after restoring task storage.';
+        throw error;
+      }
+      if (this.isTerminalStatus(ownedTask.status)) {
+        return {
+          taskId: ownedTask.taskId,
+          status: ownedTask.status,
+          result: withoutTaskTrace(ownedTask.result ?? null),
+          error: ownedTask.error ?? null,
+          terminal: true,
+          statusCode: 200
+        };
       }
       return {
         taskId: ownedTask.taskId,
-        status: this.isTerminalStatus(ownedTask.status) ? ownedTask.status : 'accepted',
+        status: 'accepted',
         statusCode: 202
       };
     }
     const replay = this.taskQueueService?.getTerminalReplay?.(idempotencyKey) || null;
     if (!replay) return null;
-    if (requestedFingerprint && replay.fingerprint
-      && requestedFingerprint !== replay.fingerprint) {
+    const legacy = replay.fingerprintVersion === undefined || replay.fingerprintVersion === 1;
+    const expectedFingerprint = legacy ? (legacyFingerprint || requestedFingerprint) : requestedFingerprint;
+    if (expectedFingerprint && replay.fingerprint
+      && expectedFingerprint !== replay.fingerprint) {
       return idempotencyConflict(replay.taskId);
     }
     return {
       taskId: replay.taskId,
       status: replay.status,
-      result: replay.result ?? null,
+      result: withoutTaskTrace(replay.result ?? null),
       error: replay.error ?? null,
       terminal: true,
       statusCode: 200

@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { createRunner } = require('../../shared/test-runner');
 const app = require('./app');
+const stateApi = require('./state');
 
 const runner = createRunner('web-console/app.test.js');
 const { test, asyncTest, pendingAsyncTests, summary } = runner;
@@ -49,6 +50,90 @@ function response(status, payload, headers = {}) {
       return JSON.stringify(payload);
     },
   };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function controllerDouble(fetch) {
+  const timers = new Map();
+  let nextTimer = 0;
+  const root = {
+    document: { hidden: false },
+    location: { origin: 'http://127.0.0.1:3000' },
+    sessionStorage: storageDouble(),
+    localStorage: storageDouble(),
+    fetch,
+    TextEncoder,
+    btoa,
+    setTimeout(callback) {
+      const id = ++nextTimer;
+      timers.set(id, callback);
+      return id;
+    },
+    clearTimeout(id) {
+      timers.delete(id);
+    },
+  };
+  const controller = new app.ConsoleController({ root });
+  controller.render = () => {};
+  controller.announce = () => {};
+  controller.refs = {
+    'gateway-token': { value: '' },
+    'connection-dialog': {
+      open: false,
+      close() {
+        this.open = false;
+      },
+    },
+  };
+  controller.state.connection.auth = 'ready';
+  return { controller, root, timers };
+}
+
+function installSocketDouble(root) {
+  const sockets = [];
+  root.WebSocket = class Socket {
+    constructor() {
+      this.readyState = 0;
+      this.listeners = new Map();
+      this.sent = [];
+      sockets.push(this);
+    }
+    addEventListener(type, listener) {
+      this.listeners.set(type, listener);
+    }
+    close() {
+      this.readyState = 3;
+    }
+    send(data) {
+      this.sent.push(JSON.parse(data));
+    }
+    emit(type, data) {
+      if (type === 'open') this.readyState = 1;
+      if (type === 'close') this.readyState = 3;
+      return this.listeners.get(type)?.(data);
+    }
+  };
+  return sockets;
+}
+
+function composerDouble(fetch) {
+  const fixture = controllerDouble(fetch);
+  const { controller, root } = fixture;
+  let requestId = 0;
+  root.crypto = { randomUUID: () => `request-${++requestId}` };
+  controller.catalog.workspace = { verified: true };
+  controller.refs['task-message'] = { value: '完成原有任务' };
+  controller.refs['review-required'] = { checked: false };
+  controller.refs['submit-task'] = { disabled: false };
+  controller.fetchTask = async () => null;
+  return fixture;
 }
 
 test('token store uses session storage and removes the legacy local token', () => {
@@ -205,6 +290,209 @@ asyncTest('API errors retain machine status while exposing bounded user copy', a
   );
 });
 
+asyncTest(
+  'hydration cannot restore authenticated state after a protected request is rejected',
+  async () => {
+    const { controller } = controllerDouble(async (url) => {
+      if (url.endsWith('/api/workspace')) return response(401, { error: 'unauthorized' });
+      if (url.includes('/api/tasks/history')) {
+        return response(200, { tasks: [{ taskId: 'private-history', status: 'done' }] });
+      }
+      return response(200, { tasks: [], rootPath: '/private/project', verified: true });
+    });
+    controller.token = 'expired-token';
+    controller.api.setToken(controller.token);
+    controller.storage.save(controller.token);
+    await controller.hydrate();
+    assert.strictEqual(controller.state.connection.auth, 'locked');
+    assert.strictEqual(controller.api.hasToken(), false);
+    assert.strictEqual(controller.storage.load(), '');
+    assert.strictEqual(controller.state.context.workspace, null);
+    assert.deepStrictEqual(Object.keys(controller.state.tasks), []);
+  }
+);
+
+asyncTest('disconnect invalidates a pending connection check', async () => {
+  const pending = deferred();
+  const { controller } = controllerDouble(() => pending.promise);
+  controller.hydrate = async () => {};
+  let socketOpened = false;
+  controller.openSocket = () => {
+    socketOpened = true;
+  };
+  const connection = controller.connect('old-token');
+  controller.disconnect();
+  pending.resolve(response(200, { tasks: [] }));
+  await connection;
+  assert.strictEqual(controller.state.connection.auth, 'locked');
+  assert.strictEqual(controller.storage.load(), '');
+  assert.strictEqual(socketOpened, false);
+});
+
+asyncTest('a rejected old connection cannot clear a newer connection token', async () => {
+  const oldResponse = deferred();
+  let requests = 0;
+  const { controller } = controllerDouble(() => {
+    requests += 1;
+    return requests === 1 ? oldResponse.promise : Promise.resolve(response(200, {}));
+  });
+  controller.hydrate = async () => {};
+  controller.openSocket = () => {};
+  const oldConnection = controller.connect('old-token');
+  await controller.connect('new-token');
+  oldResponse.resolve(response(401, { error: 'unauthorized' }));
+  await oldConnection;
+  assert.strictEqual(controller.state.connection.auth, 'ready');
+  assert.strictEqual(controller.token, 'new-token');
+  assert.strictEqual(controller.storage.load(), 'new-token');
+});
+
+asyncTest('disconnect discards an in-flight hydration snapshot', async () => {
+  const queue = deferred();
+  const queueRequested = deferred();
+  const { controller } = controllerDouble((url) => {
+    if (url.endsWith('/api/queue/status')) {
+      queueRequested.resolve();
+      return queue.promise;
+    }
+    return Promise.resolve(response(200, { tasks: [] }));
+  });
+  const hydration = controller.hydrate();
+  await queueRequested.promise;
+  controller.disconnect();
+  queue.resolve(response(200, { tasks: [{ taskId: 'old-task', status: 'queued' }] }));
+  await hydration;
+  assert.strictEqual(controller.state.connection.auth, 'locked');
+  assert.deepStrictEqual(controller.state.tasks, {});
+  assert.strictEqual(controller.catalog.workspace, null);
+});
+
+asyncTest('disconnect discards pending task and history reads', async () => {
+  const pending = deferred();
+  const { controller } = controllerDouble(() => pending.promise);
+  const taskRead = controller.fetchTask('old-task');
+  const historyRead = controller.loadHistory(2, true);
+  controller.disconnect();
+  pending.resolve(
+    response(200, {
+      taskId: 'old-task',
+      status: 'done',
+      result: { text: 'private result' },
+      tasks: [{ taskId: 'old-task', status: 'done' }],
+    })
+  );
+  await Promise.all([taskRead, historyRead]);
+  assert.deepStrictEqual(controller.state.tasks, {});
+  assert.deepStrictEqual(controller.state.history.items, []);
+});
+
+asyncTest('retired WebSockets cannot deliver events or close a new connection', async () => {
+  const { controller, root, timers } = controllerDouble(async () => response(200, {}));
+  const sockets = installSocketDouble(root);
+  controller.openSocket();
+  const oldSocket = sockets[0];
+  oldSocket.emit('open');
+  controller.stopRealtime();
+  controller.openSocket();
+  const currentSocket = sockets[1];
+  currentSocket.emit('open');
+  await oldSocket.emit('message', {
+    data: JSON.stringify({
+      type: 'taskUpdate',
+      taskId: 'old-task',
+      status: 'done',
+    }),
+  });
+  oldSocket.emit('close');
+  oldSocket.emit('error');
+  assert.strictEqual(controller.socket, currentSocket);
+  assert.strictEqual(controller.state.connection.socket, 'open');
+  assert.deepStrictEqual(controller.state.tasks, {});
+  assert.strictEqual(timers.size, 0);
+});
+
+asyncTest('natural WebSocket reconnect resubscribes each active task once', async () => {
+  const { controller, root, timers } = controllerDouble(async () => response(200, {}));
+  const sockets = installSocketDouble(root);
+  controller.dispatch({ type: 'UPSERT_TASK', task: { taskId: 'task-1', status: 'executing' } });
+  controller.openSocket();
+  sockets[0].emit('open');
+  controller.subscribeKnownTasks();
+  assert.deepStrictEqual(sockets[0].sent, [{ type: 'subscribe', taskId: 'task-1' }]);
+  sockets[0].emit('close');
+  const reconnectId = controller.socketReconnectTimer;
+  const reconnect = timers.get(reconnectId);
+  timers.delete(reconnectId);
+  reconnect();
+  sockets[1].emit('open');
+  controller.subscribeKnownTasks();
+  assert.deepStrictEqual(sockets[1].sent, [{ type: 'subscribe', taskId: 'task-1' }]);
+  assert.strictEqual(timers.size, 0);
+});
+
+asyncTest('an in-flight fallback poll cannot restart itself after disconnect', async () => {
+  const pending = deferred();
+  const { controller, timers } = controllerDouble(() => pending.promise);
+  controller.startFallbackPolling();
+  const [timerId, tick] = [...timers][0];
+  timers.delete(timerId);
+  const polling = tick();
+  controller.disconnect();
+  pending.resolve(response(200, { tasks: [] }));
+  await polling;
+  assert.strictEqual(controller.state.connection.auth, 'locked');
+  assert.strictEqual(timers.size, 0);
+});
+
+asyncTest('repeated submit events during an in-flight request create only one task', async () => {
+  const pending = deferred();
+  const calls = [];
+  const { controller } = composerDouble((url, options) => {
+    calls.push({ url, options });
+    return pending.promise;
+  });
+  const event = { preventDefault() {} };
+  const first = controller.submitTask(event);
+  const second = controller.submitTask(event);
+  pending.resolve(response(202, { taskId: 'task-1', status: 'accepted' }));
+  await Promise.all([first, second]);
+  assert.strictEqual(calls.length, 1);
+});
+
+asyncTest('retrying an uncertain submission reuses its identity until acceptance', async () => {
+  const keys = [];
+  const { controller } = composerDouble((_url, options) => {
+    keys.push(options.headers['Idempotency-Key']);
+    if (keys.length === 1) throw new TypeError('network response lost');
+    return Promise.resolve(response(202, { taskId: `task-${keys.length}`, status: 'accepted' }));
+  });
+  const event = { preventDefault() {} };
+  await controller.submitTask(event);
+  assert.strictEqual(controller.refs['task-message'].value, '完成原有任务');
+  await controller.submitTask(event);
+  assert.strictEqual(keys[0], keys[1], 'the retry must recover the same gateway task');
+  controller.refs['task-message'].value = '完成原有任务';
+  await controller.submitTask(event);
+  assert.notStrictEqual(
+    keys[1],
+    keys[2],
+    'a new instruction after acceptance needs a new identity'
+  );
+});
+
+asyncTest('changing an uncertain instruction creates a distinct submission identity', async () => {
+  const keys = [];
+  const { controller } = composerDouble((_url, options) => {
+    keys.push(options.headers['Idempotency-Key']);
+    throw new TypeError('network response lost');
+  });
+  const event = { preventDefault() {} };
+  await controller.submitTask(event);
+  controller.refs['task-message'].value = '改为另一项任务';
+  await controller.submitTask(event);
+  assert.notStrictEqual(keys[0], keys[1]);
+});
+
 test('browser application source avoids executable HTML and persistent token writes', () => {
   const source = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   assert.doesNotMatch(source, /\.innerHTML\s*=/);
@@ -217,6 +505,59 @@ test('browser application source avoids executable HTML and persistent token wri
   assert.match(source, /acknowledgeRisk/);
   assert.match(source, /document\.hidden/);
   assert.match(source, /querySelector\('dialog\[open\]'\)/);
+});
+
+asyncTest('a storage failure refreshes the same task without retrying its mutation', async () => {
+  const calls = [];
+  const { controller } = controllerDouble((url, options) => {
+    calls.push([url, options.method]);
+    if (options.method === 'POST') return response(503, { error: 'Task storage is unavailable' });
+    return response(200, {
+      taskId: 'storage-task',
+      status: 'executing',
+      statePersistencePending: true,
+    });
+  });
+  await controller.taskAction({ taskId: 'storage-task' }, 'review', { decision: 'approve' });
+  assert.deepStrictEqual(calls, [
+    ['http://127.0.0.1:3000/api/task/storage-task/review', 'POST'],
+    ['http://127.0.0.1:3000/api/task/storage-task', 'GET'],
+  ]);
+  assert.strictEqual(controller.state.tasks['storage-task'].statePersistencePending, true);
+});
+
+test('pending task cards expose refresh and cancellation retry without stale decisions', () => {
+  const { controller } = controllerDouble(() => response(200, {}));
+  controller.element = (_tag, _className, text = '') => ({
+    text,
+    dataset: {},
+    children: [],
+    append(...children) {
+      this.children.push(...children);
+    },
+  });
+  controller.button = (label) => controller.element('button', '', label);
+  controller.renderInteraction = () => {
+    throw new Error('pending approval must not expose interaction controls');
+  };
+  const text = (node) => [node.text, ...node.children.map(text)].join(' ');
+  for (const status of ['awaiting_review', 'approval_required']) {
+    const candidate = stateApi.normalizeTask({
+      taskId: 'pending-card',
+      status,
+      statePersistencePending: true,
+    });
+    const rendered = text(controller.renderTaskCard(candidate));
+    assert.match(rendered, /等待保存状态/);
+    assert.match(rendered, /刷新/);
+    assert.doesNotMatch(rendered, /批准结果|拒绝|继续|取消/);
+  }
+  const cancellation = stateApi.normalizeTask({
+    taskId: 'pending-cancellation',
+    status: 'executing',
+    cancelPersistencePending: true,
+  });
+  assert.match(text(controller.renderTaskCard(cancellation)), /重试取消/);
 });
 
 (async () => {

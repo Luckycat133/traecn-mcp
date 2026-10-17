@@ -171,6 +171,28 @@ test('QueueStateMachine: percentage progress is incomplete even with completion 
   assert.strictEqual(sm.isSuccessfulResult({ text, stable: true }), false);
 });
 
+const completedResult = {
+  stable: true,
+  text: 'Final report: the shipping calculation was corrected and all 12 tests passed. '
+    + 'The original inputs and existing behavior were preserved; the result is ready for review.'
+};
+
+test('QueueStateMachine: interrupted completion text is not reviewable and retains its output', () => {
+  const sm = new QueueStateMachine();
+  assert.strictEqual(sm.isReviewableResult(completedResult), true);
+  const partial = Object.freeze({ ...completedResult, interrupted: true });
+  assert.strictEqual(sm.isReviewableResult(partial), false);
+  assert.strictEqual(partial.text, completedResult.text);
+});
+
+test('QueueStateMachine: interrupted completion text is not successful and retains its output', () => {
+  const sm = new QueueStateMachine();
+  assert.strictEqual(sm.isSuccessfulResult(completedResult), true);
+  const partial = Object.freeze({ ...completedResult, interrupted: true });
+  assert.strictEqual(sm.isSuccessfulResult(partial), false);
+  assert.strictEqual(partial.text, completedResult.text);
+});
+
 console.log(`\n[queue-state-machine.test.js] Results: ${passed} passed, ${failed} failed\n`);
 
 process.exit(failed > 0 ? 1 : 0);

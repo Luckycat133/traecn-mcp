@@ -4,7 +4,7 @@ const assert = require('assert');
 const { TraeCNAutomationError, TraeAutomationError } = require('../cdp/errors');
 const { createRunner } = require('../shared/test-runner');
 const runner = createRunner('errors.test.js');
-const { test, asyncTest, pendingAsyncTests, summary } = runner;
+const { test, summary } = runner;
 
 console.log('\n[errors.test.js] Running tests...\n');
 
@@ -59,6 +59,16 @@ test('TraeCNAutomationError.sendFailed creates correct error', () => {
   const err = TraeCNAutomationError.sendFailed('disconnected');
   assert.strictEqual(err.code, 'SEND_FAILED');
   assert.ok(err.message.includes('disconnected'));
+  assert.deepStrictEqual(err.details, { cause: 'disconnected' });
+});
+
+test('sendFailed preserves explicit post-dispatch context without changing the error contract', () => {
+  const context = { submissionDispatched: true, cause: 'ignored caller override' };
+  const err = TraeCNAutomationError.sendFailed('confirmation timed out', context);
+  assert.strictEqual(err.code, 'SEND_FAILED');
+  assert.strictEqual(err.details.submissionDispatched, true);
+  assert.strictEqual(err.details.cause, 'confirmation timed out');
+  assert.strictEqual(context.cause, 'ignored caller override');
 });
 
 test('TraeCNAutomationError has proper stack trace', () => {

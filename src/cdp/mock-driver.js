@@ -22,7 +22,7 @@ class MockSettingsDriver {
         {
           label: 'Mock setting',
           desc: `Mock value for ${section}`,
-          currentValue: this.values.get('Mock setting') || 'enabled',
+          currentValue: this.values.has('Mock setting') ? this.values.get('Mock setting') : 'enabled',
           hasToggle: true,
           hasDropdown: false,
           hasTextInput: false,
@@ -145,7 +145,9 @@ class MockDriver extends DomDriver {
   async collectResponse() {
     if (this.mockResponses.length === 0) {
       return {
-        text: 'Mock response from TraeCN',
+        text:
+          'Mock response from TraeCN. This simulated task is complete and ready for result review. ' +
+          'No TraeCN model was called; use the live bridge to verify real desktop work.',
         stable: true,
         elapsedMs: 100
       };

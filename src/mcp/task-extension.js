@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const { getEnvWithFallback, parsePositiveInt } = require('../shared/utils');
-const { asMcpError } = require('./tools');
+const { asMcpContent, asMcpError, validateMcpToolArguments } = require('./tools');
 const { McpProtocolError, requestMeta } = require('./protocol');
 
 const TASKS_EXTENSION_ID = 'io.modelcontextprotocol/tasks';
@@ -36,16 +36,19 @@ function clientSupportsTaskExtension(message = {}) {
   return Boolean(
     capabilities
     && typeof capabilities === 'object'
+    && !Array.isArray(capabilities)
     && capabilities.extensions
     && typeof capabilities.extensions === 'object'
+    && !Array.isArray(capabilities.extensions)
     && capabilities.extensions[TASKS_EXTENSION_ID]
     && typeof capabilities.extensions[TASKS_EXTENSION_ID] === 'object'
+    && !Array.isArray(capabilities.extensions[TASKS_EXTENSION_ID])
   );
 }
 
 function assertTaskExtension(message = {}) {
   if (clientSupportsTaskExtension(message)) return true;
-  throw new McpProtocolError(-32003, 'Missing required client capability', {
+  throw new McpProtocolError(-32021, 'Missing required client capability', {
     requiredCapabilities: {
       extensions: { [TASKS_EXTENSION_ID]: {} }
     }
@@ -81,23 +84,29 @@ function isoTimestamp(value, fallback = Date.now()) {
 }
 
 function gatewayToolResult(snapshot = {}) {
-  if (TOOL_ERROR_STATUSES.has(String(snapshot.status || '').toLowerCase())) {
-    return asMcpError(snapshot.error || snapshot.message || 'TraeCN task failed');
+  const status = String(snapshot.status || '').toLowerCase();
+  if (TOOL_ERROR_STATUSES.has(status)) {
+    const failure = new Error(snapshot.error || snapshot.message || 'TraeCN task failed');
+    if (typeof snapshot.errorCode === 'string') failure.code = snapshot.errorCode;
+    if (status === 'queue_timeout') {
+      failure.code = failure.code || 'queue_timeout';
+      failure.retryable = true;
+      failure.nextAction = 'Retry the delegated task later or select another available model.';
+    }
+    return asMcpError(failure);
   }
   const value = snapshot.result && typeof snapshot.result === 'object'
     ? snapshot.result
     : snapshot;
-  const text = typeof value.text === 'string' && value.text
-    ? value.text
-    : JSON.stringify(value);
-  return {
-    content: [{ type: 'text', text }],
-    structuredContent: value,
-    isError: false
-  };
+  return asMcpContent(value);
+}
+
+function hasPendingTaskPersistence(snapshot) {
+  return Boolean(snapshot?.statePersistencePending || snapshot?.cancelPersistencePending);
 }
 
 function taskInputDescriptor(snapshot = {}) {
+  if (hasPendingTaskPersistence(snapshot)) return null;
   const gatewayStatus = String(snapshot.status || '').toLowerCase();
   const result = snapshot.result && typeof snapshot.result === 'object' ? snapshot.result : {};
   let kind = null;
@@ -188,6 +197,14 @@ function taskInputDescriptor(snapshot = {}) {
 function detailedTaskFromGateway(snapshot = {}) {
   const gatewayStatus = String(snapshot.status || '').toLowerCase();
   const createdAt = isoTimestamp(snapshot.createdAt);
+  const metadata = {
+    ...(snapshot.metadata && typeof snapshot.metadata === 'object' && !Array.isArray(snapshot.metadata)
+      ? snapshot.metadata : {}),
+    ...(typeof snapshot.workflowParentTaskId === 'string' && snapshot.workflowParentTaskId.trim()
+      ? { workflowParentTaskId: snapshot.workflowParentTaskId } : {}),
+    ...(typeof snapshot.nextTaskId === 'string' && snapshot.nextTaskId.trim()
+      ? { nextTaskId: snapshot.nextTaskId } : {})
+  };
   const task = {
     taskId: String(snapshot.taskId || ''),
     status: 'working',
@@ -198,8 +215,11 @@ function detailedTaskFromGateway(snapshot = {}) {
       Date.parse(createdAt)
     ),
     ttlMs: DEFAULT_TASK_TTL_MS,
-    pollIntervalMs: DEFAULT_TASK_POLL_INTERVAL_MS
+    pollIntervalMs: DEFAULT_TASK_POLL_INTERVAL_MS,
+    ...(Object.keys(metadata).length ? { metadata } : {})
   };
+
+  if (hasPendingTaskPersistence(snapshot)) return task;
 
   if (gatewayStatus === 'done' || TOOL_ERROR_STATUSES.has(gatewayStatus)) {
     task.status = 'completed';
@@ -236,6 +256,14 @@ class McpTaskAdapter {
     this.client = options.client;
   }
 
+  async _requestGateway(method, ...args) {
+    try {
+      return await this.client[method](...args);
+    } catch {
+      throw new McpProtocolError(-32603, 'Gateway task request could not complete');
+    }
+  }
+
   async create(submission = {}) {
     const taskId = String(submission.taskId || '').trim();
     if (!taskId) {
@@ -249,9 +277,9 @@ class McpTaskAdapter {
   }
 
   async _getGatewaySnapshot(taskId) {
-    const normalizedTaskId = String(taskId || '').trim();
+    const normalizedTaskId = typeof taskId === 'string' ? taskId.trim() : '';
     if (!normalizedTaskId) throw new McpProtocolError(-32602, 'taskId is required');
-    const response = await this.client.getTaskStatus(normalizedTaskId);
+    const response = await this._requestGateway('getTaskStatus', normalizedTaskId);
     if (Number(response?.status) === 404) {
       throw new McpProtocolError(-32602, `Failed to retrieve task: ${normalizedTaskId} was not found`);
     }
@@ -259,10 +287,13 @@ class McpTaskAdapter {
       throw new McpProtocolError(-32603, 'Failed to retrieve task from the gateway');
     }
     const snapshot = response && response.data !== undefined ? response.data : response;
-    if (!snapshot || typeof snapshot !== 'object') {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
       throw new McpProtocolError(-32603, 'Gateway returned an invalid task snapshot');
     }
-    return { taskId: normalizedTaskId, ...snapshot };
+    if (snapshot.taskId !== undefined && snapshot.taskId !== normalizedTaskId) {
+      throw new McpProtocolError(-32603, 'Gateway returned a mismatched task identifier');
+    }
+    return { ...snapshot, taskId: normalizedTaskId };
   }
 
   async get(taskId) {
@@ -281,11 +312,19 @@ class McpTaskAdapter {
     if (!input || !Object.prototype.hasOwnProperty.call(inputResponses, input.key)) return {};
 
     const response = inputResponses[input.key];
-    if (!response || typeof response !== 'object' || Array.isArray(response)) return {};
-    const action = String(response.action || '').toLowerCase();
-    const content = response.content && typeof response.content === 'object'
-      ? response.content
-      : {};
+    if (!response || typeof response !== 'object' || Array.isArray(response)
+        || !['accept', 'decline', 'cancel'].includes(response.action)) {
+      throw new McpProtocolError(-32602, 'Task input requires an accept, decline, or cancel action');
+    }
+    const action = response.action;
+    let content = {};
+    if (action === 'accept') {
+      try {
+        content = validateMcpToolArguments({ inputSchema: input.request.params.requestedSchema }, response.content);
+      } catch (error) {
+        throw new McpProtocolError(-32602, error.message);
+      }
+    }
     let gatewayResponse;
 
     if (input.kind === 'commandApproval') {
@@ -294,39 +333,40 @@ class McpTaskAdapter {
         throw new McpProtocolError(-32602, 'Command approval decision must be approve or deny');
       }
       if (decision === 'approve') {
-        const reason = String(content.reason || '').trim();
+        const reason = (content.reason || '').trim();
         if (content.acknowledgeRisk !== true || !reason || reason.length > 500) {
           throw new McpProtocolError(
             -32602,
             'Command approval requires acknowledgeRisk=true and a reason of 1-500 characters'
           );
         }
-        gatewayResponse = await this.client.resolveInteraction({
+        gatewayResponse = await this._requestGateway('resolveInteraction', {
           action: 'approve',
           expectedCommand: String(snapshot.result.command),
           acknowledgeRisk: true,
           reason
         });
       } else {
-        gatewayResponse = await this.client.resolveInteraction({ action: 'deny' });
+        gatewayResponse = await this._requestGateway('resolveInteraction', { action: 'deny' });
       }
     } else if (input.kind === 'question') {
       if (action !== 'accept') {
-        gatewayResponse = await this.client.resolveInteraction({ action: 'dismiss' });
+        gatewayResponse = await this._requestGateway('resolveInteraction', { action: 'dismiss' });
       } else {
-        const answer = String(content.answer || '').trim();
+        const answer = content.answer.trim();
         if (!answer) throw new McpProtocolError(-32602, 'Question response requires an answer');
-        gatewayResponse = await this.client.resolveInteraction({ action: 'answer', answer });
+        gatewayResponse = await this._requestGateway('resolveInteraction', { action: 'answer', answer });
       }
     } else {
       const decision = action === 'accept' ? String(content.decision || '').toLowerCase() : 'reject';
       if (!['approve', 'continue', 'reject'].includes(decision)) {
         throw new McpProtocolError(-32602, 'Review decision must be approve, continue, or reject');
       }
-      gatewayResponse = await this.client.resolveTaskReview(
-        taskId,
+      gatewayResponse = await this._requestGateway(
+        'resolveTaskReview',
+        snapshot.taskId,
         decision,
-        String(content.notes || '').slice(0, 4000)
+        content.notes || ''
       );
     }
 
@@ -335,16 +375,21 @@ class McpTaskAdapter {
   }
 
   async cancel(taskId) {
-    const current = await this.get(taskId);
-    if (['completed', 'cancelled'].includes(current.status)) return {};
-    const response = await this.client.cancelTask(taskId);
+    const snapshot = await this._getGatewaySnapshot(taskId);
+    const current = detailedTaskFromGateway(snapshot);
+    // An unconfirmed task state must reach the gateway cancellation endpoint
+    // before this cancellation request can be acknowledged.
+    if (['completed', 'cancelled'].includes(current.status) && !hasPendingTaskPersistence(snapshot)) return {};
+    const response = await this._requestGateway('cancelTask', current.taskId);
     const statusCode = Number(response?.status);
     if (statusCode === 404) {
       throw new McpProtocolError(-32602, `Failed to cancel task: ${taskId} was not found`);
     }
     if (statusCode >= 400 || response?.data?.success === false) {
       const gatewayStatus = String(response?.data?.status || '').toLowerCase();
-      if (TERMINAL_GATEWAY_STATUSES.has(gatewayStatus)) return {};
+      if (statusCode === 400 && !hasPendingTaskPersistence(snapshot)
+          && !hasPendingTaskPersistence(response?.data)
+          && TERMINAL_GATEWAY_STATUSES.has(gatewayStatus)) return {};
       const detail = typeof response?.data?.error === 'string'
         ? response.data.error.trim()
         : '';

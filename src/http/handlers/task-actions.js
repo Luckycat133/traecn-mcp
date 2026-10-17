@@ -3,6 +3,8 @@
 const { parseBody } = require('../request-gate');
 const { hasDriverCapability } = require('./helpers');
 const { resolveInteractionBody } = require('./unified-agent');
+const { withoutTaskTrace } = require('../../shared/utils');
+const { cleanAssistantResultText } = require('../../cdp/dom-handlers/response-collection');
 
 /**
  * task-actions handlers.
@@ -117,7 +119,7 @@ async function handleTaskInteraction(req, res, ctx, taskId) {
   const resolve = async () => {
     const task = ctx.taskQueue.get(taskId);
     if (!task) return ctx._json(req, res, { error: 'Task not found' }, 404);
-    if (task.status !== 'approval_required') {
+    if (task.status !== 'approval_required' || task.statePersistencePending) {
       return ctx._json(req, res, {
         error: 'task_interaction_conflict',
         message: 'The task is no longer awaiting this interaction.',
@@ -166,6 +168,20 @@ async function handleTaskInteraction(req, res, ctx, taskId) {
     : resolve();
 }
 
+function applyTaskDetail(response, storedResult, detailLevel, allowTrace) {
+  if (response.result) response.result = withoutTaskTrace(response.result);
+  if (detailLevel !== 'trace') return response;
+  response.detailLevel = 'trace';
+  if (allowTrace && response.result && typeof storedResult?.traceText === 'string' && storedResult.traceText.trim()) {
+    response.result = { ...response.result, text: storedResult.traceText };
+  } else {
+    response.detailWarning = storedResult?.interrupted === true
+      ? 'Full execution trace is unavailable; returning the stored interrupted partial output.'
+      : 'Full execution trace is unavailable; returning the stored final result.';
+  }
+  return response;
+}
+
 async function handleTaskStatus(req, res, ctx, taskId) {
   let detailLevel = 'result';
   try {
@@ -183,46 +199,24 @@ async function handleTaskStatus(req, res, ctx, taskId) {
         result: historyTask.result ? { ...historyTask.result } : historyTask.result
       };
       const snapshot = String(responseTask.result?.text || '');
-      let captured = null;
-      const recoverableResult = /新任务[\s\S]{0,80}资源管理器|一切就绪，只等你动手/.test(snapshot)
-        || /思考过程[\s\S]+完成总结/.test(snapshot)
-        || responseTask.result?.code === 'TASK_RESULT_UNAVAILABLE'
-        || detailLevel === 'trace';
-      if (recoverableResult) {
-        if (typeof ctx.driver?.findTaskResponse !== 'function'
-          && typeof ctx._ensureConnection === 'function') {
-          try {
-            await ctx._ensureConnection();
-          } catch {
-            // The unavailable-result response below is more useful than a connection exception here.
-          }
-        }
-        if (typeof ctx.driver?.findTaskResponse === 'function') {
-          try {
-            captured = await ctx.driver.findTaskResponse({ detailLevel });
-          } catch {
-            captured = null;
-          }
-        }
-        if (captured?.text && captured.hasResponse !== false) {
-          responseTask.result = {
-            text: captured.text,
-            stable: captured.inProgress !== true,
-            ...(responseTask.result?.elapsedMs === undefined ? {} : { elapsedMs: responseTask.result.elapsedMs })
-          };
-        } else if (detailLevel !== 'trace' || !responseTask.result?.text) {
-          responseTask.result = {
-            code: 'TASK_RESULT_UNAVAILABLE',
-            error: 'Agent response is no longer available in the bound TraeCN conversation'
-          };
-        }
+      if (/新任务[\s\S]{0,80}资源管理器|一切就绪，只等你动手/.test(snapshot)) {
+        responseTask.result = {
+          code: 'TASK_RESULT_UNAVAILABLE',
+          error: 'Agent response is no longer available in the bound TraeCN conversation'
+        };
+      } else if (/思考过程[\s\S]+\n[ \t]*完成总结(?=[ \t]*(?:[:：]|\n|$))/.test(snapshot)) {
+        responseTask.result.text = cleanAssistantResultText(snapshot);
       }
       const response = ctx._historyTaskStatusResponse(responseTask);
       response.detailLevel = detailLevel;
-      if (detailLevel === 'trace' && !captured?.text) {
-        response.detailWarning = 'Full execution trace is unavailable; returning the stored final result.';
+      if (responseTask.result?.code === 'TASK_RESULT_UNAVAILABLE') {
+        response.detailWarning = 'Stored task result is unavailable; the current TraeCN turn cannot be bound to this task.';
       }
-      return ctx._json(req, res, response);
+      // The current UI turn is not a durable task identity, even when its
+      // user prompt matches. Read only the result captured for this taskId.
+      return ctx._json(req, res, applyTaskDetail(response, historyTask.result, detailLevel,
+        ['completed', 'done', 'awaiting_review'].includes(historyTask.status)
+        && !historyTask.statePersistencePending && !historyTask.cancelPersistencePending));
     }
     return ctx._json(req, res, { error: 'Task not found' }, 404);
   }
@@ -233,11 +227,36 @@ async function handleTaskStatus(req, res, ctx, taskId) {
     await ctx._refreshExecutingTaskSnapshot(task);
   }
 
+  if (task.statePersistencePending) {
+    const response = {
+      taskId,
+      status: task.statePersistencePending.previousStatus,
+      statePersistencePending: true,
+      ...(task.cancelPersistencePending ? { cancelPersistencePending: true } : {}),
+      createdAt: task.createdAt,
+      elapsed: Date.now() - task.createdAt,
+      message: '任务结果已保留，正在等待存储恢复后确认状态',
+      result: task.result || null,
+      error: task.error || null
+    };
+    return ctx._json(req, res, applyTaskDetail(response, task.result, detailLevel, false));
+  }
+
+  const metadata = {
+    ...(task.metadata && typeof task.metadata === 'object' && !Array.isArray(task.metadata)
+      ? task.metadata : {}),
+    ...(typeof task.workflowParentTaskId === 'string' && task.workflowParentTaskId.trim()
+      ? { workflowParentTaskId: task.workflowParentTaskId } : {}),
+    ...(typeof task.nextTaskId === 'string' && task.nextTaskId.trim()
+      ? { nextTaskId: task.nextTaskId } : {})
+  };
   const response = {
     taskId,
-    status: task.status,
+    status: task.cancelPersistencePending?.previousStatus || task.status,
     createdAt: task.createdAt,
-    elapsed: Date.now() - task.createdAt
+    elapsed: Date.now() - task.createdAt,
+    ...(Object.keys(metadata).length ? { metadata } : {}),
+    ...(task.cancelPersistencePending ? { cancelPersistencePending: true } : {})
   };
 
   switch (task.status) {
@@ -319,9 +338,14 @@ async function handleTaskStatus(req, res, ctx, taskId) {
     case 'error':
       response.message = '执行出错';
       response.error = task.error;
+      if (typeof task.result?.text === 'string' && task.result.text.trim()) {
+        response.result = task.result;
+      }
       break;
     case 'cancelled':
-      response.message = '已取消';
+      response.message = task.cancelPersistencePending
+        ? '取消持久化尚未确认，请在存储恢复后重试取消'
+        : '已取消';
       break;
     case 'queue_timeout':
       response.message = '排队超时，请稍后重试或切换模型';
@@ -334,14 +358,16 @@ async function handleTaskStatus(req, res, ctx, taskId) {
       break;
   }
 
-  ctx._json(req, res, response);
+  ctx._json(req, res, applyTaskDetail(response, task.result, detailLevel,
+    ['done', 'awaiting_review'].includes(task.status) && !task.cancelPersistencePending));
 }
 async function handleTaskReview(req, res, ctx, taskId) {
   const task = ctx.taskQueue.get(taskId);
   if (!task) {
     return ctx._json(req, res, { error: 'Task not found' }, 404);
   }
-  if (task.status !== 'awaiting_review') {
+  if (task.status !== 'awaiting_review'
+    && task.statePersistencePending?.previousStatus !== 'awaiting_review') {
     return ctx._json(req, res, {
       error: 'Task is not awaiting review',
       status: task.status
@@ -363,32 +389,20 @@ async function handleTaskCancel(req, res, ctx, taskId) {
   if (!task) {
     return ctx._json(req, res, { error: 'Task not found' }, 404);
   }
-  if (!['queued', 'executing', 'awaiting_review', 'approval_required'].includes(task.status)) {
+  if (!['queued', 'executing', 'awaiting_review', 'approval_required'].includes(task.status)
+    && !(task.status === 'cancelled' && task.cancelPersistencePending)) {
     return ctx._json(req, res, {
       error: 'Task is not in a cancellable state',
       status: task.status
     }, 400);
   }
-  let stopResult = null;
-  if (task.status === 'executing' && task.submittedToTrae === true && ctx.driver && typeof ctx.driver.stopGeneration === 'function') {
-    try {
-      stopResult = await ctx.driver.stopGeneration();
-    } catch (err) {
-      stopResult = { success: false, error: err.message };
-    }
-  }
+  await ctx._finalizeBackgroundTask(taskId, task, 'cancelled', {
+    error: null,
+    cancelRequested: true,
+    cancelledAt: Date.now()
+  });
   ctx.taskLocks.delete(taskId);
-  task.status = 'cancelled';
-  task.error = null;
-  task.cancelledAt = Date.now();
-  if (stopResult) task.stopResult = stopResult;
-  ctx.taskHistoryStore.cancelTask(taskId);
-  if (ctx.wsHandler) {
-    ctx.wsHandler.notifyTaskStatusChange(taskId, task);
-  }
-  ctx._syncTaskHistoryMirror(task);
-  ctx._persistActiveQueue();
-  ctx._json(req, res, { taskId, status: 'cancelled', stopResult });
+  ctx._json(req, res, { taskId, status: 'cancelled', stopResult: task.stopResult || null });
 }
 async function handleAdoptCurrentTask(req, res, ctx) {
   const body = await parseBody(req);

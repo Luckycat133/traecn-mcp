@@ -6,8 +6,9 @@
  */
 
 const { createMcpHandlers, envContext } = require('./handler');
+const { setTimeout: sleep } = require('timers/promises');
 const { TraeCNApiClient } = require('../client/traecnapi-client');
-const { McpProtocolError, isModernRequest, modernResult, requestMeta } = require('./protocol');
+const { McpProtocolError, assertModernRequest, isModernRequest, modernResult, requestMeta } = require('./protocol');
 const {
   SUBSCRIPTION_ID_META_KEY,
   McpTaskAdapter,
@@ -58,16 +59,19 @@ class McpStdioDecoder {
         const headerEnd = this.buffer.indexOf('\r\n\r\n');
         if (headerEnd === -1) break;
         const header = this.buffer.slice(0, headerEnd).toString('utf8');
-        const match = header.match(/Content-Length:\s*(\d+)/i);
-        if (!match) throw new Error('Invalid Content-Length frame');
+        const match = header.match(/^Content-Length:\s*(\d+)\s*$/im);
         const bodyStart = headerEnd + 4;
-        const bodyEnd = bodyStart + Number(match[1]);
+        const bodyLength = match ? Number(match[1]) : NaN;
+        if (!Number.isSafeInteger(bodyLength)) {
+          this.buffer = this.buffer.slice(bodyStart);
+          decoded.push({ framing: 'content-length', error: new SyntaxError('Invalid Content-Length frame') });
+          continue;
+        }
+        const bodyEnd = bodyStart + bodyLength;
         if (this.buffer.length < bodyEnd) break;
-        decoded.push({
-          framing: 'content-length',
-          message: JSON.parse(this.buffer.slice(bodyStart, bodyEnd).toString('utf8'))
-        });
+        const payload = this.buffer.slice(bodyStart, bodyEnd).toString('utf8');
         this.buffer = this.buffer.slice(bodyEnd);
+        decoded.push(this.parseFrame(payload, 'content-length'));
         continue;
       }
       const lineEnd = this.buffer.indexOf('\n');
@@ -75,9 +79,18 @@ class McpStdioDecoder {
       const line = this.buffer.slice(0, lineEnd).toString('utf8').replace(/\r$/, '');
       this.buffer = this.buffer.slice(lineEnd + 1);
       if (!line.trim()) continue;
-      decoded.push({ framing: 'newline', message: JSON.parse(line) });
+      decoded.push(this.parseFrame(line, 'newline'));
     }
     return decoded;
+  }
+
+  parseFrame(payload, framing) {
+    try {
+      return { framing, message: JSON.parse(payload) };
+    } catch (error) {
+      // A bad payload must not discard neighboring messages or stay buffered.
+      return { framing, error };
+    }
   }
 }
 
@@ -85,6 +98,7 @@ function nextProtocolEra(currentEra, request = {}) {
   const requestedEra = request.method === 'initialize'
     ? 'legacy'
     : (isModernRequest(request) ? 'modern' : null);
+  if (requestedEra === 'modern') assertModernRequest(request);
   if (!currentEra && !requestedEra) {
     throw new McpProtocolError(
       -32600,
@@ -106,6 +120,9 @@ function assertJsonRpcRequest(message) {
   }
   if (message.jsonrpc !== '2.0' || typeof message.method !== 'string' || !message.method) {
     throw new McpProtocolError(-32600, 'Invalid JSON-RPC request');
+  }
+  if (message.id !== undefined && typeof message.id !== 'string' && !Number.isInteger(message.id)) {
+    throw new McpProtocolError(-32600, 'Invalid JSON-RPC request id');
   }
   if (message.params !== undefined
       && (!message.params || typeof message.params !== 'object' || Array.isArray(message.params))) {
@@ -173,8 +190,10 @@ function subscriptionClosedResult(subscriptionId) {
   };
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function assertTaskEventResponse(response, operation) {
+  if (response?.status !== undefined && Number(response.status) !== 200) {
+    throw new Error(`Task event ${operation} failed with HTTP ${response.status}`);
+  }
 }
 
 class TaskEventPump {
@@ -188,19 +207,22 @@ class TaskEventPump {
     this.cursor = options.after || null;
     this.historyPrimed = false;
     this.running = false;
+    this.stopped = false;
+    this.abortController = new AbortController();
     this.loopPromise = null;
   }
 
   async primeCursor() {
+    if (this.stopped) return this.cursor;
     if (this.historyPrimed) return this.cursor;
     let cursor = this.cursor;
     while (true) {
       const request = { limit: 100, waitMs: 0 };
+      if (this.running) request.signal = this.abortController.signal;
       if (cursor) request.after = cursor;
       const response = await this.client.listTaskEvents(this.clientId, request);
-      if (response && Number(response.status) >= 400) {
-        throw new Error(`Task event request failed with HTTP ${response.status}`);
-      }
+      if (this.stopped) return this.cursor;
+      assertTaskEventResponse(response, 'request');
       const payload = response && response.data !== undefined ? response.data : response;
       if (payload?.clientKnown !== false) {
         this.historyPrimed = true;
@@ -221,10 +243,9 @@ class TaskEventPump {
       }
     }
     if (cursor) {
+      if (this.stopped) return this.cursor;
       const ack = await this.client.ackTaskEvent(this.clientId, cursor);
-      if (ack && Number(ack.status) >= 400) {
-        throw new Error(`Task event acknowledgement failed with HTTP ${ack.status}`);
-      }
+      assertTaskEventResponse(ack, 'acknowledgement');
     }
     this.cursor = cursor;
     this.historyPrimed = true;
@@ -232,36 +253,47 @@ class TaskEventPump {
   }
 
   async pollOnce() {
+    if (this.stopped) return 0;
     const request = { limit: this.limit, waitMs: this.waitMs };
+    if (this.running) request.signal = this.abortController.signal;
     if (this.cursor) request.after = this.cursor;
     const response = await this.client.listTaskEvents(this.clientId, request);
-    if (response && Number(response.status) >= 400) {
-      throw new Error(`Task event request failed with HTTP ${response.status}`);
-    }
+    if (this.stopped) return 0;
+    assertTaskEventResponse(response, 'request');
     const payload = response && response.data !== undefined ? response.data : response;
     const events = payload && Array.isArray(payload.events) ? payload.events : [];
+    let delivered = 0;
     for (const event of events) {
+      if (this.stopped) break;
       if (!event.eventId) throw new Error('Task event is missing eventId');
-      await Promise.resolve(this.write(taskEventNotification(event)));
+      delivered += await this._deliverEvent(event);
+      if (this.stopped) break;
       const ack = await this.client.ackTaskEvent(this.clientId, event.eventId);
-      if (ack && Number(ack.status) >= 400) {
-        throw new Error(`Task event acknowledgement failed with HTTP ${ack.status}`);
-      }
+      assertTaskEventResponse(ack, 'acknowledgement');
       this.cursor = event.eventId;
     }
-    return events.length;
+    return delivered;
+  }
+
+  async _deliverEvent(event) {
+    await Promise.resolve(this.write(taskEventNotification(event)));
+    return 1;
   }
 
   start() {
+    if (this.stopped) return this.loopPromise || Promise.resolve();
     if (this.running) return this.loopPromise;
     this.running = true;
     this.loopPromise = (async () => {
       while (this.running) {
         try {
           await this.primeCursor();
+          await this.deliverInitialSnapshots?.();
           await this.pollOnce();
         } catch {
-          if (this.running) await sleep(this.retryMs);
+          if (this.running) {
+            await sleep(this.retryMs, undefined, { signal: this.abortController.signal }).catch(() => {});
+          }
         }
       }
     })();
@@ -270,6 +302,8 @@ class TaskEventPump {
 
   stop() {
     this.running = false;
+    this.stopped = true;
+    this.abortController.abort();
   }
 }
 
@@ -285,15 +319,16 @@ class TaskSubscriptionPump extends TaskEventPump {
   }
 
   async primeCursor() {
+    if (this.stopped) return this.cursor;
     if (this.historyPrimed) return this.cursor;
     let cursor = this.cursor;
     while (true) {
       const request = { limit: 100, waitMs: 0 };
+      if (this.running) request.signal = this.abortController.signal;
       if (cursor) request.after = cursor;
       const response = await this.client.listTaskEvents(this.clientId, request);
-      if (response && Number(response.status) >= 400) {
-        throw new Error(`Task event request failed with HTTP ${response.status}`);
-      }
+      if (this.stopped) return this.cursor;
+      assertTaskEventResponse(response, 'request');
       const payload = response && response.data !== undefined ? response.data : response;
       const events = payload && Array.isArray(payload.events) ? payload.events : [];
       for (const event of events) {
@@ -315,11 +350,14 @@ class TaskSubscriptionPump extends TaskEventPump {
   }
 
   async deliverInitialSnapshots() {
+    if (this.stopped) return 0;
     if (this.initialSnapshotsDelivered) return 0;
     let delivered = 0;
     for (const taskId of this.taskIds) {
+      if (this.stopped) break;
       if (this.deliveredInitialTaskIds.has(taskId)) continue;
       const task = await this.taskAdapter.get(taskId);
+      if (this.stopped) break;
       await Promise.resolve(this.write(taskSubscriptionNotification(task, this.subscriptionId)));
       this.deliveredInitialTaskIds.add(taskId);
       delivered += 1;
@@ -328,47 +366,12 @@ class TaskSubscriptionPump extends TaskEventPump {
     return delivered;
   }
 
-  async pollOnce() {
-    const request = { limit: this.limit, waitMs: this.waitMs };
-    if (this.cursor) request.after = this.cursor;
-    const response = await this.client.listTaskEvents(this.clientId, request);
-    if (response && Number(response.status) >= 400) {
-      throw new Error(`Task event request failed with HTTP ${response.status}`);
-    }
-    const payload = response && response.data !== undefined ? response.data : response;
-    const events = payload && Array.isArray(payload.events) ? payload.events : [];
-    let delivered = 0;
-    for (const event of events) {
-      if (!event.eventId) throw new Error('Task event is missing eventId');
-      if (this.taskIds.has(String(event.taskId))) {
-        const task = await this.taskAdapter.get(event.taskId);
-        await Promise.resolve(this.write(taskSubscriptionNotification(task, this.subscriptionId)));
-        delivered += 1;
-      }
-      const ack = await this.client.ackTaskEvent(this.clientId, event.eventId);
-      if (ack && Number(ack.status) >= 400) {
-        throw new Error(`Task event acknowledgement failed with HTTP ${ack.status}`);
-      }
-      this.cursor = event.eventId;
-    }
-    return delivered;
-  }
-
-  start() {
-    if (this.running) return this.loopPromise;
-    this.running = true;
-    this.loopPromise = (async () => {
-      while (this.running) {
-        try {
-          await this.primeCursor();
-          await this.deliverInitialSnapshots();
-          await this.pollOnce();
-        } catch {
-          if (this.running) await sleep(this.retryMs);
-        }
-      }
-    })();
-    return this.loopPromise;
+  async _deliverEvent(event) {
+    if (!this.taskIds.has(String(event.taskId))) return 0;
+    const task = await this.taskAdapter.get(event.taskId);
+    if (this.stopped) return 0;
+    await Promise.resolve(this.write(taskSubscriptionNotification(task, this.subscriptionId)));
+    return 1;
   }
 }
 
@@ -382,12 +385,13 @@ function startStdioServer(options = {}) {
   let taskEventPump = null;
   const taskSubscriptions = new Map();
   let stopPromise = null;
+  let stopped = false;
   let protocolEra = null;
   let initializedClientId = null;
   const decoder = new McpStdioDecoder();
   let legacyFraming = 'newline';
   const startTaskEventPump = () => {
-    if (taskEventPump || !initializedClientId) return;
+    if (stopped || taskEventPump || !initializedClientId) return;
     taskEventPump = new TaskEventPump({
       client: clientFactory(envContext()),
       clientId: initializedClientId,
@@ -396,19 +400,56 @@ function startStdioServer(options = {}) {
     taskEventPump.start();
   };
 
+  const writeError = async (error, framing, id = null) => {
+    try {
+      await Promise.resolve(write({
+        jsonrpc: '2.0',
+        id,
+        error: {
+          code: Number.isInteger(error.code) ? error.code : -32000,
+          message: error.message,
+          ...(error.data === undefined ? {} : { data: error.data })
+        }
+      }, framing));
+    } catch {
+      // The transport is already closed; no further response is possible.
+    }
+  };
+
+  const closeSubscription = subscription => {
+    if (subscription.closing) return subscription.closing;
+    if (subscription.pump) subscription.pump.stop();
+    subscription.closing = (async () => {
+      try {
+        // Never deliver the final response ahead of its acknowledgement.
+        await subscription.acknowledgement;
+        await Promise.resolve(write(
+          subscriptionClosedResult(subscription.subscriptionId),
+          subscription.framing
+        ));
+      } catch {
+        // A failed acknowledgement or closed transport cannot be completed.
+      }
+    })();
+    return subscription.closing;
+  };
+
   const input = options.input || process.stdin;
-  input.on('data', chunk => {
+  const onData = chunk => {
+    if (stopped) return;
     let decoded;
     try {
       decoded = decoder.push(chunk);
-    } catch (error) {
-      Promise.resolve(write({ jsonrpc: '2.0', id: null, error: { code: -32700, message: error.message } }));
+    } catch {
+      void writeError(new McpProtocolError(-32700, 'Parse error'), legacyFraming);
       return;
     }
     for (const frame of decoded) {
       const request = frame.message;
       Promise.resolve()
         .then(async () => {
+          if (stopped) return;
+          if (frame.error) throw new McpProtocolError(-32700, 'Parse error');
           assertJsonRpcRequest(request);
           protocolEra = nextProtocolEra(protocolEra, request);
           if (request.method === 'subscriptions/listen') {
@@ -419,48 +460,59 @@ function startStdioServer(options = {}) {
               throw new McpProtocolError(-32601, 'Task subscriptions are unavailable');
             }
             const subscriptionId = request.id;
-            const key = String(subscriptionId);
+            const key = subscriptionId;
             if (taskSubscriptions.has(key)) {
               throw new McpProtocolError(-32600, 'Subscription request id is already active');
             }
             const { taskIds } = handlers.subscribe(request);
-            await Promise.resolve(write(
-              subscriptionAcknowledgedNotification(taskIds, subscriptionId),
-              frame.framing
-            ));
-            const gatewayClient = clientFactory(envContext());
-            const clientInfo = requestMeta(request)?.['io.modelcontextprotocol/clientInfo'] || {};
-            const clientId = `${stableMcpClientId(clientInfo)}:task-sub:${String(subscriptionId)}`.slice(0, 200);
-            const pump = taskSubscriptionPumpFactory({
-              client: gatewayClient,
-              taskAdapter: taskAdapterFactory(gatewayClient),
-              clientId,
-              subscriptionId,
-              taskIds,
-              write: message => write(message, frame.framing)
-            });
-            taskSubscriptions.set(key, {
-              pump,
+            const subscription = {
+              pump: null,
               framing: frame.framing,
-              subscriptionId
-            });
-            pump.start();
+              subscriptionId,
+              acknowledgement: null,
+              closing: null
+            };
+            // Reserve before the first await so cancellation, shutdown and
+            // duplicate IDs can all observe the accepted subscription.
+            taskSubscriptions.set(key, subscription);
+            try {
+              subscription.acknowledgement = Promise.resolve(write(
+                subscriptionAcknowledgedNotification(taskIds, subscriptionId),
+                frame.framing
+              ));
+              await subscription.acknowledgement;
+              if (stopped || taskSubscriptions.get(key) !== subscription) return;
+              if (taskIds.length === 0) return;
+              const gatewayClient = clientFactory(envContext());
+              const clientInfo = requestMeta(request)?.['io.modelcontextprotocol/clientInfo'] || {};
+              const clientId = `${stableMcpClientId(clientInfo)}:task-sub:${typeof subscriptionId}:${String(subscriptionId)}`.slice(0, 200);
+              subscription.pump = taskSubscriptionPumpFactory({
+                client: gatewayClient,
+                taskAdapter: taskAdapterFactory(gatewayClient),
+                clientId,
+                subscriptionId,
+                taskIds,
+                write: message => write(message, frame.framing)
+              });
+              subscription.pump.start();
+            } catch (error) {
+              if (taskSubscriptions.get(key) === subscription) taskSubscriptions.delete(key);
+              if (subscription.pump) subscription.pump.stop();
+              throw error;
+            }
             return;
           }
           if (request.method === 'notifications/cancelled' && request.params?.requestId !== undefined) {
-            const key = String(request.params.requestId);
+            const key = request.params.requestId;
             const subscription = taskSubscriptions.get(key);
             if (subscription) {
-              subscription.pump.stop();
               taskSubscriptions.delete(key);
-              await Promise.resolve(write(
-                subscriptionClosedResult(subscription.subscriptionId),
-                subscription.framing
-              ));
+              await closeSubscription(subscription);
               return;
             }
           }
           const result = await handlers.handle(request);
+          if (stopped) return;
           if (request.method === 'initialize') {
             legacyFraming = frame.framing;
             initializedClientId = stableMcpClientId(request.params && request.params.clientInfo);
@@ -474,45 +526,32 @@ function startStdioServer(options = {}) {
           if (request.method === 'notifications/initialized') startTaskEventPump();
         })
         .catch(async error => {
-          if (isJsonRpcNotification(request)) return;
-          try {
-            await Promise.resolve(write({
-              jsonrpc: '2.0',
-              id: request.id ?? null,
-              error: {
-                code: Number.isInteger(error.code) ? error.code : -32000,
-                message: error.message,
-                ...(error.data === undefined ? {} : { data: error.data })
-              }
-            }, frame.framing));
-          } catch {
-            // The transport is already closed; no further response is possible.
-          }
+          if (stopped || isJsonRpcNotification(request)) return;
+          const id = typeof request?.id === 'string' || Number.isInteger(request?.id)
+            ? request.id
+            : null;
+          await writeError(error, frame.framing, id);
         });
     }
-  });
+  };
+  input.on('data', onData);
+  const onEnd = () => { void stop(); };
   const stop = () => {
     if (stopPromise) return stopPromise;
+    stopped = true;
+    input.off('data', onData);
+    input.off('end', onEnd);
+    input.off('close', onEnd);
     stopPromise = (async () => {
       if (taskEventPump) taskEventPump.stop();
       const subscriptions = [...taskSubscriptions.values()];
       taskSubscriptions.clear();
-      for (const subscription of subscriptions) {
-        subscription.pump.stop();
-        try {
-          await Promise.resolve(write(
-            subscriptionClosedResult(subscription.subscriptionId),
-            subscription.framing
-          ));
-        } catch {
-          // The transport may already be gone during process teardown.
-        }
-      }
+      await Promise.all(subscriptions.map(closeSubscription));
     })();
     return stopPromise;
   };
-  input.on('end', () => { void stop(); });
-  input.on('close', () => { void stop(); });
+  input.on('end', onEnd);
+  input.on('close', onEnd);
   return {
     stop,
     getTaskEventPump: () => taskEventPump,

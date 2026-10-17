@@ -66,6 +66,14 @@ class TraeCNAutomationError extends Error {
     );
   }
 
+  static windowNotVisible(cause) {
+    return new TraeCNAutomationError(
+      `TraeCN window is not visible: ${cause}`,
+      'WINDOW_NOT_VISIBLE',
+      { cause: String(cause) }
+    );
+  }
+
   static soloChatSwitchFailed(cause) {
     return new TraeCNAutomationError(
       `Failed to switch Solo chat: ${cause}`,
@@ -172,11 +180,11 @@ class TraeCNAutomationError extends Error {
     );
   }
 
-  static sendFailed(cause) {
+  static sendFailed(cause, details = {}) {
     return new TraeCNAutomationError(
       `Failed to send message to TraeCN: ${cause}`,
       'SEND_FAILED',
-      { cause: String(cause) }
+      { ...details, cause: String(cause) }
     );
   }
 

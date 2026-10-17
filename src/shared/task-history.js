@@ -32,6 +32,17 @@ function resolveDefaultPersistencePath() {
 
 const DEFAULT_PERSISTENCE_PATH = resolveDefaultPersistencePath();
 
+function compareTaskCreation(a, b) {
+  const aTime = Number.isFinite(a.createdAtMs) ? a.createdAtMs : (Date.parse(a.createdAt) || 0);
+  const bTime = Number.isFinite(b.createdAtMs) ? b.createdAtMs : (Date.parse(b.createdAt) || 0);
+  if (aTime !== bTime) return aTime - bTime;
+  // Monotonic clocks restart with the machine and are serialized as strings.
+  // Use them only to resolve ties within a wall-clock millisecond.
+  const aKey = /^\d+$/.test(String(a.sortKey)) ? BigInt(a.sortKey) : 0n;
+  const bKey = /^\d+$/.test(String(b.sortKey)) ? BigInt(b.sortKey) : 0n;
+  return aKey < bKey ? -1 : (aKey > bKey ? 1 : 0);
+}
+
 class TaskHistoryStore {
   constructor(options = {}) {
     this.maxSize = options.maxSize ?? DEFAULT_MAX_HISTORY_SIZE;
@@ -552,11 +563,7 @@ class TaskHistoryStore {
       results = results.filter(t => t.sessionId === sessionId);
     }
 
-    results.sort((a, b) => {
-      const aKey = a.sortKey || a.createdAtMs || new Date(a.createdAt).getTime();
-      const bKey = b.sortKey || b.createdAtMs || new Date(b.createdAt).getTime();
-      return bKey > aKey ? 1 : bKey < aKey ? -1 : 0;
-    });
+    results.sort((a, b) => compareTaskCreation(b, a));
 
     const total = results.length;
     const totalPages = Math.ceil(total / limit);
@@ -618,29 +625,16 @@ class TaskHistoryStore {
 
   clearHistory(options = {}) {
     const { beforeDate = null, status = null, olderThanHours = null } = options;
-    const hasFilters = status !== null || beforeDate !== null || olderThanHours !== null;
+    const beforeMs = beforeDate !== null ? Date.parse(beforeDate) : null;
+    const ageThreshold = olderThanHours !== null ? Date.now() - olderThanHours * 3600000 : null;
     let deleted = 0;
 
     for (const [taskId, task] of this.tasks) {
-      let shouldDelete = !hasFilters;
-
-      if (status && task.status === status) {
-        shouldDelete = true;
-      }
-
-      if (beforeDate && new Date(task.createdAt) < new Date(beforeDate)) {
-        shouldDelete = true;
-      }
-
-      if (olderThanHours !== null) {
-        const threshold = Date.now() - (olderThanHours * 3600000);
-        const createdMs = task.createdAtMs || new Date(task.createdAt).getTime();
-        if (createdMs <= threshold) {
-          shouldDelete = true;
-        }
-      }
-
-      if (shouldDelete) {
+      const createdMs = task.createdAtMs ?? Date.parse(task.createdAt);
+      const matches = (status === null || task.status === status)
+        && (beforeDate === null || createdMs < beforeMs)
+        && (olderThanHours === null || createdMs <= ageThreshold);
+      if (matches) {
         this.tasks.delete(taskId);
         deleted++;
       }
@@ -666,14 +660,25 @@ class TaskHistoryStore {
       }
     }
 
+    deleted += this._enforceSizeLimit();
+
+    if (deleted > 0) {
+      this._dirty = true;
+      this._persist();
+    }
+
+    return { deleted, currentSize: this.tasks.size, maxSize: this.maxSize };
+  }
+
+  _enforceSizeLimit() {
+    let deleted = 0;
     while (this.tasks.size > this.maxSize) {
       let oldest = null;
-      let oldestTime = Infinity;
+      let oldestTask = null;
 
       for (const [taskId, task] of this.tasks) {
-        const created = task.sortKey || task.createdAtMs || new Date(task.createdAt).getTime();
-        if (created < oldestTime) {
-          oldestTime = created;
+        if (!oldestTask || compareTaskCreation(task, oldestTask) < 0) {
+          oldestTask = task;
           oldest = taskId;
         }
       }
@@ -685,34 +690,7 @@ class TaskHistoryStore {
         break;
       }
     }
-
-    if (deleted > 0) {
-      this._dirty = true;
-      this._persist();
-    }
-
-    return { deleted, currentSize: this.tasks.size, maxSize: this.maxSize };
-  }
-
-  _enforceSizeLimit() {
-    while (this.tasks.size > this.maxSize) {
-      let oldest = null;
-      let oldestTime = Infinity;
-
-      for (const [taskId, task] of this.tasks) {
-        const created = task.createdAtMs || new Date(task.createdAt).getTime();
-        if (created < oldestTime) {
-          oldestTime = created;
-          oldest = taskId;
-        }
-      }
-
-      if (oldest) {
-        this.tasks.delete(oldest);
-      } else {
-        break;
-      }
-    }
+    return deleted;
   }
 
   getStats() {

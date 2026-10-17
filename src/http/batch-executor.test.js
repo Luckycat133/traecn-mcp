@@ -81,6 +81,27 @@ test('BatchExecutor: backgroundResultRetryMode returns collect for timed-out', (
   assert.strictEqual(be.backgroundResultRetryMode({ timedOut: true, stable: false, text: 'thinking' }), 'collect');
 });
 
+const completionReport = 'Final report: the shipping calculation was corrected and all 12 tests passed. '
+  + 'The original inputs and existing behavior were preserved; the result is ready for review.';
+const interruptedCases = [
+  { name: 'partial output', result: { stable: false, text: 'The shipping calculation is partially implemented.' } },
+  { name: 'timed-out completion text', result: { stable: false, timedOut: true, text: completionReport } },
+  { name: 'review-required completion text', result: { stable: true, text: completionReport }, task: { reviewRequired: true } },
+  { name: 'model error with partial output', result: { modelError: true, text: 'The shipping calculation is partially implemented.' } }
+];
+
+for (const { name, result, task } of interruptedCases) {
+  test(`BatchExecutor: interrupted ${name} stays unsuccessful without retrying or discarding output`, () => {
+    const be = new BatchExecutor({ stateMachine: new QueueStateMachine() });
+    const partial = Object.freeze({ ...result, interrupted: true });
+    const retained = { ...partial };
+    assert.strictEqual(be._isSuccessfulTaskResult(partial, task), false);
+    assert.strictEqual(be._isReviewableTaskResult(partial, task), false);
+    assert.strictEqual(be.backgroundResultRetryMode(partial, task), null);
+    assert.deepStrictEqual(partial, retained);
+  });
+}
+
 // ── dependency wiring ───────────────────────────────────────────────────
 
 test('BatchExecutor: respects injected stateMachine for classification', () => {

@@ -145,6 +145,52 @@ test('every gateway terminal status remains terminal', () => {
   }
 });
 
+test('unconfirmed snapshots stay active without exposing old review or approval inputs', () => {
+  let state = stateApi.reduceState(stateApi.createInitialState(), {
+    type: 'HYDRATE_TASKS',
+    tasks: [
+      { taskId: 'pending-review', status: 'awaiting_review', statePersistencePending: true },
+      {
+        taskId: 'pending-approval',
+        status: 'approval_required',
+        cancelPersistencePending: true,
+        result: { question: 'Old approval', buttons: ['Approve'] },
+      },
+    ],
+  });
+  assert.deepStrictEqual(stateApi.selectAttentionTasks(state), []);
+  assert.strictEqual(stateApi.selectActiveTasks(state).length, 2);
+  assert.strictEqual(state.tasks['pending-approval'].interaction, null);
+  state = stateApi.reduceState(state, {
+    type: 'UPSERT_TASK',
+    task: { taskId: 'pending-review', status: 'awaiting_review' },
+  });
+  assert.deepStrictEqual(
+    stateApi.selectAttentionTasks(state).map((task) => task.taskId),
+    ['pending-review']
+  );
+});
+
+test('terminal-looking pending snapshots cannot enter recent results before confirmation', () => {
+  let state = stateApi.reduceState(stateApi.createInitialState(), {
+    type: 'UPSERT_TASK',
+    task: {
+      taskId: 'pending-result',
+      status: 'done',
+      statePersistencePending: true,
+      result: { text: 'Collected answer' },
+    },
+  });
+  assert.deepStrictEqual(stateApi.selectTerminalTasks(state), []);
+  assert.strictEqual(stateApi.selectActiveTasks(state).length, 1);
+  state = stateApi.reduceState(state, {
+    type: 'UPSERT_TASK',
+    task: { taskId: 'pending-result', status: 'done', result: { text: 'Collected answer' } },
+  });
+  assert.strictEqual(stateApi.selectTerminalTasks(state).length, 1);
+  assert.strictEqual(state.tasks['pending-result'].result.text, 'Collected answer');
+});
+
 test('socket close marks active tasks stale without reinterpreting their status', () => {
   let state = stateApi.reduceState(stateApi.createInitialState(), {
     type: 'HYDRATE_TASKS',

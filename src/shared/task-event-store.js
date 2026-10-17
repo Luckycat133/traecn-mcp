@@ -42,7 +42,7 @@ class TaskEventStore {
     this.logger = options.logger || console;
     this.onWritePhase = typeof options.onWritePhase === 'function' ? options.onWritePhase : null;
     this.events = [];
-    this.acknowledged = {};
+    this.acknowledged = Object.create(null);
     this.sequence = 0;
     this.eventStoreWritable = null;
     this.lastSuccessfulPersistAt = null;
@@ -50,6 +50,10 @@ class TaskEventStore {
     this.lastLoadError = null;
     this.lastRecovery = null;
     this.emitter = new EventEmitter();
+    this._waiters = new Set();
+    this._wakeWaiters = () => {
+      for (const finish of Array.from(this._waiters)) finish();
+    };
     this._load();
   }
 
@@ -95,7 +99,7 @@ class TaskEventStore {
     const backupPath = `${primaryPath}.bak`;
     const backupTempPath = `${backupPath}.tmp`;
     const dirPath = path.dirname(primaryPath);
-    const serialized = `${JSON.stringify(this._createDocument(), null, 2)}\n`;
+    const serialized = this._serializeDocument();
 
     try {
       fs.mkdirSync(dirPath, { recursive: true });
@@ -158,6 +162,8 @@ class TaskEventStore {
       attentionRequired: input.attentionRequired === true,
       resultAvailable: input.resultAvailable === true,
       sessionId: input.sessionId || null,
+      ...(typeof input.interactionRequestId === 'string' && input.interactionRequestId
+        ? { interactionRequestId: input.interactionRequestId } : {}),
       summary: String(input.summary || '').slice(0, 240)
     };
     this.events.push(event);
@@ -230,7 +236,7 @@ class TaskEventStore {
     return { acknowledged: true, clientId: normalizedClientId, eventId: this.acknowledged[normalizedClientId] };
   }
 
-  _createDocument() {
+  _serializeDocument() {
     const payload = {
       schemaVersion: TASK_EVENT_STORE_SCHEMA_VERSION,
       savedAt: new Date().toISOString(),
@@ -238,18 +244,19 @@ class TaskEventStore {
       acknowledged: this.acknowledged,
       events: this.events
     };
-    return {
-      ...payload,
-      checksum: {
-        algorithm: CHECKSUM_ALGORITHM,
-        digest: this._checksum(payload)
-      }
+    // Hash and persist the same canonical bytes without traversing the event
+    // log a second time. The schema and checksum payload remain unchanged.
+    const serializedPayload = JSON.stringify(payload);
+    const checksum = {
+      algorithm: CHECKSUM_ALGORITHM,
+      digest: this._checksum(payload, serializedPayload)
     };
+    return `${serializedPayload.slice(0, -1)},"checksum":${JSON.stringify(checksum)}}\n`;
   }
 
   _applyDocument(document = {}) {
     this.events = document.events.slice();
-    this.acknowledged = { ...document.acknowledged };
+    this.acknowledged = Object.assign(Object.create(null), document.acknowledged);
     this.sequence = Math.max(
       Number(document.sequence) || 0,
       ...this.events.map(event => eventSequence(event.eventId)),
@@ -317,8 +324,8 @@ class TaskEventStore {
     return Object.values(document.acknowledged).every(eventId => eventSequence(eventId) > 0);
   }
 
-  _checksum(payload) {
-    return crypto.createHash(CHECKSUM_ALGORITHM).update(JSON.stringify(payload)).digest('hex');
+  _checksum(payload, serialized = JSON.stringify(payload)) {
+    return crypto.createHash(CHECKSUM_ALGORITHM).update(serialized).digest('hex');
   }
 
   _rewriteRecoveredSnapshot(source) {
@@ -412,7 +419,8 @@ class TaskEventStore {
 
   async wait(options = {}) {
     const existing = this.list(options);
-    if (existing.events.length > 0) return existing;
+    const signal = options.signal;
+    if (existing.events.length > 0 || signal?.aborted) return existing;
     const timeoutMs = Math.min(parsePositiveInt(options.timeoutMs, 25000), 30000);
     return new Promise(resolve => {
       let settled = false;
@@ -420,11 +428,15 @@ class TaskEventStore {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        this.emitter.removeListener('append', finish);
+        signal?.removeEventListener('abort', finish);
+        this._waiters.delete(finish);
+        if (this._waiters.size === 0) this.emitter.removeListener('append', this._wakeWaiters);
         resolve(this.list(options));
       };
       const timer = setTimeout(finish, timeoutMs);
-      this.emitter.once('append', finish);
+      signal?.addEventListener('abort', finish, { once: true });
+      this._waiters.add(finish);
+      if (this._waiters.size === 1) this.emitter.on('append', this._wakeWaiters);
     });
   }
 }

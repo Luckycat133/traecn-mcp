@@ -8,7 +8,7 @@
  * so JSON-RPC messages flow directly between the MCP client and server.
  *
  * Resolution order:
- *   1. In-repo relative path (skill/scripts/ → repo root)
+ *   1. In-repo relative path (skills/ or .codex/skills/ → repo root)
  *   2. Installed `@luckycat133/traecnclaw` package export
  *   3. Legacy installed `traecnclaw` package export
  *   4. `traecnclaw-mcp` executable on PATH
@@ -24,12 +24,20 @@ const { createRequire } = require('module');
 
 const SCRIPT_DIR = __dirname;
 
+function repositoryServerPath(scriptDir) {
+  const skillsDir = path.resolve(scriptDir, '../..');
+  const isCodexSkill = path.basename(skillsDir) === 'skills'
+    && path.basename(path.dirname(skillsDir)) === '.codex';
+  return path.resolve(scriptDir, isCodexSkill ? '../../../..' : '../../..', 'mcp-server.js');
+}
+
 /**
  * Resolve the path to mcp-server.js.
  *
  * Checks the in-repo location, installed package export, and PATH launcher.
- * Each candidate is validated as an existing regular file so directories or
- * broken symlinks are rejected silently. An environment-selected JavaScript
+ * Each candidate is resolved to its real regular file so executable symlinks
+ * retain the server's configuration directory, while directories and broken
+ * symlinks are rejected. An environment-selected JavaScript
  * path is deliberately unsupported because the launcher executes the result.
  *
  * @param {object} [env=process.env] - environment variables (injectable for tests)
@@ -38,10 +46,9 @@ const SCRIPT_DIR = __dirname;
  * @returns {string|null} absolute path to mcp-server.js, or null if not found
  */
 function resolveServerPath(env = process.env, scriptDir = SCRIPT_DIR, options = {}) {
-  const repoRoot = path.resolve(scriptDir, '../../..');
   const cwd = options.cwd || process.cwd();
   const platform = options.platform || process.platform;
-  const candidates = [path.join(repoRoot, 'mcp-server.js')];
+  const candidates = [repositoryServerPath(scriptDir)];
 
   try {
     const searchPaths = [cwd, scriptDir];
@@ -74,7 +81,7 @@ function resolveServerPath(env = process.env, scriptDir = SCRIPT_DIR, options = 
   for (const candidate of candidates) {
     try {
       if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-        return path.resolve(candidate);
+        return fs.realpathSync(candidate);
       }
     } catch {
       // Ignore unreadable paths and try the next candidate.
@@ -95,8 +102,7 @@ function main() {
   const serverPath = resolveServerPath();
 
   if (!serverPath) {
-    const repoRoot = path.resolve(SCRIPT_DIR, '../../..');
-    const tried = [path.join(repoRoot, 'mcp-server.js')];
+    const tried = [repositoryServerPath(SCRIPT_DIR)];
     console.error('[traecnclaw-mcp] mcp-server.js not found.');
     console.error('Tried: ' + tried.join(', '));
     console.error('Install the matching @luckycat133/traecnclaw package, add traecnclaw-mcp to PATH,');

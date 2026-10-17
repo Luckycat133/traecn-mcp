@@ -141,6 +141,14 @@ function sanitizeLog(obj) {
   return sanitized;
 }
 
+function withoutTaskTrace(result) {
+  if (!result || typeof result !== 'object'
+    || !Object.prototype.hasOwnProperty.call(result, 'traceText')) return result;
+  const finalResult = { ...result };
+  delete finalResult.traceText;
+  return finalResult;
+}
+
 function getGatewayContext(env = process.env) {
   const portStr = readRuntimeEnv('TRAECN_GATEWAY_PORT', env);
   const host = readRuntimeEnv('TRAECN_GATEWAY_HOST', env);
@@ -187,6 +195,7 @@ module.exports = {
   isForeignQueueProbeText,
   safeClose,
   sanitizeLog,
+  withoutTaskTrace,
   isLoopbackHost,
   getGatewayContext,
   SENSITIVE_LOG_KEYS

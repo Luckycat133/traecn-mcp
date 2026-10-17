@@ -12,7 +12,7 @@
  * for *process-level* recovery (kill / relaunch the Trae CN binary).
  */
 
-const { findTraeCNBinary, isTraeCNRunning, restartTraeCNWithDebug, startTraeCN, getQuickstartConfig } = require('../config/quickstart');
+const { activateTraeCN, findTraeCNBinary, isTraeCNRunning, restartTraeCNWithDebug, startTraeCN, getQuickstartConfig } = require('../config/quickstart');
 const { discoverTarget } = require('./discovery');
 const { getEnvWithFallback } = require('../shared/utils');
 const { runtimeDefault } = require('../config/runtime-schema');
@@ -26,6 +26,7 @@ class TraeControl {
     recoveryWaitMs = 60000,
     logger = console,
     setTimeoutImpl = setTimeout,
+    activateWindowImpl = activateTraeCN,
   } = {}) {
     this.configManager = configManager;
     this.isMockBridge = typeof isMockBridge === 'function' ? isMockBridge : () => Boolean(isMockBridge);
@@ -34,6 +35,7 @@ class TraeControl {
     this.recoveryWaitMs = recoveryWaitMs;
     this.logger = logger;
     this._setTimeoutImpl = setTimeoutImpl;
+    this._activateWindowImpl = activateWindowImpl;
     this.lastRecoveryAt = 0;
   }
 
@@ -54,6 +56,14 @@ class TraeControl {
     } catch {
       return false;
     }
+  }
+
+  async activateWindow(options = {}) {
+    if (this.isMockBridge() || !this.isRunning()) return false;
+    const binPath = options.binPath || findTraeCNBinary();
+    if (!binPath) return false;
+    const result = await this._activateWindowImpl({ binPath });
+    return result?.ok === true;
   }
 
   /**

@@ -47,7 +47,7 @@ class BatchExecutor {
    *   - null       → no retry needed, proceed with finalize
    */
   backgroundResultRetryMode(result, task = null) {
-    if (!result || result.needsApproval) return null;
+    if (!result || result.needsApproval || result.interrupted) return null;
     const text = typeof result.text === 'string' ? result.text.trim() : '';
     if (result.modelError || this._isFailedResultText(text)) return 'resubmit';
     if (this._isEchoedTaskResult(result, task)) return 'collect';
@@ -65,7 +65,7 @@ class BatchExecutor {
   // Gateway and only ever fed into the retry-mode decision.
 
   _isReviewableTaskResult(result, task = null) {
-    if (!result || result.streaming || result.truncated || result.modelError) return false;
+    if (!result || result.streaming || result.truncated || result.modelError || result.interrupted) return false;
     if (result.reviewGatePending && result.stable !== true) return false;
     if (result.stable !== true && result.timedOut !== true) return false;
     return (this._isReviewableResult(result) || this._hasStrongCompletionEvidence(result?.text))
@@ -74,7 +74,7 @@ class BatchExecutor {
   }
 
   _isSuccessfulTaskResult(result, task = null) {
-    if (!result || result.reviewGatePending || result.streaming || result.truncated || result.modelError) return false;
+    if (!result || result.reviewGatePending || result.streaming || result.truncated || result.modelError || result.interrupted) return false;
     if (result.stable !== true && result.timedOut !== true) return false;
     return (this._isSuccessfulResult(result) || this._hasStrongCompletionEvidence(result?.text))
       && !this._isFailedResultText(result?.text || '')

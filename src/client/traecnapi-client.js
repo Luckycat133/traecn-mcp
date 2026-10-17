@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const { StringDecoder } = require('string_decoder');
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8788;
@@ -66,19 +67,23 @@ class TraeCNApiClient {
         path,
         method,
         headers,
-        timeout: this.timeout
+        timeout: this.timeout,
+        signal: options.signal
       }, (res) => {
         let responseBody = '';
         let responseBytes = 0;
+        const decoder = new StringDecoder('utf8');
+        res.on('error', reject);
         res.on('data', chunk => {
           responseBytes += chunk.length;
           if (responseBytes > MAX_RESPONSE_BYTES) {
             req.destroy(new Error('Response body too large'));
             return;
           }
-          responseBody += chunk;
+          responseBody += decoder.write(chunk);
         });
         res.on('end', () => {
+          responseBody += decoder.end();
           try {
             const parsed = JSON.parse(responseBody);
             resolve({ status: res.statusCode, data: parsed });
@@ -109,7 +114,7 @@ class TraeCNApiClient {
     if (options.after) params.set('after', String(options.after));
     if (options.limit !== undefined) params.set('limit', String(options.limit));
     if (options.waitMs !== undefined) params.set('waitMs', String(options.waitMs));
-    return this._request('GET', `/api/task-events?${params.toString()}`);
+    return this._request('GET', `/api/task-events?${params.toString()}`, null, options);
   }
 
   async ackTaskEvent(clientId, eventId) {
@@ -298,6 +303,7 @@ class TraeCNApiClient {
       const response = await this.getTaskStatus(taskId);
       const data = response.data || {};
       const status = response.status === 404 ? 'not_found' : (data.status || 'unknown');
+      const persistencePending = Boolean(data.statePersistencePending || data.cancelPersistencePending);
       const elapsedMs = Date.now() - startedAt;
       lastSnapshot = data;
 
@@ -314,7 +320,7 @@ class TraeCNApiClient {
         });
       }
 
-      if (status === 'approval_required' && autoApproveDialog) {
+      if (!persistencePending && status === 'approval_required' && autoApproveDialog) {
         const dialogResponse = await this.dialogStatus();
         if (typeof options.onSnapshot === 'function') {
           await options.onSnapshot({
@@ -351,7 +357,7 @@ class TraeCNApiClient {
         }
       }
 
-      if (isTerminalTaskStatus(status)) {
+      if (!persistencePending && isTerminalTaskStatus(status)) {
         return {
           ...data,
           taskId: data.taskId || taskId,

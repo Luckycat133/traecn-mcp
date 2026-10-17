@@ -13,7 +13,7 @@ const { MockDriver } = require('../cdp/mock-driver');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { WEB_CONSOLE_CSP, getWebConsoleAsset, renderChatUI } = require('./chat-ui');
 const { generateOpenAPISpec } = require('./openapi');
-const { parsePositiveInt, sanitizeLog, isGenericQueueProbeTask, isLoopbackHost } = require('../shared/utils');
+const { parsePositiveInt, sanitizeLog, isGenericQueueProbeTask, isLoopbackHost, withoutTaskTrace } = require('../shared/utils');
 const { errorToHttpStatus, errorToBody, safeErrorMessage } = require('./error-mapping');
 const { ConfigManager, DEFAULT_CONFIG } = require('../shared/config-manager');
 const { RUNTIME_ENV_SCHEMA } = require('../config/runtime-schema');
@@ -65,6 +65,7 @@ const { CompletionSignal } = require('./completion-signal');
 // sanitizeLog is imported from ../shared/utils so audit-logger can share it.
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const DEFAULT_MODEL_PROBE_INTERVAL_MS = 60000;
+const HTTP_SHUTDOWN_GRACE_MS = 5000;
 
 const DEFAULT_QUEUE_FLICKER_GRACE_MS = 45000;
 
@@ -159,6 +160,10 @@ class Gateway {
       taskHistoryStore: this.taskHistoryStore,
       isMockBridge: () => this.mockBridge,
       isTerminalStatus: (status) => this._isTerminalTaskStatus(status),
+      isCancellationConfirmed: taskId => this.taskEventStore.events.some(event => (
+        event.taskId === taskId && event.type === 'task.cancelled' && event.terminal === true
+      )),
+      isTaskFinalizationConfirmed: (taskId, status, interactionRequestId) => this._hasConfirmedTaskStateEvent(taskId, status, interactionRequestId),
     });
     this.taskQueueService.restore(this.taskQueue);
     // Point the read-only alias at the state machine's lock map. All
@@ -292,6 +297,8 @@ class Gateway {
     if (!task || !task.taskId || !this.taskHistoryStore || typeof this.taskHistoryStore.ensureTask !== 'function') {
       return;
     }
+    const existingMetadata = typeof this.taskHistoryStore.getTask === 'function'
+      ? this.taskHistoryStore.getTask(task.taskId)?.metadata : null;
     const historyStatusMap = {
       queued: 'queued',
       executing: 'executing',
@@ -303,7 +310,9 @@ class Gateway {
       review_rejected: 'cancelled',
       cancelled: 'cancelled'
     };
-    const status = historyStatusMap[task.status] || task.status || 'running';
+    const effectiveStatus = task.cancelPersistencePending?.previousStatus
+      || task.statePersistencePending?.previousStatus || task.status;
+    const status = historyStatusMap[effectiveStatus] || effectiveStatus || 'running';
     const isTerminal = ['completed', 'failed', 'cancelled'].includes(status);
     const completedAt = isTerminal ? (task.completedAt || new Date().toISOString()) : null;
     const elapsedMs = task.createdAt ? Math.max(0, Date.now() - task.createdAt) : null;
@@ -316,6 +325,8 @@ class Gateway {
       completedAt,
       elapsedMs,
       metadata: {
+        ...(existingMetadata && typeof existingMetadata === 'object' && !Array.isArray(existingMetadata) ? existingMetadata : {}),
+        ...(task.metadata && typeof task.metadata === 'object' && !Array.isArray(task.metadata) ? task.metadata : {}),
         source: 'delegate_async_restore',
         reviewRequired: task.reviewRequired === true,
         autoContinue: task.autoContinue === true,
@@ -328,7 +339,10 @@ class Gateway {
         lastModelProbeAt: task.lastModelProbeAt || null,
         submittedToTrae: task.submittedToTrae === true,
         submittedAt: task.submittedAt || null,
-        soloChat: task.soloChat || null
+        soloChat: task.soloChat || null,
+        ...(typeof task.nextTaskId === 'string' && task.nextTaskId.trim() ? { nextTaskId: task.nextTaskId } : {}),
+        ...(typeof task.workflowParentTaskId === 'string' && task.workflowParentTaskId.trim()
+          ? { workflowParentTaskId: task.workflowParentTaskId } : {})
       }
     });
   }
@@ -444,7 +458,11 @@ class Gateway {
 
     const workspace = await this.driver.getWorkspaceContext();
     const requestedFolder = path.basename(path.resolve(requestedPath));
-    const currentFolder = String(workspace?.folderName || '').trim();
+    const observedFolder = String(workspace?.folderName || '').trim();
+    const observedTitle = String(workspace?.title || '').trim();
+    // A legacy title-only folder can itself contain the editor separator.
+    // Preserve that exact identity without inferring a path from the title.
+    const currentFolder = observedFolder && observedTitle === requestedFolder ? observedTitle : observedFolder;
     if (!currentFolder) {
       throw TraeCNAutomationError.workspaceContextUnavailable(requestedPath);
     }
@@ -492,13 +510,13 @@ class Gateway {
     return Math.max(15000, Math.min(parsed, 10 * 60 * 1000));
   }
 
-  _createQueuedTask(body, queueStatus = {}) {
+  _createQueuedTask(body, queueStatus = {}, options = {}) {
     // Keep the extracted boundary aligned with Gateway-owned stores. Tests,
     // recovery, and embedders may replace these dependencies after startup.
     this.taskOrchestrator.taskHistoryStore = this.taskHistoryStore;
     this.taskOrchestrator.taskQueue = this.taskQueue;
     this.taskOrchestrator.taskQueueService = this.taskQueueService;
-    return this.taskOrchestrator.createQueuedTask(body, queueStatus);
+    return this.taskOrchestrator.createQueuedTask(body, queueStatus, options);
   }
 
   _appendSessionMessage(sessionId, message = {}) {
@@ -755,7 +773,7 @@ class Gateway {
 
   _isReviewableResult(result) {
     if (!result || result.needsApproval) return false;
-    if (result.timedOut || result.truncated || result.streaming || result.modelError) return false;
+    if (result.timedOut || result.truncated || result.streaming || result.modelError || result.interrupted) return false;
     const text = typeof result.text === 'string' ? result.text.trim() : '';
     if (!text) return false;
     if (text.length < 80) return false;
@@ -794,7 +812,7 @@ class Gateway {
   }
 
   _isReviewableTaskResult(result, task = null) {
-    if (!result || result.streaming || result.truncated || result.modelError) return false;
+    if (!result || result.streaming || result.truncated || result.modelError || result.interrupted) return false;
     if (result.reviewGatePending && result.stable !== true) return false;
     if (result.stable !== true && result.timedOut !== true) return false;
     return (this._isReviewableResult(result) || this._hasStrongCompletionEvidence(result?.text))
@@ -803,7 +821,7 @@ class Gateway {
   }
 
   _isSuccessfulTaskResult(result, task = null) {
-    if (!result || result.reviewGatePending || result.streaming || result.truncated || result.modelError) return false;
+    if (!result || result.reviewGatePending || result.streaming || result.truncated || result.modelError || result.interrupted) return false;
     if (result.stable !== true && result.timedOut !== true) return false;
     return (this._isSuccessfulResult(result) || this._hasStrongCompletionEvidence(result?.text))
       && !this._isFailedResultText(result?.text || '')
@@ -824,7 +842,7 @@ class Gateway {
 
   _isSuccessfulResult(result) {
     if (!result || result.needsApproval) return false;
-    if (result.timedOut || result.truncated || result.streaming || result.modelError) return false;
+    if (result.timedOut || result.truncated || result.streaming || result.modelError || result.interrupted) return false;
     const text = typeof result.text === 'string' ? result.text.trim() : '';
     if (!this._hasMeaningfulResultText(text) || this._isWorkbenchChromeResultText(text) || this._isFailedResultText(text) || this._isIncompleteReviewText(text)) return false;
     return result.stable === true;
@@ -940,6 +958,7 @@ class Gateway {
   }
 
   async _tryAutoApproveTaskDialog(taskId, task, result = {}) {
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return true;
     const action = this._normalizeAutoApproveDialog(task.autoApproveDialog);
     if (!action || !this.driver) return false;
 
@@ -954,6 +973,7 @@ class Gateway {
         approvalResult = await this.driver.answerQuestionDialog(answer);
       } else {
         const dialog = await this.driver.checkForApprovalDialog();
+        if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return true;
         if (!dialog.needsApproval) return false;
         if (dialog.isCommandExec) {
           return false;
@@ -977,6 +997,7 @@ class Gateway {
       return false;
     }
 
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return true;
     if (!approvalResult || approvalResult.success !== true) {
       this.taskHistoryStore.recordStep(taskId, 'dialog_auto_approval_failed', {
         success: false,
@@ -1040,10 +1061,46 @@ class Gateway {
   }
 
   async _finalizeBackgroundTask(taskId, task, status, payload = {}) {
-    const previousStatus = task.status;
+    if (task.cancelRequested && status !== 'cancelled') return false;
+    if (task.statePersistencePending && task.statePersistencePending.status !== status
+      && !(status === 'cancelled' && payload.cancelRequested === true && !this._isTerminalTaskStatus(task.status))) return false;
+    if (!this._taskFinalizations) this._taskFinalizations = new Map();
+    const inFlight = this._taskFinalizations.get(taskId);
+    if (inFlight) {
+      await inFlight;
+      return this._finalizeBackgroundTask(taskId, task, status, payload);
+    }
+    const finalization = this._commitBackgroundTaskState(taskId, task, status, payload);
+    this._taskFinalizations.set(taskId, finalization);
+    try {
+      return await finalization;
+    } finally {
+      if (this._taskFinalizations.get(taskId) === finalization) this._taskFinalizations.delete(taskId);
+    }
+  }
+
+  async _commitBackgroundTaskState(taskId, task, status, payload = {}) {
+    const pendingCancellation = status === 'cancelled' ? task.cancelPersistencePending : null;
+    const pendingState = task.statePersistencePending;
+    const supersedingCheckpoint = status === 'cancelled' && payload.cancelRequested === true
+      && pendingState && !this._isTerminalTaskStatus(task.status);
+    if (pendingState && pendingState.status !== status && !supersedingCheckpoint) return false;
+    if (this._isTerminalTaskStatus(task.status) && !pendingCancellation && !pendingState) return false;
+    if (task.cancelRequested && status !== 'cancelled') return false;
+    if (pendingState && !supersedingCheckpoint) payload = {};
+    const previousTask = status === 'cancelled' ? { ...task } : null;
+    if (supersedingCheckpoint) delete task.statePersistencePending;
+    const previousStatus = pendingCancellation?.previousStatus || pendingState?.previousStatus || task.status;
     task.status = status;
+    if (status === 'cancelled' && payload.cancelRequested === true) {
+      task.cancelRequested = true;
+      task.cancelledAt = payload.cancelledAt || Date.now();
+    }
+    if (this._isTerminalTaskStatus(status)) {
+      task.completedAt = task.completedAt || new Date().toISOString();
+    }
     if (['approval_required', 'awaiting_review'].includes(status)) {
-      if (previousStatus !== status || !task.interactionRequestId) {
+      if ((!pendingState && previousStatus !== status) || !task.interactionRequestId) {
         task.interactionRequestId = `interaction-${crypto.randomUUID()}`;
       }
     } else {
@@ -1054,14 +1111,96 @@ class Gateway {
     if (payload.reviewDecision !== undefined) task.reviewDecision = payload.reviewDecision;
     if (payload.reviewNotes !== undefined) task.reviewNotes = payload.reviewNotes;
     if (payload.nextTaskId !== undefined) task.nextTaskId = payload.nextTaskId;
+    if (status === 'cancelled') task.cancelPersistencePending = { ...pendingCancellation, previousStatus };
+    else task.statePersistencePending = { previousStatus, status };
 
-    const terminalReplayPersisted = this.taskOrchestrator.recordTerminalTask(task);
-    if (!terminalReplayPersisted) {
-      console.error(
-        '[Gateway] Failed to persist terminal idempotency replay for task',
-        taskId
-      );
+    try {
+      const terminalStatePersisted = this.taskOrchestrator.recordTerminalTask(task);
+      if (!terminalStatePersisted) {
+        throw TraeCNAutomationError.taskStoreUnavailable(this.taskQueueService.getPersistenceHealth?.() || {});
+      }
+    } catch (error) {
+      const health = this.taskQueueService.getPersistenceHealth?.() || {};
+      if (previousTask && health.lastPersistError?.snapshotCommitted) {
+        // The primary already contains cancellation, but its directory fsync
+        // failed or was interrupted. Retain that state to block late work;
+        // retry the same cancellation before stopping or announcing it.
+        task.cancelPersistencePending = { ...pendingCancellation, previousStatus };
+      } else if (previousTask) {
+        for (const key of Object.keys(task)) delete task[key];
+        Object.assign(task, previousTask);
+      }
+      const persistenceError = error.code === 'TASK_STORE_UNAVAILABLE'
+        ? error
+        : TraeCNAutomationError.taskStoreUnavailable(health);
+      persistenceError.message = status !== 'cancelled'
+        ? 'Task state persistence could not be confirmed. The result is retained for storage retry.'
+        : (task.cancelPersistencePending
+          ? 'Task cancellation persistence could not be confirmed. Retry after restoring task storage.'
+          : 'Task cancellation could not be persisted; no cancellation was applied. Retry after restoring task storage.');
+      throw persistenceError;
     }
+    // Stop only after cancellation commits. A recovered request must prove
+    // its original native identity under the UI lock before clicking stop.
+    const needsNativeStop = status === 'cancelled' && task.cancelRequested === true
+      && previousStatus === 'executing' && task.submittedToTrae === true
+      && !Object.prototype.hasOwnProperty.call(task, 'stopResult');
+    if (needsNativeStop && !this.driver) await this._ensureConnection();
+    if (needsNativeStop && typeof this.driver?.stopGeneration !== 'function') {
+      throw new Error('The connected driver cannot stop submitted work');
+    }
+    const stopNative = async () => {
+      try {
+        task.stopResult = await this.driver.stopGeneration();
+      } catch (error) {
+        task.stopResult = { success: false, error: error.message };
+      }
+      return task.stopResult;
+    };
+    const recoveredStop = needsNativeStop && pendingCancellation?.verifyNativeIdentity === true;
+    if (recoveredStop) {
+      await this._withUiActionLock(async () => {
+        const expected = typeof task.soloChat?.sessionId === 'string' ? task.soloChat.sessionId.trim() : '';
+        const active = expected && typeof this.driver.getActiveSoloChat === 'function'
+          ? await this.driver.getActiveSoloChat() : null;
+        if (!expected || active?.active?.sessionId !== expected) {
+          throw Object.assign(new Error('Cancellation recovery requires the original native conversation to be active.'), {
+            statusCode: 409, code: 'task_cancellation_conflict'
+          });
+        }
+        await stopNative();
+      });
+    }
+    // Normal cancellation still stops concurrently with notification delivery.
+    const stopping = needsNativeStop && !recoveredStop ? stopNative() : null;
+
+    const eventType = {
+      done: 'task.completed', awaiting_review: 'task.review_required',
+      approval_required: 'task.approval_required', review_rejected: 'task.review_rejected',
+      queue_timeout: 'task.queue_timeout', error: 'task.error', cancelled: 'task.cancelled'
+    }[status];
+    try {
+      if (eventType && !this._hasConfirmedTaskStateEvent(taskId, status, task.interactionRequestId)) {
+        const notification = await this._emitTaskNotification(taskId, task, eventType,
+          status === 'awaiting_review' ? { remainingFollowups: task.followupTasks?.length || 0 } : {});
+        if (notification?.recorded === false) {
+          throw TraeCNAutomationError.taskStoreUnavailable(this.taskEventStore?.getHealth?.() || {});
+        }
+      }
+    } catch (error) {
+      if (stopping) await stopping;
+      if (status === 'cancelled') task.statePersistencePending = { previousStatus, status };
+      // Keep the already committed candidate (and any completed stop result)
+      // in tasks[] until its completion event can be durably recorded.
+      this._persistActiveQueue();
+      const persistenceError = error.code === 'TASK_STORE_UNAVAILABLE'
+        ? error : TraeCNAutomationError.taskStoreUnavailable(this.taskEventStore?.getHealth?.() || {});
+      persistenceError.message = 'Task state is retained, but its completion event could not be confirmed. Retry after restoring event storage.';
+      throw persistenceError;
+    }
+    if (stopping) await stopping;
+    delete task.cancelPersistencePending;
+    delete task.statePersistencePending;
 
     if (task.sessionId && !task.sessionResultRecorded && ['done', 'awaiting_review', 'approval_required', 'review_rejected', 'queue_timeout', 'error', 'cancelled'].includes(status)) {
       const resultText = typeof task.result?.text === 'string' ? task.result.text.trim() : '';
@@ -1090,22 +1229,12 @@ class Gateway {
       this.taskHistoryStore.completeTask(taskId, task.result, {
         elapsedMs: task.result?.elapsedMs || Date.now() - task.createdAt
       });
-      await this._emitTaskNotification(taskId, task, 'task.completed');
-    } else if (status === 'awaiting_review') {
-      await this._emitTaskNotification(taskId, task, 'task.review_required', {
-        remainingFollowups: task.followupTasks?.length || 0
-      });
-    } else if (status === 'approval_required') {
-      await this._emitTaskNotification(taskId, task, 'task.approval_required');
     } else if (status === 'review_rejected') {
       this.taskHistoryStore.cancelTask(taskId);
-      await this._emitTaskNotification(taskId, task, 'task.review_rejected');
     } else if (status === 'queue_timeout') {
       this.taskHistoryStore.failTask(taskId, task.error || 'Task exceeded queue wait timeout');
-      await this._emitTaskNotification(taskId, task, 'task.queue_timeout');
     } else if (status === 'error') {
       this.taskHistoryStore.failTask(taskId, task.error || payload.error || 'Unknown error');
-      await this._emitTaskNotification(taskId, task, 'task.error');
     } else if (status === 'cancelled') {
       this.taskHistoryStore.cancelTask(taskId);
     }
@@ -1115,9 +1244,28 @@ class Gateway {
     }
     this._syncTaskHistoryMirror(task);
     this._persistActiveQueue();
+    this._syncBatchTasksForGatewayTask(taskId);
+    return true;
   }
 
   async _continueReviewedTask(taskId, task, decision, notes = '') {
+    if (task.statePersistencePending) {
+      if (task.reviewDecision !== decision || task.reviewNotes !== notes) {
+        throw TraeCNAutomationError.reviewGateBlocked('The review decision is already pending persistence; retry the original decision.');
+      }
+      await this._finalizeBackgroundTask(taskId, task, task.statePersistencePending.status);
+      if (task.nextTaskId) {
+        this._ensureBackgroundPolling();
+        return {
+          taskId, status: 'continued', reviewDecision: decision, nextTaskId: task.nextTaskId,
+          remainingFollowups: this.taskQueue.get(task.nextTaskId)?.followupTasks?.length || 0
+        };
+      }
+      return { taskId, status: task.status, reviewDecision: decision };
+    }
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) {
+      return { taskId, status: task.status };
+    }
     task.reviewDecision = decision;
     task.reviewNotes = notes;
 
@@ -1139,7 +1287,7 @@ class Gateway {
     }
 
     const [nextSpec, ...remainingFollowups] = task.followupTasks;
-    const nextTask = this._createQueuedTask({
+    const nextTask = task.nextTaskId ? this.taskQueue.get(task.nextTaskId) : this._createQueuedTask({
       task: nextSpec.task,
       projectPath: task.projectPath || null,
       includeProcessText: nextSpec.includeProcessText === true,
@@ -1153,22 +1301,26 @@ class Gateway {
       soloChat: task.soloChat,
       fallbackModels: task.fallbackModels || [],
       modelProbeIntervalMs: task.modelProbeIntervalMs
-    }, { queued: true, queueMessage: '等待上一审查通过后继续执行' });
-    nextTask.queueState = 'workflow';
+    }, { queued: true, queueMessage: '等待上一审查通过后继续执行' }, { deferPersistence: true });
+    if (nextTask) {
+      nextTask.queueState = 'workflow';
+      nextTask.workflowParentTaskId = taskId;
+      task.nextTaskId = nextTask.taskId;
+    }
 
     await this._finalizeBackgroundTask(taskId, task, 'done', {
       result: task.result,
       reviewDecision: decision,
       reviewNotes: notes,
-      nextTaskId: nextTask.taskId
+      nextTaskId: task.nextTaskId
     });
     this._ensureBackgroundPolling();
     return {
       taskId,
       status: 'continued',
       reviewDecision: decision,
-      nextTaskId: nextTask.taskId,
-      remainingFollowups: nextTask.followupTasks.length
+      nextTaskId: task.nextTaskId,
+      remainingFollowups: nextTask?.followupTasks?.length || 0
     };
   }
 
@@ -1327,13 +1479,22 @@ class Gateway {
   }
 
   async _ensureConnection() {
-    const closeCurrentConnection = async () => {
-      if (!this.client) return;
+    const ensureActive = () => {
+      if (this._shutdownInProgress) {
+        throw TraeCNAutomationError.cdpDisconnected('Gateway is shutting down');
+      }
+    };
+    const hasConnection = () => Boolean(this.client?.isConnected && this.driver);
+    ensureActive();
+
+    const closeCurrentConnection = async (client = this.client) => {
+      if (!client) return;
       try {
-        await this.client.close();
+        await client.close();
       } catch (e) {
         console.error('[Gateway] Error closing stale CDP client:', e.message);
       }
+      if (this.client !== client) return;
       this.client = null;
       this.driver = null;
       this.traeEnvironment = null;
@@ -1341,37 +1502,51 @@ class Gateway {
       if (this.healthWatcher) this.healthWatcher.stop();
     };
 
-    const attachDriver = async (discovered) => {
-      this.traeEnvironment = await this.detectTraeEnvironment({
-        client: this.client,
+    const attachDriver = async (discovered, client) => {
+      ensureActive();
+      const environment = await this.detectTraeEnvironment({
+        client,
         cdpVersion: discovered.cdpVersion || {},
         target: discovered,
         platform: process.platform
       });
-      this.traeAdapter = this.selectTraeAdapter(this.traeEnvironment);
-      this.driver = new DomDriver(
-        this.client,
-        mergeAdapterConfig(getConfig(), this.traeAdapter),
-        { traeAdapter: this.traeAdapter }
+      ensureActive();
+      const adapter = this.selectTraeAdapter(environment);
+      const driver = new DomDriver(
+        client,
+        mergeAdapterConfig(getConfig(), adapter),
+        { traeAdapter: adapter, activateWindow: () => this.traeControl.activateWindow() }
       );
+      return { environment, adapter, driver };
     };
 
     const connectFresh = async () => {
-      try {
-        const discovered = await discoverTarget();
-        this.client = await connectToTarget(discovered, discovered.client);
-        await attachDriver(discovered);
-        if (this.healthWatcher) this.healthWatcher.start(this.client);
-        return discovered;
-      } catch (err) {
-        await closeCurrentConnection();
-        const recovered = await this._attemptTraeRecovery(err);
-        if (!recovered) throw err;
-        const discovered = await discoverTarget();
-        this.client = await connectToTarget(discovered, discovered.client);
-        await attachDriver(discovered);
-        if (this.healthWatcher) this.healthWatcher.start(this.client);
-        return discovered;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let client = null;
+        try {
+          ensureActive();
+          const discovered = await discoverTarget();
+          ensureActive();
+          client = await connectToTarget(discovered, discovered.client);
+          ensureActive();
+          const attached = await attachDriver(discovered, client);
+          ensureActive();
+          this.client = client;
+          this.traeEnvironment = attached.environment;
+          this.traeAdapter = attached.adapter;
+          this.driver = attached.driver;
+          if (this.healthWatcher) this.healthWatcher.start(client);
+          return discovered;
+        } catch (err) {
+          // A late client belongs to this attempt, even if another connection
+          // has since become current or shutdown already cleared Gateway state.
+          if (client) await closeCurrentConnection(client);
+          ensureActive();
+          if (attempt > 0) throw err;
+          const recovered = await this._attemptTraeRecovery(err);
+          ensureActive();
+          if (!recovered) throw err;
+        }
       }
     };
 
@@ -1382,15 +1557,20 @@ class Gateway {
       return;
     }
 
-    if (!this.client || !this.client.isConnected || !this.driver) {
+    if (!hasConnection()) {
       await closeCurrentConnection();
-      await connectFresh();
+      ensureActive();
+      if (!hasConnection()) await connectFresh();
+      ensureActive();
     }
 
     for (let attempt = 0; attempt < 4; attempt++) {
-      if (!this.client || !this.client.isConnected || !this.driver) {
+      ensureActive();
+      if (!hasConnection()) {
         await closeCurrentConnection();
-        await connectFresh();
+        ensureActive();
+        if (!hasConnection()) await connectFresh();
+        ensureActive();
       }
 
       let snapshot = null;
@@ -1401,6 +1581,7 @@ class Gateway {
       } catch (e) {
         console.warn('[Gateway] Setup state probe failed:', e.message);
       }
+      ensureActive();
 
       if (!snapshot?.isSetup) {
         return;
@@ -1414,12 +1595,15 @@ class Gateway {
       try {
         setupResult = await this.driver.completeSetupIfPresent();
       } catch (e) {
+        ensureActive();
         console.warn('[Gateway] Setup auto-advance failed:', e.message);
         return;
       }
+      ensureActive();
 
       if (!this.client || !this.client.isConnected) {
         await closeCurrentConnection();
+        ensureActive();
         continue;
       }
 
@@ -1462,20 +1646,24 @@ class Gateway {
 
   async _prepareQueuedTask(task) {
     if (!task) return false;
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return false;
     if (task.gatewayPrepared === true) return true;
     if (task.projectPath) await this._ensureRequestedWorkspace(task.projectPath);
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return false;
     if (task.desiredMode && typeof this.driver.switchMode === 'function') {
       const result = await this.driver.switchMode(task.desiredMode);
       if (result && result.success === false) {
         throw new Error(`Failed to switch TraeCN mode to ${task.desiredMode}`);
       }
     }
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return false;
     const queueStatus = typeof this.driver.checkQueueStatus === 'function'
       ? await this.driver.checkQueueStatus()
       : { running: false, queued: false };
     if (queueStatus.running === true || (queueStatus.queued === true && queueStatus.canSubmit !== true)) {
       return false;
     }
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return false;
     if (task.desiredModel && typeof this.driver.switchModel === 'function') {
       const result = this._normalizeModelSwitchResult(await this.driver.switchModel(task.desiredModel));
       if (!result.success) {
@@ -1483,6 +1671,7 @@ class Gateway {
       }
       task.currentModel = result.model || task.desiredModel;
     }
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return false;
     task.gatewayPrepared = true;
     task.preparedAt = Date.now();
     this._syncTaskHistoryMirror(task);
@@ -2145,6 +2334,9 @@ class Gateway {
   _normalizeSoloChatTarget(value = {}) {
     if (!value || typeof value !== 'object') return null;
     const target = {};
+    if (typeof value.sessionId === 'string' && value.sessionId.trim()) {
+      target.sessionId = value.sessionId.trim();
+    }
     if (Number.isInteger(value.index)) target.index = value.index;
     if (typeof value.titleIncludes === 'string' && value.titleIncludes.trim()) {
       target.titleIncludes = value.titleIncludes.trim();
@@ -2171,6 +2363,7 @@ class Gateway {
   _soloChatSwitchCriteria(soloChat) {
     const target = this._normalizeSoloChatTarget(soloChat);
     if (!target) return null;
+    if (target.sessionId) return { sessionId: target.sessionId };
     if (target.titleIncludes || target.textIncludes) {
       return {
         titleIncludes: target.titleIncludes,
@@ -2258,6 +2451,7 @@ class Gateway {
 
   _soloChatMatchesActive(soloChat, active) {
     if (!soloChat || !active) return false;
+    if (soloChat.sessionId) return soloChat.sessionId === active.sessionId;
     const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
     const activeText = normalize([active.title, active.text].filter(Boolean).join(' '));
     const candidates = [
@@ -2316,12 +2510,12 @@ class Gateway {
     const criteriaList = [];
     const primary = this._soloChatSwitchCriteria(task.soloChat);
     if (primary) criteriaList.push(primary);
-    for (const candidate of task.soloChat.candidates || []) {
+    for (const candidate of task.soloChat.sessionId ? [] : task.soloChat.candidates || []) {
       criteriaList.push({ titleIncludes: candidate });
       criteriaList.push({ textIncludes: candidate });
     }
     const hasTextualIdentity = criteriaList.some(item => item.titleIncludes || item.textIncludes);
-    if (!hasTextualIdentity && Number.isInteger(task.soloChat.index)) {
+    if (!task.soloChat.sessionId && !hasTextualIdentity && Number.isInteger(task.soloChat.index)) {
       criteriaList.push({ index: task.soloChat.index });
     }
     if (criteriaList.length === 0) return { skipped: true, reason: 'invalid_solo_chat_target' };
@@ -2333,6 +2527,7 @@ class Gateway {
       if (result.success !== false) break;
     }
     if (result?.success === false
+      && !task.soloChat.sessionId
       && Number.isInteger(task.soloChat.index)
       && typeof this.driver.getActiveSoloChat === 'function') {
       const submittedTasks = Array.from(this.taskQueue.entries()).filter(([, queuedTask]) => (
@@ -2385,6 +2580,7 @@ class Gateway {
       ? (stableTaskCandidate || candidates[0] || activePrimary)
       : (activePrimary || stableTaskCandidate || candidates[0]);
     const soloChat = this._normalizeSoloChatTarget({
+      sessionId: active.sessionId,
       titleIncludes: primary,
       textIncludes: primary,
       index: active.index,
@@ -2573,12 +2769,33 @@ class Gateway {
     return this._withUiActionLock(async () => {
       try {
         if (body.section) await this.driver.settings.switchTab(body.section);
+        const before = await this.driver.settings.getContent();
+        const setting = before.items?.find(item => item.label === body.label);
+        if (!setting) {
+          return this._json(req, res, { error: 'setting_not_found', label: body.label }, 404);
+        }
+        const controlKind = kind === 'auto' ? setting.controlType : kind;
+        if (!['toggle', 'option', 'text'].includes(controlKind) || controlKind !== setting.controlType) {
+          return this._json(req, res, {
+            error: 'setting_control_type_mismatch', label: body.label,
+            kind, controlType: setting.controlType
+          }, 400);
+        }
+        if (typeof body.value !== (controlKind === 'toggle' ? 'boolean' : 'string')) {
+          return this._json(req, res, { error: 'setting_value_type_mismatch', label: body.label, controlType: controlKind }, 400);
+        }
         let result;
-        if (kind === 'toggle') result = await this.driver.settings.setToggle(body.label, body.value);
-        else if (kind === 'option') result = await this.driver.settings.setDropdown(body.label, body.value);
-        else if (kind === 'text') result = await this.driver.settings.typeText(body.label, body.value);
-        else result = await this.driver.settings.set(body.label, body.value);
-        return this._json(req, res, { label: body.label, value: body.value, kind, result });
+        if (controlKind === 'toggle') result = await this.driver.settings.setToggle(body.label, body.value);
+        else if (controlKind === 'option') result = await this.driver.settings.setDropdown(body.label, body.value);
+        else result = await this.driver.settings.typeText(body.label, body.value);
+        const after = await this.driver.settings.getContent();
+        const applied = after.items?.find(item => item.label === body.label && item.controlType === controlKind);
+        const value = applied ? (controlKind === 'toggle' ? applied.toggleChecked : applied.currentValue) : null;
+        const verified = value === body.value;
+        return this._json(req, res, {
+          label: body.label, value, requestedValue: body.value, kind, controlType: controlKind, result, verified,
+          ...(!verified ? { error: 'setting_value_not_applied', code: 'SETTINGS_VALUE_NOT_APPLIED' } : {})
+        }, verified ? 200 : 409);
       } finally {
         if (body.restoreChat === true) await this.driver.settings.backToChat();
       }
@@ -2831,6 +3048,9 @@ class Gateway {
       if (record.result.error) {
         response.error = record.result.error;
         if (record.result.code) response.errorCode = record.result.code;
+        if (typeof record.result.text === 'string' && record.result.text.trim()) {
+          response.result = record.result;
+        }
       } else {
         response.result = record.result;
       }
@@ -2872,7 +3092,7 @@ class Gateway {
 
   _startBatchExecution(batchId) {
     const batch = this.batchTasks.get(batchId);
-    if (!batch || batch._cancelled) return;
+    if (!batch || batch._cancelled || batch._cancelling || this._shutdownInProgress) return;
 
     if (batch.strategy === 'parallel') {
       this._executeBatchParallel(batchId);
@@ -2885,16 +3105,16 @@ class Gateway {
 
   async _executeBatchParallel(batchId) {
     const batch = this.batchTasks.get(batchId);
-    if (!batch) return;
+    if (!batch || batch._cancelled || batch._cancelling || this._shutdownInProgress) return;
 
     const pendingTasks = batch.tasks.filter(t => t.status === 'pending');
-    const runningTasks = batch.tasks.filter(t => t.status === 'executing');
+    const runningTasks = batch.tasks.filter(t => t.status !== 'pending' && !this._isTerminalTaskStatus(t.status));
     const availableSlots = batch.maxConcurrency - runningTasks.length;
 
     if (availableSlots > 0 && pendingTasks.length > 0) {
       const tasksToStart = pendingTasks.slice(0, availableSlots);
+      for (const task of tasksToStart) task.status = 'executing';
       for (const task of tasksToStart) {
-        task.status = 'executing';
         this._executeSingleBatchTask(batchId, task.taskId).catch(() => {});
       }
     }
@@ -2902,7 +3122,8 @@ class Gateway {
 
   async _executeBatchSequential(batchId) {
     const batch = this.batchTasks.get(batchId);
-    if (!batch) return;
+    if (!batch || batch._cancelled || batch._cancelling || this._shutdownInProgress) return;
+    if (batch.tasks.some(t => t.status !== 'pending' && !this._isTerminalTaskStatus(t.status))) return;
 
     const nextTask = batch.tasks.find(t => t.status === 'pending');
     if (nextTask) {
@@ -2913,9 +3134,9 @@ class Gateway {
 
   async _executeBatchPriority(batchId) {
     const batch = this.batchTasks.get(batchId);
-    if (!batch) return;
+    if (!batch || batch._cancelled || batch._cancelling || this._shutdownInProgress) return;
 
-    const runningCount = batch.tasks.filter(t => t.status === 'executing').length;
+    const runningCount = batch.tasks.filter(t => t.status !== 'pending' && !this._isTerminalTaskStatus(t.status)).length;
     if (runningCount >= batch.maxConcurrency) return;
 
     const pendingTasks = batch.tasks
@@ -2925,55 +3146,92 @@ class Gateway {
     const slotsAvailable = batch.maxConcurrency - runningCount;
     const tasksToStart = pendingTasks.slice(0, slotsAvailable);
 
+    for (const task of tasksToStart) task.status = 'executing';
     for (const task of tasksToStart) {
-      task.status = 'executing';
       this._executeSingleBatchTask(batchId, task.taskId).catch(() => {});
     }
   }
 
   async _executeSingleBatchTask(batchId, taskId) {
     const batch = this.batchTasks.get(batchId);
-    if (!batch || batch._cancelled) return;
+    if (!batch || batch._cancelled || batch._cancelling || this._shutdownInProgress) return;
 
     const task = batch.tasks.find(t => t.taskId === taskId);
-    if (!task || task.status !== 'executing' || batch._cancelled) return;
+    if (!task || task.status !== 'executing' || task.gatewayTaskId) return;
 
+    let owned;
     try {
-      await this._ensureConnection();
-      await this._assertProjectWorkspace(task.projectPath);
-      const result = await this.driver.delegate(task.task);
-
-      task.status = 'done';
-      task.result = {
-        text: result.text,
-        stable: result.stable,
-        elapsedMs: result.elapsedMs,
-        timedOut: result.timedOut || false
-      };
-      batch.completedCount++;
-      batch.results.push({ taskId, status: 'done', result: task.result });
-
-      if (result.needsApproval) {
-        task.result.needsApproval = true;
-        task.result.question = result.question || '';
-      }
+      // The batch identity is a compatibility view. The existing durable
+      // task owns submission, UI serialization, results and interactions.
+      // Retain the identity before committing, including an uncertain rename.
+      owned = this._createQueuedTask({ task: task.task, projectPath: task.projectPath,
+        newConversation: true }, { queued: true, running: false, queueMessage: 'accepted from batch' }, { deferPersistence: true });
+      task.gatewayTaskId = owned.taskId;
+      this._ensureBackgroundPolling();
+      await this._finalizeBackgroundTask(owned.taskId, owned, 'queued');
     } catch (e) {
+      if (owned?.statePersistencePending) {
+        // Polling confirms the original queued candidate before any driver
+        // action; a failed commit must not become an orphan or a new task.
+        this._refreshBatchState(batch);
+        return;
+      }
       task.status = 'error';
       task.error = safeErrorMessage(e);
-      batch.failedCount++;
-      batch.results.push({ taskId, status: 'error', error: safeErrorMessage(e) });
+      this._refreshBatchState(batch);
+      this._checkBatchCompletion(batchId);
     }
+  }
 
-    this._checkBatchCompletion(batchId);
+  _refreshBatchState(batch) {
+    for (const item of batch.tasks) {
+      if (!item.gatewayTaskId) continue;
+      const owned = this.taskQueue.get(item.gatewayTaskId);
+      const snapshot = owned || this._historyTaskStatusResponse(this.taskHistoryStore.getTask(item.gatewayTaskId));
+      if (!snapshot) continue;
+      const persistencePending = Boolean(snapshot.statePersistencePending || snapshot.cancelPersistencePending);
+      item.gatewayStatus = snapshot.cancelPersistencePending?.previousStatus
+        || snapshot.statePersistencePending?.previousStatus || snapshot.status;
+      item.status = persistencePending || snapshot.status === 'queued' ? 'executing' : snapshot.status;
+      item.result = snapshot.result || null;
+      item.error = snapshot.error || null;
+      if (snapshot.statePersistencePending) item.statePersistencePending = true;
+      else delete item.statePersistencePending;
+      if (snapshot.cancelPersistencePending) item.cancelPersistencePending = true;
+      else delete item.cancelPersistencePending;
+      if (!persistencePending && snapshot.interactionRequestId) item.interactionRequestId = snapshot.interactionRequestId;
+      else delete item.interactionRequestId;
+    }
+    batch.completedCount = batch.tasks.filter(t => t.status === 'done').length;
+    batch.failedCount = batch.tasks.filter(t => ['error', 'queue_timeout', 'review_rejected'].includes(t.status)).length;
+    batch.cancelledCount = batch.tasks.filter(t => t.status === 'cancelled').length;
+    batch.results = batch.tasks.filter(t => this._isTerminalTaskStatus(t.status)).map(t => ({
+      taskId: t.taskId,
+      ...(t.gatewayTaskId ? { gatewayTaskId: t.gatewayTaskId } : {}),
+      status: t.status,
+      ...(t.result ? { result: withoutTaskTrace(t.result) } : {}),
+      ...(t.error ? { error: t.error } : {})
+    }));
+  }
+
+  _syncBatchTasksForGatewayTask(taskId) {
+    if (!this.batchTasks?.size) return;
+    for (const batch of this.batchTasks.values()) {
+      if (!batch.tasks.some(t => t.gatewayTaskId === taskId)) continue;
+      this._refreshBatchState(batch);
+      this._checkBatchCompletion(batch.batchId);
+    }
   }
 
   _checkBatchCompletion(batchId) {
     const batch = this.batchTasks.get(batchId);
-    if (!batch) return;
+    if (!batch || batch._cancelled || batch._cancelling || this._shutdownInProgress) return;
 
-    const allDone = batch.tasks.every(t => t.status !== 'pending' && t.status !== 'executing');
+    const allDone = batch.tasks.every(t => this._isTerminalTaskStatus(t.status)
+      && !t.statePersistencePending && !t.cancelPersistencePending);
 
     if (allDone) {
+      if (batch.status === 'completed') return;
       batch.status = 'completed';
       this._notifyBatchComplete(batch);
     } else {
@@ -2982,7 +3240,8 @@ class Gateway {
   }
 
   async _notifyBatchComplete(batch) {
-    if (!batch.onComplete) return;
+    if (!batch.onComplete || batch._notificationSent) return;
+    batch._notificationSent = true;
 
     try {
       const payload = {
@@ -2991,6 +3250,7 @@ class Gateway {
         totalCount: batch.totalCount,
         completedCount: batch.completedCount,
         failedCount: batch.failedCount,
+        cancelledCount: batch.cancelledCount,
         completedAt: new Date().toISOString(),
         results: batch.results
       };
@@ -3043,6 +3303,7 @@ class Gateway {
   }
 
   async _retryBackgroundTaskAfterCompletionCheckFailure(taskId, task, result, validation, options = {}) {
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return false;
     const maxAttempts = Number.isFinite(Number(options.maxAttempts))
       ? Number(options.maxAttempts)
       : Number(process.env.TRAECN_BACKGROUND_MAX_RETRIES || 3);
@@ -3074,16 +3335,23 @@ class Gateway {
   }
 
   async _finalizeCollectedBackgroundResult(taskId, task, result) {
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return;
     task.result = result;
 
     if (this._isQueuedTaskResult(result)) {
       this._keepSubmittedTaskWaitingInQueue(taskId, task, result);
     } else if (!this._resultBelongsToSubmittedTask(result, task)) {
       this._keepSubmittedTaskWaitingForOwnedResult(taskId, task, result, 'collected result did not include a task ownership token');
+    } else if (result.interrupted === true) {
+      await this._finalizeBackgroundTask(taskId, task, 'error', {
+        result,
+        error: result.error || 'Trae generation was interrupted'
+      });
     } else if (result.needsApproval) {
       const currentDialog = typeof this.driver?.checkForApprovalDialog === 'function'
         ? await this.driver.checkForApprovalDialog()
         : { needsApproval: true };
+      if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return;
       if (!currentDialog.needsApproval) {
         this._keepSubmittedTaskWaitingForOwnedResult(
           taskId,
@@ -3164,7 +3432,7 @@ class Gateway {
   }
 
   _backgroundResultRetryMode(result, task = null) {
-    if (!result || result.needsApproval) return null;
+    if (!result || result.needsApproval || result.interrupted) return null;
     const text = typeof result.text === 'string' ? result.text.trim() : '';
     if (result.modelError || this._isFailedResultText(text)) return 'resubmit';
     if (this._isEchoedTaskResult(result, task)) return 'collect';
@@ -3178,6 +3446,7 @@ class Gateway {
   }
 
   async _retryBackgroundTaskAfterResult(taskId, task, result, options = {}) {
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return false;
     const retryMode = this._backgroundResultRetryMode(result, task);
     if (!retryMode) return false;
 
@@ -3223,6 +3492,10 @@ class Gateway {
   }
 
   async _retryBackgroundTaskAfterError(taskId, task, err, options = {}) {
+    if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return false;
+    // A dispatched send may already be running even when the UI has not
+    // confirmed it. Preserve the uncertainty instead of submitting it twice.
+    if (err?.code === 'SEND_FAILED' && err?.details?.submissionDispatched === true) return false;
     const maxAttempts = Number.isFinite(Number(options.maxAttempts))
       ? Number(options.maxAttempts)
       : Number(process.env.TRAECN_BACKGROUND_MAX_RETRIES || 3);
@@ -3250,9 +3523,12 @@ class Gateway {
   async _collectSubmittedBackgroundTask(taskId, task) {
     return await this._withUiActionLock(async () => {
       await this._ensureConnection();
+      if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return task.result;
       await this._switchToTaskSoloChat(task, 'collect_result');
+      if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return task.result;
       if (this.driver && typeof this.driver.getActiveSoloChat === 'function') {
         const activeSnapshot = await this.driver.getActiveSoloChat();
+        if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return task.result;
         const activeChat = activeSnapshot?.active || null;
         if (activeChat?.status === 'running') {
           task.queueState = 'running';
@@ -3270,6 +3546,7 @@ class Gateway {
         }
       }
       const queueStatus = await this.driver.checkQueueStatus();
+      if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return task.result;
       this._updateQueuedTaskSnapshot(task, queueStatus);
       this._syncTaskHistoryMirror(task);
       this._persistActiveQueue();
@@ -3285,8 +3562,14 @@ class Gateway {
         return { text: '', stable: false, elapsedMs: 0, queued: queueStatus.queued === true, running: queueStatus.running === true };
       }
 
-      const result = await this.driver.collectResponse();
-      if (this._isTerminalTaskStatus(task.status)) {
+      const result = await this.driver.collectResponse({
+        shouldStop: () => Boolean(this._shutdownInProgress)
+          || (this._isTerminalTaskStatus(task.status) && !task.cancelPersistencePending && !task.statePersistencePending)
+          || (task.status === 'cancelled' && Object.prototype.hasOwnProperty.call(task, 'stopResult'))
+      });
+      if (this._shutdownInProgress) return result;
+      if (task.statePersistencePending || this._isTerminalTaskStatus(task.status)) {
+        if (task.cancelPersistencePending || task.statePersistencePending) return result;
         this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
           success: true,
           details: {
@@ -3303,20 +3586,33 @@ class Gateway {
     });
   }
 
-  _resumeApprovalRequiredTasksAfterDialogAnswer(answer, result = {}, expectedTaskId = null) {
+  _approvalTaskMatchesActiveSession(task, expectedTaskId, context = {}) {
+    const boundSessionId = typeof task.soloChat?.sessionId === 'string' ? task.soloChat.sessionId.trim() : '';
+    const activeSessionId = typeof context.activeSessionId === 'string' ? context.activeSessionId.trim() : '';
+    if (boundSessionId) return Boolean(activeSessionId && boundSessionId === activeSessionId);
+    // Global decisions apply to the fresh native card. Unbound legacy tasks
+    // remain compatible only without a native identity, or by explicit task ID.
+    return !activeSessionId || Boolean(expectedTaskId);
+  }
+
+  _resumeApprovalRequiredTasksAfterDialogAnswer(answer, result = {}, expectedTaskId = null, context = {}) {
+    if (result.success === false) return [];
+    const candidates = Array.from(this.taskQueue.entries())
+      .filter(([taskId, task]) => task.status === 'approval_required'
+        && !task.statePersistencePending && !task.cancelPersistencePending
+        && (!expectedTaskId || taskId === expectedTaskId)
+        && this._approvalTaskMatchesActiveSession(task, expectedTaskId, context))
+      .filter(([, task]) => {
+        const dialogType = String(task.result?.dialogType || '');
+        const question = String(task.result?.question || '');
+        return dialogType === 'review_scope_question'
+          || /review scope|what would you like me to review/i.test(question);
+      });
+    if (candidates.length !== 1) return [];
     const resumedTaskIds = [];
     const answeredAt = Date.now();
 
-    for (const [taskId, task] of this.taskQueue) {
-      if (task.status !== 'approval_required') continue;
-      if (expectedTaskId && taskId !== expectedTaskId) continue;
-
-      const dialogType = String(task.result?.dialogType || '');
-      const question = String(task.result?.question || '');
-      const isReviewScopeQuestion = dialogType === 'review_scope_question'
-        || /review scope|what would you like me to review/i.test(question);
-      if (!isReviewScopeQuestion) continue;
-
+    for (const [taskId, task] of candidates) {
       task.status = 'executing';
       delete task.interactionRequestId;
       task.submittedToTrae = true;
@@ -3347,22 +3643,32 @@ class Gateway {
     return resumedTaskIds;
   }
 
-  _resumeApprovalRequiredTasksAfterInteraction(action, dialog = {}, result = {}, expectedTaskId = null) {
-    const normalizedCommand = String(dialog.command || '').replace(/\s+/g, ' ').trim();
+  _resumeApprovalRequiredTasksAfterInteraction(action, dialog = {}, result = {}, expectedTaskId = null, context = {}) {
+    const normalizedCommand = String(dialog.command || '').trim();
+    const commandTypes = ['command', 'command_execution', 'command_approval'];
+    const dialogType = String(dialog.dialogType || dialog.type || '');
+    if (result.success === false || !normalizedCommand || dialog.isCommandExec === false
+      || (dialogType && !commandTypes.includes(dialogType))) return [];
     const candidates = Array.from(this.taskQueue.entries())
-      .filter(([, task]) => task.status === 'approval_required')
+      .filter(([, task]) => task.status === 'approval_required' && !task.statePersistencePending && !task.cancelPersistencePending)
       .filter(([taskId]) => !expectedTaskId || taskId === expectedTaskId)
+      .filter(([, task]) => this._approvalTaskMatchesActiveSession(task, expectedTaskId, context))
       .filter(([, task]) => {
-        if (!normalizedCommand) return true;
-        const taskInteractionText = String(task.result?.question || task.result?.text || '')
-          .replace(/\s+/g, ' ')
-          .trim();
-        return taskInteractionText.includes(normalizedCommand);
-      })
-      .sort((left, right) => (right[1].createdAt || 0) - (left[1].createdAt || 0));
+        const taskDialogType = String(task.result?.dialogType || '');
+        if (taskDialogType && !commandTypes.includes(taskDialogType)) return false;
+        const storedCommand = String(task.result?.command || '').trim();
+        if (storedCommand) return storedCommand === normalizedCommand;
+        // Older snapshots stored an explicit run question instead of command.
+        // Preserve that form without accepting arbitrary quoted/logged text.
+        const taskInteractionText = String(task.result?.question || task.result?.text || '').trim();
+        if (taskInteractionText === normalizedCommand) return true;
+        const legacyRunQuestion = /^(?:运行|执行|run|execute)\s+([\s\S]+)$/i.exec(taskInteractionText);
+        return Boolean(legacyRunQuestion && [normalizedCommand, `${normalizedCommand}?`, `${normalizedCommand}？`]
+          .includes(legacyRunQuestion[1].trim()));
+      });
 
+    if (candidates.length !== 1) return [];
     const selected = candidates[0];
-    if (!selected) return [];
 
     const [taskId, task] = selected;
     const resumedAt = Date.now();
@@ -3402,12 +3708,32 @@ class Gateway {
   // Polls periodically: checks queue state, runs newChat when the queue clears,
   // sends the task and waits for the response. Enforces per-task deadline.
 
+  _hasConfirmedTaskStateEvent(taskId, status, interactionRequestId) {
+    const type = {
+      done: 'task.completed', error: 'task.error', queue_timeout: 'task.queue_timeout',
+      review_rejected: 'task.review_rejected', awaiting_review: 'task.review_required',
+      approval_required: 'task.approval_required', cancelled: 'task.cancelled'
+    }[status];
+    const checkpoint = status === 'awaiting_review' || status === 'approval_required';
+    return (this.taskEventStore?.events || []).some(event => event.taskId === taskId && event.type === type
+      && (!checkpoint || (interactionRequestId && event.interactionRequestId === interactionRequestId)));
+  }
+
+  _workflowDependencyConfirmed(task) {
+    if (!task.workflowParentTaskId) return true;
+    const parent = this.taskQueue.get(task.workflowParentTaskId);
+    return parent
+      ? parent.status === 'done' && !parent.statePersistencePending && !parent.cancelPersistencePending
+      : task.workflowParentCompleted === true
+        || this.taskHistoryStore.getTask(task.workflowParentTaskId)?.status === 'completed';
+  }
+
   _ensureBackgroundPolling() {
-    if (this.pollingTimer) return;
+    if (this._shutdownInProgress || this.pollingTimer) return;
     const pollInterval = 15000;
     this.pollingTimer = this._setInterval(async () => {
       // Prevent concurrent polling
-      if (this.isPolling) return;
+      if (this._shutdownInProgress || this.isPolling) return;
       this.isPolling = true;
 
       try {
@@ -3416,7 +3742,8 @@ class Gateway {
         const now = Date.now();
         const maxTaskAge = 3600000; // 1小时
         for (const [taskId, task] of this.taskQueue) {
-          if (this._isTerminalTaskStatus(task.status) && now - task.createdAt > maxTaskAge) {
+          if (this._isTerminalTaskStatus(task.status) && !task.cancelPersistencePending && !task.statePersistencePending
+            && now - task.createdAt > maxTaskAge) {
             console.log('[Queue] Cleaning up old task', taskId, 'with status', task.status);
             this.taskQueue.delete(taskId);
             this.taskQueueService.release(taskId);
@@ -3427,7 +3754,8 @@ class Gateway {
         // a property of the Trae IDE, not per-task, so one CDP round-trip per
         // polling cycle suffices regardless of how many tasks are queued.
         const hasQueuedTasks = Array.from(this.taskQueue.values()).some(
-          t => t.status === 'queued' && !isGenericQueueProbeTask(t && t.task)
+          t => t.status === 'queued' && !t.statePersistencePending && !this.taskLocks.has(t.taskId)
+            && this._workflowDependencyConfirmed(t) && !isGenericQueueProbeTask(t && t.task)
         );
         if (hasQueuedTasks) {
           try {
@@ -3436,9 +3764,37 @@ class Gateway {
             console.error('[Queue] connection preparation failed:', e.message);
           }
         }
+        if (this._shutdownInProgress) return;
 
+        let processedSinceYield = 0;
+        let lastYieldAt = Date.now();
         for (const [taskId, task] of this.taskQueue) {
+          if (this._shutdownInProgress) break;
+          // Full snapshots retain their synchronous durable commits. An
+          // immediately resolved driver/lock promise only yields microtasks,
+          // so bound each batch before allowing sockets and timers to run.
+          if (processedSinceYield >= 25 || Date.now() - lastYieldAt >= 25) {
+            await new Promise(resolve => setImmediate(resolve));
+            if (this._shutdownInProgress) break;
+            processedSinceYield = 0;
+            lastYieldAt = Date.now();
+          }
+          processedSinceYield++;
           if (this.taskLocks.has(taskId)) continue;
+
+          if (task.statePersistencePending && !task.cancelPersistencePending?.verifyNativeIdentity) {
+            this.taskQueueService.tryAcquire(taskId);
+            try {
+              await this._finalizeBackgroundTask(taskId, task, task.cancelPersistencePending
+                ? 'cancelled' : task.statePersistencePending.status);
+            } catch (error) {
+              console.error('[Queue] Task state persistence retry failed:', taskId, error.code || error.message);
+            } finally {
+              this.taskQueueService.release(taskId);
+            }
+            continue;
+          }
+          if (!this._workflowDependencyConfirmed(task)) continue;
 
           if (isGenericQueueProbeTask(task && task.task)) {
             await this._finalizeBackgroundTask(taskId, task, 'cancelled', {
@@ -3453,11 +3809,14 @@ class Gateway {
               if (await this._finalizePersistedResultIfComplete(taskId, task)) {
                 continue;
               }
+              if (this._shutdownInProgress) break;
               await this._collectSubmittedBackgroundTask(taskId, task);
             } catch (e) {
+              if (this._shutdownInProgress) break;
               console.error('[Queue] Submitted task', taskId, 'recovery error:', e.message);
               if (/review gate/i.test(e.message || '')) {
                 const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
+                if (this._shutdownInProgress) break;
                 if (recoveredResult) {
                   task.result = recoveredResult;
                   await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
@@ -3467,6 +3826,7 @@ class Gateway {
               if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
                 continue;
               }
+              if (this._shutdownInProgress) break;
               await this._finalizeBackgroundTask(taskId, task, 'error', {
                 error: safeErrorMessage(e)
               });
@@ -3480,12 +3840,18 @@ class Gateway {
           if (task.status !== 'queued') continue;
 
           try {
-            await this._withUiActionLock(() => this._prepareQueuedTask(task));
+            await this._withUiActionLock(() => this._shutdownInProgress ? false : this._prepareQueuedTask(task));
+            if (this._shutdownInProgress) break;
+            if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) continue;
             let queueStatus = await this.driver.checkQueueStatus();
+            if (this._shutdownInProgress) break;
+            if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) continue;
             this._updateQueuedTaskSnapshot(task, queueStatus);
 
             if ((queueStatus.queued || queueStatus.running) && Array.isArray(task.fallbackModels) && task.fallbackModels.length > 0) {
               const probe = await this._probeFallbackModels(task);
+              if (this._shutdownInProgress) break;
+              if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) continue;
               if (probe.queueStatus) {
                 queueStatus = probe.queueStatus;
                 this._updateQueuedTaskSnapshot(task, queueStatus);
@@ -3525,6 +3891,8 @@ class Gateway {
 
             try {
               await this._withUiActionLock(async () => {
+                if (this._shutdownInProgress) return;
+                if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return;
                 // Create a fresh chat before sending (background poller bypasses
                 // delegate() which would also call newChat)
                 if (task.soloChat) {
@@ -3532,17 +3900,35 @@ class Gateway {
                 } else if (task.newConversation !== false) {
                   await this.driver.newChat();
                 }
+                if (this._shutdownInProgress) return;
+                if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return;
                 await this._ensureRequestedWorkspace(task.projectPath);
+                if (this._shutdownInProgress) return;
+                if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return;
                 await this.driver.sendMessage(task.task);
                 task.submittedToTrae = true;
                 task.submittedAt = Date.now();
+                if (this._shutdownInProgress) return;
+                if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) {
+                  if (!task.cancelPersistencePending && typeof this.driver.stopGeneration === 'function') {
+                    await this.driver.stopGeneration();
+                  }
+                  return;
+                }
                 if (!task.soloChat) {
                   await this._captureTaskSoloChat(task);
                 }
+                if (this._shutdownInProgress) return;
                 this._syncTaskHistoryMirror(task);
                 this._persistActiveQueue();
-                const result = await this.driver.collectResponse();
-                if (this._isTerminalTaskStatus(task.status)) {
+                const result = await this.driver.collectResponse({
+                  shouldStop: () => Boolean(this._shutdownInProgress)
+                    || (this._isTerminalTaskStatus(task.status) && !task.cancelPersistencePending && !task.statePersistencePending)
+                    || (task.status === 'cancelled' && Object.prototype.hasOwnProperty.call(task, 'stopResult'))
+                });
+                if (this._shutdownInProgress) return;
+                if (task.statePersistencePending || this._isTerminalTaskStatus(task.status)) {
+                  if (task.cancelPersistencePending || task.statePersistencePending) return;
                   this.taskHistoryStore.recordStep(taskId, 'collected_result_ignored', {
                     success: true,
                     details: {
@@ -3557,9 +3943,11 @@ class Gateway {
                 await this._finalizeCollectedBackgroundResult(taskId, task, result);
               });
             } catch (e) {
+              if (this._shutdownInProgress) break;
               console.error('[Queue] Task', taskId, 'execution error:', e.message);
               if (/review gate/i.test(e.message || '')) {
                 const recoveredResult = await this._recoverAwaitingReviewFromGate(task);
+                if (this._shutdownInProgress) break;
                 if (recoveredResult) {
                   task.result = recoveredResult;
                   await this._finalizeCollectedBackgroundResult(taskId, task, recoveredResult);
@@ -3569,6 +3957,7 @@ class Gateway {
               if (await this._retryBackgroundTaskAfterError(taskId, task, e)) {
                 continue;
               }
+              if (this._shutdownInProgress) break;
               await this._finalizeBackgroundTask(taskId, task, 'error', {
                 error: safeErrorMessage(e)
               });
@@ -3577,6 +3966,7 @@ class Gateway {
               this.taskQueueService.release(taskId);
             }
           } catch (e) {
+            if (this._shutdownInProgress) break;
             console.error('[Queue] polling error:', e.message);
           }
         }
@@ -3662,11 +4052,25 @@ class Gateway {
 
       if (this.server) {
         await new Promise((resolve) => {
-          this.server.close(() => {
+          const server = this.server;
+          let closed = false;
+          let closeTimeout = null;
+          server.close(() => {
+            closed = true;
+            if (closeTimeout) clearTimeout(closeTimeout);
             console.log('[Gateway] HTTP server closed');
             this.server = null;
             resolve();
           });
+          // Drain normal responses first. Silent preconnections and stalled
+          // requests must not keep an operator shutdown pending indefinitely.
+          if (!closed && typeof server.closeAllConnections === 'function') {
+            closeTimeout = setTimeout(() => {
+              console.warn('[Gateway] HTTP shutdown grace period elapsed; closing remaining connections');
+              server.closeAllConnections();
+            }, HTTP_SHUTDOWN_GRACE_MS);
+            closeTimeout.unref();
+          }
         });
       }
 

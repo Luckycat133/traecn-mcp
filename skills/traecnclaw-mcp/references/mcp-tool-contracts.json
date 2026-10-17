@@ -23,6 +23,79 @@
         ],
         "additionalProperties": false
       },
+      "outputSchema": {
+        "type": "object",
+        "description": "Accepted task identity, original terminal replay, or gateway rejection with reason.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "done",
+              "error",
+              "cancelled",
+              "queue_timeout",
+              "review_rejected"
+            ],
+            "description": "Accepted for new work, or the original terminal status on an idempotent replay."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable identifier used by traecn_get_task and traecn_cancel_task."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Original task error on replay, or submission rejection diagnostic."
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "False when the gateway rejected the submission."
+          },
+          "terminal": {
+            "type": "boolean",
+            "description": "True when returning the original terminal task without submitting again."
+          },
+          "result": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Original captured result on a terminal replay."
+          }
+        },
+        "additionalProperties": true
+      },
       "metadata": {
         "layer": "task",
         "risk": "delegate"
@@ -52,6 +125,125 @@
         ],
         "additionalProperties": false
       },
+      "outputSchema": {
+        "type": "object",
+        "description": "Task status snapshot with final result or diagnostics.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Task status such as queued, executing, done, error, cancelled, awaiting_review, approval_required."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Echoed task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Original task error, or null when no execution error was recorded."
+          },
+          "historyStatus": {
+            "type": "string",
+            "description": "Internal history status when the task already left the active queue."
+          },
+          "createdAt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Epoch milliseconds when the task was created."
+          },
+          "elapsed": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Milliseconds elapsed since creation."
+          },
+          "completedAt": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Task completion time: epoch milliseconds, an ISO 8601 timestamp from persisted history, or null when unavailable."
+          },
+          "fromHistory": {
+            "type": "boolean",
+            "description": "True when served from persisted history instead of the active queue."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Gateway bookkeeping metadata recorded with the task."
+          },
+          "stepCount": {
+            "type": "number",
+            "description": "Number of recorded execution steps."
+          },
+          "result": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Final agent answer payload: text, stable flag, elapsedMs; or code/error when unavailable."
+          },
+          "errorCode": {
+            "type": "string",
+            "description": "Stable code when the task itself failed."
+          },
+          "lastStep": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Most recent execution step summary (trace level)."
+          },
+          "detailLevel": {
+            "type": "string",
+            "enum": [
+              "result",
+              "trace"
+            ],
+            "description": "Requested detail level."
+          },
+          "detailWarning": {
+            "type": "string",
+            "description": "Present when trace details could not be fully recovered."
+          }
+        },
+        "additionalProperties": true
+      },
       "metadata": {
         "layer": "task",
         "risk": "read"
@@ -72,6 +264,56 @@
           "taskId"
         ],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Cancelled task identity and any visible-generation stop outcome.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Echoed task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "stopResult": {
+            "description": "Outcome of stopping visible generation when the task was mid-flight."
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "task",
@@ -107,6 +349,73 @@
         ],
         "additionalProperties": false
       },
+      "outputSchema": {
+        "type": "object",
+        "description": "Verified scoped stop outcome, or the active-conversation mismatch details.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "scope": {
+            "type": "string",
+            "const": "active_solo_conversation",
+            "description": "Verified stop scope."
+          },
+          "requestedConversationId": {
+            "type": "string",
+            "description": "Conversation ID supplied by the caller (mismatch path)."
+          },
+          "activeConversationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Conversation ID actually active (mismatch path)."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Driver-reported failure reason when the stop failed."
+          }
+        },
+        "additionalProperties": true
+      },
       "metadata": {
         "layer": "task",
         "risk": "delegate",
@@ -129,6 +438,108 @@
         ],
         "additionalProperties": false
       },
+      "outputSchema": {
+        "type": "object",
+        "description": "Opened workspace identity with launch and verification details.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute folder path that was opened."
+          },
+          "verifiedWorkspace": {
+            "type": [
+              "string",
+              "object"
+            ],
+            "description": "Workspace identity detected in the TraeCN window, or a compatible gateway path string.",
+            "properties": {
+              "folderName": {
+                "type": "string",
+                "description": "Folder name detected in the TraeCN window."
+              },
+              "rootPath": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Detected absolute workspace root, or null when unavailable."
+              }
+            },
+            "additionalProperties": true
+          },
+          "alreadyRunning": {
+            "type": "boolean",
+            "description": "Whether TraeCN was already running."
+          },
+          "reusedWindow": {
+            "type": "boolean",
+            "description": "Whether an existing window was reused instead of spawning one."
+          },
+          "binPath": {
+            "type": "string",
+            "description": "TraeCN binary path used by the gateway."
+          },
+          "command": {
+            "type": "string",
+            "description": "Launch command when TraeCN had to be started."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Launch arguments when TraeCN had to be started."
+          },
+          "cdp": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "CDP endpoint coordinates for gateway control."
+          }
+        },
+        "additionalProperties": true
+      },
       "metadata": {
         "layer": "context",
         "risk": "delegate"
@@ -142,6 +553,63 @@
         "properties": {},
         "required": [],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Current model plus available model names.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "current": {
+            "type": "string",
+            "description": "Currently selected model name."
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "context",
@@ -163,6 +631,98 @@
           "model"
         ],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Applied selection with before/after models and queue readiness.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model now selected."
+          },
+          "requestedModel": {
+            "type": "string",
+            "description": "Model name that was requested."
+          },
+          "previousModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model selected before the switch."
+          },
+          "alreadySelected": {
+            "type": "boolean",
+            "description": "True when the requested model was already active (no-op)."
+          },
+          "switchResult": {
+            "type": [
+              "string",
+              "object"
+            ],
+            "description": "Driver-level switch outcome summary."
+          },
+          "queued": {
+            "type": "boolean",
+            "description": "Whether the model queue is busy after switching."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether generation is running on the model after switching."
+          },
+          "canSubmit": {
+            "type": "boolean",
+            "description": "Whether a new task may be submitted immediately."
+          },
+          "queueDetails": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Queue snapshot for the selected model."
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "context",
@@ -189,6 +749,65 @@
         ],
         "additionalProperties": false
       },
+      "outputSchema": {
+        "type": "object",
+        "description": "Active mode after the switch.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Active mode after the switch."
+          },
+          "previousMode": {
+            "type": "string",
+            "description": "Mode active before the switch."
+          },
+          "alreadyInMode": {
+            "type": "boolean",
+            "description": "True when the requested mode was already active (no-op)."
+          }
+        },
+        "additionalProperties": true
+      },
       "metadata": {
         "layer": "context",
         "risk": "write"
@@ -202,6 +821,60 @@
         "properties": {},
         "required": [],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Visible settings section names.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Visible settings section names in UI order."
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "settings",
@@ -223,6 +896,68 @@
           "section"
         ],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Settings and control types within one section.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "section": {
+            "type": "string",
+            "description": "Section that was read."
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "All visible section names."
+          },
+          "items": {
+            "type": "array",
+            "description": "Settings in the section with their control types."
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "settings",
@@ -249,6 +984,68 @@
           "label"
         ],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Selectable choices for one dropdown setting.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "section": {
+            "type": "string",
+            "description": "Section containing the setting."
+          },
+          "label": {
+            "type": "string",
+            "description": "Setting label whose choices were read."
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Selectable option texts in UI order."
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "settings",
@@ -281,6 +1078,80 @@
         ],
         "additionalProperties": false
       },
+      "outputSchema": {
+        "type": "object",
+        "description": "Applied toggle value and driver outcome.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "label": {
+            "type": "string",
+            "description": "Setting label that was written."
+          },
+          "value": {
+            "description": "Value applied to the setting."
+          },
+          "result": {
+            "type": "string",
+            "description": "Driver-reported write outcome, including already-in-desired-state."
+          },
+          "requestedValue": {
+            "description": "Value requested by the caller."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "True only when the observed UI value equals the requested value."
+          },
+          "controlType": {
+            "type": "string",
+            "enum": [
+              "toggle",
+              "option",
+              "text"
+            ],
+            "description": "UI control whose value was read back."
+          }
+        },
+        "additionalProperties": true
+      },
       "metadata": {
         "layer": "settings",
         "risk": "write"
@@ -311,6 +1182,80 @@
           "value"
         ],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Applied dropdown selection and driver outcome.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "label": {
+            "type": "string",
+            "description": "Setting label that was written."
+          },
+          "value": {
+            "description": "Value applied to the setting."
+          },
+          "result": {
+            "type": "string",
+            "description": "Driver-reported write outcome, including already-in-desired-state."
+          },
+          "requestedValue": {
+            "description": "Value requested by the caller."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "True only when the observed UI value equals the requested value."
+          },
+          "controlType": {
+            "type": "string",
+            "enum": [
+              "toggle",
+              "option",
+              "text"
+            ],
+            "description": "UI control whose value was read back."
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "settings",
@@ -343,6 +1288,80 @@
         ],
         "additionalProperties": false
       },
+      "outputSchema": {
+        "type": "object",
+        "description": "Applied text value and driver outcome.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "label": {
+            "type": "string",
+            "description": "Setting label that was written."
+          },
+          "value": {
+            "description": "Value applied to the setting."
+          },
+          "result": {
+            "type": "string",
+            "description": "Driver-reported write outcome, including already-in-desired-state."
+          },
+          "requestedValue": {
+            "description": "Value requested by the caller."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "True only when the observed UI value equals the requested value."
+          },
+          "controlType": {
+            "type": "string",
+            "enum": [
+              "toggle",
+              "option",
+              "text"
+            ],
+            "description": "UI control whose value was read back."
+          }
+        },
+        "additionalProperties": true
+      },
       "metadata": {
         "layer": "settings",
         "risk": "write"
@@ -357,6 +1376,79 @@
         "required": [],
         "additionalProperties": false
       },
+      "outputSchema": {
+        "type": "object",
+        "description": "Conversations for the current mode with stable identifiers.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "mode": {
+            "type": "string",
+            "description": "TraeCN mode the list belongs to (solo, ide, unknown)."
+          },
+          "conversations": {
+            "type": "array",
+            "description": "Conversations with stable identifiers.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Stable conversation identifier."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "Conversation title shown in TraeCN."
+                },
+                "active": {
+                  "type": "boolean",
+                  "description": "Whether this conversation is currently active."
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      },
       "metadata": {
         "layer": "conversation",
         "risk": "read"
@@ -364,12 +1456,95 @@
     },
     {
       "name": "traecn_create_conversation",
-      "description": "Create a new TraeCN conversation and make it the active target. Every call creates an additional conversation, so call at most once per genuinely new context. Returns the created conversation identity.",
+      "description": "Prepare a fresh TraeCN conversation for a genuinely new context. Returns a native conversation identity when TraeCN has allocated it; an empty draft returns conversationId=null and creationDeferred=true until its first message. Reuses an already-empty draft; otherwise creates another context. Call once per new context.",
       "inputSchema": {
         "type": "object",
         "properties": {},
         "required": [],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Fresh conversation or empty draft awaiting a native identity.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native identity when allocated; null for an empty draft."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "select",
+              "delete"
+            ],
+            "description": "Conversation operation performed."
+          },
+          "deleted": {
+            "type": "number",
+            "description": "Number of conversations removed (delete only)."
+          },
+          "recoverable": {
+            "type": "boolean",
+            "description": "Always false for deletion; the gateway cannot restore conversations."
+          },
+          "expectedTitle": {
+            "type": "string",
+            "description": "Title compared against the visible conversation (delete mismatch only)."
+          },
+          "actualTitle": {
+            "type": "string",
+            "description": "Title actually visible at decision time (delete mismatch only)."
+          },
+          "creationDeferred": {
+            "type": "boolean",
+            "description": "True when TraeCN will allocate the conversation identity on its first message."
+          },
+          "fresh": {
+            "type": "boolean",
+            "description": "Whether the active context is ready for a first message."
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "conversation",
@@ -391,6 +1566,78 @@
           "conversationId"
         ],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Confirmed active conversation identity.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "select",
+              "delete"
+            ],
+            "description": "Conversation operation performed."
+          },
+          "deleted": {
+            "type": "number",
+            "description": "Number of conversations removed (delete only)."
+          },
+          "recoverable": {
+            "type": "boolean",
+            "description": "Always false for deletion; the gateway cannot restore conversations."
+          },
+          "expectedTitle": {
+            "type": "string",
+            "description": "Title compared against the visible conversation (delete mismatch only)."
+          },
+          "actualTitle": {
+            "type": "string",
+            "description": "Title actually visible at decision time (delete mismatch only)."
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "conversation",
@@ -424,6 +1671,78 @@
         ],
         "additionalProperties": false
       },
+      "outputSchema": {
+        "type": "object",
+        "description": "Deletion outcome, or title/active-state mismatch details.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "create",
+              "select",
+              "delete"
+            ],
+            "description": "Conversation operation performed."
+          },
+          "deleted": {
+            "type": "number",
+            "description": "Number of conversations removed (delete only)."
+          },
+          "recoverable": {
+            "type": "boolean",
+            "description": "Always false for deletion; the gateway cannot restore conversations."
+          },
+          "expectedTitle": {
+            "type": "string",
+            "description": "Title compared against the visible conversation (delete mismatch only)."
+          },
+          "actualTitle": {
+            "type": "string",
+            "description": "Title actually visible at decision time (delete mismatch only)."
+          }
+        },
+        "additionalProperties": true
+      },
       "metadata": {
         "layer": "conversation",
         "risk": "delegate",
@@ -445,6 +1764,60 @@
           "answer"
         ],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Interaction resolution outcome with optionally resumed tasks.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "resumedTaskIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Gateway tasks resumed automatically after the interaction resolved."
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "interaction",
@@ -484,6 +1857,60 @@
           "decision"
         ],
         "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "description": "Approval decision outcome with optionally resumed tasks.",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the operation succeeded."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable operation or task status."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable outcome summary."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Stable gateway task identifier."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Stable TraeCN conversation identifier."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether visible TraeCN state changed."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether retrying the same call can succeed later."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable result or error code."
+          },
+          "nextAction": {
+            "type": "string",
+            "description": "Suggested next step after a failure."
+          },
+          "error": {
+            "type": "string",
+            "description": "Error identifier or diagnostic when the operation failed."
+          },
+          "resumedTaskIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Gateway tasks resumed automatically after the interaction resolved."
+          }
+        },
+        "additionalProperties": true
       },
       "metadata": {
         "layer": "interaction",

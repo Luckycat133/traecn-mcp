@@ -93,6 +93,88 @@ test('handlers: tasks module routes resolve via matchRoute', () => {
   }
 });
 
+test('task history and replay responses keep the final result without exposing stored trace', () => {
+  const { handleGetTask, handleTaskReplay } = findModule('tasks');
+  const result = { text: 'final answer', stable: true, traceText: 'captured private process' };
+  const record = { taskId: 'trace_owner', status: 'completed', result };
+  for (const handle of [handleGetTask, handleTaskReplay]) {
+    let body;
+    handle({}, {}, {
+      taskHistoryStore: { getTask: () => record, getReplay: () => record },
+      _json(_req, _res, value) { body = value; }
+    }, record.taskId);
+    assert.strictEqual(body.taskId, record.taskId);
+    assert.deepStrictEqual(body.result, { text: 'final answer', stable: true });
+    assert.strictEqual(record.result.traceText, 'captured private process');
+  }
+});
+
+test('batch status keeps final results without exposing captured task traces', () => {
+  const { handleBatchStatus } = findModule('batch');
+  const result = { text: 'batch final answer', stable: true, traceText: 'batch process' };
+  const batch = { batchId: 'batch_trace', status: 'completed', tasks: [{ taskId: 'batch_task', status: 'done', result }] };
+  let body;
+  handleBatchStatus({}, {}, {
+    batchTasks: new Map([[batch.batchId, batch]]),
+    _json(_req, _res, value) { body = value; }
+  }, batch.batchId);
+  assert.deepStrictEqual(body.tasks[0].result, { text: 'batch final answer', stable: true });
+  assert.strictEqual(result.traceText, 'batch process');
+});
+
+test('history clear rejects invalid filters before reaching the history store', () => {
+  const { handleTasksHistoryClear } = findModule('tasks');
+  const invalid = [
+    'olderThanHours=', 'olderThanHours=NaN', 'olderThanHours=-1', 'olderThanHours=1junk',
+    'olderThanHours=1.5', 'olderThanHours=Infinity', 'olderThanHours=9007199254740992',
+    'olderThanHours=9007199254740991', 'status=', 'beforeDate=', 'beforeDate=not-a-date'
+  ];
+  for (const query of invalid) {
+    const req = { url: `/api/tasks/history?${query}`, headers: { host: 'localhost' } };
+    const res = {};
+    let clearCalls = 0;
+    handleTasksHistoryClear(req, res, {
+      taskHistoryStore: { clearHistory() { clearCalls++; return { deleted: 100 }; } },
+      _json(_req, _res, body, status = 200) { res.body = body; res.status = status; }
+    });
+    assert.strictEqual(res.status, 400, query);
+    assert.strictEqual(clearCalls, 0, query);
+  }
+});
+
+test('history clear preserves combined, zero-age and explicit unfiltered requests', () => {
+  const { handleTasksHistoryClear } = findModule('tasks');
+  const cases = [
+    ['?olderThanHours=24&status=completed&beforeDate=2026-10-01', {
+      olderThanHours: 24, status: 'completed', beforeDate: '2026-10-01'
+    }],
+    ['?olderThanHours=0&status=completed', { olderThanHours: 0, status: 'completed', beforeDate: null }],
+    ['', { olderThanHours: null, status: null, beforeDate: null }]
+  ];
+  for (const [query, expected] of cases) {
+    const req = { url: `/api/tasks/history${query}`, headers: { host: 'localhost' } };
+    const res = {};
+    let seen;
+    handleTasksHistoryClear(req, res, {
+      taskHistoryStore: { clearHistory(options) { seen = options; return { deleted: 2 }; } },
+      _json(_req, _res, body, status = 200) { res.body = body; res.status = status; }
+    });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(seen, expected);
+    assert.deepStrictEqual(res.body, { success: true, deleted: 2 });
+  }
+});
+
+test('OpenAPI documents history-clear filter intersection and invalid-filter refusal', () => {
+  const { generateOpenAPISpec } = require('../openapi');
+  const operation = generateOpenAPISpec().paths['/api/tasks/history'].delete;
+  assert.match(operation.description, /all provided filters/);
+  assert.ok(operation.responses['400']);
+  const age = operation.parameters.find(parameter => parameter.name === 'olderThanHours');
+  assert.strictEqual(age.schema.minimum, 0);
+  assert.strictEqual(age.schema.maximum, Math.floor(Number.MAX_SAFE_INTEGER / 3600000));
+});
+
 // ── Queue-probe guard (regression test for "wait for Trae queue" spam) ──
 const { handleDelegateAsync } = require('./delegate');
 const { handleSubmitSoloChatTask, handleCleanupForeignQueue } = require('./solo-chat');
@@ -268,6 +350,38 @@ asyncTest('handleStopGeneration requires a scoped active conversation and audit 
   assert.strictEqual(successRes.body.conversationId, 'solo:Q3VycmVudCB0YXNr');
   assert.strictEqual(stopped, true);
   assert.strictEqual(auditEntries.at(-1).action, 'trae.stop_generation');
+});
+
+asyncTest('scoped stop preserves legacy IDs and never falls back from a native ID', async () => {
+  let stopped = 0;
+  const chats = [
+    { index: 0, sessionId: 'native-current', title: 'Current task 任务中断 09:53', active: true },
+    { index: 1, sessionId: 'native-other', title: 'Other task', active: false }
+  ];
+  const ctx = {
+    _ensureConnection: async () => {},
+    _json: (_req, res, body, status = 200) => Object.assign(res, { status, body }),
+    driver: {
+      detectMode: async () => ({ mode: 'solo' }),
+      listSoloChats: async () => ({ chats }),
+      stopGeneration: async () => { stopped++; return { success: true }; }
+    }
+  };
+  const stop = async conversationId => {
+    const response = {};
+    await handleStopGeneration(jsonReq({ conversationId, acknowledgeUntrackedWork: true,
+      reason: 'Cancel the owned test conversation' }), response, ctx);
+    return response;
+  };
+  assert.strictEqual((await stop('solo-session:native-other')).status, 409);
+  assert.strictEqual((await stop('solo-session:native-missing')).status, 409);
+  assert.strictEqual(stopped, 0);
+  assert.strictEqual((await stop('solo-session:native-current')).status, 200);
+  assert.strictEqual((await stop('solo:Q3VycmVudCB0YXNr')).status, 200);
+  assert.strictEqual((await stop('solo:0')).status, 200);
+  chats.push({ index: 2, sessionId: 'same-title-other', title: 'Current task', active: false });
+  assert.strictEqual((await stop('solo:Q3VycmVudCB0YXNr')).status, 409);
+  assert.strictEqual(stopped, 3);
 });
 
 asyncTest('handleCleanupForeignQueue dry-run lists queue-probe Solo chats without deleting', async () => {

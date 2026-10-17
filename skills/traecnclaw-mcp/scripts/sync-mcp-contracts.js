@@ -20,6 +20,7 @@ function buildContract() {
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
+      outputSchema: tool.outputSchema,
       metadata: getMcpToolMetadata(tool.name)
     }))
   };

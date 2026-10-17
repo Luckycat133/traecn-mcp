@@ -54,6 +54,31 @@ test('TraeControl: isRunning delegates without throwing', () => {
 });
 
 async function main() {
+  await asyncTest('TraeControl: activation reuses a running application even when auto-start is disabled', async () => {
+    let invocation;
+    const ctrl = new TraeControl({ autoStartTrae: false, activateWindowImpl: async options => {
+      invocation = options;
+      return { ok: true };
+    } });
+    ctrl.isRunning = () => true;
+    assert.strictEqual(await ctrl.activateWindow({ binPath: '/Applications/Trae CN.app' }), true);
+    assert.deepStrictEqual(invocation, { binPath: '/Applications/Trae CN.app' });
+    assert.strictEqual(ctrl.lastRecoveryAt, 0);
+  });
+
+  await asyncTest('TraeControl: activation never launches a stopped application or the mock bridge', async () => {
+    let activations = 0;
+    for (const mock of [false, true]) {
+      const ctrl = new TraeControl({ isMockBridge: () => mock, activateWindowImpl: async () => {
+        activations++;
+        return { ok: true };
+      } });
+      ctrl.isRunning = () => mock;
+      assert.strictEqual(await ctrl.activateWindow({ binPath: '/Applications/Trae CN.app' }), false);
+    }
+    assert.strictEqual(activations, 0);
+  });
+
   await asyncTest('TraeControl: attemptRecovery returns false when mock bridge is on', async () => {
     const ctrl = new TraeControl({
       isMockBridge: () => true,
@@ -91,7 +116,7 @@ async function main() {
       autoStartTrae: true,
       recoveryCooldownMs: 0,
       recoveryWaitMs: 10,
-      setTimeoutImpl: (cb, delay) => { Promise.resolve().then(cb); return null; },
+      setTimeoutImpl: (cb, _delay) => { Promise.resolve().then(cb); return null; },
     });
     const result = await ctrl.attemptRecovery(new Error('cdp gone'));
     assert.strictEqual(typeof result, 'boolean');

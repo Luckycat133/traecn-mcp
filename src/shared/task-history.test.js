@@ -233,6 +233,62 @@ test('getHistory pagination page 2', () => {
   store.shutdown();
 });
 
+test('history order survives a reboot with a smaller monotonic sort key', () => {
+  const store = new TaskHistoryStore({ maxSize: 100 });
+  try {
+    store.ensureTask('before-reboot', 'Older task', {
+      createdAtMs: 1000,
+      sortKey: '900000000000'
+    });
+    store.shutdown();
+    const restarted = new TaskHistoryStore({ maxSize: 100 });
+    try {
+      restarted.ensureTask('after-reboot', 'Newer task', {
+        createdAtMs: 2000,
+        sortKey: '10000000000'
+      });
+      assert.deepStrictEqual(restarted.getHistory().tasks.map(task => task.taskId), [
+        'after-reboot', 'before-reboot'
+      ]);
+    } finally {
+      restarted.shutdown();
+    }
+  } finally {
+    store.shutdown();
+  }
+});
+
+test('history orders equal-millisecond tasks numerically across sort-key digit widths', () => {
+  const store = new TaskHistoryStore({ maxSize: 100 });
+  try {
+    store.ensureTask('first', 'First task', { createdAtMs: 1000, sortKey: '9999999999999999' });
+    store.ensureTask('second', 'Second task', { createdAtMs: 1000, sortKey: '10000000000000000' });
+    assert.deepStrictEqual(store.getHistory().tasks.map(task => task.taskId), ['second', 'first']);
+  } finally {
+    store.shutdown();
+  }
+});
+
+test('cleanup and insertion evict the same oldest task after a reboot', () => {
+  const store = new TaskHistoryStore({ maxSize: 100 });
+  try {
+    const now = Date.now();
+    store.ensureTask('oldest', 'Old task', { createdAtMs: now - 20, sortKey: '900000000000' });
+    store.ensureTask('middle', 'Middle task', { createdAtMs: now - 10, sortKey: '10000000000' });
+    store.ensureTask('newest', 'New task', { createdAtMs: now, sortKey: '10000000001' });
+    store.maxSize = 2;
+    assert.strictEqual(store.cleanup().deleted, 1);
+    assert.strictEqual(store.getTask('oldest'), null);
+    assert.ok(store.getTask('newest'));
+
+    store.ensureTask('latest', 'Latest task', { createdAtMs: now + 10, sortKey: '10000000002' });
+    assert.strictEqual(store.getTask('middle'), null);
+    assert.deepStrictEqual(store.getHistory().tasks.map(task => task.taskId), ['latest', 'newest']);
+  } finally {
+    store.shutdown();
+  }
+});
+
 test('getHistory filter by status', () => {
   const store = new TaskHistoryStore({ maxSize: 100 });
   const id1 = store.createTask(null, 'Task 1');
@@ -338,6 +394,23 @@ test('clearHistory deletes by olderThanHours', () => {
   const result = store.clearHistory({ olderThanHours: 0 });
   assert.strictEqual(result.deleted, 1);
   store.shutdown();
+});
+
+test('clearHistory combines status and age filters without deleting unrelated tasks', () => {
+  const store = new TaskHistoryStore({ maxSize: 100 });
+  try {
+    const now = Date.now();
+    const old = now - 48 * 3600000;
+    store.ensureTask('old-completed', 'Old completed task', { createdAtMs: old, status: 'completed' });
+    store.ensureTask('recent-completed', 'Recent completed task', { createdAtMs: now, status: 'completed' });
+    store.ensureTask('old-running', 'Old running task', { createdAtMs: old, status: 'running' });
+    assert.deepStrictEqual(store.clearHistory({ status: 'completed', olderThanHours: 24 }), { deleted: 1 });
+    assert.strictEqual(store.getTask('old-completed'), null);
+    assert.ok(store.getTask('recent-completed'));
+    assert.ok(store.getTask('old-running'));
+  } finally {
+    store.shutdown();
+  }
 });
 
 test('cleanup enforces retention policy', () => {

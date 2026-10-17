@@ -30,13 +30,24 @@
  * The runner intentionally does NOT call process.exit(). A handful of
  * test files (e.g. scripts/system-test.js) exit via their own cleanup,
  * and `npm test` runs every file in sequence with `&&`, so each file
- * MUST exit non-zero on failure on its own.
+ * MUST exit non-zero on failure on its own. An unsettled asynchronous case
+ * also makes process exit fail, even if the event loop has no remaining work.
  *
  * `passed` / `failed` are exposed as live getters on the returned
  * runner, so callers can either reference `r.passed` after the fact,
  * or destructure the helpers and read `r.failed` at the end. (Plain
  * primitives would be snapshotted at destructure time.)
  */
+
+const unsettledAsyncTests = new Set();
+
+process.on('exit', () => {
+  for (const pending of unsettledAsyncTests) {
+    pending.fail();
+    console.error(`  FAIL: [${pending.suiteName}] ${pending.name}: process exited before the test settled`);
+  }
+  if (unsettledAsyncTests.size > 0) process.exitCode = 1;
+});
 
 function createRunner(suiteName) {
   let passed = 0;
@@ -50,26 +61,7 @@ function createRunner(suiteName) {
     try {
       const r = fn();
       if (r && typeof r.then === 'function') {
-        // The promise-returning branch. Match the legacy per-file shapes:
-        // - Files like `discovery.test.js` don't await — the original
-        //   counted these as passed (sync try/catch around fn()), so we
-        //   also increment passed immediately to preserve the count.
-        // - Files like `command-palette-driver.test.js` queue the async
-        //   test for later (Promise.all(_pendingAsync).then(...)); those
-        //   callers drain via pendingAsyncTests() before summary().
-        // - Files like `dom-driver.test.js` use the for-await drain loop.
-        // All three get passed++ here; if the promise rejects later,
-        // we increment failed (in addition) so the exit code is correct.
-        passed++;
-        console.log(`  PASS: ${name}`);
-        _pendingAsync.push(
-          Promise.resolve(r).catch((err) => {
-            failed++;
-            console.error(`  FAIL: ${name}: ${err.message}`);
-            if (err.stack) console.error(err.stack.split('\n').slice(1, 4).join('\n'));
-          })
-        );
-        return;
+        return asyncTest(name, () => r);
       }
       passed++;
       console.log(`  PASS: ${name}`);
@@ -84,6 +76,8 @@ function createRunner(suiteName) {
     // callers can either `await asyncTest(...)` for sequential ordering
     // or `await pendingAsyncTests()` to drain after queuing — both styles
     // are used in this repo's test files.
+    const pending = { suiteName, name, fail: () => { failed++; } };
+    unsettledAsyncTests.add(pending);
     const task = (async () => {
       try {
         await fn();
@@ -93,6 +87,8 @@ function createRunner(suiteName) {
         failed++;
         console.error(`  FAIL: ${name}: ${err.message}`);
         if (err.stack) console.error(err.stack.split('\n').slice(1, 4).join('\n'));
+      } finally {
+        unsettledAsyncTests.delete(pending);
       }
     })();
     _pendingAsync.push(task);

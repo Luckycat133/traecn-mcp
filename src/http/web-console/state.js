@@ -83,6 +83,10 @@
     return ACTIVE_STATUSES.has(normalizeStatus(status));
   }
 
+  function isPersistencePending(task) {
+    return task?.statePersistencePending === true || task?.cancelPersistencePending === true;
+  }
+
   function normalizeOption(option) {
     if (typeof option === 'string') {
       const label = asString(option);
@@ -192,7 +196,20 @@
     const taskId = asString(value.taskId || value.id, prior.taskId || null);
     if (!taskId) return null;
 
-    const status = normalizeStatus(value.status, prior.status || 'unknown');
+    const snapshotUpdate = hasOwn(value, 'status');
+    const statePersistencePending =
+      hasOwn(value, 'statePersistencePending') || snapshotUpdate
+        ? value.statePersistencePending === true
+        : prior.statePersistencePending === true;
+    const cancelPersistencePending =
+      hasOwn(value, 'cancelPersistencePending') || snapshotUpdate
+        ? value.cancelPersistencePending === true
+        : prior.cancelPersistencePending === true;
+    const pending = statePersistencePending || cancelPersistencePending;
+    let status = normalizeStatus(value.status, prior.status || 'unknown');
+    if (pending && isTerminalStatus(status)) {
+      status = isActiveStatus(prior.status) ? prior.status : 'executing';
+    }
     const revision = taskRevision(value, prior);
     if (prior.taskId && revision && prior._revision && revision < prior._revision) return previous;
     if (prior.taskId && isTerminalStatus(prior.status) && !isTerminalStatus(status))
@@ -223,9 +240,11 @@
       progress: asNumber(value.progress, prior.progress || null),
       result,
       error,
+      statePersistencePending,
+      cancelPersistencePending,
       reviewRequired: value.reviewRequired === true || status === 'awaiting_review',
       context: normalizeContext(value, prior.context),
-      interaction: normalizeInteraction(value, status, prior.interaction),
+      interaction: pending ? null : normalizeInteraction(value, status, prior.interaction),
       queueDetails: hasOwn(value, 'queueDetails')
         ? asObject(value.queueDetails)
         : prior.queueDetails || null,
@@ -528,12 +547,16 @@
   }
 
   function selectAttentionTasks(state) {
-    return sortedTasks(state).filter((task) => isAttentionStatus(task.status));
+    return sortedTasks(state).filter(
+      (task) => isAttentionStatus(task.status) && !isPersistencePending(task)
+    );
   }
 
   function selectActiveTasks(state) {
     return sortedTasks(state).filter(
-      (task) => isActiveStatus(task.status) && !isAttentionStatus(task.status)
+      (task) =>
+        isActiveStatus(task.status) &&
+        (!isAttentionStatus(task.status) || isPersistencePending(task))
     );
   }
 
@@ -552,6 +575,7 @@
     createInitialState,
     isActiveStatus,
     isAttentionStatus,
+    isPersistencePending,
     isTerminalStatus,
     normalizeContext,
     normalizeHistoryItem,

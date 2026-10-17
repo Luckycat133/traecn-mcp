@@ -8,6 +8,7 @@ const packageInfo = require('../package.json');
 const {
   buildPublicMirror,
   compareTrees,
+  synchronizeLocalSkill,
   verifyPublicMirror
 } = require('./public-mirror');
 
@@ -18,6 +19,37 @@ const revision = '0123456789abcdef0123456789abcdef01234567';
 const escapedVersion = packageInfo.version.replace(/\./g, '\\.');
 
 try {
+  const localSkill = path.join(tempRoot, 'local-skill');
+  assert.deepStrictEqual(synchronizeLocalSkill({ destinationRoot: localSkill, check: true })
+    .filter(item => item.path === 'SKILL.md'), [{ path: 'SKILL.md', reason: 'missing' }]);
+  assert.strictEqual(fs.existsSync(localSkill), false);
+  assert.deepStrictEqual(synchronizeLocalSkill({ destinationRoot: localSkill }), []);
+  assert.deepStrictEqual(compareTrees(canonicalSkill, localSkill), []);
+  assert.strictEqual(
+    fs.statSync(path.join(localSkill, 'scripts/start-mcp.js')).mode & 0o777,
+    fs.statSync(path.join(canonicalSkill, 'scripts/start-mcp.js')).mode & 0o777
+  );
+  assert.strictEqual(fs.existsSync(path.join(localSkill, 'agents/openai.yaml')), true);
+
+  fs.appendFileSync(path.join(localSkill, 'SKILL.md'), '\nlocal drift\n');
+  fs.unlinkSync(path.join(localSkill, 'references/mcp-tool-contracts.json'));
+  fs.writeFileSync(path.join(localSkill, 'obsolete.md'), 'stale resource\n');
+  const drift = synchronizeLocalSkill({ destinationRoot: localSkill, check: true });
+  assert.deepStrictEqual(drift, [
+    { path: 'SKILL.md', reason: 'bytes-differ' },
+    { path: 'obsolete.md', reason: 'unexpected' },
+    { path: 'references/mcp-tool-contracts.json', reason: 'missing' }
+  ]);
+  assert.match(fs.readFileSync(path.join(localSkill, 'SKILL.md'), 'utf8'), /local drift/);
+  assert.deepStrictEqual(synchronizeLocalSkill({ destinationRoot: localSkill }), []);
+  assert.deepStrictEqual(synchronizeLocalSkill({ destinationRoot: localSkill, check: true }), []);
+  assert.strictEqual(fs.existsSync(path.join(localSkill, 'obsolete.md')), false);
+  for (const destinationRoot of [canonicalSkill, path.dirname(canonicalSkill), path.join(canonicalSkill, 'nested')]) {
+    assert.throws(() => synchronizeLocalSkill({ destinationRoot }), /separate trees/);
+  }
+  assert.throws(() => synchronizeLocalSkill({ sourceRoot: path.join(tempRoot, 'absent'), destinationRoot: localSkill }), /missing SKILL.md/);
+  assert.deepStrictEqual(compareTrees(canonicalSkill, localSkill), []);
+
   buildPublicMirror({ mirrorRoot: tempRoot, sourceRevision: revision });
   assert.deepStrictEqual(verifyPublicMirror({ mirrorRoot: tempRoot, sourceRevision: revision }), []);
   assert.deepStrictEqual(

@@ -49,6 +49,7 @@ function chooseReviewGateAction(state = {}) {
 }
 
 const FINAL_ASSISTANT_RESULT_MARKERS = [
+  /(^|\n)[ \t]*完成总结(?=[ \t]*(?:[:：]|\n|$))/,
   /TRAECNclaw\s+Code\s+Review\s*[—-]\s*Findings\s+First/i,
   /Code\s+Review\s*[—-]\s*Findings\s+First/i,
   /(^|\n)\s*Findings\s*\(ordered\s+by\s+severity\)/i,
@@ -140,6 +141,15 @@ async function _pollResponseState(driver) {
 
   // Mode-specific task source (sidebar for SOLO, chat panel for IDE)
   const taskSourceResult = await driver._queryTaskSource(skipText);
+  if (taskSourceResult?.interrupted === true) {
+    return {
+      taskComplete: false,
+      taskText: taskSourceResult.text || '',
+      taskInProgress: false,
+      responseText: '',
+      interrupted: true
+    };
+  }
 
   const result = await driver.client.send('Runtime.evaluate', {
     expression: `
@@ -240,6 +250,9 @@ async function _pollResponseState(driver) {
     state.taskText = taskSourceResult.text;
     state.taskInProgress = taskSourceResult.inProgress;
     state.taskComplete = taskSourceResult.isComplete;
+    if (typeof taskSourceResult.traceText === 'string' && taskSourceResult.traceText.trim()) {
+      state.traceText = taskSourceResult.traceText;
+    }
   }
   if (taskSourceResult && taskSourceResult.awaitingAssistant) {
     state.taskText = '';
@@ -273,8 +286,19 @@ async function _pollResponseState(driver) {
  * In SOLO mode: reads sidebar + heuristics (existing logic).
  * In IDE mode: reads chat panel messages + body text diff.
  */
-async function collectResponse(driver) {
+async function collectResponse(driver, options = {}) {
+  const startTime = Date.now();
+  const shouldStop = typeof options.shouldStop === 'function' ? options.shouldStop : () => false;
+  const stoppedResult = text => ({ text: text || '', stable: false, cancelled: true, elapsedMs: Date.now() - startTime });
+  const pause = async ms => {
+    const deadline = Date.now() + ms;
+    while (!shouldStop() && Date.now() < deadline) {
+      await sleep(Math.min(250, deadline - Date.now()));
+    }
+  };
+  if (shouldStop()) return stoppedResult('');
   const dialog = await driver.checkForApprovalDialog();
+  if (shouldStop()) return stoppedResult('');
   if (dialog.needsApproval) {
     return {
       text: '',
@@ -295,7 +319,6 @@ async function collectResponse(driver) {
   const modeInfo = await driver.detectMode();
   const isIdeMode = modeInfo.mode === 'ide';
 
-  const startTime = Date.now();
   const warmupMs = 3000;
   const requiredStable = 2;
   const pollInterval = driver.config.pollIntervalMs || 350;
@@ -342,7 +365,7 @@ async function collectResponse(driver) {
     driver.client.on('Log.entryAdded', logHandler);
     driver.client.on('Runtime.consoleAPICalled', consoleHandler);
     listenersRegistered = true;
-    await sleep(50);
+    await pause(50);
   } catch {
     // Log enable failed
   }
@@ -360,30 +383,54 @@ async function collectResponse(driver) {
 
   try {
     while (Date.now() - startTime < driver.config.timeoutMs) {
+      if (shouldStop()) return stoppedResult(lastText);
       const state = await driver._pollResponseState();
+      if (shouldStop()) return stoppedResult(lastText);
+      if (state.interrupted === true) {
+        return {
+          text: cleanAssistantResultText(sanitizeActivityText(state.taskText || '')),
+          stable: false,
+          interrupted: true,
+          error: 'Trae task output was interrupted before completion',
+          elapsedMs: Date.now() - startTime
+        };
+      }
       if (state.awaitingAssistant) {
         lastText = '';
         stableCount = 0;
-        await sleep(pollInterval);
+        await pause(pollInterval);
         continue;
-      }
-      const reviewGate = await driver.checkTaskReviewGate();
-      if (reviewGate.awaitingReview && reviewGate.taskCompleted) {
-        const gateResolution = await driver.resolveTaskReviewGate(chooseReviewGateAction(state));
-        if (gateResolution.success) {
-          await sleep(Math.max(driver.config.postActionDelayMs * 2, 500));
-        }
       }
       const completionCandidate = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
       const completionLooksStale = completionCandidate && (
         (driver._preSendSnapshot && driver._preSendSnapshot.includes(completionCandidate)) ||
         (driver._lastTaskText && driver._lastTaskText.includes(completionCandidate))
       );
+      const hasTaskText = !!String(state.taskText || '').trim();
+      const reviewGate = await driver.checkTaskReviewGate();
+      if (shouldStop()) return stoppedResult(lastText);
+      if (reviewGate.awaitingReview && !completionLooksStale && hasTaskText && state.taskComplete === true) {
+        const gateResolution = await driver.resolveTaskReviewGate(chooseReviewGateAction(state));
+        if (gateResolution?.success !== true) {
+          cleanup();
+          return {
+            text: completionCandidate,
+            stable: false,
+            elapsedMs: Date.now() - startTime,
+            timedOut: false,
+            needsApproval: false,
+            reviewGatePending: true
+          };
+        }
+        await pause(Math.max(driver.config.postActionDelayMs * 2, 500));
+        if (shouldStop()) return stoppedResult(lastText);
+      }
       let currentText = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
       // Periodic dialog check during streaming - detect dialogs that appear mid-execution
       const approvalCheckInterval = driver.config.approvalPollIntervalMs || 3000;
       if (driver._lastApprovalCheckAt === undefined || (Date.now() - driver._lastApprovalCheckAt) >= approvalCheckInterval) {
         const approvalDialog = await driver.checkForApprovalDialog();
+        if (shouldStop()) return stoppedResult(lastText);
         driver._lastApprovalCheckAt = Date.now();
         if (approvalDialog.transient) {
           continue;
@@ -432,14 +479,21 @@ async function collectResponse(driver) {
       }
 
 
-      const hasTaskText = !!String(state.taskText || '').trim();
-      if (!completionLooksStale && hasTaskText && (state.taskComplete || !state.taskInProgress)) {
+      if (!completionLooksStale && hasTaskText && state.taskComplete === true) {
         const text = cleanAssistantResultText(sanitizeActivityText(state.taskText || ''));
         if (driver._isModelErrorResponseText(text)) {
           cleanup();
           return { text, stable: false, elapsedMs: Date.now() - startTime, modelError: true, error: 'Trae model request failed' };
         }
-        if (text && !driver._isIncompleteResponseText(text)) { cleanup(); return { text, stable: true, elapsedMs: Date.now() - startTime }; }
+        if (text && !driver._isIncompleteResponseText(text)) {
+          cleanup();
+          return {
+            text,
+            stable: true,
+            elapsedMs: Date.now() - startTime,
+            ...(state.traceText ? { traceText: state.traceText } : {})
+          };
+        }
       }
 
       const pendingTask = String(driver._pendingUserTask || '').replace(/\s+/g, ' ').trim();
@@ -456,7 +510,7 @@ async function collectResponse(driver) {
       if (state.taskInProgress) {
         lastText = currentText;
         stableCount = 0;
-        await sleep(pollInterval);
+        await pause(pollInterval);
         continue;
       }
 
@@ -481,7 +535,7 @@ async function collectResponse(driver) {
       if (warmingUp) {
         if (currentText !== initialText) { lastText = currentText; stableCount = 0; }
         if (Date.now() - startTime >= warmupMs) { warmingUp = false; lastText = currentText; }
-        await sleep(pollInterval);
+        await pause(pollInterval);
         continue;
       }
 
@@ -508,7 +562,7 @@ async function collectResponse(driver) {
         if (!inQueueSince) inQueueSince = Date.now();
         // Wait indefinitely until queue clears - no timeout on queue
         // The point is to persist until the request goes through
-        lastText = currentText; await sleep(queuePollInterval); continue;
+        lastText = currentText; await pause(queuePollInterval); continue;
       }
 
       inQueueSince = null;
@@ -519,7 +573,7 @@ async function collectResponse(driver) {
           cleanup();
           return { text: currentText, stable: false, elapsedMs: Date.now() - startTime, truncated: true, timedOut: false };
         }
-        lastText = currentText; await sleep(pollInterval); continue;
+        lastText = currentText; await pause(pollInterval); continue;
       }
 
       truncationSince = null;
@@ -561,7 +615,7 @@ async function collectResponse(driver) {
         stableCount = 0;
       }
       lastText = currentText;
-      await sleep(pollInterval);
+      await pause(pollInterval);
     }
 
     const finalText = lastText || (streamingBuffer.length > 0 ? streamingBuffer.join(' ') : '');
@@ -572,6 +626,8 @@ async function collectResponse(driver) {
     driver._pendingUserTask = '';
     cleanup();
     throw err;
+  } finally {
+    cleanup();
   }
 }
 

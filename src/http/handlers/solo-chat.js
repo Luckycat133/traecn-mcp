@@ -91,6 +91,7 @@ async function handleSwitchSoloChat(req, res, ctx) {
   await ctx._ensureConnection();
   const result = typeof ctx.driver.switchSoloChat === 'function'
     ? await ctx.driver.switchSoloChat({
+      sessionId: body.sessionId,
       index: Number.isInteger(body.index) ? body.index : null,
       textIncludes: body.textIncludes,
       titleIncludes: body.titleIncludes

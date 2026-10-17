@@ -122,6 +122,7 @@ const DEFAULT_MODE_TAB_SELECTORS = [
 // When Trae CN is in IDE mode there is no .soloaisidebar;
 // tasks appear inside the chat/assistant panel instead.
 const DEFAULT_IDE_TASK_PANEL_SELECTORS = [
+  '.virtualized-message-list-view__virtuoso',
   '.chat-panel',
   '.assistant-panel',
   '[class*="chat-panel"]',
@@ -134,6 +135,7 @@ const DEFAULT_IDE_TASK_PANEL_SELECTORS = [
 ];
 
 const DEFAULT_IDE_RESPONSE_SELECTORS = [
+  '.turn__agent-message[data-role="assistant"]',
   '.chat-message',
   '.agent-message',
   '.chat-turn',

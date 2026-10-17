@@ -11,7 +11,8 @@ const TERMINAL_EVENTS = new Set([
   'task.completed',
   'task.error',
   'task.queue_timeout',
-  'task.review_rejected'
+  'task.review_rejected',
+  'task.cancelled'
 ]);
 const ATTENTION_EVENTS = new Set([
   'task.review_required',
@@ -37,6 +38,8 @@ function durableEvent(taskId, task, eventType, extra) {
     attentionRequired: ATTENTION_EVENTS.has(eventType),
     resultAvailable: !!task.result,
     sessionId: task.sessionId || null,
+    ...(ATTENTION_EVENTS.has(eventType) && task.interactionRequestId
+      ? { interactionRequestId: task.interactionRequestId } : {}),
     summary: eventSummary(task, extra)
   };
 }
@@ -51,6 +54,7 @@ function openClawMessage(taskId, task, eventType) {
   if (eventType === 'task.completed') return formatResult(task.result);
   if (eventType === 'task.error') return '❌ Trae 出错: ' + (task.error || 'unknown error');
   if (eventType === 'task.queue_timeout') return '❌ Trae 排队超时（超过限制），请稍后重试或切换模型';
+  if (eventType === 'task.cancelled') return `⏹ Trae 任务已取消:\nTask ID: ${taskId}`;
   return null;
 }
 
@@ -105,14 +109,27 @@ class CompletionSignal {
       recorded = true;
     }
 
-    const webSocketHandler = this.getWebSocketHandler();
-    if (webSocketHandler) {
-      webSocketHandler.broadcastEvent(eventType, { taskId, status: task.status, ...extra });
+    let delivered = true;
+    try {
+      const webSocketHandler = this.getWebSocketHandler();
+      if (webSocketHandler) {
+        webSocketHandler.broadcastEvent(eventType, { taskId, status: task.status, ...extra });
+      }
+    } catch (error) {
+      delivered = false;
+      this.logger.error('[TaskNotify] websocket failed:', error.message);
     }
 
     if (task.chatId) {
       const message = openClawMessage(taskId, task, eventType);
-      if (message) await this.notifyOpenClaw(task.chatId, message);
+      if (message) {
+        try {
+          await this.notifyOpenClaw(task.chatId, message);
+        } catch (error) {
+          delivered = false;
+          this.logger.error('[TaskNotify] OpenClaw failed:', error.message);
+        }
+      }
     }
 
     if (task.notifyUrl) {
@@ -122,10 +139,11 @@ class CompletionSignal {
           webhookPayload(taskId, task, eventType, extra)
         );
       } catch (error) {
+        delivered = false;
         this.logger.error('[TaskNotify] webhook failed:', error.message);
       }
     }
-    return { recorded, delivered: true };
+    return { recorded, delivered };
   }
 }
 

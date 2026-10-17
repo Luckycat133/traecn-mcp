@@ -1,0 +1,2 @@
+scripts/*.test.js
+scripts/sync-mcp-contracts.js

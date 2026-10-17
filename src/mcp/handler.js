@@ -55,33 +55,35 @@ function envContext() {
   };
 }
 
-async function callTool(name, args = {}, context = envContext(), authContext = {}) {
-  const internalName = internalMcpToolName(name);
-  if (!internalName) throw new McpProtocolError(-32602, `Unknown tool: ${name}`);
-  const tool = MCP_TOOLS.find(candidate => candidate.name === name);
-  args = validateMcpToolArguments(tool, args);
-
-  const decision = mcpAuth.authorizeTool({
+function authorizeTool(name, args, authContext) {
+  return mcpAuth.authorizeTool({
     apiKeyManager: authContext.apiKeyManager,
     keyId: authContext.keyId,
     toolName: name,
     args
   });
+}
+
+async function callTool(name, args = {}, context = envContext(), authContext = {}) {
+  if (typeof name !== 'string' || !name) {
+    throw new McpProtocolError(-32602, 'Tool name must be a non-empty string');
+  }
+  const internalName = internalMcpToolName(name);
+  if (!internalName) throw new McpProtocolError(-32602, `Unknown tool: ${name}`);
+  const tool = MCP_TOOLS.find(candidate => candidate.name === name);
+  args = validateMcpToolArguments(tool, args);
+
+  const decision = authorizeTool(name, args, authContext);
   if (!decision.ok) {
     return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          error: decision.message,
-          code: decision.code,
-          required: decision.required
-        }, null, 2)
-      }],
-      structuredContent: {
+      ...asMcpContent({
         error: decision.message,
         code: decision.code,
-        required: decision.required
-      },
+        message: decision.message,
+        required: decision.required,
+        retryable: false,
+        nextAction: `Authenticate with an API key that grants '${decision.required}' permission, then retry.`
+      }),
       isError: true
     };
   }
@@ -212,15 +214,32 @@ async function callTool(name, args = {}, context = envContext(), authContext = {
 function createMcpHandlers(context = envContext(), authContext = {}) {
   const gatewayClient = authContext.gatewayClient || new TraeCNApiClient(context);
   const taskAdapter = authContext.taskAdapter || new McpTaskAdapter({ client: gatewayClient });
+  const assertAuthorized = (toolName, args = {}) => {
+    const decision = authorizeTool(toolName, args, authContext);
+    if (!decision.ok) {
+      throw new McpProtocolError(-32000, decision.message, {
+        code: decision.code,
+        required: decision.required
+      });
+    }
+  };
   return {
     subscribe(message) {
       assertModernRequest(message);
       assertTaskExtension(message);
+      assertAuthorized('traecn_get_task');
+      const notifications = message.params?.notifications;
+      if (!notifications || typeof notifications !== 'object' || Array.isArray(notifications)) {
+        throw new McpProtocolError(-32602, 'notifications must be an object');
+      }
       const requested = message.params?.notifications?.taskIds;
       if (requested !== undefined && !Array.isArray(requested)) {
         throw new McpProtocolError(-32602, 'notifications.taskIds must be an array');
       }
-      const taskIds = [...new Set((requested || []).map(value => String(value || '').trim()).filter(Boolean))];
+      if ((requested || []).some(value => typeof value !== 'string' || !value.trim())) {
+        throw new McpProtocolError(-32602, 'notifications.taskIds must contain non-empty strings');
+      }
+      const taskIds = [...new Set((requested || []).map(value => value.trim()))];
       return { taskIds };
     },
     async handle(message) {
@@ -255,19 +274,23 @@ function createMcpHandlers(context = envContext(), authContext = {}) {
         }
         return {};
       }
-      if (method === 'tasks/get') {
+      if (['tasks/get', 'tasks/update', 'tasks/cancel'].includes(method)) {
+        assertModernRequest(message);
         assertTaskExtension(message);
+      }
+      if (method === 'tasks/get') {
+        assertAuthorized('traecn_get_task', { taskId: params.taskId });
         return finish(await taskAdapter.get(params.taskId));
       }
       if (method === 'tasks/update') {
-        assertTaskExtension(message);
+        assertAuthorized('traecn_decide_approval');
         if (!params.inputResponses || typeof params.inputResponses !== 'object' || Array.isArray(params.inputResponses)) {
           throw new McpProtocolError(-32602, 'inputResponses must be an object');
         }
         return finish(await taskAdapter.update(params.taskId, params.inputResponses));
       }
       if (method === 'tasks/cancel') {
-        assertTaskExtension(message);
+        assertAuthorized('traecn_cancel_task', { taskId: params.taskId });
         return finish(await taskAdapter.cancel(params.taskId));
       }
       if (method === 'tools/list') return finish({ tools: MCP_TOOLS }, { cacheable: true });
@@ -278,7 +301,7 @@ function createMcpHandlers(context = envContext(), authContext = {}) {
             && clientSupportsTaskExtension(message);
           const toolResult = await callTool(
             params.name,
-            params.arguments || {},
+            params.arguments === undefined ? {} : params.arguments,
             context,
             taskAugmented
               ? { ...authContext, idempotencyKey: taskIdempotencyKey(message) }

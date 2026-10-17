@@ -161,7 +161,7 @@ class QueueStateMachine {
 
   isReviewableResult(result) {
     if (!result || result.needsApproval) return false;
-    if (result.timedOut || result.truncated || result.streaming || result.modelError) return false;
+    if (result.timedOut || result.truncated || result.streaming || result.modelError || result.interrupted) return false;
     const text = typeof result.text === 'string' ? result.text.trim() : '';
     if (!text) return false;
     if (text.length < 80) return false;
@@ -179,7 +179,7 @@ class QueueStateMachine {
 
   isSuccessfulResult(result) {
     if (!result || result.needsApproval) return false;
-    if (result.timedOut || result.truncated || result.streaming || result.modelError) return false;
+    if (result.timedOut || result.truncated || result.streaming || result.modelError || result.interrupted) return false;
     const text = typeof result.text === 'string' ? result.text.trim() : '';
     if (!this._hasMeaningfulResultText(text) || this._isWorkbenchChromeResultText(text) || this._isFailedResultText(text) || this.isIncompleteReviewText(text)) return false;
     return result.stable === true;

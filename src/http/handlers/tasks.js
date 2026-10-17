@@ -18,7 +18,7 @@
  */
 
 const { URL } = require('url');
-const { parsePositiveInt } = require('../../shared/utils');
+const { parsePositiveInt, withoutTaskTrace } = require('../../shared/utils');
 
 const ROUTES = [
   { method: 'GET', path: '/api/tasks/history', handler: '_handleTasksHistory', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
@@ -45,11 +45,27 @@ function handleTasksHistory(req, res, ctx) {
 
 function handleTasksHistoryClear(req, res, ctx) {
   const parsedUrl = new URL(req._normalizedUrl || req.url, `http://${req.headers.host}`);
-  const olderThanHours = parsedUrl.searchParams.has('olderThanHours')
-    ? parsePositiveInt(parsedUrl.searchParams.get('olderThanHours'), null)
+  let olderThanHours = null;
+  if (parsedUrl.searchParams.has('olderThanHours')) {
+    const value = parsedUrl.searchParams.get('olderThanHours').trim();
+    olderThanHours = Number(value);
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(olderThanHours)
+      || !Number.isSafeInteger(olderThanHours * 3600000)) {
+      return ctx._json(req, res, { error: 'olderThanHours must be a non-negative safe integer' }, 400);
+    }
+  }
+  const status = parsedUrl.searchParams.has('status')
+    ? parsedUrl.searchParams.get('status').trim()
     : null;
-  const status = parsedUrl.searchParams.get('status') || null;
-  const beforeDate = parsedUrl.searchParams.get('beforeDate') || null;
+  const beforeDate = parsedUrl.searchParams.has('beforeDate')
+    ? parsedUrl.searchParams.get('beforeDate').trim()
+    : null;
+  if (status === '') {
+    return ctx._json(req, res, { error: 'status must not be empty' }, 400);
+  }
+  if (beforeDate !== null && (!beforeDate || !Number.isFinite(Date.parse(beforeDate)))) {
+    return ctx._json(req, res, { error: 'beforeDate must be a valid date' }, 400);
+  }
 
   const result = ctx.taskHistoryStore.clearHistory({ olderThanHours, status, beforeDate });
   ctx._json(req, res, { success: true, ...result });
@@ -60,7 +76,7 @@ function handleGetTask(req, res, ctx, taskId) {
   if (!task) {
     return ctx._json(req, res, { error: 'Task not found' }, 404);
   }
-  ctx._json(req, res, task);
+  ctx._json(req, res, { ...task, result: withoutTaskTrace(task.result) });
 }
 
 function handleTaskReplay(req, res, ctx, taskId) {
@@ -68,7 +84,7 @@ function handleTaskReplay(req, res, ctx, taskId) {
   if (!replay) {
     return ctx._json(req, res, { error: 'Task not found' }, 404);
   }
-  ctx._json(req, res, replay);
+  ctx._json(req, res, { ...replay, result: withoutTaskTrace(replay.result) });
 }
 
 module.exports = {
