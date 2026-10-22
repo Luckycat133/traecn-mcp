@@ -4774,10 +4774,15 @@ asyncTest('Gateway open-project returns 400 when projectPath is missing', async 
 asyncTest('Gateway open-project reuses the active TraeCN window when it is already running', async () => {
   const gateway = new Gateway();
   const quickstart = require('../config/quickstart');
+  // Resolve once so the test asserts the handler's canonicalized workspace
+  // path instead of assuming POSIX string separators on every host.
+  const projectPath = path.resolve('/tmp/some-project');
   const origFindBinary = quickstart.findTraeCNBinary;
   const origIsRunning = quickstart.isTraeCNRunning;
   const origStart = quickstart.startTraeCN;
   const origOpenExisting = quickstart.openProjectInExistingWindow;
+  // CI has no TraeCN installation: pin binary resolution so this exercises
+  // window reuse instead of the host's binary discovery.
   quickstart.findTraeCNBinary = () => '/test-only/trae-cn';
   quickstart.isTraeCNRunning = () => true;
   quickstart.startTraeCN = () => {
@@ -4788,7 +4793,7 @@ asyncTest('Gateway open-project reuses the active TraeCN window when it is alrea
     openedWith = options;
     return {
       command: options.binPath,
-      args: ['--reuse-window', '/tmp/some-project']
+      args: ['--reuse-window', projectPath]
     };
   };
   gateway._ensureConnection = async () => {};
@@ -4796,7 +4801,7 @@ asyncTest('Gateway open-project reuses the active TraeCN window when it is alrea
     getWorkspaceContext: async () => ({
       title: openedWith ? 'some-project' : 'old-project',
       folderName: openedWith ? 'some-project' : 'old-project',
-      rootPath: openedWith ? '/tmp/some-project' : '/tmp/old-project',
+      rootPath: openedWith ? projectPath : path.resolve('/tmp/old-project'),
       hasExplorer: true
     })
   };
@@ -4812,18 +4817,18 @@ asyncTest('Gateway open-project reuses the active TraeCN window when it is alrea
   try {
     const req = new Readable({ read() {} });
     req.headers = { 'content-type': 'application/json' };
-    req.push(JSON.stringify({ projectPath: '/tmp/some-project' }));
+    req.push(JSON.stringify({ projectPath }));
     req.push(null);
 
     await gateway._handleOpenProject(req, {});
     assert.strictEqual(responseStatus, 200);
     assert.strictEqual(responseData.success, true);
     assert.strictEqual(responseData.reusedWindow, true);
-    assert.strictEqual(responseData.projectPath, '/tmp/some-project');
-    assert.strictEqual(gateway._selectedWorkspacePath, '/tmp/some-project');
+    assert.strictEqual(responseData.projectPath, projectPath);
+    assert.strictEqual(gateway._selectedWorkspacePath, projectPath);
     assert.strictEqual(openedWith.binPath, '/test-only/trae-cn');
-    assert.strictEqual(openedWith.projectPath, '/tmp/some-project');
-    assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/some-project');
+    assert.strictEqual(openedWith.projectPath, projectPath);
+    assert.strictEqual(responseData.verifiedWorkspace.rootPath, projectPath);
   } finally {
     quickstart.findTraeCNBinary = origFindBinary;
     quickstart.isTraeCNRunning = origIsRunning;
@@ -4835,6 +4840,7 @@ asyncTest('Gateway open-project reuses the active TraeCN window when it is alrea
 asyncTest('Gateway open-project does not reload an already-open workspace', async () => {
   const gateway = new Gateway();
   const quickstart = require('../config/quickstart');
+  const projectPath = path.resolve('/tmp/some-project');
   const origIsRunning = quickstart.isTraeCNRunning;
   const origOpenExisting = quickstart.openProjectInExistingWindow;
   quickstart.isTraeCNRunning = () => true;
@@ -4846,7 +4852,7 @@ asyncTest('Gateway open-project does not reload an already-open workspace', asyn
     getWorkspaceContext: async () => ({
       title: 'some-project',
       folderName: 'some-project',
-      rootPath: '/tmp/some-project',
+      rootPath: projectPath,
       hasExplorer: true
     })
   };
@@ -4862,7 +4868,7 @@ asyncTest('Gateway open-project does not reload an already-open workspace', asyn
   try {
     const req = new Readable({ read() {} });
     req.headers = { 'content-type': 'application/json' };
-    req.push(JSON.stringify({ projectPath: '/tmp/some-project' }));
+    req.push(JSON.stringify({ projectPath }));
     req.push(null);
 
     await gateway._handleOpenProject(req, {});
@@ -4870,8 +4876,8 @@ asyncTest('Gateway open-project does not reload an already-open workspace', asyn
     assert.strictEqual(responseData.success, true);
     assert.strictEqual(responseData.alreadyOpen, true);
     assert.strictEqual(responseData.reusedWindow, false);
-    assert.strictEqual(gateway._selectedWorkspacePath, '/tmp/some-project');
-    assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/some-project');
+    assert.strictEqual(gateway._selectedWorkspacePath, projectPath);
+    assert.strictEqual(responseData.verifiedWorkspace.rootPath, projectPath);
   } finally {
     quickstart.isTraeCNRunning = origIsRunning;
     quickstart.openProjectInExistingWindow = origOpenExisting;
@@ -4881,6 +4887,7 @@ asyncTest('Gateway open-project does not reload an already-open workspace', asyn
 asyncTest('Gateway open-project switches a same-name workspace when its current path is unknown', async () => {
   const gateway = new Gateway();
   const quickstart = require('../config/quickstart');
+  const projectPath = path.resolve('/tmp/recovery/workspace');
   const originals = {
     isTraeCNRunning: quickstart.isTraeCNRunning,
     findTraeCNBinary: quickstart.findTraeCNBinary,
@@ -4893,12 +4900,12 @@ asyncTest('Gateway open-project switches a same-name workspace when its current 
     openedWith = options;
     return { command: 'fixture-trae-cn', args: ['--reuse-window', options.projectPath] };
   };
-  gateway._selectedWorkspacePath = '/tmp/campaign/workspace';
+  gateway._selectedWorkspacePath = path.resolve('/tmp/campaign/workspace');
   gateway._ensureConnection = async () => {};
   gateway.driver = {
     getWorkspaceContext: async () => ({
       title: 'workspace', folderName: 'workspace',
-      rootPath: openedWith ? '/tmp/recovery/workspace' : null, hasExplorer: false
+      rootPath: openedWith ? projectPath : null, hasExplorer: false
     })
   };
   let responseData;
@@ -4906,16 +4913,16 @@ asyncTest('Gateway open-project switches a same-name workspace when its current 
   try {
     const req = new Readable({ read() {} });
     req.headers = { 'content-type': 'application/json' };
-    req.push(JSON.stringify({ projectPath: '/tmp/recovery/workspace' }));
+    req.push(JSON.stringify({ projectPath }));
     req.push(null);
     await gateway._handleOpenProject(req, {});
     assert.ok(openedWith, 'an unknown path must not be reported as already open');
-    assert.strictEqual(openedWith.projectPath, '/tmp/recovery/workspace');
+    assert.strictEqual(openedWith.projectPath, projectPath);
     assert.strictEqual(responseData.success, true);
     assert.strictEqual(responseData.alreadyOpen, undefined);
     assert.strictEqual(responseData.reusedWindow, true);
-    assert.strictEqual(responseData.verifiedWorkspace.rootPath, '/tmp/recovery/workspace');
-    assert.strictEqual(gateway._selectedWorkspacePath, '/tmp/recovery/workspace');
+    assert.strictEqual(responseData.verifiedWorkspace.rootPath, projectPath);
+    assert.strictEqual(gateway._selectedWorkspacePath, projectPath);
   } finally {
     Object.assign(quickstart, originals);
   }
