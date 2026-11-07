@@ -1,0 +1,53 @@
+# TraeCN MCP
+
+TraeCN MCP is a local-first stdio server for operating the TraeCN desktop app.
+MCP contract version 5 exposes exactly 20 tools for tasks, workspace, model,
+mode, conversations, settings, and exceptional decisions. One local gateway
+owns execution, queues, persistence, and completion delivery.
+
+## Quick start
+
+Requires macOS, Node.js 22+, and a signed-in TraeCN desktop app.
+
+```sh
+npm install --global https://github.com/Luckycat133/traecn-mcp/releases/download/v{{VERSION}}/traecnclaw-{{VERSION}}.tgz
+traecn-mcp quickstart --launch-trae
+```
+
+Keep the gateway terminal open. Quickstart prints recovery instructions if
+TraeCN is already open without remote debugging.
+
+In another terminal, run `traecn-mcp setup-mcp`. Add the generated `traecn`
+entry to your MCP host and reconnect. Call `traecn_send_message` and keep the
+returned task ID for completion notifications or a `traecn_get_task` read.
+
+The web console at [127.0.0.1:8788](http://127.0.0.1:8788/) offers human control
+and task review on the same gateway.
+
+## Other install options
+
+The [matching release](https://github.com/Luckycat133/traecn-mcp/releases/tag/v{{VERSION}})
+contains the server tarball and MCPB bundle. Homebrew installs the same server:
+
+```sh
+brew tap Luckycat133/traecn-mcp https://github.com/Luckycat133/traecn-mcp.git
+brew install Luckycat133/traecn-mcp/traecnclaw
+```
+
+Hosts that support Agent Skills can also install the tool-use guidance:
+
+```sh
+npx skills add https://github.com/Luckycat133/traecn-mcp --skill traecn-mcp -g
+```
+
+## Runtime
+
+The server and gateway run beside TraeCN on your Mac. The gateway defaults to
+`127.0.0.1:8788`; configure authentication before a non-loopback bind. Directory
+builds can inspect the stdio schema.
+
+The server supports MCP `2026-07-28` with optional Tasks negotiation, plus
+initialization-based `2025-11-25` and `2024-11-05` clients.
+
+Generated from canonical TRAECNclaw {{VERSION}} at commit `{{SOURCE_REVISION}}`.
+See `SOURCE_REVISION` and `release-manifest.json` for mirror provenance.

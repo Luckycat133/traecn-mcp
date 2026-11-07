@@ -1,0 +1,310 @@
+'use strict';
+
+const { execFile, execSync, spawn } = require('child_process');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
+const http = require('http');
+const { getEnvWithFallback, sleep } = require('../shared/utils');
+const { readRuntimeEnv } = require('./runtime-schema');
+
+function findTraeCNBinary() {
+  const envBin = getEnvWithFallback('TRAECN_BIN', 'TRAE_BIN', '');
+  if (envBin) return envBin;
+
+  const platform = process.platform;
+
+  if (platform === 'darwin') {
+    const candidates = [
+      '/Applications/Trae CN.app',
+      '/Applications/TraeCN.app',
+      path.join(process.env.HOME || '', 'Applications', 'Trae CN.app'),
+      path.join(process.env.HOME || '', 'Applications', 'TraeCN.app')
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+
+  if (platform === 'win32') {
+    const candidates = [
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Trae CN', 'Trae CN.exe'),
+      path.join(process.env['ProgramFiles'] || '', 'Trae CN', 'Trae CN.exe')
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+
+  return null;
+}
+
+function isTraeCNRunning() {
+  try {
+    if (process.platform === 'darwin') {
+      const result = execSync('pgrep -f "/Trae CN\\.app/Contents/MacOS/Electron" || pgrep -f "/TraeCN\\.app/Contents/MacOS/Electron" || true', { encoding: 'utf-8' });
+      return result.trim().length > 0;
+    }
+    if (process.platform === 'win32') {
+      const result = execSync('tasklist /FI "IMAGENAME eq Trae CN.exe"', { encoding: 'utf-8' });
+      return result.includes('Trae CN.exe');
+    }
+  } catch {
+    // Process probes can fail when platform tools are unavailable.
+  }
+  return false;
+}
+
+function isTraeCNMainProcessCommand(command = '') {
+  return /\/Trae CN\.app\/Contents\/MacOS\/Electron/.test(command)
+    || /\/TraeCN\.app\/Contents\/MacOS\/Electron/.test(command);
+}
+
+function execFilePromise(command, args = [], options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, options, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function activateTraeCN(options = {}) {
+  const platform = options.platform || process.platform;
+  if (platform !== 'darwin') return { ok: false, reason: 'window activation is unavailable on this platform' };
+  const binPath = options.binPath || findTraeCNBinary();
+  if (!binPath) throw new Error('TraeCN binary not found. Set TRAECN_BIN environment variable.');
+  const execute = options.execFileImpl || execFilePromise;
+  await execute('open', ['-a', binPath], { encoding: 'utf8', timeout: 5000 });
+  return { ok: true };
+}
+
+async function waitForTraeCNExit(timeoutMs = 15000, pollMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isTraeCNRunning()) return true;
+    await sleep(pollMs);
+  }
+  return !isTraeCNRunning();
+}
+
+async function quitTraeCN(options = {}) {
+  if (!isTraeCNRunning()) {
+    return { ok: true, alreadyStopped: true };
+  }
+
+  if (process.platform === 'darwin') {
+    await execFilePromise('osascript', ['-e', 'tell application "Trae CN" to quit']);
+  } else if (process.platform === 'win32') {
+    await execFilePromise('taskkill', ['/IM', 'Trae CN.exe']);
+  } else {
+    throw new Error(`Graceful Trae CN quit is not implemented for ${process.platform}`);
+  }
+
+  const stopped = await waitForTraeCNExit(options.timeoutMs || 15000, options.pollMs || 500);
+  if (!stopped) {
+    throw new Error('Timed out waiting for Trae CN to quit');
+  }
+  return { ok: true, alreadyStopped: false };
+}
+
+function resolveMacExecutable(binPath) {
+  const executablePath = path.join(binPath, 'Contents', 'MacOS', 'Electron');
+  return fs.existsSync(executablePath) ? executablePath : null;
+}
+
+function buildStartCommand(binPath, args, options = {}) {
+  const platform = options.platform || process.platform;
+
+  if (platform === 'darwin') {
+    const directExecutable = options.newInstance ? resolveMacExecutable(binPath) : null;
+    if (directExecutable) {
+      return { command: directExecutable, commandArgs: args };
+    }
+    return { command: 'open', commandArgs: [options.newInstance ? '-na' : '-a', binPath, '--args', ...args] };
+  }
+
+  if (platform === 'win32') {
+    return { command: binPath, commandArgs: args };
+  }
+
+  return { command: binPath, commandArgs: args };
+}
+
+function buildReuseWindowCommand(binPath, projectPath, options = {}) {
+  const platform = options.platform || process.platform;
+  const pathExists = options.pathExists || fs.existsSync;
+
+  if (platform === 'darwin' && /\.app\/?$/.test(binPath)) {
+    const candidates = [
+      path.join(binPath, 'Contents', 'Resources', 'app', 'bin', 'trae-cn'),
+      path.join(binPath, 'Contents', 'Resources', 'app', 'bin', 'code')
+    ];
+    const cliPath = candidates.find(candidate => pathExists(candidate));
+    if (!cliPath) {
+      throw new Error(`TraeCN CLI not found inside ${binPath}`);
+    }
+    return { command: cliPath, commandArgs: ['--reuse-window', projectPath] };
+  }
+
+  return { command: binPath, commandArgs: ['--reuse-window', projectPath] };
+}
+
+async function openProjectInExistingWindow(options = {}) {
+  const binPath = options.binPath || findTraeCNBinary();
+  if (!binPath) {
+    throw new Error('TraeCN binary not found. Set TRAECN_BIN environment variable.');
+  }
+
+  const projectPath = path.resolve(String(options.projectPath || ''));
+  let projectStat;
+  try {
+    projectStat = fs.statSync(projectPath);
+  } catch {
+    throw new Error(`Project path does not exist: ${projectPath}`);
+  }
+  if (!projectStat.isDirectory()) {
+    throw new Error(`Project path is not a directory: ${projectPath}`);
+  }
+
+  const { command, commandArgs } = buildReuseWindowCommand(binPath, projectPath);
+  const { stdout, stderr } = await execFilePromise(command, commandArgs, {
+    encoding: 'utf8',
+    timeout: options.timeoutMs || 30000,
+    maxBuffer: 1024 * 1024
+  });
+  return {
+    command,
+    args: commandArgs,
+    stdout: String(stdout || '').trim(),
+    stderr: String(stderr || '').trim()
+  };
+}
+
+async function startTraeCN(options = {}) {
+  const binPath = options.binPath || findTraeCNBinary();
+  if (!binPath) {
+    throw new Error('TraeCN binary not found. Set TRAECN_BIN environment variable.');
+  }
+
+  const args = [];
+  const remotePort = readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT');
+  args.push(`--remote-debugging-port=${remotePort}`);
+
+  const extraArgs = getEnvWithFallback('TRAECN_ARGS', 'TRAE_ARGS', '');
+  if (extraArgs) {
+    args.push(...extraArgs.split(' '));
+  }
+
+  const useIsolatedProfile = options.useIsolatedProfile !== undefined
+    ? options.useIsolatedProfile
+    : getEnvWithFallback('TRAECN_QUICKSTART_USE_ISOLATED_PROFILE', 'TRAE_QUICKSTART_USE_ISOLATED_PROFILE', '0') === '1';
+  const userDataDir = options.userDataDir || getEnvWithFallback('TRAECN_USER_DATA_DIR', 'TRAE_USER_DATA_DIR', '');
+  if (options.newInstance && useIsolatedProfile) {
+    args.push(`--user-data-dir=${userDataDir || path.join(os.tmpdir(), `traecnclaw-profile-${remotePort}`)}`);
+  }
+
+  const projectPath = options.projectPath || getEnvWithFallback('TRAECN_PROJECT_PATH', 'TRAE_PROJECT_PATH', '');
+  if (projectPath) {
+    args.push(projectPath);
+  }
+
+  const { command, commandArgs } = buildStartCommand(binPath, args, options);
+
+  // Capture child stderr so launch failures (e.g. "bad option: --remote-debugging-port")
+  // surface instead of being swallowed by stdio:'ignore'. Cap the buffer to avoid
+  // unbounded growth for long-lived Trae instances.
+  let stderrTail = '';
+  const child = spawn(command, commandArgs, {
+    detached: true,
+    stdio: ['ignore', 'ignore', 'pipe']
+  });
+  if (child.stderr) {
+    child.stderr.on('data', (chunk) => {
+      stderrTail += chunk.toString();
+      if (stderrTail.length > 4096) stderrTail = stderrTail.slice(-4096);
+    });
+  }
+  child.unref();
+
+  // The process can start fine while CDP never comes up — e.g. a TraeCN build
+  // that rejects --remote-debugging-port (see launchError), or the port being
+  // blocked. Report readiness honestly instead of assuming the debug endpoint is listening.
+  const cdpReady = await verifyTraeCNCDP(remotePort, options.cdpTimeoutMs || 20000, 500);
+
+  return { pid: child.pid, command, args: commandArgs, remotePort, cdpReady, launchError: cdpReady ? null : stderrTail.trim() };
+}
+
+async function verifyTraeCNCDP(port, timeoutMs = 20000, pollMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const up = await new Promise((resolve) => {
+      const req = http.get({ host: '127.0.0.1', port, path: '/json/version', timeout: 2000 }, (res) => {
+        res.resume();
+        resolve(res.statusCode === 200);
+      });
+      req.on('error', () => { req.destroy(); resolve(false); });
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+    });
+    if (up) return true;
+    await sleep(pollMs);
+  }
+  return false;
+}
+
+async function restartTraeCNWithDebug(options = {}) {
+  const binPath = options.binPath || findTraeCNBinary();
+  if (!binPath) {
+    throw new Error('TraeCN binary not found. Set TRAECN_BIN environment variable.');
+  }
+
+  const quickstart = getQuickstartConfig();
+  const quit = await quitTraeCN({
+    timeoutMs: options.quitTimeoutMs,
+    pollMs: options.pollMs
+  });
+  const launched = await startTraeCN({
+    binPath,
+    projectPath: options.projectPath,
+    newInstance: quickstart.profileMode === 'isolated',
+    useIsolatedProfile: quickstart.useIsolatedProfile,
+    cdpTimeoutMs: options.cdpTimeoutMs
+  });
+  return { ok: launched.cdpReady, quit, launched, profileMode: quickstart.profileMode, launchError: launched.launchError };
+}
+
+function getQuickstartConfig() {
+  const profileModeRaw = readRuntimeEnv('TRAECN_QUICKSTART_PROFILE_MODE');
+  const profileMode = String(profileModeRaw || '').trim().toLowerCase();
+  const isolatedProfilePreferred = profileMode === 'isolated';
+  const existingProfilePreferred = !isolatedProfilePreferred;
+  return {
+    useIsolatedProfile: existingProfilePreferred
+      ? false
+      : getEnvWithFallback('TRAECN_QUICKSTART_USE_ISOLATED_PROFILE', 'TRAE_QUICKSTART_USE_ISOLATED_PROFILE', '1') === '1',
+    profileMode: existingProfilePreferred ? 'existing' : 'isolated',
+    remoteDebuggingPort: readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT'),
+    gatewayPort: readRuntimeEnv('TRAECN_GATEWAY_PORT'),
+    gatewayHost: readRuntimeEnv('TRAECN_GATEWAY_HOST')
+  };
+}
+
+module.exports = {
+  activateTraeCN,
+  buildStartCommand,
+  buildReuseWindowCommand,
+  findTraeCNBinary,
+  isTraeCNMainProcessCommand,
+  isTraeCNRunning,
+  quitTraeCN,
+  restartTraeCNWithDebug,
+  openProjectInExistingWindow,
+  startTraeCN,
+  verifyTraeCNCDP,
+  getQuickstartConfig
+};

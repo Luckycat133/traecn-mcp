@@ -1,0 +1,6 @@
+node_modules/
+audit-logs/
+coverage/
+package-lock.json
+inspect-report.json
+CHANGELOG.md

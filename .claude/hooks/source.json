@@ -1,6 +1,0 @@
-{
-  "source": "/Users/Shared/projects/traecnclaw-mcp-skill/.codex/hooks/mirror_edit_context.py",
-  "source_sha256": "3cd5381a1949e7c73c395a2e05bf7b172a8bd58d9cb857ad66185ec2d3b45df8",
-  "event": "PostToolUse",
-  "matcher": "Edit|Write"
-}

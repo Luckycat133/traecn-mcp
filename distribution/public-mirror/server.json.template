@@ -1,0 +1,44 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Luckycat133/traecnclaw",
+  "title": "TraeCN MCP",
+  "description": "Local stdio MCP server for delegating and tracking work in TraeCN on macOS.",
+  "repository": {
+    "url": "https://github.com/Luckycat133/traecn-mcp",
+    "source": "github"
+  },
+  "version": "{{VERSION}}",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@luckycat133/traecnclaw",
+      "version": "{{VERSION}}",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Gateway host; keep loopback unless remote access is authenticated.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "TRAECN_GATEWAY_HOST"
+        },
+        {
+          "description": "Gateway port.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "TRAECN_GATEWAY_PORT"
+        },
+        {
+          "description": "Gateway bearer token.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "TRAECN_GATEWAY_TOKEN"
+        }
+      ]
+    }
+  ]
+}

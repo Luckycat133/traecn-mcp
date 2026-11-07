@@ -3,10 +3,10 @@
   "maintainers": [
     "Luckycat133"
   ],
-  "name": "TRAECNclaw MCP",
+  "name": "TraeCN MCP",
   "description": "Local-first stdio MCP server and Agent Skill that lets AI agents operate the TraeCN desktop app through a gateway running on the user's Mac.",
-  "repository": "https://github.com/Luckycat133/traecnclaw-mcp-skill",
-  "homepage": "https://github.com/Luckycat133/traecnclaw-mcp-skill",
+  "repository": "https://github.com/Luckycat133/traecn-mcp",
+  "homepage": "https://github.com/Luckycat133/traecn-mcp",
   "license": "MIT",
   "type": "mcp_server",
   "status": "production",

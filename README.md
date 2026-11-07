@@ -1,111 +1,78 @@
-# TRAECNclaw MCP Skill
+# TraeCN MCP
 
-> Generated from canonical TRAECNclaw 0.6.0 at commit `40bcf7707ed9b0ff7938aea8e511d0b87d300705`.
-
-TRAECNclaw is a local-first MCP server and Agent Skill for operating the TraeCN
-desktop app on the user's Mac. This repository is the public distribution
-mirror: it carries the portable Skill, installable server archives, provenance,
-and marketplace metadata without publishing the private canonical history.
-
-TRAECNclaw exposes MCP contract version 5 with exactly 20 stable,
-single-intent tools. The normal Agent flow is:
-
-1. Open a workspace only when needed.
-2. Select model or mode only when needed.
-3. Send one message and release the caller context.
-4. Legacy MCP clients receive a durable notification; modern `2026-07-28`
-   hosts can negotiate Tasks and subscribe to the exact returned task ID.
-
-Queueing, waiting, recovery, routine non-command questions, task ownership, and
-durable completion remain gateway-managed.
-
-The local server uses newline-delimited stdio, implements MCP `2026-07-28`, and
-remains compatible with initialization-based `2025-11-25` and `2024-11-05`
-clients. TRAECNclaw contract version 5 is the tool-surface version, not the MCP
-protocol revision. The independently negotiated, upstream-draft
-`io.modelcontextprotocol/tasks` extension does not add tools.
-
-## Install the server
-
-Install the exact release through one verified channel:
-
-```sh
-npm install --global @luckycat133/traecnclaw@0.6.0
-# or, after `brew info` reports 0.6.0
-brew install Luckycat133/tap/traecnclaw
-```
-
-The matching [GitHub Release](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v0.6.0)
-also provides the complete scoped npm tarball and deterministic MCPB bundle.
-The unrelated unscoped `traecnclaw@0.3.1` package is historical and is not a
-current install path.
-
-## Homebrew compatibility transition
-
-This repository also carries `Formula/traecnclaw.rb`, copied byte-for-byte from
-the existing public 0.6.0 tap. `Luckycat133/homebrew-tap` remains available during
-the transition. Existing installations do not change automatically. See
-[migration, checks and rollback](docs/HOMEBREW-MIGRATION.md) before changing a tap
-remote. The Skill, source revision and historical release downloads are unchanged.
-
-## Install the Agent Skill
-
-Install from the public GitHub repository with the open Skills CLI:
-
-```sh
-npx skills add https://github.com/Luckycat133/traecnclaw-mcp-skill \
-  --skill traecnclaw-mcp \
-  -g
-```
-
-Or download the matching Skill archive from the GitHub Release. The Skill lives
-at `.codex/skills/traecnclaw-mcp` and includes
-`assets/mcp-client-config.json`, `scripts/setup-mcp.js`, and the server launcher.
-Restart the Agent host after installing or updating the Skill.
-
-Use `scripts/setup-mcp.js` to validate server discovery and generate the host
-entry. The normal runtime is:
+TraeCN MCP connects your agent to the TraeCN desktop app on the same Mac.
+Use 20 focused MCP tools to delegate work, follow results, change context and
+settings, and resolve approvals. The local gateway manages the queue, task
+recovery, and completion delivery.
 
 ```text
-Agent host -> local stdio server -> gateway on the same Mac -> TraeCN
+Agent host → TraeCN MCP (stdio) → local gateway → TraeCN (CDP)
 ```
 
-The server and gateway run on the same user-owned Mac as TraeCN. Marketplace
-containers may inspect the stdio schema, but a cloud container cannot
-transparently control the user's local TraeCN desktop.
+## Quick start
 
-Prepared Official Registry metadata uses the scoped package
-`@luckycat133/traecnclaw@0.6.0` with local stdio transport. Smithery Local
-uses the matching verified MCPB bundle; the retired `smithery.yaml` format
-remains absent.
+Requires macOS, Node.js 22+, and a signed-in TraeCN desktop app. From this
+checkout, install dependencies and start the gateway:
 
-## Configuration
+```sh
+npm ci
+npm run quickstart -- --launch-trae
+```
 
-The gateway defaults are `TRAECN_GATEWAY_HOST=127.0.0.1` and
-`TRAECN_GATEWAY_PORT=8788`. Non-loopback binds require
-`TRAECN_GATEWAY_TOKEN`. There is no MCP tool-profile setting.
+Keep that terminal open while using the gateway. If TraeCN is already running
+without remote debugging, follow the restart instructions printed by
+Quickstart. It reuses your existing profile by default.
 
-## Discovery channels
+In another terminal, generate the host configuration:
 
-The same public repository is the canonical source for Skill and MCP directory
-submissions. A directory listing is trustworthy only when its version, local
-stdio transport, macOS requirement, 20-tool count, and generated install command
-match this Release.
+```sh
+npm run --silent setup:mcp
+```
 
-Selected channels include ClawHub, Glama, skills.sh, AwesomeSkills.dev,
-MCP.Directory, MCPB/Smithery Local, and—after a current public package exists—the
-Official MCP Registry and PulseMCP. Other directories should reuse the same
-provenance and install copy rather than maintaining forks.
+Add the generated `traecn` entry to your host's MCP configuration and reconnect.
+See the [MCP server guide](docs/MCP-SERVER-GUIDE.md) for other config formats,
+protocol compatibility, and tool details.
 
-## Glama
+## Use it
 
-`glama.json` and the generated root Dockerfile support directory registration,
-maintainer verification, security/quality scanning, and tool-schema inspection.
-The Dockerfile installs the current public Release and never contains a gateway
-token or mock bridge.
+Call `traecn_send_message` and keep the returned task ID. Use your host's
+completion subscription or notification, or read the same task with
+`traecn_get_task`. Select a workspace, conversation, model, or mode only when
+the task requires a change.
 
-TRAECNclaw should be listed as a **local stdio server**. Do not describe a Glama
-hosted container as an automatic remote connection to the user's Mac.
+## Operations and integrations
 
-See `SOURCE_REVISION` and `release-manifest.json` for provenance and channel
-readiness.
+- **Web console** at [127.0.0.1:8788](http://127.0.0.1:8788/) for human control and task review.
+- **CLI** for setup and diagnostics. Run `npm run doctor` or see the [deployment guide](docs/deployment.md) for background operation.
+- **Agent Skill** for tool-use guidance. [Skill source](skills/traecn-mcp/SKILL.md)
+- **OpenClaw and REST** use the same gateway. [OpenClaw setup](docs/OPENCLAW-MCP-SETUP.md) · [Runtime configuration](docs/configuration.md)
+
+## Daily check-in
+
+With a signed-in Trae CN 3.4.15 or 3.4.11 workspace connected, run `traecn-mcp check-in`
+to read the account's daily status. Add `--claim` to claim the reward once, or
+start the gateway with `TRAECN_AUTO_CHECK_IN=1` to check on startup and hourly.
+For a LaunchAgent, set the same variable when installing or refreshing the
+gateway service. Check-in uses Trae CN's Beijing business day and verifies
+the result through the app. It uses the check-in action without the optional
+draw. [Runtime configuration](docs/configuration.md)
+
+## Distribution and development
+
+Download the server tarball, MCPB bundle, or Agent Skill from
+[GitHub Releases](https://github.com/Luckycat133/traecn-mcp/releases).
+On macOS, Homebrew installs the same server tarball:
+
+```sh
+brew tap Luckycat133/traecn-mcp https://github.com/Luckycat133/traecn-mcp.git
+brew install Luckycat133/traecn-mcp/traecnclaw
+traecn-mcp quickstart --launch-trae
+```
+
+In another terminal, run `traecn-mcp setup-mcp` to generate your host entry.
+
+Run `npm run verify` for local, non-live validation. See the
+[compatibility matrix](docs/COMPATIBILITY.md),
+[distribution runbook](docs/DISTRIBUTION.md), and
+[channel ledger](docs/CHANNEL-LEDGER.md). For upgrades from 0.3.x, see the
+[migration guide](docs/MIGRATING-TO-0.5.md).

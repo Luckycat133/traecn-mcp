@@ -1,0 +1,4 @@
+interface:
+  display_name: "TraeCN MCP"
+  short_description: "Operate TraeCN through focused MCP tools"
+  default_prompt: "Use $traecn-mcp to operate TraeCN with focused tools, including UI-backed settings when requested, and let the gateway manage execution mechanics."

@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "traeVersion": "1.107.1",
+    "platform": "darwin",
+    "evidence": "Sanitized structural replay derived from docs/REAL-DOM-FINDINGS.md; no account, path, prompt, or response data is retained."
+  },
+  "states": [
+    {
+      "operation": "list",
+      "mode": "solo",
+      "elements": [
+        { "role": "conversation", "id": "<conversation-a>", "text": "<task-a>", "active": true, "visible": true },
+        { "role": "conversation", "id": "<conversation-b>", "text": "<task-b>", "active": false, "visible": true }
+      ],
+      "expected": { "conversationCount": 2, "activeConversationId": "<conversation-a>" }
+    },
+    {
+      "operation": "select",
+      "mode": "solo",
+      "elements": [
+        { "role": "conversation", "id": "<conversation-b>", "text": "<task-b>", "active": true, "visible": true }
+      ],
+      "expected": { "selectedConversationId": "<conversation-b>" }
+    },
+    {
+      "operation": "submit",
+      "mode": "solo",
+      "elements": [
+        { "role": "composer", "selector": ".chat-input-v2-input-box-editable", "visible": true, "enabled": true },
+        { "role": "send", "selector": "button.chat-input-v2-send-button", "visible": true, "enabled": true }
+      ],
+      "expected": { "composerReady": true, "sendReady": true }
+    },
+    {
+      "operation": "queue",
+      "mode": "solo",
+      "elements": [
+        { "role": "queue", "visible": true, "state": "queued", "position": 42, "text": "排在第 42 位" }
+      ],
+      "expected": { "queueState": "queued", "queuePosition": 42 }
+    },
+    {
+      "operation": "approval",
+      "mode": "solo",
+      "elements": [
+        { "role": "approval", "selector": ".icd-run-command-card-v2.icd-card-container-active", "visible": true, "command": "<sanitized-command>", "risk": "high" }
+      ],
+      "expected": { "approvalRequired": true, "command": "<sanitized-command>", "risk": "high" }
+    },
+    {
+      "operation": "response",
+      "mode": "solo",
+      "elements": [
+        { "role": "assistant", "selector": ".assistant-chat-turn-content", "visible": true, "text": "<sanitized-final-response>", "stable": true }
+      ],
+      "expected": { "responseAvailable": true, "stable": true, "text": "<sanitized-final-response>" }
+    },
+    {
+      "operation": "review",
+      "mode": "solo",
+      "elements": [
+        { "role": "review", "selector": ".icube-apply-action-container", "visible": true, "reviewCount": 2, "keepAll": true, "revertAll": true }
+      ],
+      "expected": { "reviewRequired": true, "reviewCount": 2, "keepAll": true, "revertAll": true }
+    }
+  ]
+}

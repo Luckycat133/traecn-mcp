@@ -1,0 +1,1031 @@
+{
+  "id": "traecnclaw",
+  "name": "TraeCN MCP adapter",
+  "version": "0.7.0",
+  "description": "Delegate IDE tasks from OpenClaw to a local TraeCN MCP gateway.",
+  "baseUrl": "http://127.0.0.1:8788",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8788"
+      },
+      "token": {
+        "type": "string",
+        "default": ""
+      },
+      "autoStart": {
+        "type": "boolean",
+        "default": false
+      },
+      "checkForUpdates": {
+        "type": "boolean",
+        "default": true
+      },
+      "autoApplyUpdates": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  },
+  "quickstart": {
+    "macos": "start-traecnapi.command",
+    "windows": "start-traecnapi.cmd"
+  },
+  "tools": [
+    {
+      "name": "traecn_capabilities",
+      "description": "Return a compact agent-facing catalog of commands, endpoints, models, settings sections, and token-saving call order.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "traecn_command_set",
+      "description": "List the production command set OpenClaw can use to control TraeCN.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "traecn_preflight",
+      "description": "Return compact status, readiness, queue, dialog, and optional command confirmation state before operating TraeCN.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Optional command to assess"
+          },
+          "params": {
+            "type": "object",
+            "description": "Optional command parameters"
+          },
+          "forceConfirm": {
+            "type": "boolean",
+            "description": "Force confirmation planning"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_command",
+      "description": "Execute a preset TraeCN command through the local TraeCNclaw gateway, including confirmed restart_trae_debug recovery.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": [
+              "capabilities",
+              "preflight",
+              "confirm_plan",
+              "restart_trae_debug",
+              "status",
+              "readiness",
+              "new_chat",
+              "list_solo_chats",
+              "switch_solo_chat",
+              "cleanup_foreign_solo_queue",
+              "cleanup_queue_watch_status",
+              "submit_solo_chat_task",
+              "delegate",
+              "delegate_async",
+              "task_status",
+              "wait_task",
+              "review_task",
+              "adopt_current_task",
+              "cancel_task",
+              "stop_generation",
+              "review_gate_status",
+              "resolve_review_gate",
+              "switch_mode",
+              "switch_model",
+              "queue_status",
+              "open_project",
+              "settings_read",
+              "settings_read_all",
+              "settings_set",
+              "settings_navigate",
+              "settings_back",
+              "dialog_status",
+              "approve_dialog",
+              "dismiss_dialog",
+              "batch_submit",
+              "batch_status",
+              "batch_cancel",
+              "long_queue_proof_start",
+              "long_queue_proof_status",
+              "long_queue_proof_cancel",
+              "review_code",
+              "vibe_workflow",
+              "editor",
+              "file",
+              "terminal",
+              "git",
+              "search",
+              "diagnostics",
+              "snapshot",
+              "extension",
+              "command"
+            ],
+            "description": "Preset command name from traecn_command_set."
+          },
+          "params": {
+            "type": "object",
+            "description": "Command parameters. See traecn_command_set for required and optional keys."
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_vibe_workflow",
+      "description": "Run an unattended TraeCN vibe coding workflow with background queue tracking and auto-continued follow-up steps.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "task"
+        ],
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "The initial vibe coding task to delegate to TraeCN"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "description": "Follow-up workflow steps to auto-continue after the initial task"
+          },
+          "followupTasks": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "description": "Alias for steps; included for delegate_async workflow compatibility"
+          },
+          "completionChecks": {
+            "type": "object",
+            "properties": {
+              "requiredFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredText": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "filePath",
+                    "includes"
+                  ],
+                  "properties": {
+                    "filePath": {
+                      "type": "string"
+                    },
+                    "includes": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Project path TraeCN should work inside"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Logical session to append user and assistant messages to"
+          },
+          "chatId": {
+            "type": "string",
+            "description": "Optional OpenClaw chat id for notifications"
+          },
+          "soloChat": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "number"
+              },
+              "titleIncludes": {
+                "type": "string"
+              },
+              "textIncludes": {
+                "type": "string"
+              }
+            },
+            "description": "Target a real Solo conversation for ownership and queued result collection"
+          },
+          "soloChatIndex": {
+            "type": "number",
+            "description": "Target Solo conversation index"
+          },
+          "soloChatTitleIncludes": {
+            "type": "string",
+            "description": "Target Solo conversation title text"
+          },
+          "soloChatTextIncludes": {
+            "type": "string",
+            "description": "Target Solo conversation body text"
+          },
+          "newChat": {
+            "type": "boolean",
+            "description": "When false, reuse the targeted Solo conversation"
+          },
+          "includeProcessText": {
+            "type": "boolean",
+            "description": "Include process/thinking information in collected results",
+            "default": false
+          },
+          "reviewRequired": {
+            "type": "boolean",
+            "description": "Mark workflow checkpoints reviewable while auto-continuing them",
+            "default": false
+          },
+          "fallbackModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ordered fallback models to probe while the selected model is queued"
+          },
+          "autoModelFallback": {
+            "type": "boolean",
+            "description": "Use gateway default fallback model list while queued",
+            "default": false
+          },
+          "modelProbeIntervalMs": {
+            "type": "number",
+            "description": "Minimum interval between fallback model probes"
+          },
+          "notifyUrl": {
+            "type": "string",
+            "description": "Webhook URL to notify when workflow state changes"
+          },
+          "forceBackground": {
+            "type": "boolean",
+            "description": "Force gateway background tracking even if the model appears ready",
+            "default": false
+          },
+          "maxQueueWaitMs": {
+            "type": "number",
+            "description": "Optional local queue wait cap; omit to wait indefinitely"
+          },
+          "queueMaxWaitMs": {
+            "type": "number",
+            "description": "Alias for maxQueueWaitMs"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_plan_operation",
+      "description": "Create a dry side-effect, risk, and preflight plan before executing a TraeCN command.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Command you intend to execute, e.g. settings_set or approve_dialog"
+          },
+          "params": {
+            "type": "object",
+            "description": "Command-specific parameters to assess"
+          },
+          "forceConfirm": {
+            "type": "boolean",
+            "description": "Force user confirmation even for lower-risk commands"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_status",
+      "description": "Check if TraeCNclaw gateway is reachable and TraeCN automation is ready.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "allowAutoStart": {
+            "type": "boolean",
+            "description": "Allow automatically starting TraeCN if not running",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_new_chat",
+      "description": "Create a new chat in TraeCN and switch the UI to it.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "allowAutoStart": {
+            "type": "boolean",
+            "description": "Allow automatically starting TraeCN if not running",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_delegate",
+      "description": "Delegate an IDE task to TraeCN desktop app and return the AI response.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "task"
+        ],
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "The task description to delegate to TraeCN"
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Path to the project to open in TraeCN"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Existing session ID to use instead of creating a new one"
+          },
+          "chatId": {
+            "type": "string",
+            "description": "Optional OpenClaw chat id for notifications"
+          },
+          "soloChat": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "number"
+              },
+              "titleIncludes": {
+                "type": "string"
+              },
+              "textIncludes": {
+                "type": "string"
+              }
+            },
+            "description": "Target a real Solo conversation for ownership and queued result collection"
+          },
+          "soloChatIndex": {
+            "type": "number",
+            "description": "Target Solo conversation index"
+          },
+          "soloChatTitleIncludes": {
+            "type": "string",
+            "description": "Target Solo conversation title text"
+          },
+          "soloChatTextIncludes": {
+            "type": "string",
+            "description": "Target Solo conversation body text"
+          },
+          "newChat": {
+            "type": "boolean",
+            "description": "When false, reuse the targeted Solo conversation"
+          },
+          "allowAutoStart": {
+            "type": "boolean",
+            "description": "Allow automatically starting TraeCN if not running",
+            "default": false
+          },
+          "includeProcessText": {
+            "type": "boolean",
+            "description": "Include process/thinking information in the response",
+            "default": false
+          },
+          "waitForQueue": {
+            "type": "boolean",
+            "description": "If true, queue the task when the model is busy; if false, return queue info immediately",
+            "default": true
+          },
+          "background": {
+            "type": "boolean",
+            "description": "Queue immediately in the gateway background worker",
+            "default": false
+          },
+          "forceBackground": {
+            "type": "boolean",
+            "description": "Force gateway background tracking even if the model appears ready",
+            "default": false
+          },
+          "asyncPoll": {
+            "type": "boolean",
+            "description": "Always use async delegate path and return taskId for caller-managed polling",
+            "default": false
+          },
+          "reviewRequired": {
+            "type": "boolean",
+            "description": "Return successful results as review checkpoints before finalizing",
+            "default": false
+          },
+          "autoContinue": {
+            "type": "boolean",
+            "description": "Automatically approve reviewable follow-up workflow checkpoints",
+            "default": false
+          },
+          "followupTasks": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "description": "Follow-up tasks for unattended workflow continuation"
+          },
+          "completionChecks": {
+            "type": "object",
+            "properties": {
+              "requiredFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredText": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "filePath",
+                    "includes"
+                  ],
+                  "properties": {
+                    "filePath": {
+                      "type": "string"
+                    },
+                    "includes": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "notifyUrl": {
+            "type": "string",
+            "description": "Webhook URL to notify when async task state changes"
+          },
+          "fallbackModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ordered model candidates to probe while queued"
+          },
+          "autoModelFallback": {
+            "type": "boolean",
+            "description": "Use gateway default fallback model list while queued",
+            "default": false
+          },
+          "modelProbeIntervalMs": {
+            "type": "number",
+            "description": "Minimum interval between background fallback model probes"
+          },
+          "maxQueueWaitMs": {
+            "type": "number",
+            "description": "Optional local queue wait cap; omit to wait indefinitely"
+          },
+          "queueMaxWaitMs": {
+            "type": "number",
+            "description": "Alias for maxQueueWaitMs"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_settings_action",
+      "description": "Perform supported actions on the TraeCN settings panel through implemented gateway routes.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "navigate",
+              "read",
+              "readAll",
+              "type",
+              "clickTab",
+              "toggle",
+              "dropdown",
+              "set",
+              "readTables",
+              "back"
+            ],
+            "description": "Action to perform on settings"
+          },
+          "params": {
+            "type": "object",
+            "description": "Parameters for the action",
+            "properties": {
+              "section": {
+                "type": "string",
+                "description": "Section to navigate to"
+              },
+              "label": {
+                "type": "string",
+                "description": "Label text of the setting item"
+              },
+              "text": {
+                "type": "string",
+                "description": "Text to type or element text to click"
+              },
+              "value": {
+                "type": "string",
+                "description": "Value to set or select"
+              },
+              "enabled": {
+                "type": "boolean",
+                "description": "Toggle state"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_settings_read",
+      "description": "Read settings from the TraeCN settings panel. Optionally specify a section.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "type": "string",
+            "description": "Settings section to read. Leave empty for current section."
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_settings_set",
+      "description": "Change a setting in the TraeCN settings panel. Specify the label text and new value.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "The label text of the setting to change"
+          },
+          "value": {
+            "type": "string",
+            "description": "The new value for the setting"
+          },
+          "section": {
+            "type": "string",
+            "description": "Optional settings section to navigate to first"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_switch_mode",
+      "description": "Switch TraeCN between SOLO and IDE modes.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "solo",
+              "ide"
+            ],
+            "description": "The mode to switch to"
+          },
+          "allowAutoStart": {
+            "type": "boolean",
+            "description": "Allow automatically starting TraeCN if not running",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_switch_model",
+      "description": "Switch the AI model used by TraeCN.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "The model name to switch to"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_queue_status",
+      "description": "Check if the current TraeCN AI model is queued or busy.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "traecn_cleanup_queue",
+      "description": "Find and optionally delete accidental \"wait for Trae queue\" Solo conversations. With execute=true it stops running queue-probe chats before deleting them.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean",
+            "description": "List matches without deleting them",
+            "default": true
+          },
+          "execute": {
+            "type": "boolean",
+            "description": "Stop and delete matched queue-probe conversations",
+            "default": false
+          },
+          "maxPasses": {
+            "type": "integer",
+            "description": "Repeat cleanup passes for hidden queue-probe chats revealed after earlier deletions",
+            "default": 10
+          },
+          "settleMs": {
+            "type": "integer",
+            "description": "Delay between cleanup passes in milliseconds",
+            "default": 500
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_cleanup_watch_status",
+      "description": "Read local cleanup watcher lock/PID/stale status without contacting TraeCN or creating conversations.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "lockFile": {
+            "type": "string",
+            "description": "Optional cleanup watcher lock file path"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_long_queue_proof_start",
+      "description": "Start or dry-run the guarded GLM-5.2 long-queue proof. Defaults to dry-run; a new real submission requires execute=true and allowQuotaSpend=true.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string",
+            "description": "Stable owned proof marker. Reusing a marker resumes existing evidence instead of submitting again."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model to prove, defaults to GLM-5.2"
+          },
+          "projectPath": {
+            "type": "string",
+            "description": "Project path TraeCN should use for proof context"
+          },
+          "execute": {
+            "type": "boolean",
+            "description": "Enter execute mode. Without allowQuotaSpend=true this refuses new TraeCN submissions.",
+            "default": false
+          },
+          "allowQuotaSpend": {
+            "type": "boolean",
+            "description": "Required with execute=true before starting any new quota-consuming TraeCN proof submission.",
+            "default": false
+          },
+          "detach": {
+            "type": "boolean",
+            "description": "Run the proof watcher in a detached local screen session",
+            "default": false
+          },
+          "forceNew": {
+            "type": "boolean",
+            "description": "Intentionally bypass existing proof/task resume guards and submit a fresh proof",
+            "default": false
+          },
+          "resumeTaskId": {
+            "type": "string",
+            "description": "Resume waiting for an existing task id without submitting a new prompt"
+          },
+          "timeoutMs": {
+            "type": "number",
+            "description": "Maximum wait time for proof result; 0 means no local timeout"
+          },
+          "pollMs": {
+            "type": "number",
+            "description": "Task status poll interval"
+          },
+          "outputDir": {
+            "type": "string",
+            "description": "Directory for proof evidence files"
+          },
+          "cleanupIntervalMs": {
+            "type": "number",
+            "description": "Interval for queue-probe cleanup during proof waits"
+          },
+          "cleanupStabilizeChecks": {
+            "type": "number",
+            "description": "Consecutive clean cleanup dry-runs required before submitting"
+          },
+          "cleanupStabilizeDelayMs": {
+            "type": "number",
+            "description": "Delay between cleanup stabilization checks"
+          },
+          "cleanupMaxAttempts": {
+            "type": "number",
+            "description": "Maximum cleanup stabilization attempts"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_long_queue_proof_status",
+      "description": "Read local GLM-5.2 proof status and recent evidence without sending any TraeCN prompt.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string",
+            "description": "Optional proof marker. Omit to inspect the newest proof artifact."
+          },
+          "outputDir": {
+            "type": "string",
+            "description": "Directory containing proof evidence files"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_long_queue_proof_cancel",
+      "description": "Cancel a local GLM-5.2 proof watcher/task tracking without submitting another TraeCN prompt.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string",
+            "description": "Optional proof marker. Omit to cancel the newest proof artifact."
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Optional task id to cancel if known"
+          },
+          "outputDir": {
+            "type": "string",
+            "description": "Directory containing proof evidence files"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_open_project",
+      "description": "Open a project in TraeCN.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "projectPath"
+        ],
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Path to the project to open"
+          },
+          "newInstance": {
+            "type": "boolean",
+            "description": "Open the project in a separate TraeCN window when TraeCN is already running"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_chat",
+      "description": "Trigger a task via the trae-cn chat CLI without waiting for an AI response.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "Prompt to send to TraeCN"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "ask",
+              "edit",
+              "agent"
+            ],
+            "description": "CLI mode"
+          },
+          "addFile": {
+            "type": "string",
+            "description": "File path to add as context"
+          },
+          "maximize": {
+            "type": "boolean",
+            "default": false
+          },
+          "reuseWindow": {
+            "type": "boolean",
+            "default": false
+          },
+          "newWindow": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_update_self",
+      "description": "Update the TraeCNclaw plugin to the latest version.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "force": {
+            "type": "boolean",
+            "description": "Force update even if already up to date",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_approve",
+      "description": "Detect and approve/dismiss dialogs in TraeCN. Auto-detects dialog type and clicks the appropriate button.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "trust",
+              "allow",
+              "confirm",
+              "approve",
+              "deny",
+              "cancel",
+              "dismiss"
+            ],
+            "description": "\"auto\" (default) auto-detects best action. trust/allow/confirm for positive actions, deny/cancel/dismiss to reject.",
+            "default": "auto"
+          },
+          "waitForDialog": {
+            "type": "boolean",
+            "description": "If true, waits up to 30 seconds for a dialog to appear before approving.",
+            "default": false
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_dialog_status",
+      "description": "Check if there is a pending dialog (restricted mode, permission request, confirmation) in TraeCN.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "traecn_task_status",
+      "description": "Query the status of an async TraeCN task by taskId. Use after traecn_delegate returns a taskId with status \"queued\". Returns: done/queued/executing/error/cancelled/queue_timeout.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "taskId"
+        ],
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "description": "The taskId returned from traecn_delegate when the model is queued"
+          }
+        }
+      }
+    },
+    {
+      "name": "traecn_cancel_task",
+      "description": "Cancel a queued TraeCN task. Only works for tasks in \"queued\" state.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "taskId"
+        ],
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "description": "The taskId returned from traecn_delegate when the model is queued"
+          }
+        }
+      }
+    }
+  ],
+  "slashCommands": [
+    {
+      "command": "/TraeCN",
+      "description": "Create a new chat and delegate a task to TraeCN, returning only the final response",
+      "usage": "/TraeCN <task>"
+    },
+    {
+      "command": "/TraeCN process",
+      "description": "Create a new chat and delegate a task to TraeCN, returning the full output including process information",
+      "usage": "/TraeCN process <task>"
+    }
+  ],
+  "contracts": {
+    "tools": [
+      "traecn_capabilities",
+      "traecn_command_set",
+      "traecn_preflight",
+      "traecn_command",
+      "traecn_vibe_workflow",
+      "traecn_plan_operation",
+      "traecn_task_status",
+      "traecn_cancel_task",
+      "traecn_settings_action",
+      "traecn_settings_read",
+      "traecn_settings_set",
+      "traecn_status",
+      "traecn_new_chat",
+      "traecn_delegate",
+      "traecn_switch_mode",
+      "traecn_switch_model",
+      "traecn_queue_status",
+      "traecn_cleanup_queue",
+      "traecn_cleanup_watch_status",
+      "traecn_long_queue_proof_start",
+      "traecn_long_queue_proof_status",
+      "traecn_long_queue_proof_cancel",
+      "traecn_open_project",
+      "traecn_chat",
+      "traecn_update_self",
+      "traecn_approve",
+      "traecn_dialog_status"
+    ]
+  }
+}

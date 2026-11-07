@@ -1,9 +1,30 @@
-.DS_Store
 node_modules/
+.env
+.env.*
+!.env.example
 *.log
-
-# Generated release artifacts belong in GitHub Releases, not Git history.
+.DS_Store
+.claude/worktrees/
+audit-logs/
+demo-output/
 dist/
-npm-package/
-*.tgz
-*.zip
+# Local skill evaluation runs and generated review artifacts
+skills/*-workspace/
+# Only the generated project MCP Skill is included from local installs.
+.codex/skills/*
+!.codex/skills/traecn-mcp/
+.agents/skills/*
+!.agents/skills/traecn-mcp
+# Generated test coverage data
+.coverage/
+.workbuddy/
+coverage/
+# Generated inspection artifacts
+inspect-report.json
+# IDE-local working state
+.trae/
+# Local Gemini prompt history and its writer lock
+.gemini/prompts.json
+.gemini/.prompts.json.lock
+# Local browser automation snapshots
+.playwright-cli/

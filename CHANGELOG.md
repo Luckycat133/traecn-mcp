@@ -1,0 +1,841 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog v1.1.0](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.7.0] - 2026-11-07
+
+### Added
+
+- Added daily check-in status and opt-in claiming through Trae CN's native
+  account flow on macOS 3.4.11 and 3.4.15. Automatic claiming is disabled by default.
+
+### Changed
+
+- Consolidated GitHub downloads, Homebrew, and Glama metadata under the public TraeCN MCP repository.
+- Unified product naming as TraeCN MCP and simplified MCP onboarding. The new
+  `traecn-mcp` command replaces the previous server and operator commands.
+
+### Fixed
+
+- Read native conversation IDs and titles in the standalone Agent window,
+  verify the selected history row, and confirm that a new draft is empty.
+- Read the Trae CN 3.4.15 model picker and report when Auto hides manual models.
+- Verified settings against their exact control type and actual applied value;
+  scoped dropdown choices to their native portal and supplied the pointer move
+  required by TraeCN's Radix selection guard.
+- Sent messages with native CDP mouse input and serialized model-picker reads
+  with other desktop actions, preserving uncertain-send duplicate protection.
+- Verified workspace switches by native folder URI, retained native conversation
+  identities across title changes, and reported deferred empty-draft creation.
+- Released cancelled response collection promptly and retained interrupted
+  partial output as a terminal failure across runtime and compatibility APIs.
+- Rechecked concurrent submission identities after context preparation, yielded
+  between durable polling commits, and closed late connections during shutdown.
+- Kept workflow parent/child links in terminal history across restart; restored
+  the OpenClaw adapter's existing task tools, execute interface and completion checks.
+- Accepted nullable errors in task snapshots and resolved native review-scope
+  questions through the real option and final Submit with a single click.
+- Routed legacy batches through the existing durable task queue, retaining
+  batch and item identities while exposing their gateway task IDs. Preserved
+  approval checkpoints, partial failures, UI serialization and confirmed
+  cancellation; completed counts no longer include unfinished output.
+- Read TraeCN's permission settings cards as display-only content, including
+  the actual selected mode, without exposing their controls as writable settings.
+- Resolved native command approval cards with one scoped click and exact full
+  command checks; bound command and question resumption to the active native
+  conversation while retaining the original task and partial output.
+- Bounded sidebar rendering waits on hidden TraeCN pages and read a unique
+  active native conversation without scanning the full history.
+  Preserved driver-specific sidebar implementations and allowed subpixel
+  scroll rounding at the list boundary.
+- Preserved Unicode HTTP responses across network chunks, rejected incomplete
+  responses, and released cancelled task-event long polls with AbortSignal.
+- Isolated Web Console requests, polling and WebSocket callbacks by connection
+  session; restored task subscriptions after reconnect and reused submission
+  identities after uncertain network responses to prevent duplicate work.
+- Recovered stdio framing after malformed messages without dropping valid
+  requests, and closed Tasks subscriptions reliably across acknowledgement,
+  cancellation, shutdown and HTTP long-poll races.
+- Applied existing API-key permissions to Tasks reads, cancellations,
+  interaction updates and subscriptions; validated protocol inputs and kept
+  final text and structured results equivalent.
+- Persisted cancellation before waiting for desktop stop, prevented late
+  results or retries from reviving cancelled work, and retained cancellation
+  events and idempotent results across restarts. Kept an interrupted native stop
+  pending even after its cancellation event committed; a retry verifies the
+  original native conversation under the UI lock before stopping it.
+- Retained unconfirmed completion, review/approval checkpoints and completion
+  events for storage retry; kept MCP, Web Console and JavaScript clients from
+  exposing unfinished state as a final result or reusing a stale interaction.
+- Saved reviewed workflow parents and their next-task identities together,
+  blocked children until the parent was confirmed, and bound repeated attention
+  events to the current interaction identity during restart recovery. Persisted
+  the parent's completion proof with its child so delayed or pruned history
+  cannot block a confirmed workflow after restart.
+- Covered conversation aliases and queue/model timing in versioned task
+  fingerprints while preserving replay compatibility for existing tasks.
+- Locked queue recovery against concurrent writers, persisted special client
+  event cursors, and ordered task history across restarts. History cleanup now
+  intersects all supplied filters and rejects invalid age filters.
+- Isolated completion notification failures and resolved symbolic-link MCP
+  launchers to the server directory so local configuration remains discoverable.
+- Made the default mock result usable in the console's review workflow and
+  displayed the mock runtime explicitly in connection and diagnostic state.
+- Honored the unified submission's requested manual review instead of
+  automatically approving the result, while preserving submission replay IDs.
+- Included runtime output schemas in the generated MCP Skill contract and
+  synchronized the complete Codex-discovered Skill from the public source,
+  so its instructions, UI metadata, references and helpers cannot drift.
+- Matched send-message output metadata to existing terminal idempotency
+  replays, including original results, terminal statuses and nullable errors.
+- Reported current desktop readiness blockers in live UAT, checked required
+  readiness before dependent UI/session requests, skipped unavailable UI checks
+  in diagnostic runs, and closed the full Gateway with graceful shutdown.
+- Released event waits when HTTP clients disconnect and broadcast appends
+  through one listener for concurrent clients. Bounded HTTP shutdown draining
+  so silent preconnections and stalled responses cannot prevent service exit.
+- Recognized editor-prefixed workspace titles and preferred observed Explorer
+  roots while retaining exact title-only folder identities and path guards.
+  Matched MCP workspace output schemas to detected identity objects, including
+  unknown root paths, without changing the 20-tool contract.
+- Bound IDE result capture to the current assistant turn and explicit finish
+  summary, excluding workbench text and prior turns from completion detection.
+  Retained unfinished review gates for collection retry instead of reporting
+  completion before the current edits were accepted.
+- Recognized loaded model settings and explicit empty states while waiting,
+  reused IDE settings preview tabs, and closed only the active settings tab
+  when restoring chat; preserved the SOLO navigation path.
+- Backed off task-event subscriptions on every non-200 HTTP response,
+  retaining event cursors and cancellation instead of spinning on empty
+  success or redirect responses.
+- Saved the current assistant's execution trace alongside its confirmed final
+  result and served trace requests from that task's persisted record. Default
+  task, replay and batch responses retain their concise result shape; older
+  records report unavailable traces without reading another conversation.
+- Recognized populated virtualized message lists before creating an IDE
+  conversation, preventing the existing conversation from being mistaken for
+  a blank composer and reused as new context.
+- Excluded application notification toasts from approval detection while
+  continuing to inspect other visible dialogs, inline command approvals and
+  review questions in the same window.
+- Classified confirmation timeouts after dispatch as uncertain sends and
+  retained their failed task identities without automatically resubmitting
+  work that may already be running, including lost RPC acknowledgements and
+  confirmation exceptions. Pre-send failures retain their retry path.
+- Activated an existing hidden macOS TraeCN window before chat creation,
+  sending or collection and confirmed renderer visibility, so suspended
+  background rendering cannot be mistaken for an unsent task.
+- Matched task completion metadata to persisted ISO timestamps as well as
+  queue timestamps and retained explicit gateway error codes with actionable
+  guidance when the desktop window is unavailable.
+
+### Changed
+
+- Simplified both Skills around current source, preserved all 20 public tools,
+  and moved conditional protocol detail and dated channel evidence to references.
+- Isolated Gateway benchmarks from user state and real CDP, validated every
+  HTTP response, and added bounded concurrency, latency percentiles, memory
+  and event-loop measurements while retaining the existing metric names.
+- Reused the event snapshot's canonical checksum encoding for compact writes,
+  avoiding a second traversal of the retained log while preserving schema,
+  per-operation commits, validated backups, fsync and crash recovery.
+- Included all existing shared-module tests in repository verification, counted
+  asynchronous outcomes only after settlement, awaited queue/discovery tests,
+  failed process exits with unsettled asynchronous tests, and corrected
+  coverage exclusions without lowering thresholds.
+- Used the normal CDP probe timeout for functional Quickstart HTTP fixtures;
+  retained the dedicated 25 ms stalled-endpoint timeout check.
+- **Deprecated unscoped npm package `traecnclaw`** (versions `0.3.0`, `0.3.1`)
+  as of 2026-08-26. The canonical public package is
+  `@luckycat133/traecnclaw`, matching the package builder and install paths. The
+  unscoped name is no longer maintained, will not receive updates, and is
+  scheduled for removal from npm. Users depending on the unscoped name should
+  migrate to the scoped package:
+  `npm uninstall traecnclaw && npm install @luckycat133/traecnclaw`.
+
+### Security
+
+- Updated the locked development dependency `brace-expansion` to `5.0.12`
+  to resolve the reported resource-exhaustion advisories.
+- Updated the development MCP client and its core dependency to `2.2.0`
+  to address [GHSA-6qxp-vccf-f47h](https://github.com/advisories/GHSA-6qxp-vccf-f47h).
+
+## [0.6.0] - 2026-08-24
+
+### Added
+
+- Replaced the legacy chat/diagnostics page with Web Control Console v1, the
+  single responsive human surface for readiness, workspace context, task
+  submission, active progress, exceptional interactions, reviews, recent
+  results, history, and Advanced diagnostics.
+- Added authenticated `GET /api/workspace` context and exact-task
+  `POST /api/task/:taskId/interaction` handling, plus opt-in review requests on
+  the unified task submission route.
+- Added focused console state, behavior, route, WebSocket, packaging, and
+  browser acceptance coverage without changing the ordered 20-tool MCP v5
+  contract.
+
+### Changed
+
+- Served the console from fixed HTML, CSS, and JavaScript assets with
+  event-first WebSocket synchronization, bounded reconnect and polling
+  fallback, deterministic task projection, and responsive native-light layout.
+- Authenticated browser WebSocket sessions through a bearer subprotocol while
+  negotiating only the public `traecnclaw.v1` protocol with the application.
+
+### Fixed
+
+- Updated deterministic MCPB validation to use the pinned official CLI through
+  the npm 10/11-compatible `--call` execution form.
+- Allowed the Glama Linux inspection image to bypass the scoped package's
+  intentional macOS npm platform guard without changing runtime compatibility
+  claims; the container remains schema-inspection-only.
+- Removed the redundant Homebrew `:run` dependency qualifier and made the
+  formula test use Homebrew's preferred `bin/"traecnclaw-mcp"` path form so the
+  published formula passes strict online audit.
+
+### Security
+
+- Kept connection tokens in browser session storage only, omitted them from
+  URLs and rendered fields, applied same-origin authenticated requests, and
+  retained strict CSP and safe DOM rendering for the console assets.
+
+## [0.5.9] - 2026-08-23
+
+### Added
+
+- Added a deliberately staged public npm artifact under
+  `@luckycat133/traecnclaw`, keeping the canonical source package private while
+  recording the scoped identity and digest in the release manifest.
+- Added canonical Official MCP Registry metadata generation for the scoped npm
+  package and local stdio transport.
+- Added a source-owned Homebrew formula template and renderer whose test performs
+  a real MCP initialize/tools-list exchange and verifies all 20 tools.
+- Added a date-stamped channel ledger, canonical directory copy, release
+  runbook, architecture diagram, use cases, limitations, and launch scripts.
+
+### Changed
+
+- Promoted setup, doctor, Quickstart, service operations, status, logs, and MCP
+  configuration to the leading operator CLI surface while retaining advanced
+  task and proof commands.
+- Made the standalone Skill launcher prefer the scoped public server package,
+  with the historical unscoped package retained only as a compatibility
+  fallback.
+- Updated public mirror and marketplace metadata to use public provenance and
+  the scoped npm identity instead of the private canonical repository or old
+  unscoped package.
+
+### Fixed
+
+- Rebuilt MCPB packaging around the pinned official CLI and schema: repository
+  metadata is an object, tools are named/description objects, official
+  validation runs before packaging, and normalized archive metadata preserves
+  deterministic byte-for-byte output.
+- Corrected Homebrew caveats to use the installed `traecnclaw` command and
+  strengthened packaged CLI access to first-run and service scripts.
+
+## [0.5.8] - 2026-08-23
+
+### Fixed
+
+- Ship the complete `scripts/lib` directory in the published package. The
+  0.5.7 tarball omitted `scripts/lib/cli-config.js`, which broke the
+  `traecnclaw` CLI in npm-, Homebrew-, and MCPB-installed copies while the
+  stdio MCP server kept working.
+
+## [0.5.7] - 2026-08-23
+
+### Added
+
+- Added the MCP metadata quality milestone for contract v5: human-readable
+  titles on all 20 tools, rewritten intent-level descriptions with fully
+  described input properties, seven reusable output-schema families matched
+  to real gateway payloads, accurate annotations (`openWorldHint` confined to
+  `traecn_send_message`, evidence-backed `idempotentHint`), and explicit
+  `execution.taskSupport` (optional for send_message, forbidden elsewhere).
+- Added structured tool execution errors: gateway non-2xx responses now
+  surface as `isError` results carrying stable codes, `retryable`, and
+  `nextAction` instead of passing through as successful results, and the
+  queue-probe rejection uses the same shape.
+- Added `src/mcp/metadata-quality.test.js` gating names, metadata accuracy,
+  schema-vs-payload agreement, task support, annotations, and error shape.
+- Added deterministic `.mcpb` bundle packaging (`scripts/build-mcpb.js`) with
+  a spec-v0.3 manifest exposing only gateway host/port/token/client ID,
+  credential scanning, byte-identical rebuilds, and offline conformance tests.
+
+### Changed
+
+- Regenerated the public mirror from canonical sources: pinned Glama image
+  asset URL, Skills CLI install path, listing-ready marketplace metadata.
+
+## [0.5.6] - 2026-08-08
+
+### Added
+
+- Added a checksummed terminal idempotency ledger to TaskStore schema 3. A
+  stable key now replays the original terminal status/result across gateway
+  restart for a configurable 24-hour default TTL, while semantic collisions
+  are rejected before reconnecting to TraeCN.
+- Added `setup:mcp` and the portable `scripts/setup-mcp.js` entry point to
+  validate server discovery and render a resolved MCP client configuration.
+  It can print pure JSON or atomically create a new mode-0600 file without
+  overwriting an existing configuration.
+- Added bounded, injectable Quickstart CDP probing with TraeCN identity
+  validation and script-level coverage for success, timeout, connection
+  refusal, non-success HTTP responses, invalid JSON, and wrong-product
+  endpoints.
+- Added checksummed TaskHistory schema 2 snapshots with durable temporary-file
+  replacement, last-known-good backups, corrupt-file quarantine, legacy and
+  interrupted-snapshot recovery, and persistence health reporting.
+
+### Changed
+
+- Established the MCP Skill as the primary Agent path, with the CLI for live
+  validation, the web UI for diagnostics, and OpenClaw as an ecosystem adapter.
+- Migrated valid TaskStore schema 2 snapshots to schema 3 while retaining the
+  existing checksum, atomic replacement, backup, quarantine, and single-writer
+  durability boundary.
+- Included task-history persistence and recovery health under
+  `GET /api/status` as `durability.taskHistory`; history degradation now
+  contributes to the aggregate `durabilityDegraded` flag.
+- Documented the separate publication state of the private canonical source,
+  immutable `v0.5.5` tag, `v0.5.4` GitHub Release, ClawHub 0.5.5 Skill, npm
+  0.3.1 server package, and v0.5.3 public mirror so unmatched surfaces are not
+  presented as one installable release.
+
+### Fixed
+
+- Kept initialization-based Codex clients in the legacy MCP era when
+  `tools/list` carries only the standard `_meta.progressToken`; unrelated
+  request metadata no longer looks like the modern per-request protocol marker.
+- Baselined retained task events for a newly identified legacy MCP client
+  before enabling notifications, preventing historical task summaries from
+  being replayed into a new host while preserving durable missed-event replay
+  for returning client IDs.
+- Rejected `Idempotency-Key` values longer than 256 characters on
+  `POST /api/tasks/submit` with HTTP 400, and rejected reuse of an active or
+  retained terminal task key for different semantic work with HTTP 409.
+- Applied the CLI's intended 60-second HTTP request timeout through the
+  client's canonical `timeout` constructor option.
+- Made Quickstart reject CDP endpoints that do not identify TraeCN and print
+  the confirmed logged-in-profile restart command when TraeCN is already
+  running without an available debug endpoint.
+- Scheduled persistence for step-only task-history updates and preserved an
+  explicit zero-hour retention option.
+- Updated strict live UAT discovery checks to validate the current
+  gateway-managed MCP v5 task surface instead of requiring a cleanup tool that
+  was intentionally removed from the public MCP contract.
+
+### Security
+
+- Updated the locked development dependency `brace-expansion` from 5.0.8 to
+  5.0.9, fixing the high-severity denial-of-service advisory
+  [GHSA-rgw5-rvv9-x895](https://github.com/advisories/GHSA-rgw5-rvv9-x895).
+- Added a full high/critical dependency audit to `npm run test:release` so
+  release preparation checks development dependencies as well as the existing
+  production-only audit.
+
+## [0.5.5] - 2026-08-05
+
+### Added
+
+- Added deterministic fault-injection and regression tests for task restart,
+  retry, and reconnection boundaries in `src/http/task-restart-retry.test.js`.
+  Coverage includes restart before Trae submission, after durable accept,
+  after Trae submission, during result collection, and after a terminal
+  event; idempotency replay after restart; TaskStore write-failure rollback
+  with history `failTask` and no stored replay; TaskEventStore cursor
+  independence across restart; pruning cursor safety across tasks; and
+  long-poll wake after restart with a future cursor.
+
+### Changed
+
+- Extracted idempotency-key replay resolution from
+  `Gateway._checkIdempotency` into `TaskOrchestrator.resolveIdempotentTask`,
+  consolidating task-identity ownership in the orchestrator boundary. The
+  HTTP layer now delegates the active-queue lookup to the orchestrator while
+  retaining the in-memory idempotency cache. HTTP 202 status codes, response
+  shapes, terminal-status mapping, history, persistence, and
+  completion-event semantics are unchanged.
+
+## [0.5.4] - 2026-08-04
+
+### Added
+
+- Added an injectable `TaskOrchestrator` boundary for candidate task
+  construction and durable acceptance, including rollback coverage when the
+  active TaskStore is unavailable.
+- Added `npm run verify:release-manifest` and a tag-triggered GitHub workflow
+  that verifies source provenance, versions, artifact sizes, and SHA-256
+  checksums before uploading release assets.
+
+### Changed
+
+- Made extracted HTTP handler modules the source of truth for their route
+  metadata; the Gateway route table now composes those slices and retains only
+  Gateway-owned configuration, settings, confirmation, and debug routes.
+
+### Fixed
+
+- Accepted acknowledgements for valid completion-event cursors after their
+  events have been pruned, and reset unknown future cursors so later events do
+  not stall a client or long-poll subscription permanently.
+
+## [0.5.3] - 2026-08-03
+
+### Added
+
+- Added checksummed TaskEventStore schema 2 snapshots, durable temporary-file
+  replacement, last-known-good backups, corrupt-file quarantine, legacy schema
+  migration, interrupted-write recovery, and event-store persistence health in
+  `GET /api/status`.
+
+### Fixed
+
+- Rolled back completion-event appends and client cursor acknowledgements when
+  persistence fails. Failed acknowledgements now return HTTP 503, and
+  `CompletionSignal` does not continue outbound delivery when its durable event
+  was not recorded.
+- Calculated completion-event pagination from the effective acknowledged or
+  requested cursor, including empty pages after an exhausted cursor.
+- Preserved fresh malformed TaskStore locks during their metadata-write grace
+  period while allowing stale locks left by a crashed creator to be reclaimed.
+- Propagated gateway failures from MCP `tasks/cancel` instead of reporting false
+  success, while retaining idempotent success for a confirmed terminal race.
+- Closed modern MCP subscription requests exactly once on cancellation or
+  shutdown, rejected null and duplicate request IDs, baselined prior durable
+  events before the current snapshot, and retried partial initial snapshots
+  without duplicate delivery.
+
+### Security
+
+- Removed `TRAECN_MCP_SERVER_PATH` from the public Skill launcher so an
+  environment-controlled value cannot select arbitrary JavaScript for the
+  launcher to execute. Server discovery now uses only the repository entry
+  point, the installed `traecnclaw/mcp` package export, or the
+  `traecnclaw-mcp` executable on `PATH`.
+- Declared `TRAECN_GATEWAY_TOKEN` as the Skill's primary credential while
+  retaining machine-readable declarations for every supported optional
+  environment variable, and added contract coverage for secret-handling
+  guidance and metadata drift.
+
+## [0.5.2] - 2026-08-01
+
+### Added
+
+- Added an npm-compatible complete server archive to `npm run pack:skill`, with
+  its exact version, size, and SHA-256 recorded in the release manifest.
+- Added a clean-room release test that installs the portable Skill and server
+  package under a temporary HOME, discovers the exact 20-tool MCP contract,
+  submits one mock task, and reads its completed result.
+- Added TaskStore health to `/api/status`, an exclusive active-store writer
+  lock with stale-owner recovery, and deterministic ENOSPC, EACCES, EROFS,
+  interrupted-write, and competing-process coverage.
+- Added the separately negotiated `io.modelcontextprotocol/tasks` adapter for
+  modern `2026-07-28` clients. Opted-in sends return durable Task handles;
+  `tasks/get`, `tasks/update`, `tasks/cancel`, and exact-ID
+  `subscriptions/listen` delivery reuse the gateway task and event stores
+  without changing the frozen 20-tool contract.
+- Added a versioned Trae adapter registry, read-only product/version and mode
+  detection, a verified macOS TraeCN 1.107 profile, degraded unknown-version
+  fallback, status handshake, and sanitized workflow fixture replay.
+- Added an independent MCP conformance matrix using the official TypeScript
+  client 2.x for 2024, 2025, and pinned 2026 sessions, plus a raw transcript
+  client for legacy Content-Length framing and protocol error recovery.
+
+### Changed
+
+- Extracted durable event recording, WebSocket broadcast, OpenClaw messages,
+  and task webhooks from `Gateway` into one injected `CompletionSignal`.
+
+### Fixed
+
+- Extended the portable Skill launcher to resolve an installed `traecnclaw`
+  package or a `traecnclaw-mcp` executable on `PATH` after checking explicit
+  and repository-local server paths.
+- Kept unified mock submissions inside `MockDriver` for model and conversation
+  discovery instead of accidentally entering DOM handlers without a CDP client.
+- Made task acceptance atomic with the first durable queue snapshot. An
+  unwritable or already-owned TaskStore now rolls the candidate back and returns
+  `TASK_STORE_UNAVAILABLE` as HTTP 503 instead of returning a false 202.
+- Persisted `Idempotency-Key` ownership with active tasks so an uncertain retry
+  after a gateway restart resolves to the original task instead of submitting
+  duplicate work.
+- Made tool output schemas valid object schemas for official clients,
+  implemented the advertised legacy `ping` and `logging/setLevel` methods,
+  rejected malformed JSON-RPC request envelopes, and terminated modern
+  subscriptions with the standard graceful-close result.
+
+## [0.5.1] - 2026-07-31
+
+### Added
+
+- Added `detailLevel` to `traecn_get_task`: `result` (the default) returns the
+  final Trae answer, while `trace` returns the visible execution process for
+  diagnosis and audit tracing when it is still available.
+
+### Fixed
+
+- Made settings navigation reliable in Solo and IDE layouts, including narrow
+  panes with a collapsed sidebar and editor-tab variants. Native CDP mouse
+  input is now used for controls that ignore synthetic DOM clicks.
+- Restricted settings extraction to visible rows and settings-owned tables,
+  added support for usage, agent, and index/document card layouts, refreshed
+  the 16-section fallback, and retries lazy pages once before returning an
+  explicit `SETTINGS_CONTENT_UNAVAILABLE` error.
+
+## [0.5.0] - 2026-07-31
+
+### Added
+
+- Added dual-era MCP support for the stable `2026-07-28` stateless protocol,
+  including `server/discover`, per-request version metadata, typed results,
+  cache hints, and server identity metadata while retaining legacy
+  `2025-11-25` and `2024-11-05` initialization.
+- Added structured tool results and permissive JSON output schemas alongside
+  text content for old clients.
+- Added a single checksummed TaskStore schema with durable temporary writes,
+  atomic replacement, last-known-good backups, corrupt-file quarantine, legacy
+  snapshot migration, and forced-process-kill recovery tests.
+- Added a generated core runtime configuration schema shared by code,
+  `.env.example`, README defaults, doctor, and `/api/config/schema`.
+- Added release-surface scanning for local user paths, removed MCP profile
+  configuration, and stale 0.3.x install instructions.
+- Added an explicit 0.3.x to 0.5.0 migration guide and executable release
+  verification inputs.
+
+### Changed
+
+- Froze MCP contract version 5 at exactly 20 ordered, single-intent tools and
+  made contract drift fail during module loading and generated Skill checks.
+- Made `quickstart` describe its real behavior: it checks an existing TraeCN
+  CDP session and starts the gateway, while TraeCN launch remains explicit or
+  opt-in. `start:traecn` now performs the explicit launch its name promises.
+- Standardized the gateway at `127.0.0.1:8788`, CDP at `127.0.0.1:9222`, the
+  existing TraeCN profile, a 30-minute response window, and unlimited external
+  queue waiting unless a local maximum is configured.
+- Made the capabilities endpoint report MCP contract version and tool count
+  without profile metadata.
+
+### Fixed
+
+- Replaced the non-standard default `Content-Length` stdio framing with MCP's
+  newline-delimited JSON-RPC framing while preserving bidirectional
+  compatibility for existing TRAECNclaw clients using the former format.
+- Stopped echoing arbitrary client protocol versions during legacy
+  initialization and return the standard unsupported-version error for modern
+  requests.
+- Corrected Monaco MarkerSeverity values `1`, `2`, `4`, and `8` to map to
+  hint, info, warning, and error.
+- Replaced first-token Git branch guessing with explicit parsing backed by
+  realistic TraeCN status-bar fixtures.
+- Routed every active-queue persistence and restore call through TaskStore,
+  removing the competing Gateway file writer.
+- Aligned ConfigManager response-timeout validation with the canonical
+  30-minute default and one-hour schema maximum.
+
+### Removed
+
+- Removed the obsolete MCP profile exports, environment selection path, and
+  generated profile documentation.
+- Removed the public `createQueuedTask` service placeholder that always threw
+  at runtime.
+
+### Security
+
+- Gateway startup and doctor now fail closed when a non-loopback bind has no
+  authentication token.
+- Corrupt or checksum-mismatched queue snapshots are retained in quarantine
+  and recovered from a validated backup rather than silently restoring zero
+  tasks.
+
+## [0.4.7] - 2026-07-30
+
+### Security
+
+- Made the permanent-deletion example require an explicit current user request,
+  repeat the no-recovery warning, and direct the Agent to re-read the exact
+  listed conversation ID and title without adding a confirmation round trip.
+- Added a contract regression check so destructive examples cannot silently
+  lose their authorization prerequisite or irreversible-action warning.
+
+## [0.4.6] - 2026-07-30
+
+### Security
+
+- Bound direct generation stops to the verified active Solo conversation and
+  required an explicit untracked-work acknowledgement plus audit reason.
+- Made conversation deletion an inactive-target-only permanent operation with
+  exact-title verification, irreversible-deletion acknowledgement, elevated
+  `delegate` permission, and durable audit evidence.
+- Revalidated the exact visible command before approving unsafe or ambiguous
+  cards and required a risk acknowledgement plus authorization reason.
+- Reduced automatic command approval to a strict read-only allowlist and
+  blocked project scripts, mutating find/sed forms, ripgrep preprocessors, Git
+  external hooks, shell writes, network access, and process control.
+- Enabled append-only security audit records for automatic command approvals,
+  direct stops, conversation deletion, and exceptional approval decisions.
+
+## [0.4.5] - 2026-07-30
+
+### Added
+
+- Added a separate `traecn_stop_generation` UI action instead of treating all
+  stop requests as task cancellation.
+- Added progressively discovered Trae settings tools for visible sections,
+  section items, dropdown choices, boolean toggles, dropdown selection, and
+  text input.
+
+### Changed
+
+- Expanded the focused MCP surface from 13 to 20 single-intent tools. Settings
+  remain a second-level capability and do not expose one generic command tool.
+- Advanced the capabilities contract to version 4 for the UI-backed settings
+  and separate generation-stop surface.
+- Settings operations now serialize access to the Trae UI and return to chat
+  automatically after Agent-facing reads or writes.
+
+## [0.4.4] - 2026-07-30
+
+### Added
+
+- Added focused MCP tools for workspace opening, live model discovery and
+  selection, mode selection, individual conversation operations, question
+  answers, and exceptional approval decisions.
+- Added live TraeCN model-list discovery and stable-title conversation deletion.
+
+### Changed
+
+- Split the overloaded six-tool contract into 13 single-intent tools.
+  `traecn_send_message` now accepts only a message and optional conversation
+  identifier; context changes use their dedicated tools. The capabilities
+  contract version is now 3.
+- Sending without an explicit conversation now stays in the selected
+  conversation. Creating a conversation is always an explicit operation.
+- Kept readiness, queueing, persistence, waiting, recovery, notifications,
+  routine approvals, and keep/revert decisions entirely gateway-managed.
+
+## [0.4.3] - 2026-07-30
+
+### Added
+
+- Added the unified `traecn_submit`, `traecn_get_task`, conversation, cancel,
+  and exceptional-interaction MCP contract, backed by gateway-owned task and
+  conversation endpoints.
+- Added automatic workspace opening and verification, requested model/mode
+  preparation, and conversation targeting to gateway-managed submissions.
+
+### Changed
+
+- Reduced MCP discovery from 39 profile-dependent tools to one six-tool
+  surface. Every accepted submission is persisted and managed in the
+  background, including queue maintenance, recovery, event delivery, safe
+  approval handling, and follow-up continuation.
+- Changed TraeCN file-review handling to keep generated changes automatically
+  by default and revert them only when the collected state contains a clear
+  fatal automation failure.
+- Rewrote the portable Skill and MCP setup documentation around gateway
+  ownership and automatic completion notifications.
+
+### Removed
+
+- Removed Agent-facing command catalogs, preflight/planning, sync-versus-queue
+  choices, wait/poll/event acknowledgement, review shortcuts, workflow
+  shortcuts, recovery/process controls, Solo-specific controls, cleanup/proof
+  tools, settings shortcuts, and `ops`/`full` discovery profiles. Their needed
+  mechanics remain internal or operator-facing rather than MCP tools.
+- Removed the redundant long-form OpenClaw/MCP tool catalog and obsolete
+  profile configuration examples.
+
+### Fixed
+
+- Fixed workspace selection so a requested folder is opened and verified by
+  the gateway instead of being rejected or repeated inside the model message.
+- Fixed task cancellation ownership so the single MCP cancel operation lets
+  the gateway choose between removing queued work and stopping active
+  generation.
+
+## [0.4.2] - 2026-07-30
+
+### Changed
+
+- Declared ClawHub runtime requirements and optional environment variables in
+  the portable Skill metadata, with the public MCP profile as the default.
+- Clarified that automatic dialog approval is restricted to the gateway's
+  read-only allowlist; risky, unknown, destructive, or privilege-affecting
+  actions must remain within the user's explicitly authorized task scope.
+- Excluded maintainer-only tests and the contract generator from the ClawHub
+  artifact while keeping them in the source repository and npm test gate.
+
+## [0.4.1] - 2026-07-30
+
+### Added
+
+- Added a persistent, per-client task-event inbox with long-poll and
+  acknowledgement HTTP/MCP APIs, plus compact stdio MCP logging notifications
+  that replay after reconnect without retransmitting full task results.
+- Added the portable `skills/traecnclaw-mcp` Agent Skill for MCP-capable
+  clients.
+- Added `npm run pack:skill` to generate direct-download skill release
+  artifacts and checksums under `dist/`.
+- Added distribution and launch-kit documentation for public catalog
+  submissions and social announcements.
+- Added production documentation covering usage, development, deployment, environment configuration, and release acceptance checks.
+- Added mock-mode system testing and documentation/OpenAPI UAT validation scripts.
+- Added explicit OpenAPI coverage for settings read/write and self-update status endpoints.
+- Added `skills/traecnclaw-mcp/scripts/start-mcp.js` launcher so MCP clients
+  can start the server through the skill itself (auto-locates `mcp-server.js`,
+  overridable via `TRAECN_MCP_SERVER_PATH`).
+- Added separate launcher and direct-server MCP client templates at
+  `skills/traecnclaw-mcp/assets/mcp-client-config.json` and
+  `skills/traecnclaw-mcp/assets/mcp-client-config.direct.json`.
+- Added `TASK_REQUIRED` factory method to `TraeCNSkillError` on `errors.js`.
+- Added the public `traecn_resolve_task_review` MCP tool and stable
+  `review_task` command so `awaiting_review` workflow checkpoints can be
+  approved or rejected entirely through stdio MCP.
+- Added generated MCP schema contracts, validated call examples, and a real
+  Content-Length launcher smoke test for the portable Agent Skill.
+- Added `npm run test:mcp-stdio-smoke` as a standalone, gateway-independent
+  MCP `initialize` and `tools/list` verification command.
+
+### Changed
+
+- Changed the release from `0.5.0` to the conservative `0.4.1` patch line and
+  made `package.json` the canonical version source, with synchronized package,
+  Skill, and OpenClaw distribution manifests.
+- Added explicit patch/minor/major version commands and documented when each
+  increment is appropriate before `1.0.0`.
+- Aligned the ESLint configuration with the repository's CommonJS runtime,
+  removing Node's module-type reparsing warning.
+- Changed `traecn_open_project` to reuse the active TraeCN window by default
+  through the bundled CLI, reconnect CDP, and verify the exact workspace path;
+  `newInstance:true` remains available for a separate window.
+- Changed automatic command approvals to a local, token-free two-stage policy:
+  fully read-only command chains run automatically, while write, network,
+  privilege, process-control, and unknown commands return compact risk codes
+  for calling-agent review without requesting human confirmation.
+- Standardized stdio MCP public tool names under the `traecn_*` prefix and
+  grouped the tool surface into `public`, `ops`, and `full` profiles.
+- Improved gateway response headers, CORS handling, status version reporting, numeric environment parsing, and background queue polling lifecycle.
+- Improved the built-in chat UI with safer DOM rendering, clearer error handling, responsive layout, token persistence, and status metadata.
+- Updated OpenClaw plugin metadata to match registered tools.
+- Consolidated `mcp-server.js` tool metadata: `TOOL_METADATA` is now the
+  single source of truth; `PUBLIC_MCP_TOOL_NAMES`, `OPS_MCP_TOOL_NAMES`, and
+  `DESTRUCTIVE_MCP_TOOLS` are derived from it instead of maintained in
+  parallel.
+- Repointed `package.json` `exports["./errors"]` from the deleted
+  `ai-errors.js` to the canonical `errors.js`.
+- Updated lint script to check `errors.js` instead of the deleted `ai-errors.js`.
+- Extracted the queue-probe predicate helpers (6 functions) from `src/shared/utils.js` into a dedicated `src/shared/queue-probe.js` module; `utils.js` re-exports them so all 61 existing `require` sites keep working unchanged.
+- Extracted the four task-completion notification functions (`notifyOpenClaw`, `formatResult`, `formatReviewRequiredMessage`, `sendTaskWebhook`) from the top of `src/http/gateway.js` into a new `src/http/task-notify.js` module, and removed the duplicated `notifyOpenClaw`/`formatResult` definitions in `src/http/handlers/delegate.js` in favor of the shared module (an optional `logPrefix` parameter keeps both sides' error-log prefixes unchanged).
+- Derived `DEFAULT_CONFIG` in `src/shared/config-manager.js` from `CONFIG_SCHEMA` via the module-private `buildDefaultConfig()` instead of maintaining default values in two places by hand; the derived result is deep-equal to the previous handwritten values.
+- Added `src/http/handlers/helpers.js` exporting `rejectBadRequest`, `hasDriverCapability`, and `requireDriverCapability`, consolidating 28 copies of the parameter-validation and driver-capability-guard boilerplate across 10 handlers; error messages are preserved byte-for-byte and the helpers take named options objects to avoid positional-argument drift.
+- Documented `src/http/gateway.js` with a file-level docstring (gateway responsibilities and handlers layering), replaced scattered magic numbers with named constants (`MAX_TASK_TEXT_LENGTH`, `IDEMPOTENCY_KEY_TTL_MS`, `GZIP_MIN_BYTES`), and added "why" comments for the CIDR mask bit arithmetic, the 120-character completion threshold, and the 35000 ms settings-read timeout. No external behavior changes.
+- Removed the historically-unwired dead-code handler modules (`src/http/handlers/config.js`, `dialog.js`, `settings.js`, `preflight.js`); production traffic was already served by the inline implementations in `gateway.js`, so the deletion is zero-behavior-change. (Their file-header comments were corrected in a prior pass; now moot.)
+- Updated the `lint` script to `node --check` the new modules (`queue-probe.js`, `task-notify.js`, `handlers/helpers.js`).
+- Injected capability data sources (`openapi`/`prompt-layers`/`traecn-skill`) into `src/shared/capabilities.js` as parameters with lazy-require defaults, fixing a reverse-dependency layering violation (`shared` was requiring `http`/`skill`); `buildCapabilities` callers are unchanged.
+- Split the six longest mixed-responsibility functions into single-purpose helpers: `gateway._ensureBackgroundPolling`, `delegate.handleDelegateAsync`, `traecn-cli.cmdCleanupQueue`, `config-manager.validate` (into 11 sequential `_validate*` steps), `response-poller._pollResponseState` (DOM-injection template extracted), and `response-collection.collectResponse`. Control flow and return/error values preserved.
+- Unified entry-parameter naming across the skill layer and plugins: `opts`/`config` → `options` in `traecn-skill.js`, `index.js`, `simple-api.js`, and the three plugin factories; renamed the single-letter local alias `d` to `payload` in `traecn-skill.js` normalize helpers. The public `t/q/p/w/s` aliases in `simple-api.js` are intentionally preserved (API contract).
+- Centralized CLI argument parsing and gateway connection config in `scripts/lib/cli-config.js`: removed five duplicated `readArg` definitions and the per-script `host`/`port`/`token` trios; each script's original resolution priority is preserved.
+- Translated Chinese-language comments in `traecn-skill.js`, `shared/utils.js`, `shared/logger.js`, `shared/queue-probe.js`, `gateway.js`, and `batch-executor.js` to English; quoted Chinese examples inside comments and all Chinese string/regex literals (Trae CN UI text matching, user-facing messages) are preserved byte-for-byte.
+- Removed redundant restating comments in `task-actions.js`, `settings-driver.js`, `discovery.js`, and `panel-capture.js`, and deleted a block of commented-out dead-code example calls in `skill/examples/layered-usage.js`.
+- Extracted scattered magic numbers into named module constants: `MAX_TASK_TEXT_LENGTH` (task-actions.js, batch.js), `CDP_REQUEST_TIMEOUT_MS` (discovery.js), and `MAX_BATCH_TASKS` (batch.js). All values unchanged.
+
+### Fixed
+
+- Fixed the acceptance audit after queue-probe and MCP modules were split, and
+  promoted its previously orphaned regression test into the default test gate.
+- Fixed task `projectPath` handling at the gateway boundary. The path is now an
+  optional workspace guard: guarded submissions fail with `PROJECT_NOT_OPEN`
+  when another folder is open, and the gateway sends only the original task
+  text instead of injecting redundant path instructions into the model prompt.
+- Fixed inline TraeCN command approvals so active out-of-sandbox command cards
+  are reported by `traecn_get_dialog_status` and
+  `traecn_respond_dialog({action:"approve"})` can click `运行`.
+- Fixed background Solo task isolation by preferring task-specific text
+  identities and refusing stale sidebar-index fallback when a textual identity
+  exists. A newer conversation can no longer be collected as an older task
+  merely because it moved into that task's former list position.
+- Fixed partial progress such as `任务完成 16%` being classified as a terminal
+  result; percentages below 100 remain in progress.
+- Fixed `traecn_open_project` and the stable `open_project` command so the
+  optional `newInstance` flag reaches the gateway, allowing a project to open
+  in a separate TraeCN window when TraeCN is already running. The OpenClaw
+  runtime and manifest now expose the same option.
+- Fixed plugin client settings API paths to match gateway routes.
+- Added `/api/delegate-async` compatibility for async delegation clients.
+- Added mock queue status support so mock-mode delegate flows work through the async path.
+- Fixed error leakage: `errorToBody` now returns a generic `'Internal server error'` message for bare `Error` instances instead of forwarding `err.message` (which could contain filesystem paths, CDP selector names, or other internals). Added `safeErrorMessage()` helper and applied it at all stored error sites (`task.error`, `batch.results[].error`, model probe results, settings handler errors). `TraeCNAutomationError` and `HttpError` continue to surface their purpose-built messages.
+- Consolidated the dual per-task lock structures: `Gateway.taskLocks` is now a read-only alias for `taskQueueService.stateMachine.taskLocks`. Mutations go through `taskQueueService.tryAcquire/release/clearLocks`, making the previously dead abstraction real and preventing future callers (e.g. adopt-current-task, batch executor) from missing locks held by the polling loop.
+- Added a startup warning when `TRAECN_GATEWAY_TOKEN` is unset and the gateway is bound to a non-loopback host — authenticated endpoints become open in that configuration.
+- Fixed reviewed workflows so explicit `autoContinue=false` is preserved
+  instead of being overwritten by the unattended workflow wrapper.
+- Fixed the OpenClaw manifest command enum so the stable `review_task` command
+  advertised by the runtime can be selected by manifest-validating clients.
+- Fixed the Agent Skill's model-switch and review examples, split duplicate MCP
+  client entries into separate templates, and corrected no-tools diagnostics.
+- Fixed `simple-api.js` `checkQueue` routing: was calling `layered.batch.checkQueue()`
+  (nonexistent); now correctly calls `layered.dialog.checkQueue()`.
+- Fixed `submitSoloChatTask` return type inconsistency in `simple-api.js`: the
+  flat alias was stripping the result to a bare `taskId` string while
+  `index.js`'s `advanced.submitSoloChatTask` returned the full object; both
+  now return the full normalized result.
+
+### Removed
+
+- Removed the orphaned optimization-metrics script tied to a deleted report,
+  the unused `trae-cn chat` wrapper, and the unreferenced duplicate project
+  structure guide. Existing gateway, MCP, CLI, and development documentation
+  remain the maintained entry points.
+- Removed the duplicate repo-local Codex Skill copy from the npm tarball; the
+  complete canonical `skills/traecnclaw-mcp` package now ships with its assets,
+  scripts, examples, and generated contracts.
+- Removed completed process documents, historical audit logs, and redundant
+  API/architecture guides that had drifted behind the maintained README, MCP,
+  OpenClaw, and structured-prompt documentation.
+- Removed dead code `src/skill/config.js` (74 lines, zero references).
+- Removed dead code `src/skill/ai-errors.js` (375 lines, only referenced by
+  examples; had circular `require('./index')` calls). Export path
+  `./errors` now points to the canonical `errors.js`.
+- Removed `escapeJsString` from `src/shared/utils.js` and its test (unused).
+- Removed deprecated `slashCommands` export from the OpenClaw plugin
+  (`integrations/openclaw-traecn-plugin/index.js`). Slash commands are
+  declared in `openclaw.plugin.json` since OpenClaw 2026.4; the runtime array
+  was dead code. Updated `index.test.js` accordingly.
+- Gated `/openapi.json` behind `requiresAuth: true` to prevent unauthenticated API-surface reconnaissance. The chat UI diagnostics panel continues to work because it already sends the saved token on every request.
+
+### Security
+
+- Added timing-safe token comparison and removed the identifying `X-Powered-By` response header.
+- Added security headers for JSON and HTML responses and response-size protection in the plugin HTTP client.
+
+## [0.4.0] - 2026-06-12
+
+Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No behavior break; all 538+ pre-existing tests still pass alongside 100+ new driver test cases.
+
+### Added
+
+- Added nine new CDP drivers: `CommandPaletteDriver`, `EditorDriver` (with accept/reject AI edit via the `.icube-apply-action-container`), `FileDriver` (open/close/save plus `readDisk` / `writeDisk` / `mkdirDisk` / `listTreeDisk` / `renameDisk`), `TerminalDriver` (toggle/send/snapshot plus `sendCtrlC` / `sendCtrlD` / `sendCtrlL` / `sendCtrlZ`), `GitDriver` (status/commit/push/pull/branch/stash plus `commitWithMessage` and `execGit` CLI fallback), `SearchDriver` (findInFiles/readResults/collapseAll), `DiagnosticsDriver` (readAll/readModelMarkers/count/hover), `SnapshotDriver` (dom/text/layout/pageHash/screenshot), and `ExtensionDriver` (list/install/uninstall plus marketplace search and CLI fallback).
+- Exposed the nine new drivers via `DomDriver` getters: `.palette`, `.editor`, `.file`, `.terminal`, `.git`, `.search`, `.diagnostics`, `.snapshot`, `.extension`.
+- Added HTTP gateway endpoints `POST /api/editor`, `/api/file`, `/api/terminal`, `/api/git`, `/api/search`, `/api/diagnostics`, `/api/snapshot`, `/api/extension`, and `/api/command`, all dispatching a unified `{action, ...args}` body through the new `DriverRouter` in `src/http/driver-router.js` (explicit per-driver action spec mapping param names to positional arguments).
+- Added HTTP-friendly action aliases on `SnapshotDriver`: `text`, `dom`, `layout`, `screenshotEl`.
+- Added `docs/REAL-DOM-FINDINGS.md` documenting the actual class names and selectors probed via CDP from a real TraeCN 1.107.1 instance.
+- Added `scripts/live-uat-v040.js`, an end-to-end live TraeCN smoke test driving the editor through the new driver stack.
+- TraeCNClaw can now drive TraeCN end-to-end without Peekaboo or any screen-automation tool (the first OAuth login still requires the user).
+
+### Changed
+
+- Fixed `TraeCNAutomationError` signature across all drivers to the documented `(message, code, details)` form.
+- Hardened `CommandPaletteDriver` to retry `Cmd+Shift+P` up to three times with 600 ms waits before reporting failure, eliminating the known first-open palette race on a fresh editor window.
+
+### Tests
+
+- Added 10 new test files with ~100+ new driver test cases; all green.
+- All 538+ pre-existing tests continue to pass (638+ total).
+- `scripts/live-uat-v040.js` reports 24/25 pass; the single failure is a documented first-attempt `terminal.newTerminal` palette race that the new retry path resolves on the second attempt.
