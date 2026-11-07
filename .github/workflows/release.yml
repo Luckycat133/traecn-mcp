@@ -54,8 +54,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists. Published assets are immutable."
-            exit 1
+            gh release download "$RELEASE_TAG" --pattern traecn-mcp-release.json --output - | \
+              jq -e --arg revision "$(git rev-parse HEAD)" --arg version "${RELEASE_TAG#v}" \
+                '.sourceRevision == $revision and .version == $version and .sourceDirty == false' >/dev/null
+            echo "Release $RELEASE_TAG already contains a manifest for this revision."
+            exit 0
           fi
           mapfile -t ARTIFACTS < <(node -e "const m=require('./dist/traecn-mcp-release.json'); console.log(m.artifacts.map(a=>a.path).concat(m.serverPackage.artifact.path, 'dist/traecn-mcp-release.json').join('\\n'))")
           gh release create "$RELEASE_TAG" "${ARTIFACTS[@]}" --verify-tag --title "TraeCN MCP $RELEASE_TAG" --generate-notes

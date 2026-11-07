@@ -298,7 +298,8 @@ async function stop(child) {
       arguments: { message: 'Return the clean-room mock response.' }
     }, { tasks: true }));
     assert.strictEqual(submitted.resultType, 'task');
-    assert.strictEqual(submitted.status, 'working');
+    // The mock can finish before the first task snapshot is returned.
+    assert.ok(['working', 'completed'].includes(submitted.status), submitted.status);
     const taskId = submitted.taskId;
     assert.ok(taskId);
 
