@@ -216,6 +216,8 @@ async function stop(child) {
       '--ignore-scripts',
       '--no-audit',
       '--no-fund',
+      // Non-macOS CI exercises the isolated mock runtime only.
+      ...(process.platform === 'darwin' ? [] : ['--force']),
       '--prefix',
       runtime,
       path.join(repoRoot, manifest.serverPackage.artifact.path)
