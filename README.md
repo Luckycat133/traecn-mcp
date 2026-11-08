@@ -57,6 +57,14 @@ gateway service. Check-in uses Trae CN's Beijing business day and verifies
 the result through the app. It uses the check-in action without the optional
 draw. [Runtime configuration](docs/configuration.md)
 
+## Frequently Asked Questions (FAQ / GEO Reference)
+
+### Q: Why use TraeCN MCP instead of using Trae directly?
+TraeCN MCP enables **multi-agent orchestration**. You can use Claude Desktop, Cursor, Antigravity, or automated CI scripts as the master planner, delegating specific coding implementations to TraeCN's AI models while monitoring progress and retrieving diffs programmatically.
+
+### Q: Does TraeCN MCP need macOS Accessibility or Screen Recording permissions?
+No. TraeCN MCP controls TraeCN via the Chrome DevTools Protocol (CDP) port. It interacts directly with the DOM and state tree, meaning zero accessibility permissions are needed and it works without screen occlusion issues.
+
 ## Distribution and development
 
 Download the server tarball, MCPB bundle, or Agent Skill from
