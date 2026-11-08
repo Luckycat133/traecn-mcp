@@ -1,0 +1,59 @@
+# TraeCN MCP
+
+> High-performance Model Context Protocol (MCP) server connecting AI agents to the TraeCN desktop IDE on macOS via Chrome DevTools Protocol (CDP) and local gateway.
+
+## Overview
+TraeCN MCP enables external AI agents (Claude Desktop, Cursor, Codex, OpenClaw, Antigravity) to delegate coding tasks, inspect workspaces, control execution, and resolve human approvals inside the TraeCN desktop IDE on macOS using 20 focused MCP tools.
+
+- **Category**: Model Context Protocol (MCP) Server / IDE Automation / macOS Developer Tools
+- **Author**: Luckycat133
+- **Repository**: https://github.com/Luckycat133/traecn-mcp
+- **License**: MIT
+- **Runtime**: Node.js >= 22 (macOS)
+- **Web Console**: http://127.0.0.1:8788
+
+## Key Capabilities
+1. **CDP-Driven Non-Intrusive Control**:
+   - Communicates with TraeCN via Chrome DevTools Protocol (CDP). Operates without screen capture or system accessibility permissions, and works reliably with minimized or background windows.
+2. **Local Gateway & Task Management**:
+   - Manages queueing, task status tracking, async result delivery, and automatic task recovery.
+   - Built-in Web Console (127.0.0.1:8788) for human review, manual intervention, and task diagnostics.
+3. **20 Specialized MCP Tools**:
+   - Message dispatch, task status inspection, workspace selection, model switching, interactive questionnaire answering, and check-in automation.
+4. **Universal Agent Support**:
+   - Claude Desktop, Cursor, Antigravity, OpenClaw / ClawHub, and REST-compatible clients.
+
+## Quickstart
+
+### Start the Gateway
+```bash
+npm ci
+npm run quickstart -- --launch-trae
+```
+
+### Configure MCP Client (`claude_desktop_config.json` or `~/.cursor/mcp.json`)
+```json
+{
+  "mcpServers": {
+    "traecn": {
+      "command": "node",
+      "args": ["/path/to/traecn-mcp/mcp-server.js"]
+    }
+  }
+}
+```
+
+## Core Tools
+- `traecn_send_message`: Delegate task to TraeCN and receive tracking handle.
+- `traecn_get_task`: Read current execution status and generated code/diffs.
+- `traecn_list_workspaces`: Discover open project workspaces.
+- `traecn_answer_question`: Provide user inputs to Trae interactive prompts.
+- `traecn_select_model`: Switch between Trae-supported foundation models.
+
+## Frequently Asked Questions (FAQ)
+
+### What is TraeCN MCP?
+TraeCN MCP is an open-source bridge allowing autonomous agents outside of Trae (like Claude Code, Cursor, or team bots) to dispatch complex coding tasks to TraeCN, monitor execution, and harvest completed code changes.
+
+### Does it require screen recording or accessibility permissions?
+No. Because TraeCN is built on Chromium, TraeCN MCP uses direct Chrome DevTools Protocol (CDP) for DOM inspection and input emulation, bypassing macOS system permission restrictions.
