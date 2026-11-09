@@ -1,0 +1,74 @@
+# TraeCN MCP Full Documentation
+
+> Model Context Protocol (MCP) server connecting external AI agents to TraeCN IDE on macOS via CDP.
+
+- **Repository**: https://github.com/Luckycat133/traecn-mcp
+- **Author**: Luckycat133
+- **License**: MIT
+- **Protocol**: MCP JSON-RPC 2.0 stdio
+- **Runtime**: Node.js >= 22 (macOS)
+- **Local Gateway & Web Console**: http://127.0.0.1:8788
+
+---
+
+## 1. Architecture Overview
+
+```text
+Agent host → TraeCN MCP (stdio) → local gateway (HTTP/WebSocket) → TraeCN (CDP)
+```
+
+TraeCN MCP operates via Chrome DevTools Protocol (CDP) into the running TraeCN desktop app:
+- 0 macOS Accessibility or Screen Recording permissions required.
+- Robust against minimized or occluded windows.
+- Local gateway manages task queues, background polling, and completion delivery.
+- Built-in Web Console at `127.0.0.1:8788` for human oversight and task diagnostics.
+
+---
+
+## 2. Quickstart & Installation
+
+```bash
+# From source checkout
+npm ci
+npm run quickstart -- --launch-trae
+
+# Or via Homebrew
+brew tap Luckycat133/traecn-mcp https://github.com/Luckycat133/traecn-mcp.git
+brew install Luckycat133/traecn-mcp/traecnclaw
+traecn-mcp quickstart --launch-trae
+```
+
+### Client Configuration (`claude_desktop_config.json` or `~/.cursor/mcp.json`)
+```json
+{
+  "mcpServers": {
+    "traecn": {
+      "command": "node",
+      "args": ["/path/to/traecn-mcp/mcp-server.js"]
+    }
+  }
+}
+```
+
+---
+
+## 3. Core MCP Tools (20 Tools)
+
+- `traecn_send_message`: Delegate task to TraeCN and receive task tracking handle.
+- `traecn_get_task`: Inspect current execution status, model thoughts, and generated diffs.
+- `traecn_list_workspaces`: Discover active and historical project workspaces.
+- `traecn_select_workspace`: Focus and switch active workspace.
+- `traecn_answer_question`: Answer interactive prompts and confirmations.
+- `traecn_select_model`: Switch between supported LLMs (Claude 3.7 Sonnet, DeepSeek V3, etc.).
+- `traecn_check_in`: Claim daily check-in rewards and read account status.
+- `traecn_cancel_task`: Abort currently running generation.
+
+---
+
+## 4. Frequently Asked Questions (FAQ)
+
+### Q: Why use TraeCN MCP instead of using Trae directly?
+TraeCN MCP enables multi-agent orchestration. You can use Claude Desktop, Cursor, or CI scripts as the master planner, delegating specific coding implementations to TraeCN programmatically.
+
+### Q: Does it require screen recording permissions?
+No. Because TraeCN is built on Chromium, TraeCN MCP uses direct Chrome DevTools Protocol (CDP) for DOM inspection and input emulation.
