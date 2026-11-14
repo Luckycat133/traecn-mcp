@@ -2,92 +2,51 @@
 
 ## Project Structure & Product Surfaces
 
-TRAECNclaw is a Node.js 22 CommonJS local runtime for controlling TraeCN on macOS. `src/config` owns runtime configuration, `src/cdp` owns CDP/DOM drivers, `src/http` owns the gateway and task lifecycle, `src/mcp` owns stdio protocol behavior, `src/shared` owns durable stores/utilities, and `src/skill` exposes the JavaScript compatibility API. The public Agent Skill lives in `skills/traecnclaw-mcp`; OpenClaw is under `integrations/openclaw-traecn-plugin`; public distribution templates live in `distribution/public-mirror`.
+traecn-mcp is a Node.js 22 CommonJS local runtime for controlling TraeCN on macOS. `src/config` owns runtime configuration, `src/cdp` owns CDP/DOM drivers, `src/http` owns the gateway and task lifecycle, `src/mcp` owns stdio protocol behavior, `src/shared` owns durable stores/utilities, and `src/skill` exposes the JavaScript compatibility API. OpenClaw is under `integrations/openclaw-traecn-plugin`; distribution templates live in `distribution/`.
 
-Keep these roles distinct:
-
-- **MCP Skill:** primary Agent product.
-- **Web Control Console:** single human control product, including authenticated remote use.
-- **CLI:** setup, doctor, service operations, scripting, recovery, logs, release checks, and live validation.
-- **Local gateway:** shared runtime core; never duplicate its task/UI lifecycle in clients.
-- **OpenClaw/REST/JavaScript API:** adapters and integration layers.
-- **GitHub, ClawHub, Glama, skills.sh, Smithery, registries, directories, and catalogs:** discovery/install channels, not independent runtimes.
+MCP is the primary Agent interface, the web console is the human interface, and CLI is for setup, operations and scripts. They share the same gateway. Do not create a second task lifecycle in a client or expand platforms without actual test evidence.
 
 Do not commit local output such as `audit-logs`, `demo-output`, `logs`, `.env`, `dist`, or `node_modules`.
 
 ## Repository Development Skill
 
-Use `.codex/skills/traecnclaw-development/SKILL.md` for substantive development, MCP design, audit, simplification, web-console, compatibility, onboarding, packaging, testing, CI, release, directory submission, promotion, or completion-campaign work.
+Use `.codex/skills/traecn-mcp-development/SKILL.md` for repository development, audit, naming migration, recovery, workspace protection, packaging and distribution. `.agents/skills/traecn-mcp-development` and `.claude/skills/traecn-mcp-development` are symlinks to that maintained source.
 
-Current references:
+Load only the relevant reference: `project-audit.md`, `mcp-product-design.md`, `task-recovery.md`, `live-proof-workspace.md`, `distribution-promotion-plan.md` or `glama-browser-runbook.md`.
 
-- `references/project-audit.md`: current product/channel state and selected next work.
-- `references/mcp-product-design.md`: exact public MCP design and metadata quality standard.
-- `references/distribution-promotion-plan.md`: package, registry, directory, launch, and evidence plan.
-- `references/glama-browser-runbook.md`: Glama browser-Agent procedure.
+The runtime operating Skill is separate. At the reviewed remote baseline it remains `skills/traecnclaw-mcp`, mirrored exactly at `.codex/skills/traecnclaw-mcp`; these are compatibility identifiers, not the preferred product brand. Resolve actual current paths before editing. Do not copy the maintainer Skill into public artifacts or change one runtime copy independently.
 
-Use `skills/traecnclaw-mcp` only for operating TraeCN through the public 20-tool runtime. Do not copy the maintainer Skill into the public artifact.
+## Compatibility and Task Rules
 
-## Subtraction and MCP Rules
+- Preserve MCP contract v5 and its exact 20 ordered `traecn_*` tools. No wait, poll, proof, recovery or generic command tools.
+- Preserve schemas, result parity, protocol negotiation, terminal replay and task identity.
+- Distinguish accepted HTTP request identity from native UI submission. An uncertain post-send crash requires reconciliation, not a blind retry.
+- Distinguish in-process locks, file-writer locks, short UI mutexes and long-lived runtime/workspace ownership.
+- A task waiting in Trae's native queue still owns its execution context. Route all context mutation through the same application guard.
+- Keep cancellation/persistence checkpoints and follow-up parent completion markers already implemented.
+- Project renaming must not silently replace package IDs, installed bins, environment variables, service labels or state directories. Preserve or explicitly migrate compatibility aliases.
 
-- Keep MCP contract v5 at exactly 20 ordered tools unless an explicit migration is approved.
-- Do not add wait, poll, recovery, event-acknowledgement, process, proof, or generic command tools.
-- One tool represents one user intent; gateway mechanics remain internal.
-- Preserve semantic parity between text and structured results.
-- Improve titles, descriptions, output schemas, annotations, task support, and errors without changing names/order/behavior.
-- Do not add resources, prompts, icons, or MCP Apps for marketplace scores alone.
-- Do not grow CLI and web into two human products.
-- Keep normal web tasks separate from Advanced/Diagnostics.
-- Do not create cloud execution behavior merely for a marketplace.
-- Do not claim untested platforms, TraeCN versions, hosts, transports, or package channels.
+## Tests and Evidence
 
-## Distribution and Promotion Rules
+Use `docs/agent-verification.md`. Accept maintainer-supplied passing tests as a baseline, label evidence provenance, and reconcile local and remote revisions before attributing a result to a commit. Documentation-only edits need focused name/link/symlink checks, not a model task or an automatic full-suite rerun.
 
-- Search for an existing listing before submitting; reconcile rather than duplicate.
-- Submit the public mirror, never the private canonical repository.
-- Fix canonical source/templates, regenerate the public mirror, then rescan.
-- Public source version, tag, private Release, public Release, ClawHub, Glama, skills.sh, Smithery, npm, Official Registry, PulseMCP, and Homebrew are separate facts.
-- Never point current listings at npm `traecnclaw@0.3.1`.
-- Use MCPB/Smithery Local for local stdio distribution; do not select Smithery URL mode without a real Streamable HTTP product.
-- Do not imply Glama or another cloud container can transparently control the user's local Mac.
-- Store canonical listing copy and provenance in source; do not improvise install claims in browser forms.
-- A channel is verified only after inspecting its public page and testing its generated install path.
-- Promotion must use real host/TraeCN evidence, honest macOS/version limitations, and requests for feedback rather than coordinated upvotes.
+Runtime changes need a failing regression and focused owner tests. Cross-cutting lifecycle/protocol changes need relevant integration and repository gates. Packaging/release changes need clean installed-artifact checks. Mock, schema inspection, live readiness, real generation, observed long queue and crash recovery are different claims.
 
-## Build, Test, and Experience Commands
+## Distribution and Promotion
 
-- `npm ci`: install the exact lockfile graph.
-- `npm run verify:static`: check versions, generated configuration, Skill contracts, and release scanning.
-- `node scripts/public-mirror.test.js`: verify generated public distribution files.
-- `npm run test:mcp-conformance`: test supported protocol eras with independent clients.
-- `npm run test:trae-adapters`: replay sanitized TraeCN fixtures.
-- `npm run test:system`: run the real gateway against the mock bridge.
-- `npm run test:mcp-stdio-smoke`: spawn stdio MCP and verify discovery.
-- `npm run verify`: repository-wide non-live gate.
-- `npm run test:release`: verified artifacts and clean-room mock task.
-- `npm run doctor`: diagnose local setup.
-- `npm run inspect:verify`: inspect real TraeCN DOM/adapter state.
-- `node scripts/live-uat.js --strict --require-ready --require-verified-adapter`: live readiness without delegation.
-- `TRAECN_ENABLE_MOCK_BRIDGE=1 npm run start:gateway`: mock experience.
-- `npm run start:gateway`: real gateway once TraeCN CDP is ready.
+The canonical repository is public `Luckycat133/traecn-mcp`; do not repeat the historical assumption that source is private and only a mirror can be submitted. Existing package/channel slugs and historical releases may retain old identifiers. Reconcile rather than duplicate listings; update current source/visible names without rewriting immutable provenance. Treat each dated channel record independently.
 
-Run the nearest focused test first. Static audits prove declarations, mock tests prove process integration, clean-room tests prove built artifacts, only live UAT proves current TraeCN compatibility, and marketplace scores prove only their scan.
-
-For MCP metadata work, add focused tests that validate titles, property descriptions, reusable output schemas against real results, annotations, `execution.taskSupport`, exact tool order, and text/structured equivalence.
-
-For package/channel work, test the actual published MCPB/npm/Homebrew/directory install rather than only local files.
+Keep README, `llms.txt`, generated setup, actual files and installed commands consistent. Do not advertise an absent runtime-Skill path or bin. Promotion uses real evidence; do not add marketing to MCP task results or fabricate installs, model identity or long-queue success.
 
 ## Coding Style & Change Evidence
 
-Use CommonJS (`require`, `module.exports`), keep `'use strict';`, follow two-space indentation and semicolon style, and use descriptive kebab-case filenames. Tests use matching `*.test.js` files with Node `assert` and `src/shared/test-runner.js`. Prefer injected stores, drivers, clocks, network probes, and process hooks.
+Use CommonJS, `'use strict';`, two-space indentation and descriptive kebab-case filenames. Tests use Node `assert` and the existing runner. Prefer injected stores, clocks, drivers and process hooks for fault tests.
 
-Identify the owning component before editing. Characterize responses, persisted fields, events, task identity, and user-visible behavior before moving lifecycle logic. Delete old paths after callers migrate.
-
-Update README, OpenAPI, compatibility evidence, generated contracts, changelog, marketplace metadata, launch copy, and release metadata only when affected. Pull requests should describe behavior/root cause, focused tests, wider gates, and the exact mock/live/web/package/marketplace experience exercised.
+Preserve unrelated work. Characterize responses, persisted fields, events and native ownership before moving lifecycle logic. Delete migrated duplicate paths after callers switch. Report actual changes, actual validation, supplied evidence and outstanding findings separately.
 
 ## Configuration
 
-Never commit `.env`, tokens, authorization headers, passwords, cookies, or raw TraeCN profile data. Keep the gateway on loopback unless remote access is deliberately authenticated. For human remote web access, prefer a private network such as Tailscale or a deliberately configured HTTPS tunnel; never expose a tokenless gateway publicly. Use canonical environment names from `src/config/runtime-schema.js` and existing sanitization helpers.
+Use canonical runtime-schema environment names and existing redaction helpers. Never commit credentials, raw profiles or unrelated private task contents. A documentation audit does not authorize paid model tasks, native cancellation, workspace changes or publication.
 
 <!-- agent-workflow:v1:start -->
 ## 通用执行约定（2026-09-13）

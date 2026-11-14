@@ -1,4 +1,0 @@
-interface:
-  display_name: "TRAECNclaw Development"
-  short_description: "Audit and develop TRAECNclaw and its Skills"
-  default_prompt: "Use $traecnclaw-development to complete the requested TRAECNclaw work within its scope, using current source and verification evidence."

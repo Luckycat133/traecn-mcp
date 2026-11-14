@@ -1,0 +1,4 @@
+interface:
+  display_name: "traecn-mcp Development"
+  short_description: "Maintain MCP contracts, task recovery and workspace ownership"
+  default_prompt: "Use $traecn-mcp-development on the requested branch. Preserve supplied passing test evidence, distinguish canonical names from compatibility identifiers, and review the frozen 20-tool contract, native submission crash windows, long-queue ownership and workspace guards. Implement selected local work with focused regressions; collect real GLM-5.2 evidence only within the authorized live scope."
