@@ -1,8 +1,13 @@
-# TRAECNclaw Development Guide
+# TraeCN MCP Development Guide
+
+For agent-led changes, use the repository-local
+[traecn-mcp-development Skill](../.agents/skills/traecn-mcp-development/SKILL.md).
+It governs implementation, naming migration, and verification; the public
+`skills/traecn-mcp` Skill instead teaches agents to operate the installed runtime.
 
 ## Architecture
 
-TRAECNclaw is split into maintained components with explicit ownership:
+TraeCN MCP is split into maintained components with explicit ownership:
 
 - `src/shared`: reusable persistence, logging, security, metrics, and test utilities.
 - `src/config`: `.env` loading and quickstart configuration.
@@ -18,8 +23,20 @@ TRAECNclaw is split into maintained components with explicit ownership:
 
 The production path is `MCP/CLI/web/OpenClaw -> HTTP gateway -> CDP WebSocket -> TraeCN DOM`.
 The MCP Skill is the primary Agent entry point. The Web Control Console is the
-single human control surface, with diagnostics in Advanced; `traecnclaw` handles
+single human control surface, with diagnostics in Advanced; `traecn-mcp` handles
 operator setup and live validation, and OpenClaw remains an ecosystem adapter.
+
+`mcp-server.js` remains a thin compatibility entry: no arguments start stdio;
+arguments dispatch to `scripts/traecn-cli.js`. Keep protocol stdout free of CLI
+banners and logs. Shared client behavior lives in `src/client`; clients must
+not own separate queues, recovery loops, or desktop execution state.
+
+MCP product contract v5 freezes the 20 names and their order in
+`src/mcp/contract.js`; supported wire protocol eras live independently in
+`src/mcp/protocol.js`. A branding change authorizes neither a tool-surface
+change nor a protocol migration. Follow the
+[naming and compatibility policy](../.agents/skills/traecn-mcp-development/references/naming-and-architecture.md)
+before touching package identities, state paths, service labels, or aliases.
 
 ## Local Development
 
@@ -103,6 +120,10 @@ With the current defaults the gateway will also:
   already running without CDP; use `restart_trae_debug` or
   `POST /api/trae/restart-debug` with explicit confirmation to restart the
   existing logged-in profile with remote debugging.
+
+The legacy `TRAECNclaw` state-directory spelling above is a compatibility
+location, not the current product name. Do not move, delete, or stop reading
+existing state as part of a documentation rename.
 
 ## Testing Strategy
 
@@ -196,8 +217,9 @@ without modifying them.
 
 Until `1.0.0`, prefer the smallest meaningful increment:
 
-- Patch (`0.4.0` → `0.4.1`): compatible fixes, additive endpoints or tools,
-  documentation, tests, and internal refactors.
+- Patch (`0.4.0` → `0.4.1`): compatible fixes, additive non-breaking HTTP/API
+  behavior, documentation, tests, and internal refactors. This does not permit
+  adding MCP tools to the frozen v5 surface.
 - Minor (`0.4.x` → `0.5.0`): an intentional compatibility milestone or a
   substantial new product surface that merits a distinct release line.
 - Major: a deliberately breaking public API, MCP contract, persisted-data, or
@@ -216,7 +238,10 @@ alone is not evidence that a public package exists.
 
 1. Implement behavior in the owning handler or service under `src/http`; keep
    routing and lifecycle ownership in the gateway.
-2. Add or update a plugin client method in `integrations/openclaw-traecn-plugin/lib/traecnapi-client.js` when OpenClaw needs it.
+2. Add or update shared client behavior in `src/client/traecnapi-client.js`
+   and the shared catalog in `src/client/command-set.js` when needed. OpenClaw's
+   corresponding `lib` files are re-export shims; keep them thin and update
+   adapter registration only when the integration needs the capability.
 3. Update `src/http/openapi.js`.
 4. Add unit, integration, or system coverage depending on behavior.
 5. Update `README.md`, the relevant maintained guide under `docs/`, and `CHANGELOG.md` when user-visible behavior changes.
@@ -229,4 +254,13 @@ Run:
 npm run inspect:traecn
 ```
 
-Copy stable selectors into `.env` using the `TRAECN_COMPOSER_SELECTORS`, `TRAECN_SEND_BUTTON_SELECTORS`, `TRAECN_RESPONSE_SELECTORS`, `TRAECN_NEW_CHAT_SELECTORS`, and `TRAECN_MODE_TAB_SELECTORS` variables. Prefer specific selectors before generic fallbacks.
+For maintained support, add selectors and capability declarations to the
+matching versioned adapter under `src/trae-adapters`, with sanitized fixtures
+and focused driver tests. Verify the target product/version rather than
+silently broadening generic selectors or declaring an unknown version supported.
+
+The `TRAECN_COMPOSER_SELECTORS`, `TRAECN_SEND_BUTTON_SELECTORS`,
+`TRAECN_RESPONSE_SELECTORS`, `TRAECN_NEW_CHAT_SELECTORS`, and
+`TRAECN_MODE_TAB_SELECTORS` environment overrides remain available for explicit
+local diagnosis. An uncommitted `.env` override is not a shipped adapter fix.
+Prefer specific selectors before generic fallbacks.

@@ -15,9 +15,34 @@ Keep these roles distinct:
 
 Do not commit local output such as `audit-logs`, `demo-output`, `logs`, `.env`, `dist`, or `node_modules`.
 
-## Agent Skill
+## Agent Skills
+
+For repository development, review, naming migration, and architecture changes,
+read [.agents/skills/traecn-mcp-development/SKILL.md](.agents/skills/traecn-mcp-development/SKILL.md).
+Its canonical source is repository-local; the Codex and Claude development
+entries are symlinks, not additional maintained copies. It is not the public
+runtime Skill and is not a release or marketplace payload.
 
 Use `skills/traecn-mcp` for operating TraeCN through the 20-tool MCP runtime.
+That public Skill and its complete generated `.codex/skills/traecn-mcp` mirror
+retain their existing synchronization pipeline.
+
+## Naming and Compatibility
+
+Use **TraeCN MCP** for the product and `traecn-mcp` for the repository, source
+package, executable, and runtime Skill. The development Skill is
+`traecn-mcp-development`. Never globally replace old branding across wire
+contracts, package identities, stored state, service labels, or historical evidence.
+
+Keep `traecn_*` tool names, existing client configuration keys, canonical
+`TRAECN_*` variables, supported legacy aliases, and the ordered v5 contract
+stable. Product contract v5 is not an MCP protocol version. Published npm and
+Registry identities and existing state paths require their own explicit,
+verified migration. See the development Skill's
+[naming and architecture rules](.agents/skills/traecn-mcp-development/references/naming-and-architecture.md).
+
+Shared HTTP client behavior belongs in `src/client`; OpenClaw's `lib` re-export
+files are compatibility shims, not implementation owners.
 
 ## Subtraction and MCP Rules
 

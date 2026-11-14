@@ -3,7 +3,7 @@ name: traecn-mcp
 description: Operate TraeCN through TraeCN MCP’s local stdio tools. Use to delegate or stop work, choose a workspace/model/mode/conversation, inspect or change Trae settings, manage conversations, or resolve an exceptional question or command approval. The gateway owns task lifecycle and routine UI interactions.
 license: MIT-0
 metadata:
-  author: TRAECNclaw
+  author: Luckycat133
   version: "0.7.0"
   openclaw:
     requires:
