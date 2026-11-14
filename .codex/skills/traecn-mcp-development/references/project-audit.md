@@ -25,7 +25,7 @@ The README's new runtime-Skill path is absent from the inspected tree, and its n
 ## Implemented reliability to retain
 
 - Durable acceptance, active/terminal replay and checksummed recoverable task storage.
-- In-process task claims and short UI action serialization.
+- In-process task claims and UI action serialization.
 - Recovery of submitted tasks without normal resubmission; identity-guarded collection.
 - Pending cancellation/persistence checkpoints and follow-up parent completion markers.
 - Event/history persistence and independent protocol/adapter tests.
@@ -36,7 +36,7 @@ These are not a new backlog. The source findings below are narrow gaps not estab
 
 | ID | Evidence in current source | Assessment / next step |
 | --- | --- | --- |
-| R1 | `Gateway._processQueuedTask` persists executing, calls native `sendMessage`, then marks/persists `submittedToTrae`; `RecoveryHelper` requeues executing/unsubmitted tasks | High-confidence ambiguous-send crash window. Inject death after native accept but before submitted checkpoint; require no second native send |
+| R1 | Background polling dispatch in `src/http/gateway.js` persists executing, calls native `sendMessage`, then marks/persists `submittedToTrae`; `RecoveryHelper` requeues executing/unsubmitted tasks | High-confidence ambiguous-send crash window. Inject death after native accept but before submitted checkpoint; require no second native send |
 | P1 | Proof `requestWithRetry` retries network failures; `submitProof` sends POST without a stable operation key | Retry can duplicate work after a lost response. Persist proof attempt/key before POST and use an endpoint that enforces it |
 | P2 | `executeProof` runs clean/idle preconditions before selecting `resumeTaskId` | Resuming its own active queued task can be rejected. Split fresh-run preflight from exact-owner resume preflight |
 | W1 | `handleOpenProject` executes reuse-window switching without an active-task ownership guard; task/file locks are not workspace leases | Add shared runtime/workspace ownership at the application boundary and test every mutation path |

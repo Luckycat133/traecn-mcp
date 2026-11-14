@@ -7,15 +7,15 @@ Scope: current gateway, queue state machine, TaskStore and RecoveryHelper. Prese
 | Mechanism | Current scope | What it does not establish |
 | --- | --- | --- |
 | `QueueStateMachine.taskLocks` / `withLock` | One process, one task step | Durable ownership or exclusion across processes |
-| Gateway UI action chain | Short serialized UI operations in one gateway | A workspace reservation for a native queue lasting hours |
+| Gateway UI action chain | In-process serialization for participating UI paths; some collection paths also await within it | Cross-process ownership or protection for every workspace mutation entry point |
 | TaskStore PID/owner lock | One snapshot path, one writer | Exclusion between two gateways using different state paths but the same Trae window |
 | Long-queue proof marker lock | One proof marker/observer registry | Exclusive ownership of a runtime across different markers |
 
-A runtime/workspace lease is needed for the fourth, longer-lived concern; see [workspace design](live-proof-workspace.md). Do not hold an unresolved JavaScript mutex for the entire queue wait. Persist logical ownership and use short critical sections around UI mutations.
+A runtime/workspace lease is needed for the longer-lived concern; see [workspace design](live-proof-workspace.md). Prefer persisted logical ownership and short critical sections around UI mutations over holding an unresolved JavaScript mutex for the entire queue wait. Characterize existing collector paths before changing their lock duration.
 
 ## Current crash window: R1
 
-`Gateway._processQueuedTask` records an executing state, invokes `driver.sendMessage`, then sets `submittedToTrae`/`submittedAt` and persists again. `RecoveryHelper` restores executing tasks without the submitted flag as queued/unsubmitted.
+The background polling dispatch in `src/http/gateway.js` records an executing state, invokes `driver.sendMessage`, then sets `submittedToTrae`/`submittedAt` and persists again. `RecoveryHelper` restores executing tasks without the submitted flag as queued/unsubmitted.
 
 A process can therefore die after Trae accepted the user turn but before the durable submitted checkpoint. Restoring the old snapshot can permit a second send. A passed durable HTTP acceptance test does not close this external-side-effect window. Check persistence return values on this path as part of the characterization; do not assume every `_persistActiveQueue()` call is a successful commit.
 
