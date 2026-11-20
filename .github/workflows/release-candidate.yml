@@ -1,0 +1,41 @@
+name: macOS release candidate verification (no publish)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-candidate.yml'
+      - '.github/workflows/release.yml'
+      - 'package*.json'
+      - 'mcp-server*.js'
+      - 'scripts/**'
+      - 'src/**'
+      - 'skills/**'
+      - 'integrations/**'
+      - 'server.json'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Confirm clean candidate and native platform
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          test "$(node -p process.platform)" = darwin
+      - run: npm ci
+      - run: npm run test:release
