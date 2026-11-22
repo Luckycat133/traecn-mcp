@@ -71,8 +71,10 @@ case "$1 $2" in
   "release create")
     [[ "$(cat "$FIXTURE/tag")" == "$GITHUB_SHA" ]] || exit 7
     printf '%s\\n' "$@" >> "$FIXTURE/writes"
+    mkdir -p "$FIXTURE/public-dist"
+    cp "$FIXTURE"/dist/* "$FIXTURE/public-dist/"
     touch "$FIXTURE/published" ;;
-  "release download") cp "$FIXTURE"/dist/* "$7/" ;;
+  "release download") cp "$FIXTURE"/public-dist/* "$7/" ;;
   *) exit 7 ;;
 esac
 `, 0o755);
@@ -121,6 +123,15 @@ esac
   const replay = run('publish');
   assert.equal(replay.status, 0, replay.stderr);
   assert.equal(readFileSync(path.join(fixture, 'writes'), 'utf8'), writes);
+  const manifestFile = path.join(fixture, 'dist/traecn-mcp-release.json');
+  const original = readFileSync(manifestFile, 'utf8');
+  writeFileSync(manifestFile, JSON.stringify({ ...JSON.parse(original), generatedAt: 'another build' }));
+  const mismatch = run('publish');
+  assert.notEqual(mismatch.status, 0);
+  assert.match(mismatch.stderr, /independently staged assets/);
+  assert.match(mismatch.stderr, /dist\/traecn-mcp-release.json/);
+  assert.equal(readFileSync(path.join(fixture, 'writes'), 'utf8'), writes);
+  writeFileSync(manifestFile, original);
   rmSync(path.join(fixture, 'published'));
   const recovered = run('publish');
   assert.equal(recovered.status, 0, recovered.stderr);

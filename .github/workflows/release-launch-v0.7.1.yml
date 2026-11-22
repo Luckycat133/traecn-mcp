@@ -52,6 +52,12 @@ jobs:
       - run: bash scripts/release-launch-v071.sh preflight
       - run: npm ci
       - run: npm run test:release
+      - name: Test Homebrew against the exact marker archive before staging
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+          HOMEBREW_NO_ANALYTICS: '1'
+        run: bash scripts/check-homebrew-candidate.sh
       - run: bash scripts/release-launch-v071.sh artifacts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

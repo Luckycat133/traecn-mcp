@@ -51,12 +51,4 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
           HOMEBREW_NO_ANALYTICS: '1'
-        run: |
-          canonical="$RUNNER_TEMP/traecnclaw-canonical.rb"
-          npm run build:homebrew-formula -- --manifest dist/traecn-mcp-release.json --out "$canonical"
-          ruby -c "$canonical"
-          brew tap-new --no-git luckycat-ci/traecn-candidate
-          tap_path="$(brew --repository luckycat-ci/traecn-candidate)"
-          node scripts/stage-homebrew-candidate.js "$canonical" "$tap_path/Formula/traecnclaw.rb"
-          brew install --formula luckycat-ci/traecn-candidate/traecnclaw
-          brew test luckycat-ci/traecn-candidate/traecnclaw
+        run: bash scripts/check-homebrew-candidate.sh

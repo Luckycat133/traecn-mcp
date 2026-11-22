@@ -77,6 +77,8 @@ for (const file of local) {
   const asset = release.assets.find(a => a.name === path.basename(file));
   assert.equal(asset.digest, `sha256:${sha256File(path.join(root, file))}`, `Published digest mismatch: ${asset.name}`);
 }
+const mismatches = local.filter(file => sha256File(path.join(root, file)) !== sha256File(file));
+assert.deepEqual(mismatches, [], 'Public bytes differ from this run’s independently staged assets; no overwrite attempted');
 JS
 }
 

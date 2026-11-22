@@ -27,10 +27,13 @@ use `v0.MINOR.PATCH`; this release plan stays below 1.0.0.
    adding `.release/approve-v0.7.1` with exactly `v0.7.1` and a trailing
    newline. The main-branch event must contain only that addition. At the
    exact new main commit, the one-version workflow re-runs Linux and macOS
-   gates, then creates the new tag at that SHA without overwriting any ref and
-   publishes only after verifying it. A repeat with a matching tag and assets
-   performs no write. An exact tag with no Release can safely finish publishing;
-   any conflicting or unverifiable state stops for inspection. The ordinary tag route
+   gates, including a Homebrew install of that exact staged tarball. It then
+   creates the new tag without overwriting any ref and publishes only after
+   verifying the tag's SHA. Replays verify downloaded public bytes against both
+   the public manifest and this run's independently staged bytes. If a rebuilt
+   manifest timestamp or archive differs, the run fails read-only and names
+   the differing asset; it never overwrites a public artifact. An exact tag with
+   no Release can safely finish publishing; other conflicts stop for inspection. The ordinary tag route
    is unchanged, and its manual dispatch remains verify-only.
 3. Download the public manifest and the public server tarball. Verify the
    manifest version, clean source SHA, exact artifact set, and downloaded
