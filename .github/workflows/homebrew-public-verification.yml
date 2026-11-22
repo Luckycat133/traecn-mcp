@@ -1,0 +1,38 @@
+name: Verify canonical Homebrew formula with public archives
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Formula/traecnclaw.rb'
+      - 'distribution/homebrew/public-release.json'
+      - 'distribution/homebrew/traecnclaw.rb.template'
+      - 'scripts/homebrew-formula.js'
+      - 'scripts/verify-public-homebrew.sh'
+      - '.github/workflows/homebrew-public-verification.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-public-homebrew:
+    if: github.repository == 'Luckycat133/traecn-mcp'
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Confirm exact candidate checkout and native macOS
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          test "$(node -p process.platform)" = darwin
+      - name: Download and verify the public release; install, test, and invoke the formula
+        run: bash scripts/verify-public-homebrew.sh native
