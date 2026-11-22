@@ -15,9 +15,11 @@ use `v0.MINOR.PATCH`; this release plan stays below 1.0.0.
 | 0.5.0–0.5.5 | `0282c125790f4db0c8249a58cbf2538b0b10539a` through 0.5.5 snapshot `4c01911d6967a479a1d5bdd72df48881543c9b56` | Versioned historical source; do not infer missing public GitHub Releases from mirror commits |
 | 0.5.6–0.6.0 | `v0.5.6` → `d81c119`, `v0.5.7` → `2214f7a`, `v0.5.8` → `8a26b62`, `v0.5.9` → `753e468`, `v0.6.0` → `2d7fc66` | Existing GitHub Releases; these targets are the public mirror commits, not presumed identical source snapshots |
 | 0.7.0 | `v0.7.0` points to `5e3bdc69fc3cee30332add2d6a045b1cbf14d58f` (annotated tag object `8b82efb746e6caf05fdfe84ebc2d821decaa9cb7`) | Existing public GitHub Release with six assets and the current canonical Homebrew pin |
-| 0.7.1 | Candidate based on `5f7470a`, with synchronized package, lockfile, Skill and OpenClaw metadata | Pending review; no tag, Release, npm publication, or tap switch |
+| 0.7.1 | [Public GitHub Release](https://github.com/Luckycat133/traecn-mcp/releases/tag/v0.7.1), 2026-11-22, exact source `42aa3c53daa9d4d4756e7ab4d5c3229d669c8067` | Six public assets verified; the canonical formula pins this Release tarball. npm, Registry, and legacy-tap migration are separate and not implied. |
 
-## Release handoff
+## v0.7.1 release handoff
+
+Steps 1–3 completed in [release run 44979815913](https://github.com/Luckycat133/traecn-mcp/actions/runs/44979815913). Do not recreate the one-time approval marker.
 
 1. Review and merge the candidate only after exact-commit Linux verification and
    native macOS no-publish checks pass. The macOS PR gate exercises the Homebrew
@@ -50,6 +52,10 @@ use `v0.MINOR.PATCH`; this release plan stays below 1.0.0.
    evidence and authorization. A GitHub Release does not publish npm or another
    registry package.
 
-The checked-in Homebrew formula remains on the existing public v0.7.0 archive
-until step 4. Current evidence does not independently verify access to or a
-native installed-client migration from the legacy tap.
+The checked-in [canonical Homebrew formula](../Formula/traecnclaw.rb) pins the
+public v0.7.1 archive. The PR verifier installs this exact recipe in a disposable
+hosted macOS tap. After the formula merges, the scoped main workflow taps the
+[real public repository](https://github.com/Luckycat133/traecn-mcp), checks its
+exact event SHA, and uses a fresh cache for install, `brew test`, and CLI help.
+That run is the public-tap evidence; it does not verify the legacy tap or an
+upgrade of an existing user installation.

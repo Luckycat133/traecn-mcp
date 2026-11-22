@@ -1,0 +1,54 @@
+name: Verify canonical Homebrew formula with public archives
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Formula/traecnclaw.rb'
+      - 'distribution/homebrew/public-release.json'
+      - 'scripts/verify-public-homebrew.sh'
+      - '.github/workflows/homebrew-public-verification.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Formula/traecnclaw.rb'
+      - 'distribution/homebrew/public-release.json'
+      - 'distribution/homebrew/traecnclaw.rb.template'
+      - 'scripts/homebrew-formula.js'
+      - 'scripts/verify-public-homebrew.sh'
+      - '.github/workflows/homebrew-public-verification.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-public-homebrew:
+    if: github.repository == 'Luckycat133/traecn-mcp'
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Confirm exact candidate checkout and native macOS
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          test "$(node -p process.platform)" = darwin
+      - name: Verify the public archive with the PR recipe in a disposable tap
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/verify-public-homebrew.sh native
+      - name: Verify a fresh install from the real canonical public tap at main SHA
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: bash scripts/verify-public-homebrew.sh native-main

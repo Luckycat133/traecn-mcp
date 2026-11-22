@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
-## [0.7.1] - Pending release
+## [0.7.1] - 2026-11-22
 
 ### Changed
 
@@ -851,3 +851,5 @@ Additive release: nine new CDP drivers, HTTP driver gateway, and live UAT. No be
 - Added 10 new test files with ~100+ new driver test cases; all green.
 - All 538+ pre-existing tests continue to pass (638+ total).
 - `scripts/live-uat-v040.js` reports 24/25 pass; the single failure is a documented first-attempt `terminal.newTerminal` palette race that the new retry path resolves on the second attempt.
+
+[0.7.1]: https://github.com/Luckycat133/traecn-mcp/releases/tag/v0.7.1
