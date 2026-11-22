@@ -59,11 +59,19 @@ esac
 `, 0o755);
   write('bin/gh', `#!/bin/bash
 case "$1 $2" in
-  "api --paginate") : ;;
+  "api --paginate")
+    if [[ -f "$FIXTURE/published" ]]; then printf 'v0.7.1\\n'; fi ;;
+  "api --method")
+    [[ "$3" == POST && "$4" == repos/Luckycat133/traecn-mcp/git/refs && "$6" == ref=refs/tags/v0.7.1 && "$8" == "sha=$GITHUB_SHA" ]] || exit 7
+    [[ ! -e "$FIXTURE/tag" && "${'$'}{TEST_REF_RACE:-}" != yes ]] || exit 7
+    printf '%s' "$GITHUB_SHA" > "$FIXTURE/tag"
+    printf 'create-only\\n' >> "$FIXTURE/ref-writes"
+    printf '%s\\n' "$GITHUB_SHA" ;;
   "api repos/Luckycat133/traecn-mcp/releases/tags/v0.7.1") cat "$FIXTURE/public.json" ;;
   "release create")
+    [[ "$(cat "$FIXTURE/tag")" == "$GITHUB_SHA" ]] || exit 7
     printf '%s\\n' "$@" >> "$FIXTURE/writes"
-    printf '%s' "$GITHUB_SHA" > "$FIXTURE/tag" ;;
+    touch "$FIXTURE/published" ;;
   "release download") cp "$FIXTURE"/dist/* "$7/" ;;
   *) exit 7 ;;
 esac
@@ -94,20 +102,33 @@ esac
     { TEST_DIFF: 'M\\t.release/approve-v0.7.1' },
     { TEST_DIFF: 'A\\t.release/approve-v0.7.1\\nM\\tpackage.json' },
     { TEST_MAIN: before }
-  ]) assert.notEqual(run('publish', changes).status, 0);
+  ]) {
+    const refused = run('publish', changes);
+    assert.notEqual(refused.status, 0, JSON.stringify(changes));
+    assert.match(refused.stderr, /Release launch refused:/);
+  }
   assert.throws(() => readFileSync(path.join(fixture, 'writes')), /ENOENT/);
   assert.equal(run('artifacts').status, 0);
+  const raced = run('publish', { TEST_REF_RACE: 'yes' });
+  assert.notEqual(raced.status, 0);
+  assert.throws(() => readFileSync(path.join(fixture, 'writes')), /ENOENT/);
   const published = run('publish');
   assert.equal(published.status, 0, published.stderr);
   const writes = readFileSync(path.join(fixture, 'writes'), 'utf8');
-  assert.ok(writes.includes(`--target\n${sha}\n`));
+  assert.ok(writes.includes(`--verify-tag\n--target\n${sha}\n`));
+  assert.equal(readFileSync(path.join(fixture, 'ref-writes'), 'utf8'), 'create-only\n');
   assert.equal(writes.match(/^dist\//gm).length, 6);
   const replay = run('publish');
   assert.equal(replay.status, 0, replay.stderr);
   assert.equal(readFileSync(path.join(fixture, 'writes'), 'utf8'), writes);
+  rmSync(path.join(fixture, 'published'));
+  const recovered = run('publish');
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.equal(readFileSync(path.join(fixture, 'ref-writes'), 'utf8'), 'create-only\n');
+  assert.equal(readFileSync(path.join(fixture, 'writes'), 'utf8'), writes + writes);
   write('tag', before);
   assert.notEqual(run('publish').status, 0);
-  assert.equal(readFileSync(path.join(fixture, 'writes'), 'utf8'), writes);
+  assert.equal(readFileSync(path.join(fixture, 'writes'), 'utf8'), writes + writes);
 } finally {
   rmSync(fixture, { recursive: true, force: true });
 }

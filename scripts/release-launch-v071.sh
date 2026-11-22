@@ -7,18 +7,30 @@ version=0.7.1
 repo=Luckycat133/traecn-mcp
 marker=.release/approve-v0.7.1
 
+die() {
+  printf 'Release launch refused: %s\n' "$*" >&2
+  exit 1
+}
+
 preflight() {
-  [[ "${GITHUB_EVENT_NAME:-}" == push ]]
-  [[ "${GITHUB_REPOSITORY:-}" == "$repo" ]]
-  [[ "${GITHUB_REF:-}" == refs/heads/main ]]
-  [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]]
-  [[ "${LAUNCH_BEFORE:-}" =~ ^[0-9a-f]{40}$ ]]
-  [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-  [[ "$(git diff --name-status --no-renames "$LAUNCH_BEFORE" "$GITHUB_SHA")" == $'A\t'"$marker" ]]
-  cmp "$marker" <(printf '%s\n' "$tag")
-  [[ "$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" == "$GITHUB_SHA" ]]
-  [[ "$(node -p 'require("./package.json").version')" == "$version" ]]
-  [[ -z "$(git status --porcelain)" ]]
+  [[ "${GITHUB_EVENT_NAME:-}" == push ]] || die "expected a push event"
+  [[ "${GITHUB_REPOSITORY:-}" == "$repo" ]] || die "repository mismatch"
+  [[ "${GITHUB_REF:-}" == refs/heads/main ]] || die "not the main branch"
+  [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || die "invalid event SHA"
+  [[ "${LAUNCH_BEFORE:-}" =~ ^[0-9a-f]{40}$ ]] || die "invalid before SHA"
+
+  local head changes main actual_version status
+  head="$(git rev-parse HEAD)" || die "cannot resolve checkout"
+  [[ "$head" == "$GITHUB_SHA" ]] || die "checkout SHA mismatch"
+  changes="$(git diff --name-status --no-renames "$LAUNCH_BEFORE" "$GITHUB_SHA")" || die "cannot compare the main event"
+  [[ "$changes" == $'A\t'"$marker" ]] || die "the event must only add the marker"
+  cmp -s "$marker" <(printf '%s\n' "$tag") || die "release marker contents mismatch"
+  main="$(git ls-remote --exit-code origin refs/heads/main | cut -f1)" || die "cannot resolve origin/main"
+  [[ "$main" == "$GITHUB_SHA" ]] || die "origin/main moved or does not match the event"
+  actual_version="$(node -p 'require("./package.json").version')" || die "cannot read package version"
+  [[ "$actual_version" == "$version" ]] || die "package version mismatch"
+  status="$(git status --porcelain)" || die "cannot inspect checkout status"
+  [[ -z "$status" ]] || die "checkout is dirty"
 }
 
 assets=(
@@ -75,7 +87,21 @@ case "${1:-}" in
     preflight
     check_artifacts
     if existing_ref="$(git ls-remote --exit-code origin "refs/tags/$tag")"; then
-      [[ "$(cut -f1 <<< "$existing_ref")" == "$GITHUB_SHA" ]]
+      [[ "$(cut -f1 <<< "$existing_ref")" == "$GITHUB_SHA" ]] || die "existing tag points to a different SHA"
+    else
+      status=$?
+      [[ "$status" == 2 ]] || die "tag lookup failed" # 2 means no matching refs
+      existing="$(gh api --paginate "repos/$repo/releases" --jq '.[].tag_name')" || die "release lookup failed"
+      if grep -Fxq "$tag" <<< "$existing"; then
+        die "release exists without the expected tag"
+      fi
+      created="$(gh api --method POST "repos/$repo/git/refs" -f "ref=refs/tags/$tag" \
+        -f "sha=$GITHUB_SHA" --jq '.object.sha')" || die "create-only tag request failed"
+      [[ "$created" == "$GITHUB_SHA" ]] || die "tag creation reported a different SHA"
+    fi
+    [[ "$(git ls-remote --exit-code origin "refs/tags/$tag" | cut -f1)" == "$GITHUB_SHA" ]] || die "tag SHA mismatch"
+    existing="$(gh api --paginate "repos/$repo/releases" --jq '.[].tag_name')" || die "release lookup failed"
+    if grep -Fxq "$tag" <<< "$existing"; then
       prior="$(mktemp -d)"
       trap 'rm -rf "$prior"' EXIT
       mkdir "$prior/dist"
@@ -84,18 +110,10 @@ case "${1:-}" in
       verify_public_release "$prior"
       echo "$tag already exists at this SHA with a verified public manifest and assets."
       exit 0
-    else
-      status=$?
-      [[ "$status" == 2 ]] # exit 2 is specifically "no matching refs"
     fi
-    existing="$(gh api --paginate "repos/$repo/releases" --jq '.[].tag_name')"
-    if grep -Fxq "$tag" <<< "$existing"; then
-      echo "Refusing to modify existing release $tag" >&2
-      exit 1
-    fi
-    gh release create "$tag" "${assets[@]}" --repo "$repo" --target "$GITHUB_SHA" \
+    gh release create "$tag" "${assets[@]}" --repo "$repo" --verify-tag --target "$GITHUB_SHA" \
       --title "TraeCN MCP $tag" --generate-notes --notes-start-tag v0.7.0
-    [[ "$(git ls-remote --exit-code origin "refs/tags/$tag" | cut -f1)" == "$GITHUB_SHA" ]]
+    [[ "$(git ls-remote --exit-code origin "refs/tags/$tag" | cut -f1)" == "$GITHUB_SHA" ]] || die "published tag SHA mismatch"
     verify_public_release
     ;;
   *) exit 2 ;;
