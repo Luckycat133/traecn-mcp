@@ -4,7 +4,7 @@ description: Operate TraeCN through TraeCN MCP’s local stdio tools. Use to del
 license: MIT-0
 metadata:
   author: Luckycat133
-  version: "0.7.0"
+  version: "0.7.1"
   openclaw:
     requires:
       bins:

@@ -6,7 +6,12 @@ on:
     paths:
       - '.github/workflows/release-candidate.yml'
       - '.github/workflows/release.yml'
+      - '.github/workflows/release-launch-v0.7.1.yml'
       - 'package*.json'
+      - 'Formula/**'
+      - 'distribution/homebrew/**'
+      - 'CHANGELOG.md'
+      - 'docs/RELEASE-MILESTONES.md'
       - 'mcp-server*.js'
       - 'scripts/**'
       - 'src/**'
@@ -37,5 +42,21 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain)"
           test "$(node -p process.platform)" = darwin
+      - run: node scripts/release-launch-v071.test.js
       - run: npm ci
       - run: npm run test:release
+
+      - name: Validate and install the Homebrew candidate (local archive only)
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+          HOMEBREW_NO_ANALYTICS: '1'
+        run: |
+          canonical="$RUNNER_TEMP/traecnclaw-canonical.rb"
+          npm run build:homebrew-formula -- --manifest dist/traecn-mcp-release.json --out "$canonical"
+          ruby -c "$canonical"
+          brew tap-new --no-git luckycat-ci/traecn-candidate
+          tap_path="$(brew --repository luckycat-ci/traecn-candidate)"
+          node scripts/stage-homebrew-candidate.js "$canonical" "$tap_path/Formula/traecnclaw.rb"
+          brew install --formula luckycat-ci/traecn-candidate/traecnclaw
+          brew test luckycat-ci/traecn-candidate/traecnclaw

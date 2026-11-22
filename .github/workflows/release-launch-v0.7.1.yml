@@ -1,0 +1,92 @@
+name: Explicit release launch v0.7.1
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.release/approve-v0.7.1'
+
+env:
+  LAUNCH_BEFORE: ${{ github.event.before }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-launch-v0-7-1
+  cancel-in-progress: false
+
+jobs:
+  verify-linux:
+    if: github.repository == 'Luckycat133/traecn-mcp' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: bash scripts/release-launch-v071.sh preflight
+      - run: npm ci
+      - run: npm run verify
+      - run: npm run test:clean-room
+
+  verify-macos:
+    if: github.repository == 'Luckycat133/traecn-mcp' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: bash scripts/release-launch-v071.sh preflight
+      - run: npm ci
+      - run: npm run test:release
+      - run: bash scripts/release-launch-v071.sh artifacts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: traecn-mcp-v0.7.1-${{ github.sha }}
+          path: |
+            dist/traecn-mcp-0.7.1.mcpb
+            dist/traecn-mcp-0.7.1.mcpb.meta.json
+            dist/traecn-mcp-release.json
+            dist/traecn-mcp-skill.tgz
+            dist/traecn-mcp-skill.zip
+            dist/traecnclaw-0.7.1.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    if: github.repository == 'Luckycat133/traecn-mcp' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [verify-linux, verify-macos]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: traecn-mcp-v0.7.1-${{ github.sha }}
+          path: dist
+      - name: Publish only the verified v0.7.1 release at the exact launch SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/release-launch-v071.sh publish
