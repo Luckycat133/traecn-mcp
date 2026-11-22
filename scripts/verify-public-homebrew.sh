@@ -42,8 +42,16 @@ assets=(
 download() {
   curl --fail --silent --show-error --location --retry 3 --connect-timeout 20 --max-time 120 --proto '=https' --proto-redir '=https' "$@"
 }
-download "https://api.github.com/repos/$repo/releases/tags/$tag" --output "$tmp/release-api.json"
+if [[ -n "${GH_TOKEN:-}" ]]; then
+  echo 'Read GitHub asset metadata using the CI read-only token.'
+  gh api --method GET "repos/$repo/releases/tags/$tag" > "$tmp/release-api.json"
+  unset GH_TOKEN
+else
+  echo 'Read GitHub asset metadata anonymously.'
+  download "https://api.github.com/repos/$repo/releases/tags/$tag" --output "$tmp/release-api.json"
+fi
 for filename in "${assets[@]}"; do
+  printf 'Download public asset without credentials: %s\n' "$filename"
   download "https://github.com/$repo/releases/download/$tag/$filename" --output "$tmp/dist/$filename"
 done
 

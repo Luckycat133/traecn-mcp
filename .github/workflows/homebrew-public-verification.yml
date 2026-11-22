@@ -43,9 +43,12 @@ jobs:
           test "$(node -p process.platform)" = darwin
       - name: Verify the public archive with the PR recipe in a disposable tap
         if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/verify-public-homebrew.sh native
       - name: Verify a fresh install from the real canonical public tap at main SHA
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
+          GH_TOKEN: ${{ github.token }}
           EXPECTED_SHA: ${{ github.sha }}
         run: bash scripts/verify-public-homebrew.sh native-main
