@@ -5,7 +5,15 @@ set -euo pipefail
 mode="${1:-check}"
 canonical=Formula/traecnclaw.rb
 repo=Luckycat133/traecn-mcp
-[[ "$mode" == render || "$mode" == check || "$mode" == native ]] || exit 2
+case "$mode" in
+  render|check|native) ;;
+  native-main)
+    [[ "${GITHUB_EVENT_NAME:-}" == push && "${GITHUB_REF:-}" == refs/heads/main && "${GITHUB_REPOSITORY:-}" == "$repo" ]] || exit 2
+    [[ "${EXPECTED_SHA:-}" =~ ^[0-9a-f]{40}$ && "${GITHUB_SHA:-}" == "$EXPECTED_SHA" ]] || exit 2
+    [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || exit 2
+    ;;
+  *) exit 2 ;;
+esac
 
 version="$(node -p 'require("./distribution/homebrew/public-release.json").version')"
 release_sha="$(node -p 'require("./distribution/homebrew/public-release.json").sourceRevision')"
@@ -32,7 +40,7 @@ assets=(
   "$archive"
 )
 download() {
-  curl --fail --silent --show-error --location --retry 3 --proto '=https' --proto-redir '=https' "$@"
+  curl --fail --silent --show-error --location --retry 3 --connect-timeout 20 --max-time 120 --proto '=https' --proto-redir '=https' "$@"
 }
 download "https://api.github.com/repos/$repo/releases/tags/$tag" --output "$tmp/release-api.json"
 for filename in "${assets[@]}"; do
@@ -73,16 +81,26 @@ if [[ "$mode" == render ]]; then
   exit 0
 fi
 cmp "$tmp/traecnclaw.rb" "$canonical"
-if [[ "$mode" == native ]]; then
+if [[ "$mode" == native || "$mode" == native-main ]]; then
   [[ "$(node -p process.platform)" == darwin ]] || exit 2
   ruby -c "$canonical"
   export HOMEBREW_CACHE="$tmp/fresh-homebrew-cache"
   export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ANALYTICS=1
-  tap=luckycat-ci/traecn-public-verification
-  brew tap-new --no-git "$tap"
-  tap_path="$(brew --repository "$tap")"
-  mkdir -p "$tap_path/Formula"
-  cp "$canonical" "$tap_path/Formula/traecnclaw.rb"
+  if [[ "$mode" == native-main ]]; then
+    tap=luckycat133/traecn-mcp
+    brew tap "$tap" "$remote"
+    tap_path="$(brew --repository "$tap")"
+    tap_sha="$(git -C "$tap_path" rev-parse HEAD)"
+    [[ "$tap_sha" == "$EXPECTED_SHA" ]] || { echo 'Canonical tap does not match the main event SHA' >&2; exit 1; }
+    cmp "$canonical" "$tap_path/Formula/traecnclaw.rb"
+    printf 'Canonical public tap matches main %s\n' "$tap_sha"
+  else
+    tap=luckycat-ci/traecn-public-verification
+    brew tap-new --no-git "$tap"
+    tap_path="$(brew --repository "$tap")"
+    mkdir -p "$tap_path/Formula"
+    cp "$canonical" "$tap_path/Formula/traecnclaw.rb"
+  fi
   brew install --formula "$tap/traecnclaw"
   brew test "$tap/traecnclaw"
   "$(brew --prefix "$tap/traecnclaw")/bin/traecn-mcp" help
