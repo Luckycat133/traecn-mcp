@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.7.1] - Pending release
+
+### Changed
+
+- Keep GitHub Release verification on a native macOS runner and require an audit
+  of the tagged source and artifact manifest before publication.
+- Exercise the candidate's Homebrew formula with the staged tarball in a
+  disposable macOS runner; the canonical tap stays pinned until the public
+  asset is verified. No npm or directory publication is implied.
+- Record the source and public-release milestones beginning at 0.1.0 without
+  changing historical tags or releases.
+
 ## [0.7.0] - 2026-11-07
 
 ### Added

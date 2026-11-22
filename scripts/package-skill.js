@@ -105,7 +105,7 @@ if (zipResult.available && fs.existsSync(zipPath)) {
   artifacts.push(artifact(zipPath));
 }
 
-artifacts.push(artifact(builtMcpbPath));
+artifacts.push(artifact(builtMcpbPath), artifact(`${builtMcpbPath}.meta.json`));
 
 const publicPackage = buildNpmPackage({
   outDir: distDir,

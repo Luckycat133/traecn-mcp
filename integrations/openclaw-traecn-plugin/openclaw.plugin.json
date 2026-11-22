@@ -1,7 +1,7 @@
 {
   "id": "traecnclaw",
   "name": "TraeCN MCP adapter",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Delegate IDE tasks from OpenClaw to a local TraeCN MCP gateway.",
   "baseUrl": "http://127.0.0.1:8788",
   "configSchema": {

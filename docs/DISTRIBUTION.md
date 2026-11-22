@@ -179,6 +179,11 @@ GitHub Release MCPB. After publication, the Smithery page must say `Local`.
 
 ## Homebrew
 
+See [Release milestones and handoff](RELEASE-MILESTONES.md) for the current
+candidate, historical refs and order of operations. Keep the canonical formula
+pinned to the latest verified public asset while a candidate is unpublished.
+A local-archive Homebrew test is not a public tap test.
+
 Render the formula from the clean release manifest:
 
 ```sh

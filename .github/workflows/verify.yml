@@ -19,6 +19,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - run: node scripts/release-launch-v071.test.js
       - run: npm ci
       - run: npm run verify
       - run: npm run test:clean-room
