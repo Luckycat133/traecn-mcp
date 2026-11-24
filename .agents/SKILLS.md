@@ -10,9 +10,8 @@ Load only the Skill whose trigger matches the task. Project instructions and the
 | `mcp-builder` (global) | General MCP protocol and server design via global skill (`~/.gemini/config/skills/mcp-builder`) |
 | `playwright-best-practices` | Browser automation patterns |
 | `architecture-patterns` | Opt-in integration-heavy structural work |
-| `directory-submissions` | MCP Registry (`server.json`), Glama (`glama.json`), Cursor/Claude plugin manifests, `skills.sh`, and directory submissions |
-| `clawhub` | ClawHub skill publishing, syncing, and verification workflows |
 | `github-release` | GitHub Releases, SemVer tagging, and Keep a Changelog release workflows |
+| `distribution-publisher` (Claude Agent) | Dedicated agent (`~/.claude/agents/distribution-publisher.md`) for MCP/Skill registries, ClawHub, `skills.sh`, GEO/`llms.txt`, and launch copy |
 
 The maintainer source is `.codex/skills/traecn-mcp-development`. Both `.agents` and `.claude` discovery links must resolve to it. The former maintainer identity was migrated; do not resurrect a second active copy. Runtime Skill renaming is a separate atomic source/local-copy/package migration.
 

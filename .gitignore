@@ -4,7 +4,9 @@ node_modules/
 !.env.example
 *.log
 .DS_Store
+.agent-context-migration/
 .claude/worktrees/
+.claude/settings.local.json
 audit-logs/
 demo-output/
 dist/
