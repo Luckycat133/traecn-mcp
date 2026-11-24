@@ -17,6 +17,97 @@ const SETTINGS_SECTIONS = [
 ];
 
 const SOLO_MODE_TABS = ['编辑器', '设置', '智能体', 'MCP'];
+const AGENT_SETTINGS_BODY = '.icube-settings-container .icube-settings-content-body';
+const TEXT_SETTING_CONTROL = 'input[type="text"], input:not([type]), textarea, input[type="search"], input[type="number"]';
+
+const VISIBLE_ELEMENT = `function visible(el) {
+  if (!el) return false;
+  const rect = el.getBoundingClientRect();
+  const style = getComputedStyle(el);
+  return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+}`;
+
+const MATCH_SETTING_ROWS = `function matchingRows(root, labelText) {
+  return Array.from(root?.querySelectorAll('.icb-setting-item-container') || []).filter(row => {
+    const label = row.querySelector('.icb-setting-item-label');
+    return visible(row) && String(label?.innerText || label?.textContent || '').trim() === labelText;
+  });
+}`;
+
+async function _agentSettingsUi(client, action = 'read', section = null) {
+  return evaluate(client, `(action, section) => {
+    ${VISIBLE_ELEMENT}
+    function clickOnly(elements) {
+      if (elements.length !== 1 || elements[0].disabled || elements[0].getAttribute('aria-disabled') === 'true') return false;
+      elements[0].click();
+      return true;
+    }
+    function label(el, selector) {
+      const text = el.querySelector(selector);
+      return String(text?.innerText || text?.textContent || '').trim();
+    }
+
+    if (action === 'open-menu') {
+      const menu = document.querySelector('[class*="accountHostRoot"]');
+      const triggers = Array.from(menu?.querySelectorAll('button[class*="accountTrigger"]') || []).filter(visible);
+      return triggers.length === 1 && (triggers[0].getAttribute('aria-expanded') === 'true' || clickOnly(triggers));
+    }
+    if (action === 'open-settings') {
+      const entries = Array.from(document.querySelectorAll('button[class*="accountMenuItem"]')).filter(el =>
+        visible(el) && ['设置', 'Settings'].includes(label(el, '[class*="accountMenuLabel"]')));
+      return clickOnly(entries);
+    }
+
+    const sidebars = Array.from(document.querySelectorAll('.icube-settings-sidebar-container')).filter(visible);
+    if (sidebars.length !== 1) return { open: sidebars.length > 0, active: null, sections: [] };
+    const sidebar = sidebars[0];
+    if (action === 'back') {
+      const entries = Array.from(sidebar.querySelectorAll('.back-to-app-container .settings-sidebar-menu-item')).filter(el =>
+        visible(el) && ['返回应用', 'Back to App'].includes(label(el, '.text')));
+      return clickOnly(entries);
+    }
+
+    const rows = Array.from(sidebar.querySelectorAll('.settings-sidebar-menu-item.menu-item2')).filter(visible);
+    if (action === 'section') {
+      const matches = rows.filter(el => label(el, '.text') === section);
+      return matches.length === 1 && (matches[0].classList.contains('active') || clickOnly(matches));
+    }
+    const active = rows.filter(el => el.classList.contains('active'));
+    return {
+      open: true,
+      active: active.length === 1 ? label(active[0], '.text') : null,
+      sections: [...new Set(rows.map(el => label(el, '.text')).filter(Boolean))]
+    };
+  }`, [action, section]);
+}
+
+async function _waitForAgentSettingsUi(read, ready) {
+  const end = Date.now() + 3000;
+  do {
+    const state = await read();
+    if (ready(state)) return state;
+    await sleep(125);
+  } while (Date.now() < end);
+  return null;
+}
+
+async function _goToAgentSettings(client) {
+  if (!await _agentSettingsUi(client, 'open-settings')) {
+    if (!await _agentSettingsUi(client, 'open-menu') || !await _waitForAgentSettingsUi(
+      () => _agentSettingsUi(client, 'open-settings'), Boolean
+    )) {
+      throw TraeCNAutomationError.selectorNotFound('Agent settings menu', ['设置', 'Settings']);
+    }
+  }
+  const ready = await _waitForAgentSettingsUi(() => _agentSettingsUi(client), state => Boolean(state.active));
+  if (!ready) throw TraeCNAutomationError.selectorNotFound('Agent settings sidebar', ['.settings-sidebar-menu-item.menu-item2.active']);
+}
+
+async function _clickAgentSettingsSection(client, section) {
+  if (!await _agentSettingsUi(client, 'section', section)) return `not found: ${section}`;
+  const ready = await _waitForAgentSettingsUi(() => _agentSettingsUi(client), state => state.active === section);
+  return ready ? `clicked: ${section}` : 'native sidebar did not confirm the selection';
+}
 
 /**
  * Navigate to the Settings tab in the SOLO mode top bar.
@@ -215,14 +306,14 @@ async function _listSettingsSidebarSections(client) {
  * function returns the array directly and the helper handles JSON
  * transport if needed. A non-empty result short-circuits the loop.
  */
-async function _waitForContent(client, maxWait = 8000) {
+async function _waitForContent(client, maxWait = 8000, agent = false) {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
-    const parsed = await _inspectSettingsContent(client);
+    const parsed = await _inspectSettingsContent(client, agent);
     const items = Array.isArray(parsed) ? parsed : parsed.items;
     if (Array.isArray(items) && items.length > 0) return items;
     if (parsed.type === 'model-table') return [];
-    await sleep(500);
+    await sleep(agent ? 125 : 500);
   }
   return [];
 }
@@ -234,17 +325,19 @@ async function _waitForContent(client, maxWait = 8000) {
  * Migration: page-side function now returns a plain object directly;
  * `evaluateJSON` handles the JSON-stringify/parse transport round-trip.
  */
-async function _inspectSettingsContent(client) {
+async function _inspectSettingsContent(client, agent = false) {
   let parsed;
   try {
     parsed = await evaluateJSON(
       client,
-      `() => {
+      `(agent) => {
+        const root = agent ? document.querySelector(${safeJsValue(AGENT_SETTINGS_BODY)}) : document;
+        if (!root) return { count: 0, items: [], type: 'none' };
         // Strategy 1: standard icb-setting-item-container rows (most settings sections)
-        const containerItems = document.querySelectorAll('.icb-setting-item-container');
+        const containerItems = root.querySelectorAll('.icb-setting-item-container');
 
         // Strategy 2: table-based model list (the \u6a21\u578b section uses a <table>)
-        const tableRows = document.querySelectorAll([
+        const tableRows = root.querySelectorAll([
           '.icube-settings-container table tbody tr',
           '.part.solo_settings table tbody tr',
           '[class*="settings-content"] table tbody tr'
@@ -252,7 +345,7 @@ async function _inspectSettingsContent(client) {
 
         // Strategy 3: settings pages that use custom cards/lists instead of
         // the standard setting-row component (usage, agents, index/docs).
-        const customItems = document.querySelectorAll([
+        const customItems = root.querySelectorAll([
           '.ai-agent-list-item-name',
           '.codeIndex-list-item',
           '.user-entitlement-credits-overview-card',
@@ -278,15 +371,15 @@ async function _inspectSettingsContent(client) {
             const descEl = el.querySelector('.icb-setting-item-description');
             const toggleEl = el.querySelector('input[type="checkbox"]');
             const dropdownEl = el.querySelector('[class*="auto-test-select-option"]');
-            const textInputEl = el.querySelector('input[type="text"], input:not([type]), textarea, input[type="search"], input[type="number"]');
+            const textInputEl = el.querySelector(${safeJsValue(TEXT_SETTING_CONTROL)});
             containerResults.push({
               label: labelEl ? labelEl.innerText.trim() : '',
               desc: descEl ? descEl.innerText.trim() : '',
               currentValue: dropdownEl ? dropdownEl.innerText.trim()
                 : (textInputEl ? String(textInputEl.value ?? '') : ''),
-              hasToggle: !!toggleEl,
+              hasToggle: !!toggleEl && (!agent || !toggleEl.disabled),
               hasDropdown: !!dropdownEl,
-              hasTextInput: !!textInputEl,
+              hasTextInput: !!textInputEl && (!agent || (!textInputEl.readOnly && !textInputEl.disabled)),
               toggleChecked: toggleEl ? toggleEl.checked : null,
               y: Math.round(r.y),
               visible: true
@@ -422,7 +515,7 @@ async function _inspectSettingsContent(client) {
         const strategy = candidates[0].type;
 
         if (chosen.length === 0) {
-          const emptyModels = document.querySelectorAll('.icube-settings-container .custom-model-no-data');
+          const emptyModels = root.querySelectorAll('.icube-settings-container .custom-model-no-data');
           const emptyModelVisible = Array.from(emptyModels).some(el => {
             const r = el.getBoundingClientRect();
             const style = getComputedStyle(el);
@@ -432,7 +525,7 @@ async function _inspectSettingsContent(client) {
           return { count: 0, items: [], type: emptyModelVisible ? 'model-table' : 'none' };
         }
         return { count: chosen.length, items: chosen, type: strategy };
-      }`
+      }`, [agent]
     ) || { count: 0, items: [], type: 'none' };
   } catch {
     parsed = { count: 0, items: [], type: 'none' };
@@ -440,8 +533,8 @@ async function _inspectSettingsContent(client) {
   return parsed;
 }
 
-async function _readSettingsContent(client, waitMs = 8000) {
-  const parsed = await _inspectSettingsContent(client);
+async function _readSettingsContent(client, waitMs = 8000, agent = false) {
+  const parsed = await _inspectSettingsContent(client, agent);
 
   if (parsed.count > 0) {
     return { sections: [], items: parsed.items };
@@ -450,7 +543,7 @@ async function _readSettingsContent(client, waitMs = 8000) {
   // Wait for every supported content shape after a loading snapshot. Explicit
   // empty-model UI is already readable and does not need standard setting rows.
   if (parsed.type !== 'model-table') {
-    const waitedItems = await _waitForContent(client, waitMs);
+    const waitedItems = await _waitForContent(client, waitMs, agent);
     return { sections: [], items: waitedItems };
   }
 
@@ -464,8 +557,8 @@ async function _readSettingsContent(client, waitMs = 8000) {
  * Bind the exact labelled row's combobox to its aria-controls portal.
  * Current-value text under other triggers is never an option candidate.
  */
-async function _openSettingsDropdown(client, labelText) {
-  const point = await evaluateJSON(client, `(labelText) => {
+async function _openSettingsDropdown(client, labelText, agent) {
+  const point = await evaluateJSON(client, `(labelText, agent) => {
     function visible(el) {
       if (!el) return false;
       const r = el.getBoundingClientRect();
@@ -476,20 +569,22 @@ async function _openSettingsDropdown(client, labelText) {
       }
       return true;
     }
-    const rows = document.querySelectorAll('.icb-setting-item-container');
+    ${MATCH_SETTING_ROWS}
+    const root = agent ? document.querySelector(${safeJsValue(AGENT_SETTINGS_BODY)}) : document;
+    const rows = matchingRows(root, labelText);
+    if (agent && rows.length !== 1) return null;
     for (const row of rows) {
-      const label = row.querySelector('.icb-setting-item-label');
-      if (String(label?.innerText || label?.textContent || '').trim() !== labelText || !visible(row)) continue;
       const trigger = row.querySelector('button[role="combobox"], [role="combobox"]');
       if (!visible(trigger) || trigger.disabled || trigger.getAttribute('aria-disabled') === 'true') return null;
       const controlsId = trigger.getAttribute('aria-controls');
       if (!controlsId) return null;
+      if (agent) trigger.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       const r = trigger.getBoundingClientRect();
       return { controlsId, x: r.left + r.width / 2, y: r.top + r.height / 2,
         alreadyOpen: trigger.getAttribute('aria-expanded') === 'true' };
     }
     return null;
-  }`, [labelText]);
+  }`, [labelText, agent]);
   if (!point) return null;
   if (!point.alreadyOpen) {
     await client.send('Input.dispatchMouseEvent', {
@@ -498,7 +593,7 @@ async function _openSettingsDropdown(client, labelText) {
     await client.send('Input.dispatchMouseEvent', {
       type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1
     });
-    await sleep(300);
+    if (!agent) await sleep(300);
   }
   return point.controlsId;
 }
@@ -521,6 +616,26 @@ async function _settingsDropdownOptions(client, controlsId) {
   }`, [controlsId]);
 }
 
+async function _readSettingsDropdownOptions(client, controlsId, agent) {
+  const read = () => _settingsDropdownOptions(client, controlsId);
+  if (!agent) return read();
+  return await _waitForAgentSettingsUi(read, options => options.length > 0) || [];
+}
+
+async function _agentDropdownSelected(client, labelText, value, controlsId) {
+  return evaluate(client, `(labelText, value, controlsId) => {
+    ${VISIBLE_ELEMENT}
+    ${MATCH_SETTING_ROWS}
+    const rows = matchingRows(document.querySelector(${safeJsValue(AGENT_SETTINGS_BODY)}), labelText);
+    if (rows.length !== 1) return false;
+    const trigger = rows[0].querySelector('[role="combobox"]');
+    const selected = rows[0].querySelector('[class*="auto-test-select-option"]');
+    return visible(trigger) && trigger.getAttribute('aria-expanded') === 'false'
+      && !visible(document.getElementById(controlsId))
+      && String(selected?.innerText || selected?.textContent || '').trim() === value;
+  }`, [labelText, value, controlsId]);
+}
+
 async function _closeSettingsDropdown(client, controlsId) {
   const open = await evaluate(client, `(controlsId) => {
     const portal = document.getElementById(controlsId);
@@ -538,12 +653,13 @@ async function _closeSettingsDropdown(client, controlsId) {
   });
 }
 
-async function _setDropdown(client, labelText, value) {
-  const controlsId = await _openSettingsDropdown(client, labelText);
+async function _setDropdown(client, labelText, value, agent) {
+  const controlsId = await _openSettingsDropdown(client, labelText, agent);
   if (!controlsId) return 'item not found: ' + labelText;
   try {
-    const options = await _settingsDropdownOptions(client, controlsId);
-    const match = options.find(option => option.label === value);
+    const options = await _readSettingsDropdownOptions(client, controlsId, agent);
+    const matches = options.filter(option => option.label === value);
+    const match = agent && matches.length !== 1 ? null : matches[0];
     if (!match) return 'option not found: ' + value;
     // Radix ignores the first pointerup after opening until the pointer moves.
     await client.send('Input.dispatchMouseEvent', {
@@ -555,18 +671,25 @@ async function _setDropdown(client, labelText, value) {
     await client.send('Input.dispatchMouseEvent', {
       type: 'mouseReleased', x: match.x, y: match.y, button: 'left', buttons: 0, clickCount: 1
     });
-    await sleep(400);
+    if (agent) {
+      const applied = await _waitForAgentSettingsUi(
+        () => _agentDropdownSelected(client, labelText, match.label, controlsId), Boolean
+      );
+      if (!applied) return 'selection not confirmed: ' + match.label;
+    } else {
+      await sleep(400);
+    }
     return 'selected: ' + match.label;
   } finally {
     await _closeSettingsDropdown(client, controlsId);
   }
 }
 
-async function _listDropdownOptions(client, labelText) {
-  const controlsId = await _openSettingsDropdown(client, labelText);
+async function _listDropdownOptions(client, labelText, agent) {
+  const controlsId = await _openSettingsDropdown(client, labelText, agent);
   if (!controlsId) return [];
   try {
-    const options = await _settingsDropdownOptions(client, controlsId);
+    const options = await _readSettingsDropdownOptions(client, controlsId, agent);
     return [...new Set(options.map(option => option.label))];
   } finally {
     await _closeSettingsDropdown(client, controlsId);
@@ -579,6 +702,65 @@ function normalizeSettingItem(item) {
   else if (item.hasDropdown) controlType = 'option';
   else if (item.hasTextInput) controlType = 'text';
   return { ...item, controlType };
+}
+
+async function _agentSettingControl(client, label, type, action, targetChecked = null) {
+  const selector = type === 'toggle' ? 'input[type="checkbox"]' : TEXT_SETTING_CONTROL;
+  return evaluate(client, `(label, selector, action, targetChecked) => {
+    ${VISIBLE_ELEMENT}
+    ${MATCH_SETTING_ROWS}
+    const root = document.querySelector(${safeJsValue(AGENT_SETTINGS_BODY)});
+    const rows = matchingRows(root, label);
+    if (rows.length !== 1) return 'setting row not found or ambiguous';
+    const row = rows[0];
+    const controls = Array.from(row.querySelectorAll(selector)).filter(el =>
+      !el.disabled && !el.readOnly && (selector === 'input[type="checkbox"]' || visible(el)));
+    if (controls.length !== 1) return 'writable control not found or ambiguous';
+    const control = controls[0];
+    if (action === 'toggle') {
+      if (control.checked === targetChecked) return 'already in desired state: ' + control.checked;
+      const labels = Array.from(control.labels || []).filter(el => row.contains(el) && visible(el));
+      const clickable = labels.length === 1 ? labels[0] : (labels.length === 0 && visible(control) ? control : null);
+      if (!clickable) return 'visible toggle control not found or ambiguous';
+      clickable.click();
+      return 'toggled';
+    }
+    if (action === 'checked') return control.checked;
+    if (action === 'focus') {
+      control.focus();
+      control.select();
+      return document.activeElement === control;
+    }
+    if (document.activeElement !== control) return false;
+    control.blur();
+    return true;
+  }`, [label, selector, action, targetChecked]);
+}
+
+async function _setAgentToggle(client, label, checked) {
+  const outcome = await _agentSettingControl(client, label, 'toggle', 'toggle', checked);
+  if (outcome !== 'toggled') return outcome;
+  const actual = await _waitForAgentSettingsUi(() => _agentSettingControl(client, label, 'toggle', 'checked'),
+    value => value === checked);
+  return actual === checked ? `toggled to: ${actual}` : `toggle not applied: expected ${checked}`;
+}
+
+async function _typeIntoAgentInput(client, label, text) {
+  const focused = await _agentSettingControl(client, label, 'text', 'focus');
+  if (focused !== true) return typeof focused === 'string' ? focused : `input not focused: ${label}`;
+  let blurred;
+  try {
+    if (text) await client.send('Input.insertText', { text });
+    else {
+      const key = { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 };
+      await client.send('Input.dispatchKeyEvent', { ...key, type: 'keyDown' });
+      await client.send('Input.dispatchKeyEvent', { ...key, type: 'keyUp' });
+    }
+  } finally {
+    blurred = await _agentSettingControl(client, label, 'text', 'blur');
+  }
+  if (blurred !== true) return `input commit not confirmed: ${label}`;
+  return `typed: ${text}`;
 }
 
 /**
@@ -808,6 +990,7 @@ class SettingsDriver {
     this.config = config || {};
     this._ensureVisibleWindow = typeof options.ensureVisibleWindow === 'function'
       ? options.ensureVisibleWindow : async () => {};
+    this._agentSettings = false;
     this._currentTab = null; // 'chat' | 'settings' | 'agents' | 'mcp'
   }
 
@@ -822,6 +1005,7 @@ class SettingsDriver {
     const settingsOpen = await evaluate(
       this.client,
       `() => {
+        if (document.location?.pathname.endsWith('/solo/solo-lite.html')) return 'agent';
         const soloTab = document.querySelector('.icube-solo-mode-tab-item.active');
         if (soloTab) {
           return String(soloTab.innerText || soloTab.textContent || '').trim() === '设置';
@@ -843,7 +1027,16 @@ class SettingsDriver {
       }`
     );
 
-    if (!settingsOpen) {
+    this._agentSettings = settingsOpen === 'agent';
+    if (this._agentSettings) {
+      const state = await _agentSettingsUi(this.client);
+      if (!state.open) await _goToAgentSettings(this.client);
+      else if (!state.active && !await _waitForAgentSettingsUi(
+        () => _agentSettingsUi(this.client), value => Boolean(value.active)
+      )) {
+        throw TraeCNAutomationError.selectorNotFound('Agent settings sidebar', ['.settings-sidebar-menu-item.menu-item2.active']);
+      }
+    } else if (!settingsOpen) {
       await _goToSettingsTab(this.client);
       await sleep(1500);
     }
@@ -852,11 +1045,13 @@ class SettingsDriver {
 
     // Navigate to section using sidebar item clicker (correct method)
     if (section) {
-      const clickResult = await _clickSidebarItem(this.client, section);
+      const clickResult = this._agentSettings
+        ? await _clickAgentSettingsSection(this.client, section)
+        : await _clickSidebarItem(this.client, section);
       if (!String(clickResult).startsWith('clicked:')) {
         throw TraeCNAutomationError.settingsSectionNotActivated(section, clickResult);
       }
-      await sleep(1200);
+      if (!this._agentSettings) await sleep(1200);
     }
 
     return { tab: 'settings', section: section || null };
@@ -864,13 +1059,22 @@ class SettingsDriver {
 
   async listSections() {
     await this.switchTab();
+    return this._settingsSections();
+  }
+
+  async _settingsSections() {
+    if (this._agentSettings) {
+      const state = await _agentSettingsUi(this.client);
+      if (!state.active) throw TraeCNAutomationError.settingsContentUnavailable('Agent sidebar');
+      return state.sections;
+    }
     const discovered = await _listSettingsSidebarSections(this.client);
     return discovered.length > 0 ? discovered : SETTINGS_SECTIONS.slice();
   }
 
   async listOptions(label) {
     await this._ensureVisibleWindow();
-    return _listDropdownOptions(this.client, label);
+    return _listDropdownOptions(this.client, label, this._agentSettings);
   }
 
   /**
@@ -878,8 +1082,8 @@ class SettingsDriver {
    * @returns {{ sections: Array, items: Array, raw: Object }}
    */
   async getContent() {
-    await sleep(2000); // Allow settings panel and table content to fully render after navigation
-    const data = await _readSettingsContent(this.client);
+    if (!this._agentSettings) await sleep(2000);
+    const data = await _readSettingsContent(this.client, undefined, this._agentSettings);
 
     // Deduplicate items by label
     const seen = new Set();
@@ -913,13 +1117,7 @@ class SettingsDriver {
 
     await this.switchTab();
 
-    let sections;
-    try {
-      const discoveredSections = await _listSettingsSidebarSections(this.client);
-      sections = discoveredSections.length > 0 ? discoveredSections : SETTINGS_SECTIONS;
-    } catch {
-      sections = SETTINGS_SECTIONS;
-    }
+    const sections = await this._settingsSections();
 
     // De-dupe while preserving order, in case the sidebar DOM returns dupes
     const seenSection = new Set();
@@ -944,7 +1142,9 @@ class SettingsDriver {
 
       let clickResult;
       try {
-        clickResult = await _clickSidebarItem(this.client, section, sectionPerSectionWaitMs);
+        clickResult = this._agentSettings
+          ? await _clickAgentSettingsSection(this.client, section)
+          : await _clickSidebarItem(this.client, section, sectionPerSectionWaitMs);
       } catch (e) {
         clickResult = 'error: ' + e.message;
       }
@@ -959,11 +1159,11 @@ class SettingsDriver {
         continue;
       }
 
-      await sleep(sectionPostClickSleepMs);
+      if (!this._agentSettings) await sleep(sectionPostClickSleepMs);
 
       let data;
       try {
-        data = await _readSettingsContent(this.client, sectionPerSectionWaitMs);
+        data = await _readSettingsContent(this.client, sectionPerSectionWaitMs, this._agentSettings);
       } catch (e) {
         data = { sections: [], items: [], error: e.message };
       }
@@ -1007,7 +1207,7 @@ class SettingsDriver {
    */
   async setDropdown(label, value) {
     await this._ensureVisibleWindow();
-    return _setDropdown(this.client, label, value);
+    return _setDropdown(this.client, label, value, this._agentSettings);
   }
 
   /**
@@ -1017,6 +1217,7 @@ class SettingsDriver {
    */
   async setToggle(label, checked) {
     await this._ensureVisibleWindow();
+    if (this._agentSettings) return _setAgentToggle(this.client, label, checked);
     return _setToggle(this.client, label, checked);
   }
 
@@ -1027,6 +1228,7 @@ class SettingsDriver {
    */
   async typeText(label, text) {
     await this._ensureVisibleWindow();
+    if (this._agentSettings) return _typeIntoAgentInput(this.client, label, text);
     await _ensureClickHelper(this.client);
     return _typeIntoInput(this.client, label, text);
   }
@@ -1084,7 +1286,7 @@ class SettingsDriver {
       case 'navigate':
         return this.switchTab(params.section);
       case 'read':
-        await sleep(1500);
+        if (!this._agentSettings) await sleep(1500);
         return this.getContent();
       case 'type':
         return this.typeText(params.label, params.text);
@@ -1111,7 +1313,8 @@ class SettingsDriver {
    * Navigate back to the Chat tab.
    */
   async backToChat() {
-    const closePoint = await evaluateJSON(this.client, `() => {
+    const closePoint = await evaluate(this.client, `() => {
+      if (document.location?.pathname.endsWith('/solo/solo-lite.html')) return 'agent';
       function visible(el) {
         if (!el) return false;
         const r = el.getBoundingClientRect();
@@ -1131,6 +1334,15 @@ class SettingsDriver {
         || style.visibility === 'hidden' || style.display === 'none') return null;
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     }`);
+    if (closePoint === 'agent') {
+      const before = await _agentSettingsUi(this.client);
+      if (!before.open) return 'not found';
+      if (!await _agentSettingsUi(this.client, 'back')) return 'not found';
+      const after = await _waitForAgentSettingsUi(() => _agentSettingsUi(this.client), state => !state.open);
+      if (!after) return 'settings still visible';
+      this._currentTab = 'chat';
+      return 'clicked: 返回应用';
+    }
     if (closePoint) {
       await this.client.send('Input.dispatchMouseEvent', {
         type: 'mousePressed', x: closePoint.x, y: closePoint.y, button: 'left', clickCount: 1

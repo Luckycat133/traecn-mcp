@@ -64,7 +64,7 @@ assert.ok(packageJson.scripts['test:uat'].includes('contract:audit'), 'test:uat 
 assert.ok(packageJson.scripts.verify.includes('test:all'), 'verify must execute the behavior test gate');
 assert.strictEqual(packageJson.scripts['inspect:verify'], 'node scripts/inspect-traecn.js --verify');
 assert.strictEqual(packageJson.scripts['test:live'], 'node scripts/live-uat.js');
-assert.strictEqual(packageJson.bin['traecnclaw-mcp'], './mcp-server.js');
+assert.strictEqual(packageJson.bin['traecn-mcp'], './mcp-server.js');
 assert.strictEqual(packageJson.exports['./mcp'], './mcp-server.js');
 assert.strictEqual(packageJson.types, 'src/skill/simple-api.d.ts');
 assert.ok(openClawManifest.tools.some(tool => tool.name === 'traecn_capabilities'), 'OpenClaw manifest missing traecn_capabilities');

@@ -14,12 +14,12 @@ publish, and verify those rows.
 
 | Role | Canonical identity |
 | --- | --- |
-| Private source | `Luckycat133/TRAECNclaw` |
+| Private source | `Luckycat133/traecn-mcp` |
 | Public distribution mirror | `Luckycat133/traecnclaw-mcp-skill` |
 | MCP server name | `io.github.Luckycat133/traecnclaw` (existing Registry identity) |
 | Current npm package | `@luckycat133/traecnclaw` |
 | Historical npm package | `traecnclaw@0.3.1`; never advertise as current |
-| Agent Skill | `traecnclaw-mcp` |
+| Agent Skill | `traecn-mcp` |
 | Homebrew formula | `Luckycat133/tap/traecnclaw` |
 | Transport | local stdio on the same Mac as TraeCN |
 | Platform evidence | macOS with TraeCN 1.107.x; do not claim other platforms |
@@ -43,13 +43,13 @@ npm run pack:skill
 
 `npm run pack:skill` creates:
 
-- `dist/traecnclaw-mcp-skill.tgz` and `.zip`;
-- `dist/traecnclaw-mcp-<version>.mcpb`, validated with the pinned official
+- `dist/traecn-mcp-skill.tgz` and `.zip`;
+- `dist/traecn-mcp-<version>.mcpb`, validated with the pinned official
   MCPB CLI and normalized for byte-identical rebuilds;
 - `dist/traecnclaw-<version>.tgz`, whose internal npm identity is
   `@luckycat133/traecnclaw` even though the canonical source package remains
   private and unscoped;
-- `dist/traecnclaw-mcp-release.json`, recording source revision, dirty state,
+- `dist/traecn-mcp-release.json`, recording source revision, dirty state,
   artifact size, SHA-256, package identity, and install hints.
 
 The generated files are ignored by git. Build them from the clean tagged
@@ -116,7 +116,7 @@ stages a separate public tarball with:
 - the release version and `mcpName`;
 - public repository, homepage, and issue URLs;
 - `os: ["darwin"]` and public publish configuration;
-- the `traecnclaw` and `traecnclaw-mcp` binaries.
+- the `traecnclaw` and `traecn-mcp` binaries.
 
 Publish only the generated tarball:
 
@@ -132,7 +132,7 @@ npm view @luckycat133/traecnclaw@<version> \
   name version dist.integrity dist.tarball mcpName os
 npm install --global @luckycat133/traecnclaw@<version>
 traecnclaw --help
-traecnclaw-mcp
+traecn-mcp
 ```
 
 Use a temporary prefix for automated stdio discovery so an existing global
@@ -172,7 +172,7 @@ ID configuration. Build and validate it with:
 ```sh
 npm run build:mcpb
 npm exec --package=@anthropic-ai/mcpb@2.1.2 \
-  --call='mcpb validate dist/traecnclaw-mcp-<version>.mcpb'
+  --call='mcpb validate dist/traecn-mcp-<version>.mcpb'
 ```
 
 Install the exact bundle into a clean compatible desktop host and verify all 20
@@ -200,12 +200,13 @@ Render the formula from the clean release manifest:
 
 ```sh
 npm run build:homebrew-formula -- \
-  --manifest dist/traecnclaw-mcp-release.json \
+  --manifest dist/traecn-mcp-release.json \
   --out /path/to/homebrew-tap/Formula/traecnclaw.rb
 ```
 
-The formula URL and SHA-256 must point to the public Release tarball. Its test
-must exercise both `traecnclaw --help` and a real stdio initialize/tools-list
+The formula downloads the pinned scoped npm tarball. Before publishing the
+formula, download that tarball and verify its SHA-256 against the release
+manifest. The formula test exercises CLI help and a stdio initialize/tools-list
 exchange with exactly 20 tools. Verify the public tap on a clean install:
 
 ```sh
@@ -226,27 +227,27 @@ The public mirror is the public provenance source. After its release commit is
 known, dry-run and publish the generated Skill path:
 
 ```sh
-clawhub publish skills/traecnclaw-mcp \
-  --slug traecnclaw-mcp \
+clawhub publish skills/traecn-mcp \
+  --slug traecn-mcp \
   --name "TRAECNclaw MCP" \
   --version <version> \
   --tags latest,mcp,agent-skills,codex,openclaw,traecn \
   --source-repo Luckycat133/traecnclaw-mcp-skill \
   --source-commit <public-commit> \
   --source-ref main \
-  --source-path .codex/skills/traecnclaw-mcp \
+  --source-path .codex/skills/traecn-mcp \
   --changelog "See CHANGELOG.md for verified release changes."
-clawhub inspect traecnclaw-mcp --versions --limit 3
+clawhub inspect traecn-mcp --versions --limit 3
 ```
 
-The public mirror stores the Skill under `.codex/skills/traecnclaw-mcp` even
-though the canonical source path is `skills/traecnclaw-mcp`.
+The public mirror stores the Skill under `.codex/skills/traecn-mcp` even
+though the canonical source path is `skills/traecn-mcp`.
 
 Also test the public repository through Skills CLI:
 
 ```sh
 npx skills add https://github.com/Luckycat133/traecnclaw-mcp-skill \
-  --skill traecnclaw-mcp \
+  --skill traecn-mcp \
   -g
 ```
 

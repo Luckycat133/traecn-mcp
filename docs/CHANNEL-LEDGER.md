@@ -39,6 +39,12 @@ verified listing, and a directory scan is not a runtime test.
 | Skills CLI | A clean temporary project installed public repository Skill metadata version 0.6.0 for Codex | Preserve the public GitHub install path and launcher contract | `npx skills add ... --skill traecnclaw-mcp --agent codex --copy --yes` succeeded and installed the expected Skill files | verified |
 | skills.sh | [Detail page](https://www.skills.sh/luckycat133/traecnclaw-mcp-skill/traecnclaw-mcp) shows the correct repository, Skill content, and install command; audits are Trust Hub Warn, Socket Pass, Snyk Pass; install count is still unavailable | Keep source/install current and do not invent counts | Site-generated JSON-LD incorrectly says `Cross-platform`; retain the repository's explicit macOS limitation and request correction if the site exposes a channel | verified |
 
+On 2026-11-06, the [public Homebrew formula](https://github.com/Luckycat133/homebrew-tap/blob/19b53bd417163d4eb34a4e4200e872ee33f41760/Formula/traecnclaw.rb)
+switched the 0.6.0 archive URL to the scoped npm registry. The npm archive
+byte-matched the GitHub Release asset and retained its SHA-256. A fresh
+isolated Homebrew install used an empty cache and a local Node.js 22.14.0
+dependency, then passed `brew test` and exact 20-tool discovery.
+
 ## Directory and catalog channels
 
 | Channel | Current public state | Next exact step | Status |

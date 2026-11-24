@@ -10,6 +10,7 @@ const packageInfo = {
 const metadata = JSON.parse(renderRegistryMetadata({ packageInfo }));
 
 assert.strictEqual(metadata.name, packageInfo.mcpName);
+assert.strictEqual(metadata.title, 'TraeCN MCP');
 assert.strictEqual(metadata.version, packageInfo.version);
 assert.deepStrictEqual(metadata.repository, {
   url: 'https://github.com/Luckycat133/traecnclaw-mcp-skill',

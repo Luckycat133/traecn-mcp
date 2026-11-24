@@ -50,7 +50,7 @@ function checkArtifact(repoRoot, entry, label) {
 
 function verifyManifest({
   repoRoot = DEFAULT_REPO_ROOT,
-  manifestPath = path.join(repoRoot, 'dist', 'traecnclaw-mcp-release.json'),
+  manifestPath = path.join(repoRoot, 'dist', 'traecn-mcp-release.json'),
   revision = null,
   version = null,
   allowDirty = false,

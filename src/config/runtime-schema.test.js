@@ -8,7 +8,6 @@ const {
   runtimeDefault,
   readRuntimeEnv,
   renderEnvDefaultsBlock,
-  renderReadmeDefaultsBlock,
   renderConfigurationDocument
 } = require('./runtime-schema');
 
@@ -37,9 +36,6 @@ for (const [name, spec] of Object.entries(RUNTIME_ENV_SCHEMA)) {
 
 const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
 assert.ok(envExample.includes(renderEnvDefaultsBlock()), '.env.example generated defaults are stale');
-
-const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
-assert.ok(readme.includes(renderReadmeDefaultsBlock()), 'README generated defaults are stale');
 
 assert.strictEqual(
   fs.readFileSync(path.join(repoRoot, 'docs/configuration.md'), 'utf8'),

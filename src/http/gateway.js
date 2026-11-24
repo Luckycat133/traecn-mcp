@@ -9,6 +9,7 @@ const { URL } = require('url');
 const packageInfo = require('../../package.json');
 const { discoverTarget, connectToTarget, resolveCDPEndpoint, fetchCDPTargets, describeCDPSurface } = require('../cdp/discovery');
 const { DomDriver, getConfig } = require('../cdp/dom-driver');
+const { NATIVE_TURN_OWNERSHIP } = require('../cdp/dom-handlers/response-collection');
 const { MockDriver } = require('../cdp/mock-driver');
 const { TraeCNAutomationError } = require('../cdp/errors');
 const { WEB_CONSOLE_CSP, getWebConsoleAsset, renderChatUI } = require('./chat-ui');
@@ -16,7 +17,8 @@ const { generateOpenAPISpec } = require('./openapi');
 const { parsePositiveInt, sanitizeLog, isGenericQueueProbeTask, isLoopbackHost, withoutTaskTrace } = require('../shared/utils');
 const { errorToHttpStatus, errorToBody, safeErrorMessage } = require('./error-mapping');
 const { ConfigManager, DEFAULT_CONFIG } = require('../shared/config-manager');
-const { RUNTIME_ENV_SCHEMA } = require('../config/runtime-schema');
+const { RUNTIME_ENV_SCHEMA, readRuntimeEnv } = require('../config/runtime-schema');
+const { CheckInDriver } = require('../cdp/check-in-driver');
 const { getGlobalStore } = require('../shared/task-history');
 const { TaskEventStore } = require('../shared/task-event-store');
 const { buildCapabilities } = require('../capabilities');
@@ -32,6 +34,7 @@ const { AuditLogger } = require('../shared/audit-logger');
 const {
   adapterHandshake,
   detectTraeEnvironment,
+  isKnownStandaloneAgentVersion,
   mergeAdapterConfig,
   parseTraeVersion,
   selectTraeAdapter
@@ -121,6 +124,7 @@ class Gateway {
     this.pollingTimer = null;
     this.isPolling = false;
     this.uiActionChain = Promise.resolve();
+    this.lastCheckInDay = null;
     // taskLocks is owned by taskQueueService.stateMachine (a Map<taskId, boolean>).
     // Exposed on `this` as a read-only alias for the polling loop's .has()
     // checks; mutations go through taskQueueService.tryAcquire/release so
@@ -277,6 +281,52 @@ class Gateway {
       this.uiActionInFlight = Math.max(0, (this.uiActionInFlight || 1) - 1);
       release();
     }
+  }
+
+  async _runCheckIn({ claim = false, scheduled = false } = {}) {
+    if (this.mockBridge || this._shutdownInProgress) return { state: 'unavailable' };
+
+    return this._withUiActionLock(async () => {
+      if (this._shutdownInProgress) return { state: 'unavailable' };
+      if (scheduled && !this.client?.isConnected) {
+        try {
+          const target = await discoverTarget();
+          if (target.surface !== 'workspace') return { state: 'unavailable' };
+          await this._connectTraeTarget(target);
+        } catch {
+          return { state: 'unavailable' };
+        }
+      } else {
+        await this._ensureConnection();
+      }
+      if (this._shutdownInProgress || !isKnownStandaloneAgentVersion(this.traeEnvironment?.appVersion) || !this.client?.isConnected) {
+        return { state: 'unavailable' };
+      }
+      const driver = new CheckInDriver(this.client);
+      if (!claim) return driver.status();
+
+      const day = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      if (this.lastCheckInDay === day) {
+        if (scheduled) return { state: 'already_attempted', day };
+        const status = await driver.status();
+        return status.checkedIn ? { ...status, state: 'already_claimed' } : { ...status, state: 'already_attempted' };
+      }
+      const result = await driver.claim();
+      if (result.attempted || result.checkedIn) this.lastCheckInDay = result.day || day;
+      return result;
+    });
+  }
+
+  _startAutoCheckIn() {
+    if (readRuntimeEnv('TRAECN_AUTO_CHECK_IN') !== '1' || this.mockBridge) return;
+    const tick = () => {
+      if (this.uiActionInFlight || this._shutdownInProgress) return;
+      this._runCheckIn({ claim: true, scheduled: true }).then(result => {
+        if (result.attempted) console.log('[Gateway] Daily check-in:', result.state, result.day);
+      }).catch(() => console.warn('[Gateway] Daily check-in status unavailable'));
+    };
+    this._setTimeout(tick, 1000);
+    this._setInterval(tick, 60 * 60 * 1000);
   }
 
   _setInterval(callback, interval) {
@@ -457,7 +507,12 @@ class Gateway {
     if (!this.driver || typeof this.driver.getWorkspaceContext !== 'function') return null;
 
     const workspace = await this.driver.getWorkspaceContext();
-    const requestedFolder = path.basename(path.resolve(requestedPath));
+    const canonicalPath = value => {
+      const resolved = path.resolve(value);
+      try { return fs.realpathSync(resolved); } catch { return resolved; }
+    };
+    const normalizedRequestedPath = canonicalPath(requestedPath);
+    const requestedFolder = path.basename(normalizedRequestedPath);
     const observedFolder = String(workspace?.folderName || '').trim();
     const observedTitle = String(workspace?.title || '').trim();
     // A legacy title-only folder can itself contain the editor separator.
@@ -470,8 +525,7 @@ class Gateway {
     const expandedCurrentPath = rawCurrentPath.startsWith('~/')
       ? path.join(os.homedir(), rawCurrentPath.slice(2))
       : rawCurrentPath;
-    const currentPath = expandedCurrentPath ? path.resolve(expandedCurrentPath) : null;
-    const normalizedRequestedPath = path.resolve(requestedPath);
+    const currentPath = expandedCurrentPath ? canonicalPath(expandedCurrentPath) : null;
     if ((currentPath && currentPath !== normalizedRequestedPath) ||
         (!currentPath && currentFolder !== requestedFolder)) {
       throw TraeCNAutomationError.projectNotOpen(
@@ -1151,7 +1205,7 @@ class Gateway {
     }
     const stopNative = async () => {
       try {
-        task.stopResult = await this.driver.stopGeneration();
+        task.stopResult = await this.driver.stopGeneration(task.soloChat?.sessionId);
       } catch (error) {
         task.stopResult = { success: false, error: error.message };
       }
@@ -1478,6 +1532,95 @@ class Gateway {
     }
   }
 
+  async _connectTraeTarget(target, prepare) {
+    const assertActive = () => {
+      if (this._shutdownInProgress) throw TraeCNAutomationError.cdpDisconnected('Gateway is shutting down');
+    };
+    assertActive();
+    const client = await connectToTarget(target, target.client);
+    try {
+      assertActive();
+      const environment = await this.detectTraeEnvironment({
+        client,
+        cdpVersion: target.cdpVersion || {},
+        target,
+        platform: process.platform
+      });
+      assertActive();
+      const adapter = this.selectTraeAdapter(environment);
+      const driver = new DomDriver(client, mergeAdapterConfig(getConfig(), adapter), {
+        traeAdapter: adapter,
+        activateWindow: () => this.traeControl.activateWindow()
+      });
+      const result = await (prepare ? prepare(driver) : undefined);
+      assertActive();
+      if (result?.success === false) {
+        await client.close();
+        return result;
+      }
+      const previous = this.client;
+      if (previous && previous !== client) this.healthWatcher?.stop();
+      this.client = client;
+      this.traeEnvironment = environment;
+      this.traeAdapter = adapter;
+      this.traeTarget = target;
+      this.driver = driver;
+      this.healthWatcher?.start(client);
+      if (previous && previous !== client) {
+        try { await previous.close(); } catch { /* The verified replacement is already connected. */ }
+      }
+      return result;
+    } catch (error) {
+      try { await client.close(); } catch { /* Preserve the connection error. */ }
+      throw error;
+    }
+  }
+
+  async _selectTraeMode(mode) {
+    return this._withUiActionLock(async () => {
+      await this._ensureConnection();
+      return this._switchTraeMode(mode);
+    });
+  }
+
+  async _switchTraeMode(mode, taskId) {
+    if (!isKnownStandaloneAgentVersion(this.traeEnvironment?.appVersion)) return this.driver.switchMode(mode);
+
+    const current = (await this.driver.detectMode()).mode;
+    const surface = mode === 'solo' ? 'agent' : 'workbench';
+    if (this.traeTarget?.workspaceKind === surface) return this.driver.switchMode(mode);
+    if ([...this.taskQueue.values()].some(task => task.taskId !== taskId && !this._isTerminalTaskStatus(task.status))) {
+      return { success: false, previousMode: current, error: 'Wait for active gateway tasks before changing TraeCN windows' };
+    }
+
+    let target;
+    try {
+      target = await discoverTarget({ surface });
+    } catch {
+      if (surface === 'agent' && current !== 'solo') {
+        const switched = await this.driver.switchMode('solo');
+        if (!switched.success) return switched;
+      }
+      if (!(await this.driver.openModeWindow(surface))) {
+        return { success: false, previousMode: current, error: 'TraeCN window switch control is unavailable' };
+      }
+      for (let attempt = 0; attempt < 12 && !target; attempt++) {
+        if (this._shutdownInProgress) throw TraeCNAutomationError.cdpDisconnected('Gateway is shutting down');
+        try { target = await discoverTarget({ surface }); } catch {
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+      }
+    }
+    if (!target) return { success: false, previousMode: current, error: 'Requested TraeCN window did not appear' };
+
+    const result = await this._connectTraeTarget(target, driver => driver.switchMode(mode));
+    if (result.success) {
+      this.preferredTraeWorkspaceKind = surface;
+      await this.client.send('Page.bringToFront').catch(() => {});
+    }
+    return { ...result, previousMode: current, alreadyInMode: false };
+  }
+
   async _ensureConnection() {
     const ensureActive = () => {
       if (this._shutdownInProgress) {
@@ -1499,48 +1642,29 @@ class Gateway {
       this.driver = null;
       this.traeEnvironment = null;
       this.traeAdapter = null;
+      this.traeTarget = null;
       if (this.healthWatcher) this.healthWatcher.stop();
-    };
-
-    const attachDriver = async (discovered, client) => {
-      ensureActive();
-      const environment = await this.detectTraeEnvironment({
-        client,
-        cdpVersion: discovered.cdpVersion || {},
-        target: discovered,
-        platform: process.platform
-      });
-      ensureActive();
-      const adapter = this.selectTraeAdapter(environment);
-      const driver = new DomDriver(
-        client,
-        mergeAdapterConfig(getConfig(), adapter),
-        { traeAdapter: adapter, activateWindow: () => this.traeControl.activateWindow() }
-      );
-      return { environment, adapter, driver };
     };
 
     const connectFresh = async () => {
       for (let attempt = 0; attempt < 2; attempt++) {
-        let client = null;
         try {
           ensureActive();
-          const discovered = await discoverTarget();
+          let discovered;
+          try {
+            discovered = await discoverTarget(this.preferredTraeWorkspaceKind
+              ? { surface: this.preferredTraeWorkspaceKind } : {});
+          } catch (error) {
+            ensureActive();
+            if (!this.preferredTraeWorkspaceKind ||
+                [...this.taskQueue.values()].some(task => !this._isTerminalTaskStatus(task.status))) throw error;
+            discovered = await discoverTarget();
+          }
           ensureActive();
-          client = await connectToTarget(discovered, discovered.client);
-          ensureActive();
-          const attached = await attachDriver(discovered, client);
-          ensureActive();
-          this.client = client;
-          this.traeEnvironment = attached.environment;
-          this.traeAdapter = attached.adapter;
-          this.driver = attached.driver;
-          if (this.healthWatcher) this.healthWatcher.start(client);
+          await this._connectTraeTarget(discovered);
+          if (discovered.workspaceKind !== this.preferredTraeWorkspaceKind) this.preferredTraeWorkspaceKind = null;
           return discovered;
         } catch (err) {
-          // A late client belongs to this attempt, even if another connection
-          // has since become current or shutdown already cleared Gateway state.
-          if (client) await closeCurrentConnection(client);
           ensureActive();
           if (attempt > 0) throw err;
           const recovered = await this._attemptTraeRecovery(err);
@@ -1651,7 +1775,7 @@ class Gateway {
     if (task.projectPath) await this._ensureRequestedWorkspace(task.projectPath);
     if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return false;
     if (task.desiredMode && typeof this.driver.switchMode === 'function') {
-      const result = await this.driver.switchMode(task.desiredMode);
+      const result = await this._switchTraeMode(task.desiredMode, task.taskId);
       if (result && result.success === false) {
         throw new Error(`Failed to switch TraeCN mode to ${task.desiredMode}`);
       }
@@ -2442,6 +2566,10 @@ class Gateway {
     if (!task || task.submittedToTrae !== true) return true;
     const text = String(result?.text || '');
     if (!text.trim()) return true;
+    const native = result?.[NATIVE_TURN_OWNERSHIP];
+    const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+    if (native?.sessionId && native.sessionId === task.soloChat?.sessionId
+      && native.taskText && normalize(native.taskText) === normalize(task.task)) return true;
     const signals = this._taskOwnershipSignals(task);
     const strongSignals = signals.filter(signal => signal.strong);
     const requiredSignals = strongSignals.length > 0 ? strongSignals : [];
@@ -2622,6 +2750,14 @@ class Gateway {
 
   async _handleDetectMode(req, res) {
     return traeControlHandlers.handleDetectMode(req, res, this);
+  }
+
+  async _handleCheckIn(req, res) {
+    const claim = req.method === 'POST';
+    if (claim && (await parseBody(req)).confirm !== true) {
+      return this._json(req, res, { error: 'confirm must be true to claim daily check-in' }, 400);
+    }
+    return this._json(req, res, await this._runCheckIn({ claim }));
   }
 
   async _handleSwitchMode(req, res) {
@@ -3524,7 +3660,14 @@ class Gateway {
     return await this._withUiActionLock(async () => {
       await this._ensureConnection();
       if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return task.result;
-      await this._switchToTaskSoloChat(task, 'collect_result');
+      const expectedSessionId = task.soloChat?.sessionId;
+      const mounted = this.traeTarget?.workspaceKind === 'agent' && expectedSessionId
+        && typeof this.driver?.getActiveSoloChat === 'function'
+        ? (await this.driver.getActiveSoloChat())?.active
+        : null;
+      if (mounted?.sessionId !== expectedSessionId || !expectedSessionId) {
+        await this._switchToTaskSoloChat(task, 'collect_result');
+      }
       if (task.cancelRequested || task.statePersistencePending || this._isTerminalTaskStatus(task.status)) return task.result;
       if (this.driver && typeof this.driver.getActiveSoloChat === 'function') {
         const activeSnapshot = await this.driver.getActiveSoloChat();
@@ -3563,6 +3706,8 @@ class Gateway {
       }
 
       const result = await this.driver.collectResponse({
+        expectedTask: task.task,
+        expectedSessionId: task.soloChat?.sessionId,
         shouldStop: () => Boolean(this._shutdownInProgress)
           || (this._isTerminalTaskStatus(task.status) && !task.cancelPersistencePending && !task.statePersistencePending)
           || (task.status === 'cancelled' && Object.prototype.hasOwnProperty.call(task, 'stopResult'))
@@ -3731,7 +3876,7 @@ class Gateway {
   _ensureBackgroundPolling() {
     if (this._shutdownInProgress || this.pollingTimer) return;
     const pollInterval = 15000;
-    this.pollingTimer = this._setInterval(async () => {
+    this._pollBackgroundOnce = async () => {
       // Prevent concurrent polling
       if (this._shutdownInProgress || this.isPolling) return;
       this.isPolling = true;
@@ -3922,6 +4067,8 @@ class Gateway {
                 this._syncTaskHistoryMirror(task);
                 this._persistActiveQueue();
                 const result = await this.driver.collectResponse({
+                  expectedTask: task.task,
+                  expectedSessionId: task.soloChat?.sessionId,
                   shouldStop: () => Boolean(this._shutdownInProgress)
                     || (this._isTerminalTaskStatus(task.status) && !task.cancelPersistencePending && !task.statePersistencePending)
                     || (task.status === 'cancelled' && Object.prototype.hasOwnProperty.call(task, 'stopResult'))
@@ -3974,14 +4121,28 @@ class Gateway {
         // Release the polling lock
         this.isPolling = false;
       }
-    }, pollInterval);
+    };
+    this.pollingTimer = this._setInterval(this._pollBackgroundOnce, pollInterval);
     if (typeof this.pollingTimer.unref === 'function') {
       this.pollingTimer.unref();
     }
     console.log('[Gateway] Background polling started (interval=' + pollInterval + 'ms)');
   }
 
+  _wakeBackgroundPolling() {
+    if (this._shutdownInProgress || this.isPolling || this._pollWakeTimer || !this._pollBackgroundOnce) return;
+    this._pollWakeTimer = this._setTimeout(() => {
+      this._pollWakeTimer = null;
+      this._pollBackgroundOnce?.().catch(error => console.error('[Queue] wake failed:', safeErrorMessage(error)));
+    }, 0);
+  }
+
   _stopBackgroundPolling() {
+    if (this._pollWakeTimer) {
+      this._clearTimeout(this._pollWakeTimer);
+      this._pollWakeTimer = null;
+    }
+    this._pollBackgroundOnce = null;
     if (!this.pollingTimer) return;
     this._clearInterval(this.pollingTimer);
     this.pollingTimer = null;
@@ -4120,6 +4281,7 @@ async function startGateway(options = {}) {
       gateway.wsHandler = new WebSocketHandler(gateway);
       gateway.wsHandler.initialize(server);
       gateway._ensureBackgroundPolling();
+      gateway._startAutoCheckIn();
       // `close` is the canonical embed/test handle. `gateway.gracefulShutdown()`
       // remains available for callers already wired to it.
       resolve({ server, gateway, close: () => gateway.gracefulShutdown() });

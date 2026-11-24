@@ -7,8 +7,62 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Changed
+
+- Shortened MCP discovery descriptions without changing tool contracts; moved
+  conditional host setup and result-review details out of the public Skill entry.
+
+## [0.7.1] - 2026-11-14
+
+### Docs
+
+- Added `llms.txt` standard and generative engine FAQ section for AI search
+  discoverability (`676b461`).
+- Migrated the maintainer development Skill and IDE symlinks to
+  `traecn-mcp-development`, updated `AGENTS.md` and `docs/agent-verification.md`,
+  and documented polling dispatch, lock scopes, and queue recovery boundaries
+  (`9935074`, `aa3327e`).
+
+## [0.7.0] - 2026-11-07
+
+### Added
+
+- Added daily check-in status and opt-in claiming through Trae CN's native
+  account flow on macOS 3.4.11 and 3.4.15. Automatic claiming is disabled by default.
+
+### Changed
+
+- Consolidated GitHub downloads, Homebrew, and Glama metadata under the public
+  TraeCN MCP repository.
+- Unified product naming as TraeCN MCP and simplified MCP onboarding. The new
+  `traecn-mcp` command replaces the previous server and operator commands.
+- Simplified both Skills around current source, preserved all 20 public tools,
+  and moved conditional protocol detail and dated channel evidence to references.
+- Isolated Gateway benchmarks from user state and real CDP, validated every
+  HTTP response, and added bounded concurrency, latency percentiles, memory
+  and event-loop measurements while retaining the existing metric names.
+- Reused the event snapshot's canonical checksum encoding for compact writes,
+  avoiding a second traversal of the retained log while preserving schema,
+  per-operation commits, validated backups, fsync and crash recovery.
+- Included all existing shared-module tests in repository verification, counted
+  asynchronous outcomes only after settlement, awaited queue/discovery tests,
+  failed process exits with unsettled asynchronous tests, and corrected
+  coverage exclusions without lowering thresholds.
+- Used the normal CDP probe timeout for functional Quickstart HTTP fixtures;
+  retained the dedicated 25 ms stalled-endpoint timeout check.
+- **Deprecated unscoped npm package `traecnclaw`** (versions `0.3.0`, `0.3.1`)
+  as of 2026-08-26. The canonical public package is
+  `@luckycat133/traecnclaw`, matching the package builder and install paths. The
+  unscoped name is no longer maintained, will not receive updates, and is
+  scheduled for removal from npm. Users depending on the unscoped name should
+  migrate to the scoped package:
+  `npm uninstall traecnclaw && npm install @luckycat133/traecnclaw`.
+
 ### Fixed
 
+- Read native conversation IDs and titles in the standalone Agent window,
+  verify the selected history row, and confirm that a new draft is empty.
+- Read the Trae CN 3.4.15 model picker and report when Auto hides manual models.
 - Verified settings against their exact control type and actual applied value;
   scoped dropdown choices to their native portal and supplied the pointer move
   required by TraeCN's Radix selection guard.
@@ -117,30 +171,6 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - Matched task completion metadata to persisted ISO timestamps as well as
   queue timestamps and retained explicit gateway error codes with actionable
   guidance when the desktop window is unavailable.
-
-### Changed
-
-- Simplified both Skills around current source, preserved all 20 public tools,
-  and moved conditional protocol detail and dated channel evidence to references.
-- Isolated Gateway benchmarks from user state and real CDP, validated every
-  HTTP response, and added bounded concurrency, latency percentiles, memory
-  and event-loop measurements while retaining the existing metric names.
-- Reused the event snapshot's canonical checksum encoding for compact writes,
-  avoiding a second traversal of the retained log while preserving schema,
-  per-operation commits, validated backups, fsync and crash recovery.
-- Included all existing shared-module tests in repository verification, counted
-  asynchronous outcomes only after settlement, awaited queue/discovery tests,
-  failed process exits with unsettled asynchronous tests, and corrected
-  coverage exclusions without lowering thresholds.
-- Used the normal CDP probe timeout for functional Quickstart HTTP fixtures;
-  retained the dedicated 25 ms stalled-endpoint timeout check.
-- **Deprecated unscoped npm package `traecnclaw`** (versions `0.3.0`, `0.3.1`)
-  as of 2026-08-26. The canonical public package is
-  `@luckycat133/traecnclaw`, matching the package builder and install paths. The
-  unscoped name is no longer maintained, will not receive updates, and is
-  scheduled for removal from npm. Users depending on the unscoped name should
-  migrate to the scoped package:
-  `npm uninstall traecnclaw && npm install @luckycat133/traecnclaw`.
 
 ### Security
 

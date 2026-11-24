@@ -1,8 +1,9 @@
-# TRAECNclaw Deployment Guide
+# TraeCN MCP Deployment Guide
 
 ## Deployment Model
 
-TRAECNclaw is designed as a local desktop companion service. It should run on the same machine as TraeCN and bind to `127.0.0.1` unless a controlled network deployment has been reviewed.
+Run the gateway on the same Mac as TraeCN. Use `127.0.0.1` for local access
+and configure authentication for a deliberately networked deployment.
 
 ## Production Configuration
 

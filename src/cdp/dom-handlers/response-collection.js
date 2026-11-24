@@ -18,6 +18,27 @@
 
 const { sleep, safeJsValue } = require('../../shared/utils');
 const { sanitizeActivityText, isTruncationSignal } = require('../driver-config');
+const NATIVE_TURN_OWNERSHIP = Symbol('nativeTurnOwnership');
+
+function addNativeTurnOwnership(result, state) {
+  if (state.nativeFinalReply && state.nativeTurnOwnership) {
+    Object.defineProperty(result, NATIVE_TURN_OWNERSHIP, { value: state.nativeTurnOwnership });
+  }
+  return result;
+}
+
+async function readCompletedNativeTurn(driver, options) {
+  if (!options.expectedSessionId || !options.expectedTask || options.shouldStop?.()) return null;
+  const state = await driver._pollResponseState(options);
+  if (!state.taskComplete || !state.nativeFinalReply || !state.nativeTurnOwnership) return null;
+  if ((await driver.checkForApprovalDialog()).needsApproval || options.shouldStop?.()) return null;
+  const review = await driver.checkTaskReviewGate();
+  if ((review?.awaitingReview && review.reviewCount !== 0) || options.shouldStop?.()) return null;
+  return addNativeTurnOwnership({
+    text: state.taskText, stable: true, elapsedMs: 0,
+    ...(state.traceText ? { traceText: state.traceText } : {})
+  }, state);
+}
 
 function hasCompletionMarker(text) {
   if (!text) return false;
@@ -125,12 +146,12 @@ function cleanAssistantResultText(text) {
 
 /**
  * Core polling method. Checks multiple response sources in priority order:
- * 1. Mode-specific response selectors (sidebar for SOLO, chat panel for IDE)
+ * 1. Mode-specific response selectors (current turn, sidebar or chat panel)
  * 2. Configured response selectors (generic fallback)
  * 3. Broad content area scan (heuristic-based)
  * 4. Body text diffing (last resort)
  */
-async function _pollResponseState(driver) {
+async function _pollResponseState(driver, options = {}) {
   const skipText = driver._lastTaskText;
   const safeResponseSelectors = driver.config.responseSelectors.map(s => safeJsValue(s));
   const safeActivitySelectors = driver.config.activitySelectors.map(s => safeJsValue(s));
@@ -139,8 +160,7 @@ async function _pollResponseState(driver) {
   const modeInfo = await driver.detectMode();
   const isIdeMode = modeInfo.mode === 'ide';
 
-  // Mode-specific task source (sidebar for SOLO, chat panel for IDE)
-  const taskSourceResult = await driver._queryTaskSource(skipText);
+  const taskSourceResult = await driver._queryTaskSource(skipText, options);
   if (taskSourceResult?.interrupted === true) {
     return {
       taskComplete: false,
@@ -148,6 +168,20 @@ async function _pollResponseState(driver) {
       taskInProgress: false,
       responseText: '',
       interrupted: true
+    };
+  }
+  if (taskSourceResult?.standalone) {
+    return {
+      taskComplete: taskSourceResult.isComplete,
+      taskText: taskSourceResult.text,
+      taskInProgress: taskSourceResult.inProgress,
+      responseText: '',
+      awaitingAssistant: taskSourceResult.awaitingAssistant,
+      nativeOwnershipPending: taskSourceResult.nativeOwnershipPending,
+      nativeFinalReply: taskSourceResult.nativeFinalReply,
+      nativeTurnOwnership: taskSourceResult.nativeTurnOwnership,
+      matchedUser: taskSourceResult.matchedUser,
+      ...(taskSourceResult.traceText ? { traceText: taskSourceResult.traceText } : {})
     };
   }
 
@@ -283,7 +317,8 @@ async function _pollResponseState(driver) {
 
 /**
  * Mode-aware response collection.
- * In SOLO mode: reads sidebar + heuristics (existing logic).
+ * In standalone Agent: reads the latest turn and its native finish summary.
+ * In legacy SOLO mode: reads the sidebar and uses text heuristics.
  * In IDE mode: reads chat panel messages + body text diff.
  */
 async function collectResponse(driver, options = {}) {
@@ -296,10 +331,13 @@ async function collectResponse(driver, options = {}) {
       await sleep(Math.min(250, deadline - Date.now()));
     }
   };
+  const pollOptions = { expectedTask: options.expectedTask, expectedSessionId: options.expectedSessionId };
+  const requiresNativeSession = Boolean(options.expectedSessionId
+    && driver.traeAdapter?.environment?.target?.workspaceKind === 'agent');
   if (shouldStop()) return stoppedResult('');
-  const dialog = await driver.checkForApprovalDialog();
+  const dialog = requiresNativeSession ? null : await driver.checkForApprovalDialog();
   if (shouldStop()) return stoppedResult('');
-  if (dialog.needsApproval) {
+  if (dialog?.needsApproval) {
     return {
       text: '',
       stable: false,
@@ -384,8 +422,14 @@ async function collectResponse(driver, options = {}) {
   try {
     while (Date.now() - startTime < driver.config.timeoutMs) {
       if (shouldStop()) return stoppedResult(lastText);
-      const state = await driver._pollResponseState();
+      const state = await driver._pollResponseState(pollOptions);
       if (shouldStop()) return stoppedResult(lastText);
+      if (state.nativeOwnershipPending) {
+        lastText = '';
+        stableCount = 0;
+        await pause(pollInterval);
+        continue;
+      }
       if (state.interrupted === true) {
         return {
           text: cleanAssistantResultText(sanitizeActivityText(state.taskText || '')),
@@ -398,37 +442,38 @@ async function collectResponse(driver, options = {}) {
       if (state.awaitingAssistant) {
         lastText = '';
         stableCount = 0;
-        await pause(pollInterval);
-        continue;
       }
-      const completionCandidate = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
-      const completionLooksStale = completionCandidate && (
+      const completionCandidate = state.nativeFinalReply
+        ? state.taskText
+        : cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
+      const completionLooksStale = completionCandidate && !state.matchedUser && (
         (driver._preSendSnapshot && driver._preSendSnapshot.includes(completionCandidate)) ||
         (driver._lastTaskText && driver._lastTaskText.includes(completionCandidate))
       );
       const hasTaskText = !!String(state.taskText || '').trim();
-      const reviewGate = await driver.checkTaskReviewGate();
+      const reviewGate = state.awaitingAssistant ? null : await driver.checkTaskReviewGate();
       if (shouldStop()) return stoppedResult(lastText);
-      if (reviewGate.awaitingReview && !completionLooksStale && hasTaskText && state.taskComplete === true) {
+      if (reviewGate?.awaitingReview && !completionLooksStale && hasTaskText && state.taskComplete === true) {
         const gateResolution = await driver.resolveTaskReviewGate(chooseReviewGateAction(state));
         if (gateResolution?.success !== true) {
           cleanup();
-          return {
+          return addNativeTurnOwnership({
             text: completionCandidate,
             stable: false,
             elapsedMs: Date.now() - startTime,
             timedOut: false,
             needsApproval: false,
             reviewGatePending: true
-          };
+          }, state);
         }
         await pause(Math.max(driver.config.postActionDelayMs * 2, 500));
         if (shouldStop()) return stoppedResult(lastText);
       }
-      let currentText = cleanAssistantResultText(sanitizeActivityText(state.taskText || state.responseText || ''));
-      // Periodic dialog check during streaming - detect dialogs that appear mid-execution
+      let currentText = completionCandidate;
+      // Once the native turn is verified, release the UI lock promptly for its pending interaction.
       const approvalCheckInterval = driver.config.approvalPollIntervalMs || 3000;
-      if (driver._lastApprovalCheckAt === undefined || (Date.now() - driver._lastApprovalCheckAt) >= approvalCheckInterval) {
+      if (requiresNativeSession || driver._lastApprovalCheckAt === undefined
+        || (Date.now() - driver._lastApprovalCheckAt) >= approvalCheckInterval) {
         const approvalDialog = await driver.checkForApprovalDialog();
         if (shouldStop()) return stoppedResult(lastText);
         driver._lastApprovalCheckAt = Date.now();
@@ -478,21 +523,25 @@ async function collectResponse(driver, options = {}) {
         }
       }
 
+      if (state.awaitingAssistant || (state.nativeFinalReply && completionLooksStale)) {
+        await pause(pollInterval);
+        continue;
+      }
 
       if (!completionLooksStale && hasTaskText && state.taskComplete === true) {
-        const text = cleanAssistantResultText(sanitizeActivityText(state.taskText || ''));
-        if (driver._isModelErrorResponseText(text)) {
+        const text = completionCandidate;
+        if (!state.nativeFinalReply && driver._isModelErrorResponseText(text)) {
           cleanup();
           return { text, stable: false, elapsedMs: Date.now() - startTime, modelError: true, error: 'Trae model request failed' };
         }
-        if (text && !driver._isIncompleteResponseText(text)) {
+        if (text && (state.nativeFinalReply || !driver._isIncompleteResponseText(text))) {
           cleanup();
-          return {
+          return addNativeTurnOwnership({
             text,
             stable: true,
             elapsedMs: Date.now() - startTime,
             ...(state.traceText ? { traceText: state.traceText } : {})
-          };
+          }, state);
         }
       }
 
@@ -618,7 +667,7 @@ async function collectResponse(driver, options = {}) {
       await pause(pollInterval);
     }
 
-    const finalText = lastText || (streamingBuffer.length > 0 ? streamingBuffer.join(' ') : '');
+    const finalText = lastText || (!requiresNativeSession ? streamingBuffer.join(' ') : '');
     driver._pendingUserTask = '';
     cleanup();
     return { text: finalText, stable: false, elapsedMs: Date.now() - startTime, timedOut: true };
@@ -632,6 +681,8 @@ async function collectResponse(driver, options = {}) {
 }
 
 module.exports = {
+  NATIVE_TURN_OWNERSHIP,
+  readCompletedNativeTurn,
   hasCompletionMarker,
   chooseReviewGateAction,
   extractFinalAssistantResultText,

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Build a deterministic .mcpb bundle for the local TRAECNclaw MCP server.
+ * Build a deterministic .mcpb bundle for the local TraeCN MCP server.
  *
  * Pipeline: npm pack -> extract -> npm ci --omit=dev -> public metadata ->
  * manifest.json -> secret scan -> official pack -> normalized zip. The bundle carries the full server
@@ -51,8 +51,8 @@ function run(command, args, options = {}) {
 function buildMcpbManifest({ version, description, keywords, includeToolSummaries = true }) {
   const manifest = {
     manifest_version: '0.3',
-    name: 'traecnclaw-mcp',
-    display_name: 'TRAECNclaw MCP',
+    name: 'traecn-mcp',
+    display_name: require('../package.json').displayName,
     version,
     description,
     author: { name: 'Luckycat133', url: 'https://github.com/Luckycat133' },
@@ -83,14 +83,14 @@ function buildMcpbManifest({ version, description, keywords, includeToolSummarie
       gateway_host: {
         type: 'string',
         title: 'Gateway host',
-        description: 'Host of the local TRAECNclaw gateway.',
+        description: 'Host of the local TraeCN MCP gateway.',
         default: '127.0.0.1',
         required: false
       },
       gateway_port: {
         type: 'string',
         title: 'Gateway port',
-        description: 'Port of the local TRAECNclaw gateway.',
+        description: 'Port of the local TraeCN MCP gateway.',
         default: '8788',
         required: false
       },
@@ -144,7 +144,7 @@ function buildMcpb({ outDir, revision, packageInfo, smitheryCompatible = false }
   const workRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'traecn-mcpb-'));
   const stagingRoot = path.join(workRoot, 'staging');
   const suffix = smitheryCompatible ? '-smithery' : '';
-  const outPath = path.join(outDir, `traecnclaw-mcp-${packageInfo.version}${suffix}.mcpb`);
+  const outPath = path.join(outDir, `traecn-mcp-${packageInfo.version}${suffix}.mcpb`);
   try {
     fs.mkdirSync(stagingRoot, { recursive: true });
     fs.mkdirSync(outDir, { recursive: true });

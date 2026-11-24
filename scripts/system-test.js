@@ -71,7 +71,7 @@ function request(port, method, path, body = null, headers = {}) {
 
     const capabilities = await request(port, 'GET', '/api/capabilities');
     assert.strictEqual(capabilities.status, 200);
-    assert.strictEqual(capabilities.data.name, 'traecnclaw');
+    assert.strictEqual(capabilities.data.name, 'traecn-mcp');
     assert.ok(capabilities.data.commands.some(command => command.command === 'delegate_async'));
 
     const unauthorized = await request(port, 'POST', '/api/sessions', {});

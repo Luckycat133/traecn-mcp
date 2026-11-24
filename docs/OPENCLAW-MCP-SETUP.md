@@ -35,14 +35,14 @@ The `--silent` flag keeps stdout as pure JSON. To create a new mode-0600 file
 atomically, without replacing an existing file, run:
 
 ```sh
-npm run setup:mcp -- --output ./traecnclaw-mcp.json
+npm run setup:mcp -- --output ./traecn-mcp.json
 ```
 
 Merge the resulting `mcpServers.traecn` entry into the host configuration and
 restart or reconnect the host. A standalone Skill installation can run
 `node scripts/setup-mcp.js`; setup fails before writing when it cannot locate a
 matching repository server, installed `traecnclaw` package, or
-`traecnclaw-mcp` executable.
+`traecn-mcp` executable.
 
 The generated entry uses the skill launcher:
 
@@ -51,7 +51,7 @@ The generated entry uses the skill launcher:
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/TRAECNclaw/skills/traecnclaw-mcp/scripts/start-mcp.js"],
+      "args": ["/absolute/path/to/TRAECNclaw/skills/traecn-mcp/scripts/start-mcp.js"],
       "env": {
         "TRAECN_GATEWAY_HOST": "127.0.0.1",
         "TRAECN_GATEWAY_PORT": "8788",

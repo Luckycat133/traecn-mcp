@@ -235,6 +235,62 @@ async function verifyModelListingAfterShutdown(ctx) {
   assert.strictEqual(missingNativeRes.status, 404);
   assert.strictEqual(nativeCalls.length, beforeMissing, 'missing native identity must never delete a title/index match');
 
+  const standaloneDelete = {};
+  await handleManageConversation(request({
+    action: 'delete',
+    conversationId: 'solo-session:' + otherSession,
+    expectedTitle: 'Same title',
+    acknowledgePermanentDeletion: true
+  }), standaloneDelete, {
+    ...nativeCtx,
+    traeTarget: { workspaceKind: 'agent' },
+    _withUiActionLock: () => assert.fail('standalone Agent must refuse deletion before UI interaction')
+  });
+  assert.strictEqual(standaloneDelete.status, 501);
+  assert.strictEqual(standaloneDelete.body.code, 'STANDALONE_AGENT_DELETE_UNSUPPORTED');
+
+  const observedAgentCtx = {
+    ...nativeCtx,
+    traeTarget: { workspaceKind: 'agent' },
+    traeEnvironment: { appVersion: '3.4.15' }
+  };
+  for (const [id, title, expectedStatus] of [
+    ['solo:1', 'Same title', 400],
+    [nativeId, 'Same title', 409],
+    [`solo-session:${otherSession}`, 'Same title 09:40', 409],
+    [`solo-session:${otherSession}`, 'Same title', 200]
+  ]) {
+    const res = {};
+    const callCount = nativeCalls.length;
+    await handleManageConversation(request({
+      action: 'delete', conversationId: id, expectedTitle: title, acknowledgePermanentDeletion: true
+    }), res, observedAgentCtx);
+    assert.strictEqual(res.status, expectedStatus);
+    assert.strictEqual(nativeCalls.length, callCount + (expectedStatus === 200 ? 1 : 0));
+  }
+  assert.deepStrictEqual(nativeCalls.at(-1), ['delete', {
+    standaloneAgent: true,
+    candidates: [{ index: 1, sessionId: otherSession, title: 'Same title' }]
+  }]);
+  for (const [reason, code] of [
+    ['delete_dialog_not_confirmed', 'delete_dialog_not_confirmed'],
+    ['untrusted driver diagnostic', 'delete_failed']
+  ]) {
+    const res = {};
+    await handleManageConversation(request({
+      action: 'delete', conversationId: `solo-session:${otherSession}`,
+      expectedTitle: 'Same title', acknowledgePermanentDeletion: true
+    }), res, {
+      ...observedAgentCtx,
+      driver: { ...observedAgentCtx.driver, deleteSoloChats: async () => ({ deleted: 0, attempts: [{ reason }] }) }
+    });
+    assert.strictEqual(res.status, 409);
+    assert.strictEqual(res.body.error, 'delete_failed');
+    assert.strictEqual(res.body.code, code);
+    assert.strictEqual(auditEntries.at(-1).error, code);
+    assert.ok(!Object.hasOwn(res.body, 'attempts'));
+  }
+
   for (const createCase of ['draft', 'stale-active', 'native-created']) {
     let reads = 0;
     const createRes = {};

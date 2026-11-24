@@ -80,9 +80,44 @@ test('version adapter selectors are prepended without removing runtime overrides
 
 test('registry inventory distinguishes verified and fallback adapters', () => {
   assert.deepStrictEqual(listTraeAdapters().map(item => ({ id: item.id, compatibility: item.compatibility })), [
+    { id: 'traecn-3.4.15', compatibility: 'degraded' },
+    { id: 'traecn-3.4.11', compatibility: 'degraded' },
     { id: 'traecn-1.107', compatibility: 'verified' },
     { id: 'traecn-unknown', compatibility: 'degraded' }
   ]);
+});
+
+test('registry selects current selectors without inheriting engine-based verification', () => {
+  const environment = {
+    traeVersion: '1.107.1',
+    appVersion: '3.4.11',
+    platform: 'darwin',
+    target: { surface: 'workspace', workspaceKind: 'agent' },
+    mode: 'solo'
+  };
+  const adapter = selectTraeAdapter(environment);
+  const handshake = adapterHandshake(adapter);
+  assert.strictEqual(handshake.adapter, 'traecn-3.4.11');
+  assert.strictEqual(handshake.appVersion, '3.4.11');
+  assert.strictEqual(handshake.traeVersion, '1.107.1');
+  assert.strictEqual(handshake.verified, false);
+  assert.deepStrictEqual(adapter.selectors.newChatSelectors.slice(0, 1), [
+    '.task-list-new-task-item:not(.task-list-skills-item)'
+  ]);
+  assert.strictEqual(selectTraeAdapter({ ...environment, appVersion: '3.4.12' }).id, 'traecn-unknown');
+  assert.strictEqual(selectTraeAdapter({ ...environment, appVersion: '3.4.15' }).id, 'traecn-3.4.15');
+  assert.strictEqual(selectTraeAdapter({ ...environment, appVersion: '3.4.16' }).id, 'traecn-unknown');
+  assert.strictEqual(selectTraeAdapter({ ...environment, appVersion: null }).id, 'traecn-unknown');
+});
+
+test('setup does not inherit a verified adapter from the engine version', () => {
+  const adapter = selectTraeAdapter({
+    traeVersion: '1.107.1',
+    platform: 'darwin',
+    target: { surface: 'setup' }
+  });
+  assert.strictEqual(adapter.id, 'traecn-unknown');
+  assert.strictEqual(adapterHandshake(adapter).verified, false);
 });
 
 summary();

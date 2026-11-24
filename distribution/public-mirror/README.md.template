@@ -1,103 +1,50 @@
-# TRAECNclaw MCP Skill
+# TraeCN MCP
 
-> Generated from canonical TRAECNclaw {{VERSION}} at commit `{{SOURCE_REVISION}}`.
+TraeCN MCP is a local-first stdio server for operating the TraeCN desktop app.
+MCP contract version 5 exposes exactly 20 tools for tasks, workspace, model,
+mode, conversations, settings, and exceptional decisions. One local gateway
+owns execution, queues, persistence, and completion delivery.
 
-TRAECNclaw is a local-first MCP server and Agent Skill for operating the TraeCN
-desktop app on the user's Mac. This repository is the public distribution
-mirror: it carries the portable Skill, installable server archives, provenance,
-and marketplace metadata without publishing the private canonical history.
+## Quick start
 
-TRAECNclaw exposes MCP contract version 5 with exactly 20 stable,
-single-intent tools. The normal Agent flow is:
-
-1. Open a workspace only when needed.
-2. Select model or mode only when needed.
-3. Send one message and release the caller context.
-4. Legacy MCP clients receive a durable notification; modern `2026-07-28`
-   hosts can negotiate Tasks and subscribe to the exact returned task ID.
-
-Queueing, waiting, recovery, routine non-command questions, task ownership, and
-durable completion remain gateway-managed.
-
-The local server uses newline-delimited stdio, implements MCP `2026-07-28`, and
-remains compatible with initialization-based `2025-11-25` and `2024-11-05`
-clients. TRAECNclaw contract version 5 is the tool-surface version, not the MCP
-protocol revision. The independently negotiated, upstream-draft
-`io.modelcontextprotocol/tasks` extension does not add tools.
-
-## Install the server
-
-Install the exact release through one verified channel:
+Requires macOS, Node.js 22+, and a signed-in TraeCN desktop app.
 
 ```sh
 npm install --global @luckycat133/traecnclaw@{{VERSION}}
-# or, after `brew info` reports {{VERSION}}
-brew install Luckycat133/tap/traecnclaw
+traecn-mcp quickstart --launch-trae
 ```
 
-The matching [GitHub Release](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v{{VERSION}})
-also provides the complete scoped npm tarball and deterministic MCPB bundle.
-The unrelated unscoped `traecnclaw@0.3.1` package is historical and is not a
-current install path.
+Keep the gateway terminal open. Quickstart prints recovery instructions if
+TraeCN is already open without remote debugging.
 
-## Install the Agent Skill
+In another terminal, run `traecn-mcp setup-mcp`. Add the generated `traecn`
+entry to your MCP host and reconnect. Call `traecn_send_message` and keep the
+returned task ID for completion notifications or a `traecn_get_task` read.
 
-Install from the public GitHub repository with the open Skills CLI:
+The web console at [127.0.0.1:8788](http://127.0.0.1:8788/) offers human control
+and task review on the same gateway.
+
+## Other install options
+
+The [matching release](https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/tag/v{{VERSION}})
+contains the server tarball and MCPB bundle. Homebrew installs the same server
+with `brew install Luckycat133/tap/traecnclaw` when the formula reports
+`{{VERSION}}`. Use the scoped npm package for npm installs.
+
+Hosts that support Agent Skills can also install the tool-use guidance:
 
 ```sh
-npx skills add https://github.com/Luckycat133/traecnclaw-mcp-skill \
-  --skill traecnclaw-mcp \
-  -g
+npx skills add https://github.com/Luckycat133/traecnclaw-mcp-skill --skill traecn-mcp -g
 ```
 
-Or download the matching Skill archive from the GitHub Release. The Skill lives
-at `.codex/skills/traecnclaw-mcp` and includes
-`assets/mcp-client-config.json`, `scripts/setup-mcp.js`, and the server launcher.
-Restart the Agent host after installing or updating the Skill.
+## Runtime
 
-Use `scripts/setup-mcp.js` to validate server discovery and generate the host
-entry. The normal runtime is:
+The server and gateway run beside TraeCN on your Mac. The gateway defaults to
+`127.0.0.1:8788`; configure authentication before a non-loopback bind. Directory
+builds can inspect the stdio schema.
 
-```text
-Agent host -> local stdio server -> gateway on the same Mac -> TraeCN
-```
+The server supports MCP `2026-07-28` with optional Tasks negotiation, plus
+initialization-based `2025-11-25` and `2024-11-05` clients.
 
-The server and gateway run on the same user-owned Mac as TraeCN. Marketplace
-containers may inspect the stdio schema, but a cloud container cannot
-transparently control the user's local TraeCN desktop.
-
-Prepared Official Registry metadata uses the scoped package
-`@luckycat133/traecnclaw@{{VERSION}}` with local stdio transport. Smithery Local
-uses the matching verified MCPB bundle; the retired `smithery.yaml` format
-remains absent.
-
-## Configuration
-
-The gateway defaults are `TRAECN_GATEWAY_HOST=127.0.0.1` and
-`TRAECN_GATEWAY_PORT=8788`. Non-loopback binds require
-`TRAECN_GATEWAY_TOKEN`. There is no MCP tool-profile setting.
-
-## Discovery channels
-
-The same public repository is the canonical source for Skill and MCP directory
-submissions. A directory listing is trustworthy only when its version, local
-stdio transport, macOS requirement, 20-tool count, and generated install command
-match this Release.
-
-Selected channels include ClawHub, Glama, skills.sh, AwesomeSkills.dev,
-MCP.Directory, MCPB/Smithery Local, and—after a current public package exists—the
-Official MCP Registry and PulseMCP. Other directories should reuse the same
-provenance and install copy rather than maintaining forks.
-
-## Glama
-
-`glama.json` and the generated root Dockerfile support directory registration,
-maintainer verification, security/quality scanning, and tool-schema inspection.
-The Dockerfile installs the current public Release and never contains a gateway
-token or mock bridge.
-
-TRAECNclaw should be listed as a **local stdio server**. Do not describe a Glama
-hosted container as an automatic remote connection to the user's Mac.
-
-See `SOURCE_REVISION` and `release-manifest.json` for provenance and channel
-readiness.
+Generated from canonical TRAECNclaw {{VERSION}} at commit `{{SOURCE_REVISION}}`.
+See `SOURCE_REVISION` and `release-manifest.json` for mirror provenance.

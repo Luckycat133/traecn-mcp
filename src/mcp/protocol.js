@@ -12,7 +12,11 @@ const PROTOCOL_VERSION_META_KEY = 'io.modelcontextprotocol/protocolVersion';
 const CLIENT_INFO_META_KEY = 'io.modelcontextprotocol/clientInfo';
 const CLIENT_CAPABILITIES_META_KEY = 'io.modelcontextprotocol/clientCapabilities';
 const SERVER_INFO_META_KEY = 'io.modelcontextprotocol/serverInfo';
-const SERVER_INFO = Object.freeze({ name: 'traecnclaw', version: packageInfo.version });
+const SERVER_INFO = Object.freeze({
+  name: 'traecn-mcp',
+  title: packageInfo.displayName,
+  version: packageInfo.version
+});
 
 class McpProtocolError extends Error {
   constructor(code, message, data) {

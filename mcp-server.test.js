@@ -84,7 +84,7 @@ async function test(name, fn) {
     const handlers = createMcpHandlers({ test: true });
     const result = await handlers.handle({ method: 'initialize', params: { protocolVersion: '2025-11-25' } });
     assert.strictEqual(result.protocolVersion, '2025-11-25');
-    assert.strictEqual(result.serverInfo.name, 'traecnclaw');
+    assert.strictEqual(result.serverInfo.name, 'traecn-mcp');
     assert.ok(result.capabilities.tools);
     assert.ok(result.capabilities.prompts);
     assert.ok(result.capabilities.resources);
@@ -106,7 +106,7 @@ async function test(name, fn) {
     });
     assert.strictEqual(result.resultType, 'complete');
     assert.deepStrictEqual(result.supportedVersions, ['2026-07-28', '2025-11-25', '2024-11-05']);
-    assert.strictEqual(result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
+    assert.strictEqual(result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecn-mcp');
     assert.strictEqual(result.capabilities.logging, undefined);
     assert.ok(result.capabilities.tools);
     assert.deepStrictEqual(
@@ -170,7 +170,7 @@ async function test(name, fn) {
       assert.strictEqual(created.resultType, 'task');
       assert.strictEqual(created.taskId, 'task-ext-1');
       assert.strictEqual(created.status, 'working');
-      assert.strictEqual(created._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
+      assert.strictEqual(created._meta['io.modelcontextprotocol/serverInfo'].name, 'traecn-mcp');
 
       const completed = await handlers.handle({
         jsonrpc: '2.0',
@@ -251,7 +251,7 @@ async function test(name, fn) {
     assert.strictEqual(result.resultType, 'complete');
     assert.strictEqual(result.cacheScope, 'private');
     assert.ok(result.ttlMs > 0);
-    assert.strictEqual(result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecnclaw');
+    assert.strictEqual(result._meta['io.modelcontextprotocol/serverInfo'].name, 'traecn-mcp');
   });
 
   await test('tool metadata and results expose structured JSON', async () => {

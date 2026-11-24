@@ -13,7 +13,7 @@ const {
 } = require('./public-mirror');
 
 const repoRoot = path.resolve(__dirname, '..');
-const canonicalSkill = path.join(repoRoot, 'skills/traecnclaw-mcp');
+const canonicalSkill = path.join(repoRoot, 'skills/traecn-mcp');
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'traecn-public-mirror-'));
 const revision = '0123456789abcdef0123456789abcdef01234567';
 const escapedVersion = packageInfo.version.replace(/\./g, '\\.');
@@ -50,16 +50,21 @@ try {
   assert.throws(() => synchronizeLocalSkill({ sourceRoot: path.join(tempRoot, 'absent'), destinationRoot: localSkill }), /missing SKILL.md/);
   assert.deepStrictEqual(compareTrees(canonicalSkill, localSkill), []);
 
+  const formerSkill = path.join(tempRoot, '.codex/skills/traecnclaw-mcp');
+  fs.mkdirSync(formerSkill, { recursive: true });
+  fs.writeFileSync(path.join(formerSkill, 'SKILL.md'), '# Previous generated Skill\n');
   buildPublicMirror({ mirrorRoot: tempRoot, sourceRevision: revision });
+  assert.strictEqual(fs.existsSync(formerSkill), false);
   assert.deepStrictEqual(verifyPublicMirror({ mirrorRoot: tempRoot, sourceRevision: revision }), []);
   assert.deepStrictEqual(
-    compareTrees(canonicalSkill, path.join(tempRoot, '.codex/skills/traecnclaw-mcp')),
+    compareTrees(canonicalSkill, path.join(tempRoot, '.codex/skills/traecn-mcp')),
     []
   );
 
   assert.match(fs.readFileSync(path.join(tempRoot, 'SOURCE_REVISION'), 'utf8'), new RegExp(revision));
 
   const readme = fs.readFileSync(path.join(tempRoot, 'README.md'), 'utf8');
+  assert.match(readme, /^# TraeCN MCP\n/);
   assert.match(readme, /contract version 5/i);
   assert.match(readme, /exactly 20/i);
   assert.match(readme, /local-first/i);
@@ -71,6 +76,7 @@ try {
   assert.match(license, /Copyright \(c\) 2026 Luckycat133/);
 
   const glama = JSON.parse(fs.readFileSync(path.join(tempRoot, 'glama.json'), 'utf8'));
+  assert.strictEqual(glama.name, 'TraeCN MCP');
   assert.deepStrictEqual(glama.maintainers, ['Luckycat133']);
   assert.strictEqual(glama.tools, 20);
   assert.deepStrictEqual(glama.transport, ['stdio']);
@@ -92,8 +98,8 @@ try {
 
   const dockerfilePath = path.join(tempRoot, 'Dockerfile');
   const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
-  assert.match(dockerfile, new RegExp(`/v${escapedVersion}/traecnclaw-${escapedVersion}\\.tgz`));
-  assert.match(dockerfile, /ENTRYPOINT \["traecnclaw-mcp"\]/);
+  assert.match(dockerfile, new RegExp(`registry\\.npmjs\\.org/@luckycat133/traecnclaw/-/traecnclaw-${escapedVersion}\\.tgz`));
+  assert.ok(dockerfile.includes('ENTRYPOINT ["node", "/usr/local/lib/node_modules/@luckycat133/traecnclaw/mcp-server.js"]'));
   assert.match(dockerfile, /TRAECN_GATEWAY_HOST=127\.0\.0\.1/);
   assert.match(dockerfile, /npm install -g --ignore-scripts --force \/tmp\/traecnclaw\.tgz/);
   assert.match(dockerfile, /without changing the package metadata or claiming Linux support/);
@@ -122,7 +128,7 @@ try {
 
   buildPublicMirror({ mirrorRoot: tempRoot, sourceRevision: revision });
   fs.appendFileSync(
-    path.join(tempRoot, '.codex/skills/traecnclaw-mcp/SKILL.md'),
+    path.join(tempRoot, '.codex/skills/traecn-mcp/SKILL.md'),
     '\nmirror drift\n',
     'utf8'
   );

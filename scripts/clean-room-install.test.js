@@ -202,7 +202,7 @@ async function stop(child) {
     fs.mkdirSync(runtime, { recursive: true });
     run(process.execPath, [path.join(__dirname, 'package-skill.js')]);
     const manifest = JSON.parse(fs.readFileSync(
-      path.join(repoRoot, 'dist', 'traecnclaw-mcp-release.json'),
+      path.join(repoRoot, 'dist', 'traecn-mcp-release.json'),
       'utf8'
     ));
     run('tar', [
@@ -230,7 +230,7 @@ async function stop(child) {
       runtime,
       'node_modules',
       '.bin',
-      process.platform === 'win32' ? 'traecnclaw.cmd' : 'traecnclaw'
+      process.platform === 'win32' ? 'traecn-mcp.cmd' : 'traecn-mcp'
     );
     const help = run(cli, ['--help'], { cwd: runtime, env: operatorEnv });
     assert.match(help.stdout, /setup-mcp/);
@@ -252,6 +252,20 @@ async function stop(child) {
       TRAECN_RESPONSE_TIMEOUT_MS: '5000',
       TRAECN_QUIET_LOG: '1'
     };
+    const result = spawnSync(cli, [], {
+      cwd: runtime,
+      env,
+      encoding: 'utf8',
+      input: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: modernParams() }) + '\n',
+      timeout: 5000
+    });
+    assert.strictEqual(result.status, 0, result.error?.message || result.stderr);
+    const response = JSON.parse(result.stdout);
+    const serverInfo = response.result._meta['io.modelcontextprotocol/serverInfo'];
+    assert.strictEqual(serverInfo.name, 'traecn-mcp');
+    assert.strictEqual(serverInfo.title, 'TraeCN MCP');
+    assert.deepStrictEqual(response.result.tools.map(tool => tool.name), EXPECTED_TOOLS);
+
     const installedPackage = path.join(runtime, 'node_modules', '@luckycat133', 'traecnclaw');
     gateway = spawn(process.execPath, [path.join(installedPackage, 'scripts', 'start-gateway.js')], {
       cwd: runtime,
@@ -261,8 +275,11 @@ async function stop(child) {
     gateway.stdout.on('data', chunk => { gatewayStdout += chunk.toString('utf8'); });
     gateway.stderr.on('data', chunk => { gatewayStderr += chunk.toString('utf8'); });
     await waitForGateway(port, gateway);
+    const capabilitiesResponse = await fetch('http://127.0.0.1:' + port + '/api/capabilities');
+    assert.strictEqual(capabilitiesResponse.status, 200);
+    assert.strictEqual((await capabilitiesResponse.json()).name, 'traecn-mcp');
 
-    const launcher = path.join(skillRoot, 'traecnclaw-mcp', 'scripts', 'start-mcp.js');
+    const launcher = path.join(skillRoot, 'traecn-mcp', 'scripts', 'start-mcp.js');
     mcp = spawn(process.execPath, [launcher], {
       cwd: runtime,
       env,

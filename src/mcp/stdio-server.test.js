@@ -809,7 +809,8 @@ asyncTest('stdio closes a live subscription with the standard graceful result', 
       _meta: {
         'io.modelcontextprotocol/subscriptionId': 'listen-graceful-1',
         'io.modelcontextprotocol/serverInfo': {
-          name: 'traecnclaw',
+          name: 'traecn-mcp',
+          title: 'TraeCN MCP',
           version: require('../../package.json').version
         }
       }

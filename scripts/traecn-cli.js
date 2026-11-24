@@ -126,16 +126,17 @@ function showProgress(current, total, label = '') {
 
 function showHelp() {
   console.log(`
-${color('bold', 'TRAECNclaw')} - setup and operations for the local TraeCN gateway
+${color('bold', 'TraeCN MCP')} - setup and operations for the local TraeCN gateway
 
 ${color('bold', 'USAGE:')}
-  traecnclaw <command> [options]
+  traecn-mcp <command> [options]
 
 ${color('bold', 'SETUP AND OPERATIONS:')}
   ${color('green', 'setup-mcp')} [--output FILE]  Validate discovery and print/write MCP config
   ${color('green', 'doctor')}                    Diagnose Node, gateway, CDP, and TraeCN readiness
   ${color('green', 'quickstart')} [--launch-trae] Start/check the gateway; launch TraeCN only on request
   ${color('green', 'service')} start|stop|status Manage the macOS LaunchAgent gateway service
+  ${color('green', 'check-in')} [--claim]        Read or claim today's TraeCN check-in
   ${color('green', 'status')}                    Show gateway status
   ${color('green', 'logs')} [lines]              View recent logs
   ${color('green', 'config')} get|set <key>       Read or update host, port, or token
@@ -177,18 +178,18 @@ ${color('bold', 'OPTIONS:')}
   --auto-approve-dialog [action] Wait: handle an eligible non-command dialog
 
 ${color('bold', 'EXAMPLES:')}
-  traecnclaw setup-mcp --output ./traecnclaw-mcp.json
-  traecnclaw doctor
-  traecnclaw quickstart --launch-trae
-  traecnclaw service start
-  traecnclaw service status
-  traecnclaw status
-  traecnclaw logs 100
-  traecnclaw delegate "Write a hello world program"
-  traecnclaw wait task_123 --poll-ms 30000 --timeout-ms 0 --quiet -o json
-  traecnclaw cleanup-queue --status --json
-  traecnclaw cleanup-queue --execute --watch-ms 7200000 --stable-ms 1800000 --detach
-  traecnclaw proof start --execute --detach --allow-quota-spend --marker TRAECN_GLM52_CLEAN_1
+  traecn-mcp setup-mcp --output ./traecn-mcp.json
+  traecn-mcp doctor
+  traecn-mcp quickstart --launch-trae
+  traecn-mcp service start
+  traecn-mcp service status
+  traecn-mcp status
+  traecn-mcp logs 100
+  traecn-mcp delegate "Write a hello world program"
+  traecn-mcp wait task_123 --poll-ms 30000 --timeout-ms 0 --quiet -o json
+  traecn-mcp cleanup-queue --status --json
+  traecn-mcp cleanup-queue --execute --watch-ms 7200000 --stable-ms 1800000 --detach
+  traecn-mcp proof start --execute --detach --allow-quota-spend --marker TRAECN_GLM52_CLEAN_1
 
 ${color('bold', 'CONFIG FILE:')}
   Config is stored at ${CONFIG_FILE}
@@ -200,7 +201,7 @@ ${color('bold', 'ENVIRONMENT:')}
 }
 
 const LOCAL_SCRIPT_COMMANDS = Object.freeze({
-  'setup-mcp': path.join(__dirname, '..', 'skills', 'traecnclaw-mcp', 'scripts', 'setup-mcp.js'),
+  'setup-mcp': path.join(__dirname, '..', 'skills', 'traecn-mcp', 'scripts', 'setup-mcp.js'),
   doctor: path.join(__dirname, 'doctor.js'),
   quickstart: path.join(__dirname, 'quickstart.js'),
   service: path.join(__dirname, 'gateway-service.js'),
@@ -745,7 +746,7 @@ async function cmdDelegate(args) {
 
   if (!task.trim()) {
     console.error(color('red', 'Error: Task is required'));
-    console.error(color('gray', 'Usage: traecnclaw delegate <task>'));
+    console.error(color('gray', 'Usage: traecn-mcp delegate <task>'));
     process.exit(1);
   }
 
@@ -759,7 +760,7 @@ async function cmdDelegate(args) {
     });
 
     if (result.status === 202 && result.data.status === 'queued') {
-      console.log(color('yellow', '⚠ Task queued, use traecnclaw status to check progress'));
+      console.log(color('yellow', '⚠ Task queued, use traecn-mcp status to check progress'));
       console.log(color('dim', `Task ID: ${result.data.taskId}`));
       if (outputFormat === 'json') {
         console.log(JSON.stringify(result.data, null, 2));
@@ -843,7 +844,7 @@ async function cmdVibe(args) {
 
   if (!task.trim()) {
     console.error(color('red', 'Error: Task is required'));
-    console.error(color('gray', 'Usage: traecnclaw vibe <task> [--step <task>] [--project <path>]'));
+    console.error(color('gray', 'Usage: traecn-mcp vibe <task> [--step <task>] [--project <path>]'));
     process.exit(1);
   }
 
@@ -882,7 +883,7 @@ async function cmdWait(args) {
   const options = parseWaitArgs(args);
   if (!options.taskId) {
     console.error(color('red', 'Error: taskId is required'));
-    console.error(color('gray', 'Usage: traecnclaw wait <taskId> [--poll-ms <ms>] [--timeout-ms <ms>] [--log <file>]'));
+    console.error(color('gray', 'Usage: traecn-mcp wait <taskId> [--poll-ms <ms>] [--timeout-ms <ms>] [--log <file>]'));
     process.exit(1);
   }
 
@@ -1004,7 +1005,7 @@ async function cmdPlan(args) {
   const command = args[0];
   if (!command) {
     console.error(color('red', 'Error: command is required'));
-    console.error(color('gray', 'Usage: traecnclaw plan <command> [params-json] [--force-confirm]'));
+    console.error(color('gray', 'Usage: traecn-mcp plan <command> [params-json] [--force-confirm]'));
     process.exit(1);
   }
   const params = args[1] && !args[1].startsWith('-') ? parseJsonArg(args[1], 'params') : {};
@@ -1528,7 +1529,7 @@ async function cmdConfig(args) {
     const key = args[1];
     if (!key) {
       console.error(color('red', 'Error: Key required'));
-      console.error(color('gray', 'Usage: traecnclaw config get <key>'));
+      console.error(color('gray', 'Usage: traecn-mcp config get <key>'));
       process.exit(1);
     }
     const value = cfg[key];
@@ -1547,7 +1548,7 @@ async function cmdConfig(args) {
 
     if (!key || value === undefined) {
       console.error(color('red', 'Error: Key and value required'));
-      console.error(color('gray', 'Usage: traecnclaw config set <key> <value>'));
+      console.error(color('gray', 'Usage: traecn-mcp config set <key> <value>'));
       process.exit(1);
     }
 
@@ -1578,14 +1579,14 @@ async function cmdConfig(args) {
   }
 
   console.error(color('red', `Error: Unknown config command "${action}"`));
-  console.error(color('gray', 'Usage: traecnclaw config [get <key> | set <key> <value>]'));
+  console.error(color('gray', 'Usage: traecn-mcp config [get <key> | set <key> <value>]'));
   process.exit(1);
 }
 
 async function cmdBatch(args) {
   if (args.length === 0) {
     console.error(color('red', 'Error: Batch command required'));
-    console.error(color('gray', 'Usage: traecnclaw batch [submit|status|cancel] [args]'));
+    console.error(color('gray', 'Usage: traecn-mcp batch [submit|status|cancel] [args]'));
     process.exit(1);
   }
 
@@ -1595,7 +1596,7 @@ async function cmdBatch(args) {
     const filePath = args[1];
     if (!filePath) {
       console.error(color('red', 'Error: File path required'));
-      console.error(color('gray', 'Usage: traecnclaw batch submit <file.json>'));
+      console.error(color('gray', 'Usage: traecn-mcp batch submit <file.json>'));
       process.exit(1);
     }
 
@@ -1681,7 +1682,7 @@ async function cmdBatch(args) {
     const batchId = args[1];
     if (!batchId) {
       console.error(color('red', 'Error: Batch ID required'));
-      console.error(color('gray', 'Usage: traecnclaw batch status <batchId>'));
+      console.error(color('gray', 'Usage: traecn-mcp batch status <batchId>'));
       process.exit(1);
     }
 
@@ -1727,7 +1728,7 @@ async function cmdBatch(args) {
     const batchId = args[1];
     if (!batchId) {
       console.error(color('red', 'Error: Batch ID required'));
-      console.error(color('gray', 'Usage: traecnclaw batch cancel <batchId>'));
+      console.error(color('gray', 'Usage: traecn-mcp batch cancel <batchId>'));
       process.exit(1);
     }
 
@@ -1753,7 +1754,7 @@ async function cmdBatch(args) {
   }
 
   console.error(color('red', `Error: Unknown batch command "${action}"`));
-  console.error(color('gray', 'Usage: traecnclaw batch [submit|status|cancel]'));
+  console.error(color('gray', 'Usage: traecn-mcp batch [submit|status|cancel]'));
   process.exit(1);
 }
 
@@ -1810,7 +1811,7 @@ async function cmdProof(args) {
     proofArgs = buildProofCliArgs(args);
   } catch (err) {
     console.error(color('red', `Error: ${err.message}`));
-    console.error(color('gray', 'Usage: traecnclaw proof status|start|cancel [long-queue-proof options]'));
+    console.error(color('gray', 'Usage: traecn-mcp proof status|start|cancel [long-queue-proof options]'));
     process.exit(1);
   }
   const result = spawnSync(process.execPath, proofArgs, {
@@ -1854,6 +1855,13 @@ async function main() {
       case 'wait-task':
         await cmdWait(args.slice(1));
         break;
+      case 'check-in': {
+        const claim = args.includes('--claim');
+        const result = await apiRequest(claim ? 'POST' : 'GET', '/api/trae/check-in', claim ? { confirm: true } : undefined);
+        console.log(JSON.stringify(result.data, null, 2));
+        if (claim && !['claimed', 'already_claimed'].includes(result.data.state)) process.exitCode = 1;
+        break;
+      }
       case 'status':
         await cmdStatus();
         break;
@@ -1886,7 +1894,7 @@ async function main() {
         break;
       default:
         console.error(color('red', `Error: Unknown command "${command}"`));
-        console.error(color('gray', 'Run "traecnclaw help" for usage'));
+        console.error(color('gray', 'Run "traecn-mcp help" for usage'));
         process.exit(1);
     }
   } catch (err) {
@@ -1900,6 +1908,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  main,
   apiRequest,
   loadConfig,
   saveConfig,

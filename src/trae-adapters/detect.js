@@ -1,6 +1,6 @@
 'use strict';
 
-const { classifyTargetSurface } = require('../cdp/discovery');
+const { classifyTargetSurface, classifyWorkspaceTarget, readWorkspaceMode } = require('../cdp/discovery');
 
 function normalizedVersion(value) {
   const match = String(value || '').match(/\b(\d+\.\d+\.\d+(?:\.\d+)?)\b/);
@@ -8,7 +8,7 @@ function normalizedVersion(value) {
 }
 
 function parseTraeVersion(input = {}) {
-  for (const key of ['traeVersion', 'productVersion', 'applicationVersion', 'appVersion']) {
+  for (const key of ['traeVersion', 'productVersion', 'applicationVersion']) {
     const direct = normalizedVersion(input[key]);
     if (direct) return direct;
   }
@@ -22,39 +22,31 @@ function parseTraeVersion(input = {}) {
   return null;
 }
 
-async function probeProductEnvironment(client) {
+async function probeProductEnvironment(client, workspaceKind = null) {
   if (!client || typeof client.send !== 'function') return {};
   try {
     const response = await client.send('Runtime.evaluate', {
       expression: `
-        (() => {
-          const product = window._VSCODE_PRODUCT_JSON
+        (async () => {
+          let configuration;
+          try {
+            configuration = await window.vscode?.context?.configuration?.();
+          } catch {
+            // Older renderers may expose only the product globals.
+          }
+          const product = configuration?.product
+            || window._VSCODE_PRODUCT_JSON
             || window.__TRAECN_PRODUCT_JSON__
             || window.__icube_product__
             || {};
           const versionMeta = document.querySelector(
             'meta[name="application-version"], meta[name="app-version"], meta[name="product-version"]'
           );
-          const visible = element => !!(element && element.offsetParent !== null);
-          const activeTabs = Array.from(document.querySelectorAll('.icube-mode-tab-item'));
-          const activeTab = activeTabs.find(tab => {
-            const classes = String(tab.className || '');
-            return /(?:^|\\s)(?:active|selected)(?:\\s|$)/.test(classes)
-              || tab.getAttribute('aria-selected') === 'true';
-          });
-          const activeText = String(activeTab?.innerText || activeTab?.textContent || '').toLowerCase();
-          const soloSidebar = document.querySelector('.soloaisidebar');
-          let mode = null;
-          if (activeText.includes('ide')) mode = 'ide';
-          else if (activeText.includes('solo')) mode = 'solo';
-          else if (visible(soloSidebar)) mode = 'solo';
-          else if (visible(document.querySelector('.monaco-workbench, .monaco-editor'))) mode = 'ide';
+          const visible = element => Boolean(element?.getClientRects().length);
 
           const controls = Array.from(document.querySelectorAll('button, [role="button"]'));
-          const controlText = controls
-            .filter(visible)
-            .map(item => String(item.innerText || item.textContent || '').trim())
-            .join('\n');
+          const reviewGate = controls.some(item => visible(item)
+            && /全部保留|全部撤销|Keep All|Discard All/i.test(item.innerText || item.textContent || ''));
           return {
             productName: String(product.nameLong || product.nameShort || product.applicationName || 'Trae CN'),
             productVersion: String(
@@ -64,17 +56,19 @@ async function probeProductEnvironment(client) {
               || versionMeta?.content
               || ''
             ),
-            mode,
+            appVersion: String(product.appVersion || ''),
+            mode: (${readWorkspaceMode.toString()})(${JSON.stringify(workspaceKind)}),
             structures: {
               composer: visible(document.querySelector('.chat-input-v2-input-box-editable, textarea, [contenteditable="true"]')),
               conversationIdentity: !!document.querySelector('[data-conversation-id], [data-chat-id], .solo-chat-item'),
-              reviewGate: /全部保留|全部撤销|Keep All|Discard All/i.test(controlText),
+              reviewGate,
               settingsUI: !!document.querySelector('[class*="settings"], [class*="preferences"], [data-settings-section]')
             }
           };
         })()
       `,
-      returnByValue: true
+      returnByValue: true,
+      awaitPromise: true
     });
     const value = response?.result?.value;
     return value && typeof value === 'object' ? value : {};
@@ -88,24 +82,28 @@ async function detectTraeEnvironment(options = {}) {
     ? options.cdpVersion
     : {};
   const target = options.target && typeof options.target === 'object' ? options.target : {};
+  const surface = classifyTargetSurface(target);
+  const workspaceKind = classifyWorkspaceTarget(target);
   const product = options.productProbe && typeof options.productProbe === 'object'
     ? options.productProbe
-    : await probeProductEnvironment(options.client);
+    : await probeProductEnvironment(options.client, workspaceKind);
   const productVersion = parseTraeVersion(product);
   const cdpDetectedVersion = parseTraeVersion(cdpVersion);
 
   return {
     product: String(product.productName || 'Trae CN'),
     traeVersion: productVersion || cdpDetectedVersion || null,
+    appVersion: normalizedVersion(product.appVersion),
     platform: String(options.platform || process.platform),
-    mode: ['solo', 'ide'].includes(product.mode) ? product.mode : null,
+    mode: surface === 'workspace' && ['solo', 'ide'].includes(product.mode) ? product.mode : null,
     cdp: {
       browser: cdpVersion.Browser || null,
       protocolVersion: cdpVersion['Protocol-Version'] || null
     },
     target: {
       title: target.title || null,
-      surface: classifyTargetSurface(target)
+      surface,
+      workspaceKind
     },
     structures: product.structures && typeof product.structures === 'object'
       ? { ...product.structures }

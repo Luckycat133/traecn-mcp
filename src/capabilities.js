@@ -1,7 +1,7 @@
 'use strict';
 
-const packageInfo = require('../package.json');
 const { MCP_CONTRACT_VERSION } = require('./mcp/contract');
+const { SERVER_INFO } = require('./mcp/protocol');
 const { listTraeAdapters } = require('./trae-adapters');
 
 // Keep capability data sources injectable so callers can avoid eager dependency
@@ -120,8 +120,8 @@ function buildCapabilities(options = {}, deps = {}) {
   const operations = options.includeHttpOperations === false ? undefined : buildHttpOperations({ generateOpenAPISpec });
 
   return {
-    name: 'traecnclaw',
-    version: packageInfo.version,
+    name: SERVER_INFO.name,
+    version: SERVER_INFO.version,
     contractVersion: MCP_CONTRACT_VERSION,
     tokenStrategy: {
       prefer: ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task'],

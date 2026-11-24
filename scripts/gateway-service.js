@@ -54,6 +54,7 @@ function readExistingLaunchdEnv() {
     'TRAECN_TRAE_RECOVERY_NEW_INSTANCE',
     'TRAECN_AUTO_START_TRAE',
     'TRAECN_AUTO_RECOVER',
+    'TRAECN_AUTO_CHECK_IN',
     'HOST',
     'PORT'
   ]) {
@@ -88,7 +89,8 @@ function buildEnvironmentVariables() {
     TRAECN_QUICKSTART_USE_ISOLATED_PROFILE: process.env.TRAECN_QUICKSTART_USE_ISOLATED_PROFILE || existingEnv.TRAECN_QUICKSTART_USE_ISOLATED_PROFILE || (quickstart.useIsolatedProfile ? '1' : '0'),
     TRAECN_TRAE_RECOVERY_NEW_INSTANCE: process.env.TRAECN_TRAE_RECOVERY_NEW_INSTANCE || existingEnv.TRAECN_TRAE_RECOVERY_NEW_INSTANCE || '0',
     TRAECN_AUTO_START_TRAE: process.env.TRAECN_AUTO_START_TRAE || existingEnv.TRAECN_AUTO_START_TRAE || runtimeDefault('TRAECN_AUTO_START_TRAE'),
-    TRAECN_AUTO_RECOVER: process.env.TRAECN_AUTO_RECOVER || existingEnv.TRAECN_AUTO_RECOVER || '0'
+    TRAECN_AUTO_RECOVER: process.env.TRAECN_AUTO_RECOVER || existingEnv.TRAECN_AUTO_RECOVER || '0',
+    TRAECN_AUTO_CHECK_IN: process.env.TRAECN_AUTO_CHECK_IN || existingEnv.TRAECN_AUTO_CHECK_IN || runtimeDefault('TRAECN_AUTO_CHECK_IN')
   };
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined || value === '') continue;

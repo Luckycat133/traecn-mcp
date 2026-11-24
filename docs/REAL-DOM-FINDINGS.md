@@ -1,5 +1,64 @@
 # TraeCN 真实 DOM 发现（v0.4.0 起点）
 
+## Trae CN 3.4.15 on macOS
+
+On 2026-11-06 the normal restart of the signed-in desktop profile exposed
+product version `3.4.15` with engine `1.107.1`. The standalone Agent sidebar
+mounts native `.task-list-row-wrapper[data-session-id]` rows with
+`.taskText` titles and marks the open conversation with
+`.taskItemSelected`. Stdio discovery matched the 18 native sidebar
+IDs, opened one existing conversation, and returned to an empty draft without
+changing the set of history IDs.
+
+The new `.core-model-select-trigger` showed `Auto`. In this
+mode the picker hides manual models; listing returned `["Auto"]` and
+`manualModelsHidden: true`, with the picker closed again afterward.
+The native check-in status reported eligible and unclaimed for the Beijing
+business day. No prompt, model change, or reward claim was sent in this run.
+
+A follow-up used disposable conversations and a temporary local folder.
+The native Agent project picker exposes each local project's absolute path
+in its hover tooltip, including separate same-name entries. The selected
+project's tooltip confirmed the exact path. An agent task read a marker
+file in that folder and returned its exact contents in the latest turn's
+finish summary. The task result is attributed by native session ID and
+the latest user message body, separately from the assistant's reply.
+
+The settings page opens from the account menu in the same Agent window.
+Live stdio calls listed its 17 sections and read back a reversible toggle,
+dropdown and text change after reopening settings. The test restored the
+original values and model selection. A review-scope question was answered
+through its native card, and a command in manual approval mode was denied.
+The affected file belonged to the temporary test folder and remained in
+place after denial.
+
+On 2026-11-07 the Agent deletion tool returned `deleted: 1` for an inactive
+disposable conversation. A fresh MCP list dropped from 25 conversations
+to 24. The target native ID was absent, and every other ID and title,
+including all 18 pre-test conversations, matched the prior list.
+
+## Trae CN 3.4.11 on macOS
+
+On 2026-11-06 an isolated local profile exposed product version `3.4.11`
+through the workbench configuration and engine version `1.107.1` in the
+CDP user agent. The setup renderer lives at `/setup/setup.html`. The Agent
+renderer opens at `/solo/solo-lite.html`, with title `Agent`, a
+`.task-list-panel` sidebar, and a dedicated `打开 Trae IDE` button. That
+button opens a separate `/workbench/workbench.html` renderer, which
+retains the legacy SOLO and IDE tabs and can open Agent in its own window.
+
+The signed-out Agent renderer still mounts its composer and disabled send
+button. A visible account login control or login dialog blocks readiness.
+The logged-out profile could not expose authenticated model options,
+project selection or conversation history.
+
+The installed 3.4.11 desktop implements separate native check-in status
+and claim operations. The application can attach a draw when a claim is
+initiated from an account menu or banner. The gateway sends the native
+claim without that source argument and requires a new status read to
+verify the outcome. A signed-in claim was not part of this observation.
+
+
 > 来自 `npm run start:traecn` + CDP probe 抓的**真实** TraeCN 1.107.1 DOM
 > 采集时的工作目录已脱敏为：`<workspace>/TRAECNclaw`
 > CDP: 9222 · `~/Library/Application Support/Trae CN`（macOS 默认 user-data-dir，已登录态持久化）

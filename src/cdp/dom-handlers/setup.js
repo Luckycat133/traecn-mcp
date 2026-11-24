@@ -229,7 +229,8 @@ async function inspectWorkspaceBlockers(driver) {
             titles: titleEls.slice(0, 8),
             guideVisible,
             guideButtons: guideButtons.slice(0, 10),
-            loginVisible: !!loginButton,
+            loginVisible: !!loginButton || Array.from(document.querySelectorAll('.icube-login-modal, button[class*="accountLoginButton"]'))
+              .some(element => element.getClientRects().length > 0),
             loginButton,
             newTaskVisible: !!newTaskButton,
             newTaskButton,

@@ -658,9 +658,8 @@ async function approveDialog(driver, action, options = {}) {
 
     const clickResult = result.result?.value || {};
     if (clickResult.clicked) {
-      await sleep(driver.config.postActionDelayMs);
       if (nativePanel) {
-        const remaining = await driver.client.send('Runtime.evaluate', {
+        const probe = {
           expression: `(function() {
             var nativeApprovalVisible = ${nativeApprovalVisible.toString()};
             return Array.from(document.querySelectorAll(${safeJsValue(NATIVE_COMMAND_PANEL_SELECTOR)})).some(function(panel) {
@@ -671,10 +670,18 @@ async function approveDialog(driver, action, options = {}) {
             });
           })()`,
           returnByValue: true
-        });
+        };
+        const deadline = Date.now() + Math.max(800, driver.config.postActionDelayMs || 0);
+        let remaining = await driver.client.send('Runtime.evaluate', probe);
+        while (remaining.result?.value === true && Date.now() < deadline) {
+          await sleep(50);
+          remaining = await driver.client.send('Runtime.evaluate', probe);
+        }
         if (remaining.result?.value !== false) {
           return { success: false, action, buttonClicked: clickResult.buttonText, error: 'Native command approval panel disappearance could not be confirmed' };
         }
+      } else {
+        await sleep(driver.config.postActionDelayMs);
       }
       const dialogAfter = await driver.checkForApprovalDialog();
       if (dialogAfter.transient || dialogAfter.needsApproval !== false) {
@@ -766,17 +773,17 @@ async function checkReadiness(driver) {
   let blocker = null;
   const composerReady = !!(composer || composerFallback);
   const sendButtonReady = !!(sendBtn || sendBtnFallback);
-  if (!(composerReady && sendButtonReady)) {
+  if (blockers.loginVisible) blocker = 'login_required';
+  else if (!(composerReady && sendButtonReady)) {
     if (dialog.needsApproval) blocker = 'approval_dialog';
     else if (restricted.restricted) blocker = 'trust_workspace';
     else if (blockers.guideVisible) blocker = 'workspace_guide';
-    else if (blockers.loginVisible) blocker = 'login_required';
     else if (blockers.newTaskVisible) blocker = 'open_task_panel';
     else blocker = 'composer_unavailable';
   }
 
   return {
-    ready: !!(composerReady && sendButtonReady),
+    ready: !blocker && composerReady && sendButtonReady,
     composer: composer ? { matchedSelector: composer.matchedSelector } : (composerFallback ? {
       matchedSelector: composerFallback.matchedSelector,
       runtimeFallback: true

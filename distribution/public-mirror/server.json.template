@@ -1,7 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Luckycat133/traecnclaw",
-  "description": "Local persistent TraeCN coding-task gateway with a focused MCP Agent surface.",
+  "title": "TraeCN MCP",
+  "description": "Local stdio MCP server for delegating and tracking work in TraeCN on macOS.",
   "repository": {
     "url": "https://github.com/Luckycat133/traecnclaw-mcp-skill",
     "source": "github"

@@ -1,6 +1,6 @@
-# TRAECNclaw MCP server
+# TraeCN MCP server guide
 
-TRAECNclaw exposes a local stdio MCP server for operating TraeCN. The Agent
+TraeCN MCP exposes a local stdio MCP server for operating TraeCN. The Agent
 contract contains 20 focused tools; lower-level HTTP, CLI, proof, waiting, and
 maintenance operations remain gateway or operator facilities.
 
@@ -8,19 +8,19 @@ maintenance operations remain gateway or operator facilities.
 
 The server supports both protocol eras:
 
-| MCP revision | Lifecycle | TRAECNclaw behavior |
+| MCP revision | Lifecycle | TraeCN MCP behavior |
 | --- | --- | --- |
 | `2026-07-28` | Stateless requests with `_meta` | `server/discover`, strict per-request version checks, `resultType`, cache hints, server identity metadata, and an optional Tasks extension |
 | `2025-11-25` | `initialize` handshake | Focused tools plus legacy logging notifications |
 | `2024-11-05` | `initialize` handshake | Compatibility mode for existing clients |
 
 Standard stdio framing is newline-delimited JSON-RPC. The server can still
-decode and answer the `Content-Length` framing used by older TRAECNclaw
+decode and answer the `Content-Length` framing used by older TraeCN MCP
 clients, but new integrations should send one compact JSON object per line.
 Metadata such as `_meta.progressToken` on a legacy request does not switch the
-connection to the modern era; only the explicit TRAECNclaw protocol-version
+connection to the modern era; only the explicit MCP protocol-version
 metadata does so.
-MCP contract version 5 names the frozen TRAECNclaw tool surface; it is separate
+MCP contract version 5 names the frozen TraeCN MCP tool surface; it is separate
 from the date-based MCP protocol revision.
 
 ## Configure
@@ -32,7 +32,7 @@ launcher entry:
 npm run --silent setup:mcp
 ```
 
-Use `npm run setup:mcp -- --output ./traecnclaw-mcp.json` to atomically create
+Use `npm run setup:mcp -- --output ./traecn-mcp.json` to atomically create
 a new mode-0600 file; it refuses to replace an existing configuration. A
 standalone Skill installation can run `node scripts/setup-mcp.js`. For hosts
 using `mcpServers` JSON, merge the resulting `traecn` entry and reconnect.
@@ -45,7 +45,7 @@ server entry below remains a fallback:
   "mcpServers": {
     "traecn": {
       "command": "node",
-      "args": ["/absolute/path/to/TRAECNclaw/mcp-server.js"],
+      "args": ["/absolute/path/to/checkout/mcp-server.js"],
       "env": {
         "TRAECN_GATEWAY_HOST": "127.0.0.1",
         "TRAECN_GATEWAY_PORT": "8788",
@@ -56,7 +56,8 @@ server entry below remains a fallback:
 }
 ```
 
-Start the gateway separately with `npm run start:gateway`.
+Start the gateway separately with `npm run quickstart`. Installed builds
+also expose the same stdio server through `traecn-mcp`.
 
 ## Tool groups
 
@@ -133,7 +134,7 @@ execution steps are needed to investigate an unexpected result.
 
 `server/discover` advertises `io.modelcontextprotocol/tasks`. The upstream
 extension is independently versioned and still published as a draft; the core
-`2026-07-28` revision and TRAECNclaw contract version 5 remain separate.
+`2026-07-28` revision and TraeCN MCP contract version 5 remain separate.
 
 A client opts in on each request through
 `_meta.io.modelcontextprotocol/clientCapabilities.extensions`. For an opted-in
@@ -171,4 +172,4 @@ the legacy Content-Length compatibility path, malformed JSON recovery,
 JSON-RPC error codes, argument rejection, and connection-era pinning.
 
 Generated schemas live in
-`skills/traecnclaw-mcp/references/mcp-tool-contracts.json`.
+`skills/traecn-mcp/references/mcp-tool-contracts.json`.

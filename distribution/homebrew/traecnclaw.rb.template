@@ -2,8 +2,8 @@ require "json"
 
 class Traecnclaw < Formula
   desc "Local-first MCP server and Agent Skill for TraeCN desktop automation"
-  homepage "https://github.com/Luckycat133/traecnclaw-mcp-skill"
-  url "https://github.com/Luckycat133/traecnclaw-mcp-skill/releases/download/v{{VERSION}}/traecnclaw-{{VERSION}}.tgz"
+  homepage "https://www.npmjs.com/package/@luckycat133/traecnclaw"
+  url "https://registry.npmjs.org/@luckycat133/traecnclaw/-/traecnclaw-{{VERSION}}.tgz"
   sha256 "{{SHA256}}"
   license "MIT"
 
@@ -11,40 +11,36 @@ class Traecnclaw < Formula
 
   def install
     (libexec/"lib").install Dir["*"]
+    node_bin = formula_opt_bin("node")
     cd libexec/"lib" do
-      system formula_opt_bin("node")/"npm", "install", "--omit=dev", "--ignore-scripts",
+      system node_bin/"node", node_bin/"npm", "install", "--omit=dev", "--ignore-scripts",
              "--no-audit", "--no-fund"
     end
 
-    (bin/"traecnclaw-mcp").write_env_script(
+    (bin/"traecn-mcp").write_env_script(
       libexec/"lib/mcp-server.js",
       PATH: "#{formula_opt_bin("node")}:/usr/bin:/bin:/usr/sbin:/sbin",
     )
-    chmod 0755, bin/"traecnclaw-mcp"
-
-    (bin/"traecnclaw").write_env_script(
-      libexec/"lib/scripts/traecn-cli.js",
-      PATH: "#{formula_opt_bin("node")}:/usr/bin:/bin:/usr/sbin:/sbin",
-    )
-    chmod 0755, bin/"traecnclaw"
+    chmod 0755, bin/"traecn-mcp"
   end
 
   def caveats
     <<~EOS
-      TRAECNclaw runs beside TraeCN on this Mac. Complete local setup with:
+      Start the local gateway beside TraeCN:
 
-        traecnclaw doctor
-        traecnclaw quickstart --launch-trae
-        traecnclaw service start
-        traecnclaw setup-mcp
+        traecn-mcp quickstart --launch-trae
 
-      The Homebrew package installs the operator CLI and stdio server. Install
-      the Agent Skill separately with the command shown by the public README.
+      Keep the gateway terminal open. In another terminal, generate the host entry:
+
+        traecn-mcp setup-mcp
+
+      Add the generated traecn entry to your MCP host and reconnect.
+      Run traecn-mcp doctor to diagnose setup issues.
     EOS
   end
 
   test do
-    assert_match "setup-mcp", shell_output("#{bin}/traecnclaw help")
+    assert_match "setup-mcp", shell_output("#{bin}/traecn-mcp help")
 
     messages = [
       {
@@ -60,7 +56,7 @@ class Traecnclaw < Formula
       { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
       { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
     ]
-    output = pipe_output(bin/"traecnclaw-mcp", "#{messages.map(&:to_json).join("\n")}\n")
+    output = pipe_output(bin/"traecn-mcp", "#{messages.map(&:to_json).join("\n")}\n")
     tools = output.lines.map { |line| JSON.parse(line) }.find { |item| item["id"] == 2 }.dig("result", "tools")
     assert_equal 20, tools.length
     assert_equal "traecn_send_message", tools.first["name"]

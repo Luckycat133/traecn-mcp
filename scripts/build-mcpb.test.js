@@ -25,7 +25,8 @@ try {
 
   // Spec conformance for the fields hosts validate.
   assert.strictEqual(manifest.manifest_version, '0.3');
-  assert.strictEqual(manifest.name, 'traecnclaw-mcp');
+  assert.strictEqual(manifest.name, 'traecn-mcp');
+  assert.strictEqual(manifest.display_name, 'TraeCN MCP');
   assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
   assert.strictEqual(manifest.server.type, 'node');
   assert.strictEqual(manifest.server.entry_point, 'mcp-server.js');

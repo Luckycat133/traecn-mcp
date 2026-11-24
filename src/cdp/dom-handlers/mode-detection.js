@@ -21,6 +21,7 @@
  */
 
 const dom = require('../browser-dom');
+const { isKnownStandaloneAgentVersion } = require('../../trae-adapters/registry');
 
 const { sleep, safeJsValue } = require('../../shared/utils');
 
@@ -36,6 +37,11 @@ async function detectMode(driver) {
     expression: `
       (function() {
         var indicators = [];
+
+        // Agent is a separate native window in current Trae CN.
+        if (location.pathname.endsWith('/solo/solo-lite.html')) {
+          return { mode: 'solo', confidence: 1, indicators: ['agent-window'] };
+        }
 
         // SOLO indicators: sidebar
         var soloSidebar = document.querySelector('.soloaisidebar');
@@ -97,6 +103,24 @@ async function detectMode(driver) {
 /**
  * Invalidate mode cache so next detectMode() re-evaluates from scratch.
  */
+async function openModeWindow(driver, surface) {
+  const selector = surface === 'agent'
+    ? 'button.icube-open-solo-lite-window-button'
+    : 'button.solo-lite-titlebar-action-btn[aria-label="打开 Trae IDE"], button.solo-lite-titlebar-action-btn[aria-label="Open Trae IDE"]';
+  const result = await driver.client.send('Runtime.evaluate', {
+    expression: `
+      (() => {
+        const button = document.querySelector(${safeJsValue(selector)});
+        if (!button || button.disabled || !button.getClientRects().length) return false;
+        button.click();
+        return true;
+      })()
+    `,
+    returnByValue: true
+  });
+  return result.result?.value === true;
+}
+
 function _invalidateModeCache(driver) {
   driver._cachedMode = null;
   driver._cachedModeTs = 0;
@@ -199,8 +223,43 @@ async function switchMode(driver, mode) {
   const currentModeInfo = await detectMode(driver);
 
   const modeLower = mode.toLowerCase();
-  if (currentModeInfo.mode === modeLower) {
+  const knownAgentVersion = isKnownStandaloneAgentVersion(driver.traeAdapter?.environment?.appVersion);
+  if (currentModeInfo.mode === modeLower && (!knownAgentVersion || currentModeInfo.confidence >= 0.7)) {
     return { success: true, previousMode: currentModeInfo.mode, currentMode: modeLower, alreadyInMode: true };
+  }
+
+  if (knownAgentVersion) {
+    const selector = modeLower === 'ide' ? '.icube-mode-tab-item-ide' : '.icube-mode-tab-item-solo';
+    const clickTab = `
+        (() => {
+          const tabs = [...document.querySelectorAll(${safeJsValue(selector)})].filter(tab => tab.getClientRects().length);
+          if (tabs.length !== 1) return tabs.length ? 'ambiguous' : 'waiting';
+          tabs[0].click();
+          return 'clicked';
+        })()
+      `;
+    // The app advertises the new CDP page before the workbench finishes
+    // mounting. Verify the mode or wait for its exact tab before clicking.
+    let clicked = false;
+    const deadline = Date.now() + driver.config.modeSwitchWaitMs + 3000;
+    do {
+      _invalidateModeCache(driver);
+      const observed = await detectMode(driver);
+      if (observed.mode === modeLower && observed.confidence >= 0.7) {
+        return { success: true, previousMode: currentModeInfo.mode, currentMode: modeLower };
+      }
+      if (!clicked) {
+        const response = await driver.client.send('Runtime.evaluate', { expression: clickTab, returnByValue: true });
+        const state = response.result?.value;
+        if (state === 'ambiguous') {
+          return { success: false, previousMode: currentModeInfo.mode, error: 'Target mode tab is ambiguous' };
+        }
+        clicked = state === 'clicked';
+      }
+      await sleep(100);
+    } while (Date.now() < deadline);
+    return { success: false, previousMode: currentModeInfo.mode,
+      error: clicked ? 'Mode switch verification timed out' : 'Target mode tab not found' };
   }
 
   // Find mode tabs and match by text content
@@ -305,5 +364,6 @@ module.exports = {
   _findVisibleElementRuntime,
   findNewChatButton,
   findModeTabs,
+  openModeWindow,
   switchMode
 };

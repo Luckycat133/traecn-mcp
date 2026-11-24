@@ -60,31 +60,31 @@ async function main() {
   // the first time they run `npm run quickstart` after closing the IDE.
   const autoLaunch = readRuntimeEnv('TRAECN_AUTO_START_TRAE') === '1' || args.includes('--launch-trae');
 
-  console.log('[TRAECNclaw] Checking TraeCN status...');
+  console.log('[TraeCN MCP] Checking TraeCN status...');
 
   const traeRunning = isTraeCNRunning();
   if (traeRunning) {
-    console.log('[TRAECNclaw] TraeCN is already running.');
+    console.log('[TraeCN MCP] TraeCN is already running.');
   } else if (!autoLaunch) {
-    console.log('[TRAECNclaw] TraeCN is not running. Skipping auto-launch (opt-in).');
-    console.log('[TRAECNclaw] To start it explicitly, run: npm run start:traecn');
-    console.log('[TRAECNclaw] Or re-run with: npm run quickstart -- --launch-trae');
+    console.log('[TraeCN MCP] TraeCN is not running. Skipping auto-launch (opt-in).');
+    console.log('[TraeCN MCP] To start it explicitly, run: npm run start:traecn');
+    console.log('[TraeCN MCP] Or re-run with: npm run quickstart -- --launch-trae');
   } else {
-    console.log('[TRAECNclaw] TraeCN is not running. Auto-launch enabled, starting...');
+    console.log('[TraeCN MCP] TraeCN is not running. Auto-launch enabled, starting...');
     const binPath = findTraeCNBinary();
     if (!binPath) {
-      console.error('[TRAECNclaw] TraeCN binary not found.');
-      console.error('[TRAECNclaw] Please set TRAECN_BIN environment variable or install TraeCN.');
+      console.error('[TraeCN MCP] TraeCN binary not found.');
+      console.error('[TraeCN MCP] Please set TRAECN_BIN environment variable or install TraeCN.');
       process.exit(1);
     }
 
     try {
       const result = await startTraeCN({ binPath });
-      console.log(`[TRAECNclaw] TraeCN started (PID: ${result.pid})`);
-      console.log('[TRAECNclaw] Waiting for TraeCN to initialize...');
+      console.log(`[TraeCN MCP] TraeCN started (PID: ${result.pid})`);
+      console.log('[TraeCN MCP] Waiting for TraeCN to initialize...');
       await new Promise(resolve => setTimeout(resolve, 5000));
     } catch (err) {
-      console.error(`[TRAECNclaw] Failed to start TraeCN: ${err.message}`);
+      console.error(`[TraeCN MCP] Failed to start TraeCN: ${err.message}`);
       process.exit(1);
     }
   }
@@ -92,29 +92,29 @@ async function main() {
   const host = readRuntimeEnv('TRAECN_CDP_HOST');
   const port = readRuntimeEnv('TRAECN_REMOTE_DEBUGGING_PORT');
 
-  console.log(`[TRAECNclaw] Checking CDP at ${host}:${port}...`);
+  console.log(`[TraeCN MCP] Checking CDP at ${host}:${port}...`);
 
   try {
     const info = await probeTraeCNCDP({ host, port });
-    console.log(`[TRAECNclaw] CDP connected: ${info.Browser || 'Unknown'}`);
+    console.log(`[TraeCN MCP] CDP connected: ${info.Browser || 'Unknown'}`);
   } catch (err) {
-    console.error(`[TRAECNclaw] CDP not available: ${err.message}`);
+    console.error(`[TraeCN MCP] CDP not available: ${err.message}`);
     for (const instruction of buildCdpRecoveryInstructions(traeRunning)) {
-      console.error(`[TRAECNclaw] ${instruction}`);
+      console.error(`[TraeCN MCP] ${instruction}`);
     }
     process.exit(1);
   }
 
-  console.log('[TRAECNclaw] Starting gateway...');
+  console.log('[TraeCN MCP] Starting gateway...');
   const { startGateway } = require('../src/http/gateway');
   const { server } = await startGateway();
   const address = server.address();
-  console.log(`[TRAECNclaw] Gateway running at http://${address.address}:${address.port}`);
+  console.log(`[TraeCN MCP] Gateway running at http://${address.address}:${address.port}`);
 }
 
 if (require.main === module) {
   main().catch(err => {
-    console.error('[TRAECNclaw] Quickstart failed:', err.message);
+    console.error('[TraeCN MCP] Quickstart failed:', err.message);
     process.exit(1);
   });
 }

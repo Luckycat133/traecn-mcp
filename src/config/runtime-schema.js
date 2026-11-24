@@ -68,6 +68,14 @@ const RUNTIME_ENV_SPECS = [
     description: 'Opt in to automatic TraeCN launch/recovery. quickstart also accepts --launch-trae.'
   },
   {
+    name: 'TRAECN_AUTO_CHECK_IN',
+    section: 'TraeCN and CDP',
+    default: '0',
+    aliases: [],
+    type: 'boolean',
+    description: 'Opt in to daily check-in using the current logged-in TraeCN desktop session.'
+  },
+  {
     name: 'TRAECN_RESPONSE_TIMEOUT_MS',
     section: 'Task lifecycle',
     default: '1800000',

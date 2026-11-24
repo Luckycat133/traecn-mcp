@@ -17,6 +17,7 @@
 
 const { sleep, safeJsValue } = require('../../shared/utils');
 const { KNOWN_MODELS } = require('../../shared/models');
+const CORE_MODEL_TRIGGER = 'button.core-model-select-trigger[role="combobox"]';
 
 async function checkQueueStatus(driver, timeoutMs = 5000) {
   let timeoutId;
@@ -135,6 +136,8 @@ async function getCurrentModel(driver) {
   const result = await driver.client.send('Runtime.evaluate', {
     expression: `
       (function() {
+        var coreTrigger = (${readCoreTrigger.toString()})(document, ${safeJsValue(CORE_MODEL_TRIGGER)});
+        if (coreTrigger) return coreTrigger.current || '';
         var selectors = [
           '.icd-model-select-trigger-value-name',
           '.icd-model-select-trigger',
@@ -164,11 +167,129 @@ async function getCurrentModel(driver) {
   return result.result?.value || '';
 }
 
+// Serialized into Runtime.evaluate and called before any legacy picker probe.
+function readCoreTrigger(document, selector) {
+  const triggers = Array.from(document.querySelectorAll(selector)).filter(el => el.matches?.(selector));
+  if (triggers.length === 0) return null;
+  const visible = triggers.filter(el => {
+    const rect = el.getBoundingClientRect();
+    return rect.width > 4 && rect.height > 4;
+  });
+  if (visible.length !== 1) return { core: true, disabled: true };
+  const trigger = visible[0];
+  const rect = trigger.getBoundingClientRect();
+  return {
+    core: true,
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
+    current: (trigger.innerText || trigger.textContent || '').replace(/\s+/g, ' ').trim(),
+    expanded: trigger.getAttribute('aria-expanded') === 'true',
+    controls: trigger.getAttribute('aria-controls'),
+    disabled: trigger.disabled || trigger.getAttribute('aria-disabled') === 'true'
+  };
+}
+
+async function readCorePicker(driver, controls, selection = null) {
+  const result = await driver.client.send('Runtime.evaluate', {
+    expression: `
+      (() => {
+        const controls = ${safeJsValue(controls)};
+        const trigger = (${readCoreTrigger.toString()})(document, ${safeJsValue(CORE_MODEL_TRIGGER)});
+        if (!trigger?.expanded || trigger.controls !== controls) return null;
+
+        const portal = document.getElementById(controls);
+        if (portal?.getAttribute('role') !== 'listbox') return { expanded: true };
+        const textOf = el => (el?.innerText || el?.textContent || '').replace(/\\s+/g, ' ').trim();
+        const autoSwitches = Array.from(portal.querySelectorAll('.core-auto-mode-switch input[role="switch"]'));
+        const autoSwitch = autoSwitches.length === 1 ? autoSwitches[0] : null;
+        const autoName = autoSwitch ? textOf(portal.querySelector('.core-auto-mode-switch-label')) : '';
+        const manualModelsHidden = autoSwitch?.checked === true
+          && !portal.querySelector('.core-model-select-model-list');
+        const labels = Array.from(portal.querySelectorAll('.core-model-select-model-item-name'))
+          .filter(el => el.getClientRects().length)
+          .map(el => ({ name: textOf(el), row: el.closest('.core-model-select-model-item[role="option"]') }))
+          .filter(item => item.name);
+        const models = labels.map(item => item.name);
+        const request = ${safeJsValue(selection)};
+        const snapshot = { expanded: true, autoName, models, manualModelsHidden };
+        if (!request) return snapshot;
+
+        const matches = request.auto
+          ? autoSwitches.filter(el => el.getAttribute('aria-label') === 'Auto')
+          : labels.filter(item => item.name === request.name).map(item => item.row);
+        snapshot.matchCount = matches.length;
+        if (matches.length !== 1 || !matches[0]) return snapshot;
+
+        const choice = matches[0];
+        if (request.auto) snapshot.autoChecked = choice.checked === true;
+        snapshot.disabled = choice.disabled || choice.getAttribute('aria-disabled') === 'true'
+          || choice.hasAttribute('data-disabled');
+        if (snapshot.disabled) return snapshot;
+        const clickable = request.auto ? choice.closest('label') || choice : choice;
+        const rect = clickable.getBoundingClientRect();
+        if (rect.width > 4 && rect.height > 4) {
+          const x = rect.x + rect.width / 2;
+          const y = rect.y + rect.height / 2;
+          const hit = document.elementFromPoint(x, y);
+          if (hit && clickable.contains(hit)) snapshot.point = { x, y };
+        }
+        return snapshot;
+      })()
+    `,
+    returnByValue: true
+  });
+  return result.result?.value || null;
+}
+
+async function clickCorePickerPoint(driver, point, move = true) {
+  if (move) await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point, buttons: 0 });
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await driver.client.send('Input.dispatchMouseEvent', { type, ...point, button: 'left', clickCount: 1 });
+  }
+}
+
+async function withCorePicker(driver, trigger, selection, read) {
+  const openedHere = !trigger.expanded;
+  let snapshot;
+  try {
+    if (openedHere) await clickCorePickerPoint(driver, { x: trigger.x, y: trigger.y });
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (attempt > 0) await sleep(100);
+      snapshot = await readCorePicker(driver, trigger.controls, selection);
+      if (snapshot?.manualModelsHidden || snapshot?.models?.length || (selection?.auto && snapshot?.autoName)) break;
+    }
+    return await read(snapshot);
+  } finally {
+    if (openedHere && (await readCorePicker(driver, trigger.controls))?.expanded) {
+      for (const type of ['rawKeyDown', 'keyUp']) {
+        await driver.client.send('Input.dispatchKeyEvent', {
+          type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 53
+        });
+      }
+    }
+  }
+}
+
+async function listCoreModels(driver, current, trigger) {
+  if (!trigger.controls || trigger.disabled) return { current, models: [] };
+  return withCorePicker(driver, trigger, null, snapshot => {
+    const models = [snapshot?.autoName, ...(snapshot?.models || [])].filter(Boolean);
+    return {
+      current,
+      models: [...new Set(models)],
+      ...(snapshot?.manualModelsHidden ? { manualModelsHidden: true } : {})
+    };
+  });
+}
+
 async function listModels(driver) {
   const current = await driver.getCurrentModel();
   const triggerResult = await driver.client.send('Runtime.evaluate', {
     expression: `
       (function() {
+        var coreTrigger = (${readCoreTrigger.toString()})(document, ${safeJsValue(CORE_MODEL_TRIGGER)});
+        if (coreTrigger) return coreTrigger;
         function visible(el) {
           if (!el || !el.getBoundingClientRect) return false;
           var rect = el.getBoundingClientRect();
@@ -198,6 +319,7 @@ async function listModels(driver) {
     returnByValue: true
   });
   const trigger = triggerResult.result?.value || null;
+  if (trigger?.core) return listCoreModels(driver, current, trigger);
   const openedByList = Boolean(trigger && !trigger.expanded);
 
   async function clickTrigger() {
@@ -266,28 +388,101 @@ async function listModels(driver) {
 
 function _normalizeModelName(name) {
   return String(name || '')
+    .replace(/^\s*Auto Mode\s*$/i, 'Auto')
     .replace(/\s*Beta\s*/ig, '')
     .replace(/[^\p{L}\p{N}]/gu, '')
     .toLowerCase();
+}
+
+function isAutoModel(name) {
+  return /^Auto(?: Mode)?$/i.test(name);
+}
+
+function alreadySelected(requestedModel, current) {
+  return {
+    success: true,
+    model: current,
+    requestedModel,
+    previousModel: current,
+    alreadySelected: true,
+    switchResult: 'already selected'
+  };
+}
+
+async function switchCoreModel(driver, requestedModel, beforeModel, trigger) {
+  const selection = { name: requestedModel, auto: isAutoModel(requestedModel) };
+  const resultBase = { requestedModel, previousModel: beforeModel };
+  const fail = (code, error, model = beforeModel) => ({
+    ...resultBase, success: false, model, code, switchResult: code, error
+  });
+  if (!trigger.controls || trigger.disabled) {
+    return fail('MODEL_PICKER_UNAVAILABLE', 'The native Trae CN model picker is unavailable.');
+  }
+
+  return withCorePicker(driver, trigger, selection, async snapshot => {
+    if (!snapshot?.expanded) {
+      return fail('MODEL_PICKER_UNAVAILABLE', 'The native Trae CN model picker did not open.');
+    }
+    if (snapshot.manualModelsHidden && !selection.auto) {
+      return fail('MANUAL_MODELS_HIDDEN', 'Auto is active. Turn it off in Trae CN to show manual models.');
+    }
+    if (snapshot?.matchCount > 1) {
+      return fail('MODEL_LABEL_AMBIGUOUS', `More than one native option is named "${requestedModel}".`);
+    }
+    if (!snapshot?.matchCount) {
+      return fail('MODEL_NOT_FOUND', `The native picker did not offer "${requestedModel}".`);
+    }
+    let clicked = false;
+    if (!snapshot.autoChecked) {
+      if (!snapshot.point) {
+        return fail('MODEL_PICKER_UNAVAILABLE', `The native option "${requestedModel}" is not clickable.`);
+      }
+      await driver.client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...snapshot.point, buttons: 0 });
+      const refreshed = await readCorePicker(driver, trigger.controls, selection);
+      if (!refreshed?.autoChecked) {
+        const point = refreshed?.point;
+        if (!point || point.x !== snapshot.point.x || point.y !== snapshot.point.y) {
+          return fail('MODEL_PICKER_UNAVAILABLE', `The native option "${requestedModel}" changed before selection.`);
+        }
+        await clickCorePickerPoint(driver, point, false);
+        clicked = true;
+      }
+    }
+
+    let currentModel = beforeModel;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (attempt > 0) await sleep(100);
+      const response = await driver.client.send('Runtime.evaluate', {
+        expression: `(${readCoreTrigger.toString()})(document, ${safeJsValue(CORE_MODEL_TRIGGER)})`,
+        returnByValue: true
+      });
+      currentModel = response.result?.value?.current || currentModel;
+      if (selection.auto ? isAutoModel(currentModel) : currentModel === requestedModel) {
+        return {
+          ...resultBase,
+          success: true,
+          model: currentModel,
+          ...(clicked ? { switchResult: `clicked: ${currentModel}` }
+            : { alreadySelected: true, switchResult: 'already selected' })
+        };
+      }
+    }
+
+    return fail('MODEL_CHANGE_UNVERIFIED', `Model did not change to ${requestedModel}.`, currentModel);
+  });
 }
 
 async function switchModel(driver, modelName) {
   const requestedModel = String(modelName || '').trim();
   const normalizedRequested = _normalizeModelName(requestedModel);
   const beforeModel = await driver.getCurrentModel();
-  if (_normalizeModelName(beforeModel) === normalizedRequested) {
-    return {
-      success: true,
-      model: beforeModel,
-      requestedModel,
-      previousModel: beforeModel,
-      alreadySelected: true,
-      switchResult: 'already selected'
-    };
+  if (beforeModel && (beforeModel === requestedModel || (isAutoModel(beforeModel) && isAutoModel(requestedModel)))) {
+    return alreadySelected(requestedModel, beforeModel);
   }
 
   const busyCheck = await driver.client.send('Runtime.evaluate', {
     expression: `(() => {
+      var coreTrigger = (${readCoreTrigger.toString()})(document, ${safeJsValue(CORE_MODEL_TRIGGER)});
       function visible(el) {
         if (!el || !el.getBoundingClientRect) return false;
         var rect = el.getBoundingClientRect();
@@ -299,7 +494,7 @@ async function switchModel(driver, modelName) {
       var stopIcon = Array.from(document.querySelectorAll('.codicon-stop-circle,[class*="stop-circle"]'))
         .find(function(el) { return visible(el); });
       if (stopIcon) {
-        return { busy: true, reason: 'generating' };
+        return { busy: true, reason: 'generating', coreTrigger };
       }
       var stopButton = Array.from(document.querySelectorAll('button,[role="button"],.chat-input-v2-send-button'))
         .find(function(el) {
@@ -311,20 +506,32 @@ async function switchModel(driver, modelName) {
             /chat-input|send|stop/i.test(className + ' ' + label);
         });
       if (stopButton) {
-        return { busy: true, reason: 'generating' };
+        return { busy: true, reason: 'generating', coreTrigger };
       }
       var trigger = document.querySelector('.chat-model-label');
       if (trigger) {
         var triggerArea = trigger.closest('[class*=chat-input], [class*=input]') || trigger.parentElement;
         if (visible(triggerArea) && textOf(triggerArea).includes('\\u751f\\u6210\\u4e2d')) {
-          return { busy: true, reason: 'generating' };
+          return { busy: true, reason: 'generating', coreTrigger };
         }
       }
-      return { busy: false };
+      return { busy: false, coreTrigger };
     })()`,
     returnByValue: true
   });
   const busyInfo = busyCheck.result?.value;
+  if (typeof busyInfo?.busy !== 'boolean') {
+    return {
+      success: false,
+      requestedModel,
+      previousModel: beforeModel,
+      code: 'MODEL_PICKER_UNAVAILABLE',
+      error: 'Trae CN model controls could not be verified.'
+    };
+  }
+  if (!busyInfo.coreTrigger && normalizedRequested && _normalizeModelName(beforeModel) === normalizedRequested) {
+    return alreadySelected(requestedModel, beforeModel);
+  }
   if (busyInfo && busyInfo.busy) {
     return {
       success: false,
@@ -334,6 +541,7 @@ async function switchModel(driver, modelName) {
       error: busyInfo.reason
     };
   }
+  if (busyInfo?.coreTrigger) return switchCoreModel(driver, requestedModel, beforeModel, busyInfo.coreTrigger);
 
   let openResult = 'not attempted';
   for (let retry = 0; retry < 3; retry++) {

@@ -4,7 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { CDPClient } = require('../src/cdp/client');
-const { isTraeCNVersion, resolveCDPEndpoint } = require('../src/cdp/discovery');
+const { classifyTargetSurface, discoverTarget, isTraeCNVersion, resolveCDPEndpoint } = require('../src/cdp/discovery');
 const dom = require('../src/cdp/browser-dom');
 const { loadEnv } = require('../src/config/env');
 const { getEnvWithFallback } = require('../src/shared/utils');
@@ -13,6 +13,7 @@ const { runtimeDefault } = require('../src/config/runtime-schema');
 const {
   adapterHandshake,
   detectTraeEnvironment,
+  mergeAdapterConfig,
   parseTraeVersion,
   selectTraeAdapter
 } = require('../src/trae-adapters');
@@ -48,13 +49,8 @@ async function fetchJSON(url) {
   });
 }
 
-function looksLikeTraeTarget(target) {
-  const title = String(target.title || '').toLowerCase();
-  const url = String(target.url || '').toLowerCase();
-  return title.includes('trae') || url.includes('vscode-app') || url.includes('vscode-file');
-}
-
-function verifyResults(target, version, results, adapterInfo) {
+function verifyResults(target, version, results, adapterInfo, workspaceKind) {
+  const agentWindow = workspaceKind === 'agent';
   const checks = [
     {
       name: 'CDP endpoint belongs to TraeCN',
@@ -62,15 +58,15 @@ function verifyResults(target, version, results, adapterInfo) {
       detail: version['User-Agent'] || version.Browser || 'unknown'
     },
     {
-      name: 'Selected target looks like TraeCN',
-      ok: looksLikeTraeTarget(target),
+      name: 'Selected Trae CN workspace',
+      ok: classifyTargetSurface(target) === 'workspace',
       detail: `${target.title || 'No title'} (${target.url || 'no url'})`
     },
     {
-      name: 'Versioned Trae adapter',
-      ok: adapterInfo?.verified === true,
+      name: 'Known Trae adapter for structural inspection',
+      ok: Boolean(adapterInfo?.evidence),
       detail: adapterInfo
-        ? `${adapterInfo.adapter} (${adapterInfo.traeVersion || 'unknown'}, ${adapterInfo.compatibility})`
+        ? `${adapterInfo.adapter} (app ${adapterInfo.appVersion || 'unknown'}, engine ${adapterInfo.traeVersion || 'unknown'}, ${adapterInfo.compatibility})`
         : 'not detected'
     },
     {
@@ -94,9 +90,9 @@ function verifyResults(target, version, results, adapterInfo) {
       detail: results.newChatButtons[0]?.selector || 'not found'
     },
     {
-      name: 'Mode tab selector',
-      ok: results.modeTabs.length > 0,
-      detail: results.modeTabs[0]?.selector || 'not found'
+      name: agentWindow ? 'Standalone Agent workspace' : 'Mode tab selector',
+      ok: agentWindow ? results.agentWorkspace : results.modeTabs.length > 0,
+      detail: agentWindow ? 'body.solo-lite' : results.modeTabs[0]?.selector || 'not found'
     }
   ];
 
@@ -113,15 +109,13 @@ function uniqueSelectors(selectors) {
   return Array.from(new Set(selectors.filter(Boolean)));
 }
 
-function getScanConfig() {
-  const config = getConfig();
+function getScanConfig(config = getConfig()) {
   return {
     composerSelectors: uniqueSelectors(config.composerSelectors),
     sendButtonSelectors: uniqueSelectors(config.sendButtonSelectors),
     responseSelectors: uniqueSelectors([
       ...config.responseSelectors,
-      ...config.ideResponseSelectors,
-      ...config.activitySelectors
+      ...config.ideResponseSelectors
     ]),
     newChatSelectors: uniqueSelectors([
       ...config.newChatSelectors,
@@ -142,7 +136,8 @@ async function scanDOM(client, scanConfig = getScanConfig()) {
     responseRegions: [],
     newChatButtons: [],
     modeTabs: [],
-    activityIndicators: []
+    activityIndicators: [],
+    agentWorkspace: Boolean(await dom.querySelector(client, 'body.solo-lite'))
   };
 
   const composerSelectors = scanConfig.composerSelectors;
@@ -265,12 +260,15 @@ async function main() {
   }
   console.log('');
 
-  const pageTargets = targets
-    .filter(t => t.type === 'page' && !t.title?.includes('DevTools'))
-    .sort((a, b) => Number(looksLikeTraeTarget(b)) - Number(looksLikeTraeTarget(a)));
+  const requestedSurface = argValue('--surface', '');
+  if (requestedSurface && !['agent', 'workbench'].includes(requestedSurface)) {
+    throw new Error('--surface must be agent or workbench');
+  }
+  const selected = await discoverTarget({ host: CDP_HOST, port: CDP_PORT, surface: requestedSurface });
+  const pageTargets = [selected].filter(target => classifyTargetSurface(target) === 'workspace');
 
   if (pageTargets.length === 0) {
-    console.error('[inspect-traecn] No page targets found. Is TraeCN Chat panel open?');
+    console.error('[inspect-traecn] Trae CN is showing setup. Finish onboarding before inspecting workspace selectors.');
     process.exit(1);
   }
 
@@ -288,19 +286,21 @@ async function main() {
       await client.connect();
       await client.send('DOM.enable');
 
-      const results = await scanDOM(client);
       const environment = await detectTraeEnvironment({
         client,
         cdpVersion: version,
         target,
         platform: process.platform
       });
-      const adapterInfo = adapterHandshake(selectTraeAdapter(environment));
+      const adapter = selectTraeAdapter(environment);
+      const adapterInfo = adapterHandshake(adapter);
+      const results = await scanDOM(client, getScanConfig(mergeAdapterConfig(getConfig(), adapter)));
 
       console.log('');
       console.log('  === Trae Adapter ===');
       console.log(`  Adapter: ${adapterInfo.adapter}`);
-      console.log(`  Version: ${adapterInfo.traeVersion || 'unknown'}`);
+      console.log(`  App version: ${adapterInfo.appVersion || 'unknown'}`);
+      console.log(`  Engine version: ${adapterInfo.traeVersion || 'unknown'}`);
       console.log(`  Compatibility: ${adapterInfo.compatibility}`);
       if (adapterInfo.warnings.length > 0) {
         for (const warning of adapterInfo.warnings) console.log(`  WARN: ${warning}`);
@@ -404,7 +404,7 @@ async function main() {
       };
 
       if (VERIFY_MODE) {
-        const passed = verifyResults(target, version, results, adapterInfo);
+        const passed = verifyResults(target, version, results, adapterInfo, environment.target.workspaceKind);
         if (!passed) {
           process.exitCode = 1;
         }

@@ -15,6 +15,7 @@ Canonical variables and defaults:
 | `TRAECN_REMOTE_DEBUGGING_PORT` | `9222` | Single CDP port used by launch, discovery, quickstart, doctor, and services. |
 | `TRAECN_QUICKSTART_PROFILE_MODE` | `existing` | Reuse the logged-in profile by default; isolated is for disposable testing. |
 | `TRAECN_AUTO_START_TRAE` | `0` | Opt in to automatic TraeCN launch/recovery. quickstart also accepts --launch-trae. |
+| `TRAECN_AUTO_CHECK_IN` | `0` | Opt in to daily check-in using the current logged-in TraeCN desktop session. |
 | `TRAECN_RESPONSE_TIMEOUT_MS` | `1800000` | Maximum response-collection window (30 minutes). |
 | `TRAECN_QUEUE_WAIT_TIMEOUT_MS` | `60000` | Timeout for one low-level queue wait operation; it is not the total task lifetime. |
 | `TRAECN_QUEUE_PER_TASK_TIMEOUT_MS` | `600000` | Deadline-extension window while a task remains in an external model queue. |

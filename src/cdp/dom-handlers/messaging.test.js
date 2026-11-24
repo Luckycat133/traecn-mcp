@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const vm = require('vm');
-const { sendMessage } = require('./messaging');
+const { sendMessage, stopGeneration } = require('./messaging');
 const { TraeCNAutomationError } = require('../errors');
 const { createRunner } = require('../../shared/test-runner');
 const r = createRunner('messaging.test.js');
@@ -400,6 +400,37 @@ asyncTest('pre-dispatch button discovery and composer insertion RPC failures ret
     assert.strictEqual(failure.details.submissionDispatched, undefined);
     assert.strictEqual(fixture.sends(), 0);
   }
+});
+
+asyncTest('standalone Agent stops only the exact active session with a real stop icon', async () => {
+  let generating = true;
+  let clicks = 0;
+  const button = {
+    getClientRects: () => [{}],
+    querySelector: () => generating ? {} : null,
+    getAttribute: () => null,
+    click() { clicks++; generating = false; }
+  };
+  const document = {
+    querySelector: () => ({ closest: () => ({ getAttribute: () => 'active-session' }) }),
+    querySelectorAll: () => [button]
+  };
+  const evaluate = expression => vm.runInNewContext(expression, { document });
+  const driver = {
+    traeAdapter: { environment: { target: { workspaceKind: 'agent' } } },
+    client: {
+      async send(method, { expression }) {
+        assert.strictEqual(method, 'Runtime.evaluate');
+        return { result: { value: evaluate(expression) } };
+      }
+    },
+    _waitForExpression: async expression => evaluate(expression)
+  };
+  assert.strictEqual((await stopGeneration(driver, 'other-session')).reason, 'active_conversation_mismatch');
+  assert.strictEqual(clicks, 0);
+  assert.strictEqual((await stopGeneration(driver, 'active-session')).reason, 'generation_stopped');
+  assert.strictEqual((await stopGeneration(driver, 'active-session')).reason, 'stop_button_not_found');
+  assert.strictEqual(clicks, 1);
 });
 
 (async () => {

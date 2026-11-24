@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('node:path');
 const { SettingsDriver } = require('./settings-driver');
 const { CommandPaletteDriver } = require('./command-palette-driver');
 const { EditorDriver } = require('./editor-driver');
@@ -68,6 +69,10 @@ class DomDriver {
     return modeModule.detectMode(this);
   }
 
+  async openModeWindow(surface) {
+    return modeModule.openModeWindow(this, surface);
+  }
+
   _invalidateModeCache() {
     return modeModule._invalidateModeCache(this);
   }
@@ -105,7 +110,20 @@ class DomDriver {
   // ── Sidebar / panel text capture ───────────────────────────────────────
 
   async getWorkspaceContext() {
+    if (this.traeAdapter?.environment?.target?.workspaceKind === 'agent') {
+      const { readAgentWorkspace } = require('./dom-handlers/agent-workspace');
+      const observed = await readAgentWorkspace(this);
+      if (observed.success) {
+        return { title: 'Agent', folderName: path.basename(observed.projectPath), rootPath: observed.projectPath, hasExplorer: false };
+      }
+      return { title: 'Agent', folderName: null, rootPath: null, hasExplorer: false };
+    }
     return panelModule.getWorkspaceContext(this);
+  }
+
+  async selectAgentWorkspace(absolutePath) {
+    const { selectAgentWorkspace } = require('./dom-handlers/agent-workspace');
+    return selectAgentWorkspace(this, absolutePath);
   }
 
   async _captureSidebarText() {
@@ -233,8 +251,8 @@ class DomDriver {
     return messagingModule.sendMessage(this, text);
   }
 
-  async stopGeneration() {
-    return messagingModule.stopGeneration(this);
+  async stopGeneration(expectedSessionId) {
+    return messagingModule.stopGeneration(this, expectedSessionId);
   }
 
   // ── Core polling ───────────────────────────────────────────────────────
@@ -246,8 +264,8 @@ class DomDriver {
    * 3. Broad content area scan (heuristic-based)
    * 4. Body text diffing (last resort)
    */
-  async _pollResponseState() {
-    return responseModule._pollResponseState(this);
+  async _pollResponseState(options) {
+    return responseModule._pollResponseState(this, options);
   }
 
   async checkForApprovalDialog() {
@@ -266,7 +284,14 @@ class DomDriver {
    * In IDE mode: reads chat panel messages + body text diff.
    */
   async collectResponse(options = {}) {
-    await this._ensureVisibleWindow();
+    try {
+      await this._ensureVisibleWindow();
+    } catch (error) {
+      if (error?.code !== 'WINDOW_NOT_VISIBLE' || this.traeAdapter?.environment?.target?.workspaceKind !== 'agent') throw error;
+      const completed = await responseModule.readCompletedNativeTurn(this, options);
+      if (completed) return completed;
+      throw error;
+    }
     return responseModule.collectResponse(this, options);
   }
 

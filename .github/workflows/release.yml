@@ -54,5 +54,5 @@ jobs:
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
             gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
-          mapfile -t ARTIFACTS < <(node -e "const m=require('./dist/traecnclaw-mcp-release.json'); console.log(m.artifacts.map(a=>a.path).concat(m.serverPackage.artifact.path, 'dist/traecnclaw-mcp-release.json').join('\\n'))")
+          mapfile -t ARTIFACTS < <(node -e "const m=require('./dist/traecn-mcp-release.json'); console.log(m.artifacts.map(a=>a.path).concat(m.serverPackage.artifact.path, 'dist/traecn-mcp-release.json').join('\\n'))")
           gh release upload "$RELEASE_TAG" "${ARTIFACTS[@]}" --clobber

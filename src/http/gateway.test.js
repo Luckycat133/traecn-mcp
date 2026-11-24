@@ -23,6 +23,7 @@ try {
 } catch {}
 
 const { Gateway, RateLimiter, sanitizeLog } = require('./gateway');
+const { NATIVE_TURN_OWNERSHIP } = require('../cdp/dom-handlers/response-collection');
 const { buildCapabilities } = require('../capabilities');
 const { buildConfirmationPlan } = require('../shared/operation-confirmation');
 const { generateOpenAPISpec } = require('./openapi');
@@ -368,7 +369,7 @@ test('buildCapabilities returns compact command and token strategy metadata', ()
     commands: [{ command: 'delegate_async', summary: 'Async delegate', required: ['task'], optional: ['waitForQueue'] }],
     mcpTools: [{ name: 'queue_task', description: 'Queue task', inputSchema: { required: ['task'] } }]
   });
-  assert.strictEqual(capabilities.name, 'traecnclaw');
+  assert.strictEqual(capabilities.name, 'traecn-mcp');
   assert.strictEqual(capabilities.coverage.queueManagement, true);
   assert.deepStrictEqual(capabilities.tokenStrategy.prefer, ['traecn_send_message', 'traecn_list_conversations', 'traecn_get_task']);
   assert.strictEqual(capabilities.tokenStrategy.gatewayManaged, true);
@@ -382,7 +383,7 @@ test('buildCapabilities returns compact command and token strategy metadata', ()
   assert.ok(capabilities.http.some(operation => operation.path === '/api/preflight'));
   assert.deepStrictEqual(
     capabilities.traeCN.adapters.map(adapter => adapter.id),
-    ['traecn-1.107', 'traecn-unknown']
+    ['traecn-3.4.15', 'traecn-3.4.11', 'traecn-1.107', 'traecn-unknown']
   );
 });
 
@@ -2239,6 +2240,22 @@ asyncTest('Gateway keeps submitted task executing when collected result lacks ow
   assert.strictEqual(task.attempts, 0);
   assert.strictEqual(task.error, null);
   assert.match(task.queueMessage, /ownership token/);
+});
+
+test('Gateway accepts a native final reply only with the original conversation and prompt', () => {
+  const gateway = new Gateway();
+  const task = {
+    submittedToTrae: true, task: 'TRAECN_TASK_PROOF verify the final reply',
+    soloChat: { sessionId: 'expected-session' }
+  };
+  const result = { text: 'Verified.', stable: true };
+  const proof = (sessionId, taskText) => ({
+    ...result, [NATIVE_TURN_OWNERSHIP]: { sessionId, taskText }
+  });
+  assert.strictEqual(gateway._resultBelongsToSubmittedTask(proof('expected-session', task.task), task), true);
+  assert.strictEqual(gateway._resultBelongsToSubmittedTask(proof('another-session', task.task), task), false);
+  assert.strictEqual(gateway._resultBelongsToSubmittedTask(proof('expected-session', 'another task'), task), false);
+  assert.strictEqual(gateway._resultBelongsToSubmittedTask(result, task), false);
 });
 
 asyncTest('Gateway keeps long submitted queue waits alive without consuming retry attempts', async () => {

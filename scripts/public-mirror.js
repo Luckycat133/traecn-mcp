@@ -9,9 +9,10 @@ const packageInfo = require('../package.json');
 const { MCP_CONTRACT_VERSION, MCP_TOOL_NAMES } = require('../src/mcp/contract');
 
 const repoRoot = path.resolve(__dirname, '..');
-const canonicalSkillRoot = path.join(repoRoot, 'skills/traecnclaw-mcp');
+const canonicalSkillRoot = path.join(repoRoot, 'skills/traecn-mcp');
 const distributionRoot = path.join(repoRoot, 'distribution/public-mirror');
-const mirrorSkillPath = '.codex/skills/traecnclaw-mcp';
+const mirrorSkillPath = '.codex/skills/traecn-mcp';
+const formerMirrorSkillPath = '.codex/skills/traecnclaw-mcp';
 const obsoleteRootFiles = ['smithery.yaml', 'server.json', 'Dockerfile.glama'];
 
 function listTree(rootPath) {
@@ -88,10 +89,10 @@ function assertRevision(sourceRevision) {
 
 function sourceRevisionDocument(sourceRevision) {
   return [
-    'Canonical repository: https://github.com/Luckycat133/TRAECNclaw',
+    'Canonical repository: https://github.com/Luckycat133/traecn-mcp',
     `Canonical commit: ${sourceRevision}`,
     `Canonical release: v${packageInfo.version}`,
-    'Canonical path: skills/traecnclaw-mcp',
+    'Canonical path: skills/traecn-mcp',
     'Generated mirror: do not edit the mirrored Skill by hand.',
     ''
   ].join('\n');
@@ -115,7 +116,7 @@ function releaseManifest(sourceRevision) {
     contractVersion: MCP_CONTRACT_VERSION,
     toolCount: MCP_TOOL_NAMES.length,
     repository: 'https://github.com/Luckycat133/traecnclaw-mcp-skill',
-    canonicalRepository: 'https://github.com/Luckycat133/TRAECNclaw',
+    canonicalRepository: 'https://github.com/Luckycat133/traecn-mcp',
     sourceRevision,
     skillPath: mirrorSkillPath,
     marketplaces: {
@@ -148,6 +149,7 @@ function buildPublicMirror({ mirrorRoot, sourceRevision }) {
   assertRevision(sourceRevision);
   fs.mkdirSync(mirrorRoot, { recursive: true });
   copyTree(canonicalSkillRoot, path.join(mirrorRoot, mirrorSkillPath));
+  fs.rmSync(path.join(mirrorRoot, formerMirrorSkillPath), { recursive: true, force: true });
   fs.writeFileSync(path.join(mirrorRoot, 'SOURCE_REVISION'), sourceRevisionDocument(sourceRevision), 'utf8');
   fs.writeFileSync(path.join(mirrorRoot, 'README.md'), renderReadme(sourceRevision), 'utf8');
   fs.copyFileSync(path.join(distributionRoot, 'LICENSE'), path.join(mirrorRoot, 'LICENSE'));
@@ -167,6 +169,9 @@ function verifyPublicMirror({ mirrorRoot, sourceRevision }) {
   assertRevision(sourceRevision);
   const violations = compareTrees(canonicalSkillRoot, path.join(mirrorRoot, mirrorSkillPath))
     .map(detail => ({ rule: 'skill-byte-mismatch', ...detail }));
+  if (fs.existsSync(path.join(mirrorRoot, formerMirrorSkillPath))) {
+    violations.push({ rule: 'obsolete-mirrored-skill', path: formerMirrorSkillPath });
+  }
 
   const sourcePath = path.join(mirrorRoot, 'SOURCE_REVISION');
   const source = fs.existsSync(sourcePath) ? fs.readFileSync(sourcePath, 'utf8') : '';
@@ -177,7 +182,8 @@ function verifyPublicMirror({ mirrorRoot, sourceRevision }) {
 
   const readmePath = path.join(mirrorRoot, 'README.md');
   const readme = fs.existsSync(readmePath) ? fs.readFileSync(readmePath, 'utf8') : '';
-  if (!readme.includes(`TRAECNclaw ${packageInfo.version}`)
+  if (!readme.startsWith(`# ${packageInfo.displayName}\n`)
+      || !readme.includes(`TRAECNclaw ${packageInfo.version}`)
       || !/contract version 5/i.test(readme)
       || !/exactly 20/i.test(readme)
       || !/local-first/i.test(readme)
@@ -218,8 +224,8 @@ function verifyPublicMirror({ mirrorRoot, sourceRevision }) {
 
   const dockerfilePath = path.join(mirrorRoot, 'Dockerfile');
   const dockerfile = fs.existsSync(dockerfilePath) ? fs.readFileSync(dockerfilePath, 'utf8') : '';
-  if (!dockerfile.includes(`/v${packageInfo.version}/traecnclaw-${packageInfo.version}.tgz`)
-      || !dockerfile.includes('ENTRYPOINT ["traecnclaw-mcp"]')
+  if (!dockerfile.includes(`https://registry.npmjs.org/@luckycat133/traecnclaw/-/traecnclaw-${packageInfo.version}.tgz`)
+      || !dockerfile.includes('ENTRYPOINT ["node", "/usr/local/lib/node_modules/@luckycat133/traecnclaw/mcp-server.js"]')
       || !dockerfile.includes('TRAECN_GATEWAY_HOST=127.0.0.1')
       || !dockerfile.includes('npm install -g --ignore-scripts --force /tmp/traecnclaw.tgz')
       || !dockerfile.includes('without changing the package metadata or claiming Linux support')

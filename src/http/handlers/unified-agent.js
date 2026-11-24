@@ -3,6 +3,7 @@
 const { parseBody } = require('../request-gate');
 const { isGenericQueueProbeTask } = require('../../shared/utils');
 const { TraeCNAutomationError } = require('../../cdp/errors');
+const { isKnownStandaloneAgentVersion } = require('../../trae-adapters/registry');
 
 const ROUTES = [
   { method: 'POST', path: '/api/tasks/submit', handler: '_handleUnifiedSubmit', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
@@ -11,6 +12,15 @@ const ROUTES = [
   { method: 'POST', path: '/api/conversations/manage', handler: '_handleManageConversation', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'POST', path: '/api/interactions/resolve', handler: '_handleResolveInteraction', requiresAuth: true, requiresRateLimit: true, requiresBody: true }
 ];
+
+const SAFE_STANDALONE_DELETE_FAILURES = new Set([
+  'candidate_not_found', 'candidate_not_located', 'sidebar_element_not_found', 'sidebar_not_visible',
+  'sidebar_scan_timeout', 'sidebar_scan_incomplete', 'standalone_agent_identity_required',
+  'standalone_agent_sidebar_changed', 'standalone_agent_delete_target_changed', 'standalone_agent_row_not_visible',
+  'preexisting_dialog', 'preexisting_context_menu', 'row_action_not_visible', 'delete_menu_not_bound_to_row',
+  'delete_menu_not_found', 'delete_menu_not_visible', 'delete_dialog_not_confirmed', 'delete_confirm_not_visible',
+  'delete_dialog_still_open', 'delete_control_unavailable', 'delete_verification_unavailable', 'delete_verification_failed'
+]);
 
 function parseConversationId(value) {
   const input = String(value || '').trim();
@@ -155,6 +165,13 @@ async function handleSubmit(req, res, ctx) {
   }
 
   await ctx._ensureConnection();
+  if ((ctx.traeTarget?.workspaceKind === 'agent' || isKnownStandaloneAgentVersion(ctx.traeEnvironment?.appVersion)) &&
+      (await ctx.driver.inspectWorkspaceBlockers()).loginVisible) {
+    return ctx._json(req, res, {
+      error: 'Sign in to TraeCN before submitting a task.',
+      code: 'LOGIN_REQUIRED'
+    }, 409);
+  }
   if (projectPath) await ctx._ensureRequestedWorkspace(projectPath);
   if (!projectPath && ctx._selectedWorkspacePath && typeof ctx._assertProjectWorkspace === 'function') {
     try {
@@ -212,7 +229,9 @@ async function handleSubmit(req, res, ctx) {
   task.newConversation = queuedBody.newConversation;
   ctx._ensureBackgroundPolling();
   const response = { taskId: task.taskId, status: 'accepted' };
-  return ctx._json(req, res, response, 202);
+  const sent = ctx._json(req, res, response, 202);
+  ctx._wakeBackgroundPolling?.();
+  return sent;
 }
 
 async function handleListConversations(req, res, ctx) {
@@ -244,6 +263,13 @@ async function handleListModels(req, res, ctx) {
     if (typeof ctx.driver.listModels !== 'function') {
       return ctx._json(req, res, { error: 'model listing is not supported by the active TraeCN driver' }, 501);
     }
+    if ((ctx.traeTarget?.workspaceKind === 'agent' || isKnownStandaloneAgentVersion(ctx.traeEnvironment?.appVersion)) &&
+        (await ctx.driver.inspectWorkspaceBlockers()).loginVisible) {
+      return ctx._json(req, res, {
+        error: 'Sign in to TraeCN before reading available models.',
+        code: 'LOGIN_REQUIRED'
+      }, 409);
+    }
     return ctx._json(req, res, await ctx.driver.listModels());
   });
 }
@@ -260,11 +286,23 @@ async function handleManageConversation(req, res, ctx) {
       message: 'Deleting a TraeCN conversation is permanent and cannot be recovered by the gateway.'
     }, 400);
   }
-  const expectedTitle = action === 'delete' ? stableConversationTitle(body.expectedTitle) : '';
-  if (action === 'delete' && !expectedTitle) {
+  if (action === 'delete' && (typeof body.expectedTitle !== 'string' || !body.expectedTitle.trim())) {
     return ctx._json(req, res, { error: 'expectedTitle is required for permanent deletion' }, 400);
   }
   await ctx._ensureConnection();
+  const standaloneAgent = ctx.traeTarget?.workspaceKind === 'agent';
+  const expectedTitle = action === 'delete'
+    ? (standaloneAgent ? body.expectedTitle : stableConversationTitle(body.expectedTitle))
+    : '';
+  if (action === 'delete' && !expectedTitle) {
+    return ctx._json(req, res, { error: 'expectedTitle is required for permanent deletion' }, 400);
+  }
+  if (action === 'delete' && standaloneAgent && ctx.traeEnvironment?.appVersion !== '3.4.15') {
+    return ctx._json(req, res, {
+      error: 'Standalone Agent conversation deletion is not supported. Delete it in TraeCN if needed.',
+      code: 'STANDALONE_AGENT_DELETE_UNSUPPORTED'
+    }, 501);
+  }
   return ctx._withUiActionLock(async () => {
     if (action === 'create') {
       const before = typeof ctx.driver.listSoloChats === 'function' ? await ctx.driver.listSoloChats() : null;
@@ -289,7 +327,13 @@ async function handleManageConversation(req, res, ctx) {
       const result = await ctx.driver.switchSoloChat(target);
       return ctx._json(req, res, { action, conversationId: body.conversationId, ...result }, result.success === false ? 404 : 200);
     }
-    const listed = await ctx.driver.listSoloChats();
+    if (standaloneAgent && !target.sessionId) {
+      return ctx._json(req, res, { error: 'A native conversationId is required for standalone Agent deletion.' }, 400);
+    }
+    const listed = await ctx.driver.listSoloChats(standaloneAgent ? { standaloneAgent: true } : undefined);
+    if (standaloneAgent && listed?.mode !== 'solo') {
+      return ctx._json(req, res, { error: 'Standalone Agent conversation list is unavailable.' }, 409);
+    }
     const chat = (listed.chats || []).find(candidate => (
       target.sessionId
         ? candidate.sessionId === target.sessionId
@@ -298,7 +342,7 @@ async function handleManageConversation(req, res, ctx) {
         : stableConversationTitle(candidate.title || candidate.text) === target.titleIncludes
     ));
     if (!chat) return ctx._json(req, res, { error: 'conversation not found' }, 404);
-    const actualTitle = stableConversationTitle(chat.title || chat.text);
+    const actualTitle = standaloneAgent ? chat.title : stableConversationTitle(chat.title || chat.text);
     if (actualTitle !== expectedTitle) {
       auditSecurityAction(ctx, req, 'conversation.delete', String(body.conversationId), {
         expectedTitle,
@@ -319,22 +363,30 @@ async function handleManageConversation(req, res, ctx) {
         message: 'Select a different conversation before permanently deleting this one.'
       }, 409);
     }
-    const result = await ctx.driver.deleteSoloChats({ candidates: [{
-      index: chat.index,
-      ...(chat.sessionId ? { sessionId: chat.sessionId } : {}),
-      title: chat.title || ''
-    }] });
+    const result = await ctx.driver.deleteSoloChats({
+      ...(standaloneAgent ? { standaloneAgent: true } : {}),
+      candidates: [{
+        index: chat.index,
+        ...(chat.sessionId ? { sessionId: chat.sessionId } : {}),
+        title: chat.title || ''
+      }]
+    });
     const deleted = result.deleted || 0;
+    const attemptReason = result.attempts?.[0]?.reason;
+    const failure = standaloneAgent && SAFE_STANDALONE_DELETE_FAILURES.has(attemptReason)
+      ? attemptReason
+      : 'delete_failed';
     auditSecurityAction(ctx, req, 'conversation.delete', String(body.conversationId), {
       title: actualTitle,
       deleted,
       recoverable: false
-    }, deleted > 0 ? 'success' : 'failure', deleted > 0 ? null : 'delete_failed');
+    }, deleted > 0 ? 'success' : 'failure', deleted > 0 ? null : failure);
     return ctx._json(req, res, {
       action,
       conversationId: body.conversationId,
       deleted,
-      recoverable: false
+      recoverable: false,
+      ...(standaloneAgent && deleted === 0 ? { error: 'delete_failed', code: failure } : {})
     }, deleted > 0 ? 200 : 409);
   });
 }

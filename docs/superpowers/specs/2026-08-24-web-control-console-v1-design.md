@@ -328,7 +328,7 @@ Advanced remains closed during normal work and contains:
   monitoring system;
 - **Configuration audit:** sanitized current config, diff, and recent config
   audit records;
-- **Logs:** fixed local log paths and a copyable `traecnclaw logs 100` command.
+- **Logs:** fixed local log paths and a copyable `traecn-mcp logs 100` command.
   The browser does not tail arbitrary files or duplicate CLI log lifecycle;
 - **OpenAPI:** authenticated link and current API version/path count.
 

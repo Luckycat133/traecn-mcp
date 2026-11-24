@@ -145,8 +145,8 @@ test('buildProofCliArgs keeps proof start dry-run unless caller passes execute',
 
 test('CLI proof help does not suggest quota-spending start without approval flag', () => {
   const source = fs.readFileSync(path.join(__dirname, 'traecn-cli.js'), 'utf8');
-  assert.ok(source.includes('traecnclaw proof start --execute --detach --allow-quota-spend --marker'));
-  assert.ok(!source.includes('traecnclaw proof start --execute --detach --marker'));
+  assert.ok(source.includes('traecn-mcp proof start --execute --detach --allow-quota-spend --marker'));
+  assert.ok(!source.includes('traecn-mcp proof start --execute --detach --marker'));
 });
 
 test('buildLocalScriptArgs exposes first-run and operator commands from the package', () => {

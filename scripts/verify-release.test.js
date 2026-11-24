@@ -27,7 +27,7 @@ function createFixture() {
   fs.writeFileSync(path.join(root, 'dist', 'skill.tgz'), skill);
   fs.writeFileSync(path.join(root, 'dist', 'server.tgz'), server);
   const manifest = {
-    name: 'traecnclaw-mcp',
+    name: 'traecn-mcp',
     version: '0.5.4',
     sourceRevision: 'a'.repeat(40),
     sourceDirty: false,

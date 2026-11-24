@@ -29,12 +29,12 @@ function generateOpenAPISpec() {
   const spec = {
     openapi: '3.0.3',
     info: {
-      title: 'TraeCN CDP HTTP Bridge',
+      title: 'TraeCN MCP Gateway API',
       description: 'Local HTTP bridge for TraeCN desktop automation via CDP and DOM',
       version: packageInfo.version
     },
     servers: [
-      { url: 'http://127.0.0.1:8788', description: 'Local TraeCNclaw gateway' }
+      { url: 'http://127.0.0.1:8788', description: 'Local TraeCN MCP gateway' }
     ],
     paths: {
       '/api/status': {
@@ -59,6 +59,7 @@ function generateOpenAPISpec() {
                         nullable: true,
                         properties: {
                           traeVersion: { type: 'string', nullable: true },
+                          appVersion: { type: 'string', nullable: true },
                           platform: { type: 'string' },
                           adapter: { type: 'string' },
                           mode: { type: 'string', nullable: true },
@@ -1242,6 +1243,24 @@ function generateOpenAPISpec() {
             '200': { description: 'The verified active conversation generation was stopped' },
             '409': { description: 'Conversation scope mismatch or stop action unavailable' }
           }
+        }
+      },
+      '/api/trae/check-in': {
+        get: {
+          summary: 'Read daily check-in status',
+          responses: { 200: { description: 'Check-in status for the desktop account' } }
+        },
+        post: {
+          summary: 'Claim daily check-in credits',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { type: 'object', required: ['confirm'], properties: { confirm: { type: 'boolean', enum: [true] } } }
+              }
+            }
+          },
+          responses: { 200: { description: 'Check-in result' }, 400: { description: 'Confirmation required' } }
         }
       },
       '/api/trae/review-gate': {

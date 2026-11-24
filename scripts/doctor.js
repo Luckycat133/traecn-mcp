@@ -345,7 +345,7 @@ function add(checks, status, name, detail, critical = false) {
 
 function printChecks(checks) {
   const width = Math.max(...checks.map(check => check.status.length));
-  console.log('TRAECNclaw doctor');
+  console.log('TraeCN MCP doctor');
   console.log('');
   for (const check of checks) {
     const status = check.status.padEnd(width, ' ');

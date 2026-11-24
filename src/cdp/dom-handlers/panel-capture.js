@@ -80,7 +80,7 @@ async function _captureSidebarText(driver) {
   try {
     const result = await driver.client.send('Runtime.evaluate', {
       expression: `(() => {
-        var s = document.querySelector('.soloaisidebar');
+        var s = document.querySelector('.soloaisidebar, .task-list-panel');
         return s ? s.textContent.trim() : '';
       })()`,
       returnByValue: true
@@ -130,7 +130,7 @@ async function _captureVisibleText(driver) {
         var bodyText = document.body ? document.body.innerText || document.body.textContent || '' : '';
         if (!bodyText) return '';
         var sidebarText = '';
-        var sidebarEl = document.querySelector('.soloaisidebar');
+        var sidebarEl = document.querySelector('.soloaisidebar, .task-list-panel');
         if (sidebarEl) sidebarText = sidebarEl.innerText || sidebarEl.textContent || '';
         var composerText = '';
         var composerEl = document.querySelector('.chat-input-v2-input-box-editable, [class*="input-box"]');
@@ -194,7 +194,7 @@ async function _scanContentArea(driver) {
         var contentAreas = [];
         var allDivs = document.querySelectorAll('div');
         var composerEl = document.querySelector('.chat-input-v2-input-box-editable, [class*="input-box"]');
-        var sidebarEl = document.querySelector('.soloaisidebar');
+        var sidebarEl = document.querySelector('.soloaisidebar, .task-list-panel');
         for (var i = 0; i < allDivs.length; i++) {
           var d = allDivs[i];
           var rect = d.getBoundingClientRect ? d.getBoundingClientRect() : null;
@@ -235,7 +235,7 @@ async function _queryTaskSidebar(driver, skipText) {
   const result = await driver.client.send('Runtime.evaluate', {
     expression: `
       (function() {
-        var sidebar = document.querySelector('.soloaisidebar');
+        var sidebar = document.querySelector('.soloaisidebar, .task-list-panel');
         if (!sidebar) return null;
 
         // Find task items using the actual task item class 而非 generic divs
@@ -300,23 +300,38 @@ async function _queryTaskSidebar(driver, skipText) {
 }
 
 /**
- * Query the IDE chat panel for task state.
- * Used instead of _queryTaskSidebar() in IDE mode.
+ * Query the chat panel or the standalone Agent's latest turn for task state.
  */
 async function _queryIdeTaskPanel(driver, skipText, options = {}) {
   const safePanelSels = driver.config.ideTaskPanelSelectors.map(s => safeJsValue(s));
+  const standalone = driver.traeAdapter?.environment?.target?.workspaceKind === 'agent';
 
   const result = await driver.client.send('Runtime.evaluate', {
     expression: `
       (function() {
+        var standalone = ${standalone};
         var sels = [${safePanelSels.join(', ')}];
         var panel = null;
-        for (var i = 0; i < sels.length; i++) {
-          var el = document.querySelector(sels[i]);
-          if (el && el.offsetParent !== null && el !== document.body && el !== document.documentElement
-            && !/(?:^|\\s)monaco-workbench(?:\\s|$)/.test(String(el.className || ''))) {
-            panel = el;
-            break;
+        var sessionId = '';
+        if (standalone) {
+          var selected = document.querySelectorAll('.task-list-panel .taskItem.taskItemSelected');
+          if (selected.length === 1) {
+            var row = selected[0].closest('.task-list-row-wrapper[data-session-id]');
+            sessionId = (row?.getAttribute('data-session-id') || '').trim();
+          }
+          var latestTurns = Array.from(document.querySelectorAll('.turn.turn--last')).filter(function(el) {
+            return el.offsetParent !== null;
+          });
+          if (latestTurns.length !== 1) return { structuredPanel: true, turns: [], sessionId: sessionId };
+          panel = latestTurns[0];
+        } else {
+          for (var i = 0; i < sels.length; i++) {
+            var el = document.querySelector(sels[i]);
+            if (el && el.offsetParent !== null && el !== document.body && el !== document.documentElement
+              && !/(?:^|\\s)monaco-workbench(?:\\s|$)/.test(String(el.className || ''))) {
+              panel = el;
+              break;
+            }
           }
         }
         if (!panel) return null;
@@ -330,13 +345,17 @@ async function _queryIdeTaskPanel(driver, skipText, options = {}) {
           });
           if (currentTurns.length) turnSource = currentTurns[currentTurns.length - 1];
         }
-        var turns = Array.from(turnSource.querySelectorAll(
-          'section.chat-turn, section[class*="chat-turn"], .chat-message, .agent-message, [class*="chat-message"], .turn__agent-message, [data-role="user"], [data-role="assistant"]'
-        )).filter(function(el) {
-          return el && el.offsetParent !== null;
+        var messageSelectors = standalone
+          ? '.turn__user-message[data-role="user"], .turn__agent-message'
+          : 'section.chat-turn, section[class*="chat-turn"], .chat-message, .agent-message, [class*="chat-message"], .turn__agent-message, [data-role="user"], [data-role="assistant"]';
+        var turns = Array.from(turnSource.querySelectorAll(messageSelectors)).filter(function(el) {
+          return el && el.offsetParent !== null && (!standalone || el.closest('.turn') === panel);
         }).map(function(el) {
           var className = (el.className || '').toString();
           var structuredTask = /(?:^|\\s)turn__agent-message(?:\\s|$)/.test(className);
+          var userBodies = standalone && el.getAttribute('data-role') === 'user'
+            ? Array.from(el.querySelectorAll('.user-message__text-content')).filter(function(body) { return body.offsetParent !== null; })
+            : [];
           var summaries = Array.from(el.querySelectorAll('.core-finish-card__summary .markdown-renderer'))
             .filter(function(summary) { return summary.offsetParent !== null; })
             .map(function(summary) { return (summary.innerText || summary.textContent || '').trim(); })
@@ -352,6 +371,7 @@ async function _queryIdeTaskPanel(driver, skipText, options = {}) {
             className: className + ' ' + (el.getAttribute('data-role') || ''),
             ariaLabel: (el.getAttribute('aria-label') || '').toString(),
             text: ((el.innerText || el.textContent || '').trim() || ''),
+            nativeUserText: userBodies.length === 1 ? (userBodies[0].innerText || userBodies[0].textContent || '').trim() : '',
             finalText: finalText,
             taskComplete: structuredTask ? !!finalText : null,
             interrupted: interrupted
@@ -365,10 +385,11 @@ async function _queryIdeTaskPanel(driver, skipText, options = {}) {
         )).some(function(el) {
           return /\u4efb\u52a1\u5b8c\u6210|Task completed/i.test((el.innerText || el.textContent || '').trim());
         });
-        var runningIndicator = Array.from(panel.querySelectorAll(
+        var runningIndicator = Array.from((standalone ? document : panel).querySelectorAll(
           '.codicon-stop-circle, [class*="stop-circle"], .run-command-inline-header__status-label, [class*="status-label"]'
         )).some(function(el) {
-          if (!el || !el.getBoundingClientRect) return false;
+          if (!el || el.offsetParent === null || !el.getBoundingClientRect) return false;
+          if (standalone && el.closest('.turn') && !panel.contains(el)) return false;
           var rect = el.getBoundingClientRect();
           if (rect.width <= 4 || rect.height <= 4) return false;
           var text = (el.innerText || el.textContent || '').trim();
@@ -379,7 +400,9 @@ async function _queryIdeTaskPanel(driver, skipText, options = {}) {
         return {
           fullText: fullText,
           turns: turns,
-          structuredPanel: structuredPanel,
+          standalone: standalone,
+          sessionId: sessionId,
+          structuredPanel: standalone || structuredPanel,
           taskComplete: completeIndicator && !runningIndicator,
           taskInProgress: runningIndicator
         };
@@ -388,7 +411,35 @@ async function _queryIdeTaskPanel(driver, skipText, options = {}) {
     returnByValue: true
   });
 
-  return _extractLatestIdeAssistantState(result.result?.value, skipText, options);
+  const panelState = result.result?.value;
+  if (!standalone) return _extractLatestIdeAssistantState(panelState, skipText, options);
+  const normalize = text => String(text || '').replace(/\s+/g, ' ').trim();
+  const userMessages = (panelState?.turns || []).filter(turn => turn.className.split(/\s+/).includes('turn__user-message'));
+  const expectedTask = normalize(options.expectedTask);
+  const latestUser = userMessages.length === 1 ? userMessages[0] : null;
+  const latestUserText = normalize(expectedTask ? latestUser?.nativeUserText : latestUser?.nativeUserText || latestUser?.text);
+  const expectedSessionId = typeof options.expectedSessionId === 'string' ? options.expectedSessionId.trim() : '';
+  const pendingUserText = normalize(driver._pendingUserTask);
+  const matchedUser = expectedTask ? latestUserText === expectedTask : Boolean(pendingUserText && latestUserText.includes(pendingUserText));
+  const nativeOwnershipPending = Boolean((expectedSessionId && panelState?.sessionId !== expectedSessionId)
+    || (expectedTask && !matchedUser));
+  if (!nativeOwnershipPending && (expectedTask || !pendingUserText || !latestUserText || matchedUser)) {
+    const state = _extractLatestIdeAssistantState(panelState, matchedUser ? '' : skipText, options);
+    if (state) {
+      return {
+        ...state,
+        standalone: true,
+        matchedUser,
+        ...(state.nativeFinalReply && expectedSessionId && expectedTask
+          ? { nativeTurnOwnership: { sessionId: panelState.sessionId, taskText: latestUserText } }
+          : {})
+      };
+    }
+  }
+  return {
+    text: '', inProgress: true, isComplete: false, hasResponse: false, awaitingAssistant: true, standalone: true,
+    nativeOwnershipPending
+  };
 }
 
 function _extractLatestIdeAssistantState(panelState, skipText, options = {}) {
@@ -509,7 +560,8 @@ function _extractLatestIdeAssistantState(panelState, skipText, options = {}) {
     text: latestText,
     inProgress,
     isComplete: isComplete || (latestText.includes('完成') && !inProgress),
-    hasResponse: !inProgress && latestText.length > 20,
+    hasResponse: (structurallyComplete && !!latestAssistant.finalText) || (!inProgress && latestText.length > 20),
+    ...(panelState.standalone && structurallyComplete && latestAssistant.finalText ? { nativeFinalReply: true } : {}),
     // Keep the process and final summary from this one assistant snapshot.
     // Completion collection decides when they can be persisted for the task.
     ...(structurallyComplete && latestAssistant.finalText
@@ -565,11 +617,14 @@ function _isModelErrorResponseText(text) {
  * Mode-aware version: tries sidebar in SOLO mode, chat panel in IDE mode.
  */
 async function _queryTaskSource(driver, skipText, options = {}) {
+  if (driver.traeAdapter?.environment?.target?.workspaceKind === 'agent') {
+    return _queryIdeTaskPanel(driver, skipText, options);
+  }
   const modeInfo = await driver.detectMode();
   if (modeInfo.mode === 'solo') {
     const soloMessage = await driver.client.send('Runtime.evaluate', {
       expression: `(() => {
-        const sidebar = document.querySelector('.soloaisidebar');
+        const sidebar = document.querySelector('.soloaisidebar, .task-list-panel');
         const composer = document.querySelector('.chat-input-v2-input-box-editable, [class*="input-box"]');
         const soloTopLevelTurns = Array.from(document.querySelectorAll('.chat-turn'))
           .filter(el => el.offsetParent !== null && !(sidebar && sidebar.contains(el)) && !(composer && composer.contains(el)))
@@ -630,7 +685,7 @@ async function findTaskResponse(driver, options = {}) {
     const result = await driver.client.send('Runtime.evaluate', {
       expression: `
         (() => {
-          let sidebar = document.querySelector('.soloaisidebar');
+          let sidebar = document.querySelector('.soloaisidebar, .task-list-panel');
           if (!sidebar) return null;
 
           let fullText = sidebar.textContent.trim();

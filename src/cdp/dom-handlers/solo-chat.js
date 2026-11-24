@@ -3,17 +3,50 @@
 /**
  * solo-chat handlers.
  *
- * Moved verbatim from src/cdp/dom-driver.js. Each method is now an
- * exported function with signature `function method(driver, ...args)`
- * taking the DomDriver instance as `driver`. Behavior is preserved 1:1.
- *
- * The DomDriver retains thin delegating shims (e.g. `listSoloChats()`)
- * so existing dom-driver.test.js cases that call `driver.listSoloChats()`
- * continue to work unchanged.
+ * Conversation sidebar handling shared by legacy Solo and standalone Agent.
  */
 
 const { TraeCNAutomationError } = require('../errors');
 const { sleep, safeJsValue } = require('../../shared/utils');
+
+const STANDALONE_UI_WAIT_MS = 800;
+const STANDALONE_UI_POLL_MS = 35;
+const STANDALONE_DELETE_VERIFY_MS = 2500;
+const SIDEBAR_PAINT_WAIT_MS = 650;
+
+async function waitForStandaloneUi(read, timeoutMs = STANDALONE_UI_WAIT_MS) {
+  const deadline = performance.now() + timeoutMs;
+  while (true) {
+    const state = await read();
+    const remaining = deadline - performance.now();
+    if (!state.pending || remaining <= 0) return state;
+    await sleep(Math.min(STANDALONE_UI_POLL_MS, remaining));
+  }
+}
+
+const SIDEBAR_ROWS_EXPRESSION = `
+  var agentSidebar = sidebar.classList?.contains('task-list-panel') === true;
+  var rowSelector = agentSidebar ? '.task-list-row-wrapper[data-session-id]'
+    : '[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]';
+  var titleSelector = agentSidebar ? '.taskText'
+    : '[class*="task-title___"], [class*="task-item-title"], [class*="conversation-item-title"], [class*="chat-item-title"]';
+  function rowText(el) {
+    return (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+  }
+  function rowTitle(el) {
+    var title = el.querySelector(titleSelector);
+    return title ? rowText(title) : rowText(el);
+  }
+  function sidebarRows() {
+    return Array.from(sidebar.querySelectorAll(rowSelector)).filter(function(el) {
+      if (agentSidebar) return Boolean((el.getAttribute('data-session-id') || '').trim());
+      var cls = (el.className || '').toString();
+      if (/task-list-new-task-item|task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
+      var text = rowText(el);
+      return Boolean(text) && !(/^\\s*(新建任务|新任务|New Task|New Chat|新对话)/i.test(text) && text.length < 30);
+    });
+  }
+`;
 
 // Hidden Electron renderers may never run RAF. A timer bounds the wait, but
 // cannot certify a virtualized list rendered: callers must stop that scan.
@@ -22,7 +55,7 @@ const SIDEBAR_SETTLE_EXPRESSION = `
     return new Promise(function(resolve) {
       var settled = false;
       var frames = [];
-      var timer = setTimeout(function() { finish(false); }, 200);
+      var timer = setTimeout(function() { finish(false); }, ${SIDEBAR_PAINT_WAIT_MS});
       function finish(rendered) {
         if (settled) return;
         settled = true;
@@ -41,7 +74,7 @@ const SIDEBAR_SETTLE_EXPRESSION = `
   }
 `;
 
-async function listSoloChats(driver, { visibleOnly = false, visibilityPrepared = false } = {}) {
+async function listSoloChats(driver, { visibleOnly = false, visibilityPrepared = false, standaloneAgent = false } = {}) {
   const canPrepareVisibility = !visibleOnly && !visibilityPrepared &&
     typeof driver._activateWindow === 'function' && typeof driver._ensureVisibleWindow === 'function';
   const result = await driver.client.send('Runtime.evaluate', {
@@ -69,7 +102,7 @@ async function listSoloChats(driver, { visibleOnly = false, visibilityPrepared =
             var scrollable = (node.scrollHeight || 0) - clientHeight;
             var style = window.getComputedStyle ? window.getComputedStyle(node) : null;
             var overflow = style ? [style.overflowY, style.overflow].join(' ') : '';
-            var taskCount = node.querySelectorAll ? node.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]').length : 0;
+            var taskCount = node.querySelectorAll ? node.querySelectorAll(rowSelector).length : 0;
             var likelyScroller = /(auto|scroll|overlay)/i.test(overflow) || taskCount > 1 || node === el;
             if (scrollable <= 24 && !likelyScroller) return null;
             return { el: node, scrollable: scrollable, taskCount: taskCount, likelyScroller: likelyScroller };
@@ -83,7 +116,7 @@ async function listSoloChats(driver, { visibleOnly = false, visibilityPrepared =
             : { host: null, scanned: 'visible' };
         }
         ${SIDEBAR_SETTLE_EXPRESSION}
-        var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
+        var sidebar = document.querySelector('.soloaisidebar, .task-list-panel') || document.querySelector('[class*="sidebar"]');
         if (!sidebar) {
           return { mode: 'not_solo', chats: [], count: 0, reason: 'sidebar_element_not_found' };
         }
@@ -93,38 +126,26 @@ async function listSoloChats(driver, { visibleOnly = false, visibilityPrepared =
         // still mounted in the DOM). Falling back to a structural probe — if
         // there are task-item class nodes under the sidebar, treat this as
         // "in solo mode" rather than bailing.
-        var sidebarItemsRaw = sidebar.querySelectorAll('[class*="task-item___"], [class*="chat-item___"], [class*="conversation-item___"]');
+        ${SIDEBAR_ROWS_EXPRESSION}
+        if (${standaloneAgent} && !agentSidebar) return { error: 'standalone_agent_sidebar_changed' };
+        var sidebarItemsRaw = sidebar.querySelectorAll(agentSidebar ? rowSelector : '[class*="task-item___"], [class*="chat-item___"], [class*="conversation-item___"]');
         if ((!sidebar.offsetParent || sidebar.offsetParent === null) && sidebarItemsRaw.length === 0) {
           return { mode: 'not_solo', chats: [], count: 0, reason: 'solo_sidebar_not_visible' };
         }
         var seen = new Set();
         var chats = [];
-        function visibleChatNodes() {
-          return Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
-            .filter(function(el) {
-              var cls = (el.className || '').toString();
-              if (/task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
-              var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-              if (!text) return false;
-              if (/^\\s*(新任务|New Task|New Chat|新对话)/i.test(text) && text.length < 30) return false;
-              // Loosened visibility: Trae webview commonly reports rect 0×0
-              // and offsetParent === null on its own DOM, so we now only filter
-              // out completely-empty / disconnected nodes.
-              return true;
-            });
-        }
         function collectVisible(scrollInfo) {
-          visibleChatNodes().forEach(function(el) {
-            var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+          sidebarRows().forEach(function(el) {
+            var text = rowText(el);
             var sessionId = (el.getAttribute('data-session-id') || '').trim();
             var identity = sessionId || text;
-            if (!text || seen.has(identity)) return;
+            if (!identity || seen.has(identity)) return;
             seen.add(identity);
-            var titleNode = el.querySelector('[class*="task-title___"], [class*="task-item-title"], [class*="conversation-item-title"], [class*="chat-item-title"]');
-            var title = titleNode ? (titleNode.innerText || titleNode.textContent || '').replace(/\\s+/g, ' ').trim() : text;
+            var title = rowTitle(el);
             var cls = (el.className || '').toString();
-            var active = /active|selected|current|focus/i.test(cls) || el.getAttribute('aria-selected') === 'true';
-            var status = text.includes('进行中') || text.includes('思考中') ? 'running'
+            var active = agentSidebar ? Boolean(el.querySelector('.taskItem.taskItemSelected'))
+              : /active|selected|current|focus/i.test(cls) || el.getAttribute('aria-selected') === 'true';
+            var status = agentSidebar ? 'unknown' : text.includes('进行中') || text.includes('思考中') ? 'running'
               : (text.includes('任务完成') || text.includes('已完成') ? 'done' : 'unknown');
             var scrollTop = scrollInfo.host ? scrollInfo.host.scrollTop : 0;
             chats.push({
@@ -180,10 +201,10 @@ async function listSoloChats(driver, { visibleOnly = false, visibilityPrepared =
   const value = result.result?.value;
   if (value?.error === 'sidebar_visibility_required') {
     await driver._ensureVisibleWindow();
-    return listSoloChats(driver, { visibleOnly, visibilityPrepared: true });
+    return listSoloChats(driver, { visibleOnly, visibilityPrepared: true, standaloneAgent });
   }
   if (value?.error === 'sidebar_scan_timeout') {
-    throw TraeCNAutomationError.cdpTimeout('Solo sidebar did not confirm a rendered scroll position', 200);
+    throw TraeCNAutomationError.cdpTimeout('Solo sidebar did not confirm a rendered scroll position', SIDEBAR_PAINT_WAIT_MS);
   }
   if (value?.error === 'sidebar_scan_incomplete') {
     throw TraeCNAutomationError.cdpTimeout('Solo sidebar scan could not reach the end of the list');
@@ -243,33 +264,25 @@ async function switchSoloChat(driver, criteria = {}) {
         var sessionId = ${safeJsValue(sessionId)};
         var textIncludes = ${safeJsValue(textIncludes)};
         var titleIncludes = ${safeJsValue(titleIncludes)};
-        var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
+        var sidebar = document.querySelector('.soloaisidebar, .task-list-panel') || document.querySelector('[class*="sidebar"]');
         if (!sidebar) {
           return { success: false, reason: 'sidebar_element_not_found' };
         }
-        var sidebarItemsRaw = sidebar.querySelectorAll('[class*="task-item___"], [class*="chat-item___"], [class*="conversation-item___"]');
+        ${SIDEBAR_ROWS_EXPRESSION}
+        var sidebarItemsRaw = sidebar.querySelectorAll(agentSidebar ? rowSelector : '[class*="task-item___"], [class*="chat-item___"], [class*="conversation-item___"]');
         if ((!sidebar.offsetParent || sidebar.offsetParent === null) && sidebarItemsRaw.length === 0) {
           return { success: false, reason: 'solo_sidebar_not_visible' };
         }
-        var nodes = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
-          .filter(function(el) {
-            var cls = (el.className || '').toString();
-            if (/task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
-            var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-            if (!text) return false;
-            if (/^\\s*(新任务|New Task|New Chat|新对话)/i.test(text) && text.length < 30) return false;
-            return true;
-          });
+        var nodes = sidebarRows();
         var items = [];
         var seen = new Set();
         for (var i = 0; i < nodes.length; i++) {
-          var text = (nodes[i].innerText || nodes[i].textContent || '').replace(/\\s+/g, ' ').trim();
+          var text = rowText(nodes[i]);
           var nativeId = (nodes[i].getAttribute('data-session-id') || '').trim();
           var identity = nativeId || text;
-          if (!text || seen.has(identity)) continue;
+          if (!identity || seen.has(identity)) continue;
           seen.add(identity);
-          var titleNode = nodes[i].querySelector('[class*="task-title___"], [class*="task-item-title"], [class*="conversation-item-title"], [class*="chat-item-title"]');
-          var title = titleNode ? (titleNode.innerText || titleNode.textContent || '').trim() : text.slice(0, 120);
+          var title = rowTitle(nodes[i]);
           items.push({ el: nodes[i], text: text, title: title, sessionId: nativeId, index: items.length });
         }
         var match = null;
@@ -280,12 +293,19 @@ async function switchSoloChat(driver, criteria = {}) {
         } else if (textIncludes) {
           match = items.find(function(item) { return item.text.includes(textIncludes); });
         } else if (titleIncludes) {
-          match = items.find(function(item) { return item.text.slice(0, 120).includes(titleIncludes); });
+          match = items.find(function(item) { return (agentSidebar ? item.title : item.text).slice(0, 120).includes(titleIncludes); });
         }
         if (!match) {
           return { success: false, reason: 'chat_not_found', count: items.length };
         }
         var el = match.el;
+        if (agentSidebar) {
+          var item = el.querySelector('.taskItem');
+          if (!item) return { success: false, reason: 'chat_action_not_found' };
+          if (!item.classList.contains('taskItemSelected')) item.click();
+          return { success: true, verifyNative: true, index: match.index, sessionId: match.sessionId,
+            title: match.title.slice(0, 120), text: match.text.slice(0, 500) };
+        }
         var rect = el.getBoundingClientRect();
         var x = rect.x + rect.width / 2;
         var y = rect.y + rect.height / 2;
@@ -306,9 +326,21 @@ async function switchSoloChat(driver, criteria = {}) {
     returnByValue: true,
     awaitPromise: true
   });
-  const value = result.result?.value || { success: false, reason: 'unknown' };
+  const { verifyNative, ...value } = result.result?.value || { success: false, reason: 'unknown' };
   if (value.success) {
-    await sleep(driver.config.postActionDelayMs || 500);
+    if (verifyNative) {
+      const state = await waitForStandaloneUi(async () => {
+        const snapshot = await driver.listSoloChats({ visibleOnly: true, standaloneAgent: true });
+        if (snapshot?.mode !== 'solo' || !Array.isArray(snapshot.chats)) return {};
+        const active = snapshot.chats.filter(chat => chat.active);
+        if (active.length > 1) return {};
+        if (active[0]?.sessionId === value.sessionId) return { confirmed: true };
+        return { pending: true };
+      });
+      if (!state.confirmed) return { success: false, reason: 'chat_switch_not_confirmed' };
+    } else {
+      await sleep(driver.config.postActionDelayMs || 500);
+    }
     driver._lastTaskText = '';
     driver._pendingUserTask = '';
     driver._preSendSnapshot = '';
@@ -347,17 +379,14 @@ async function _openRowContextMenu(driver, candidate) {
     (function() {
       var openRowActionMenu = true;
       var candidate = ${safeJsValue(candidate)};
-      var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
+      var sidebar = document.querySelector('.soloaisidebar, .task-list-panel') || document.querySelector('[class*="sidebar"]');
       if (!sidebar) return { success: false, reason: 'sidebar_not_visible' };
-      var items = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
-        .filter(function(el) {
-          var cls = (el.className || '').toString();
-          if (/task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
-          return true;
-        });
+      ${SIDEBAR_ROWS_EXPRESSION}
+      if (agentSidebar) return { success: false, reason: 'standalone_agent_delete_not_verified' };
+      var items = sidebarRows();
       var target = null;
       for (var i = 0; i < items.length; i++) {
-        var text = (items[i].innerText || items[i].textContent || '').replace(/\\s+/g, ' ').trim();
+        var text = rowText(items[i]);
         if (candidate && candidate.sessionId) {
           if (items[i].getAttribute('data-session-id') === candidate.sessionId) { target = items[i]; break; }
         } else if (candidate && candidate.title && text.indexOf(candidate.title) !== -1) { target = items[i]; break; }
@@ -411,7 +440,7 @@ async function _openRowContextMenu(driver, candidate) {
  * It then walks up to find the nearest scroll container so that the
  * element is on-screen before recording the action point.
  */
-async function _locateCandidateRow(driver, candidate, visibilityPrepared = false) {
+async function _locateCandidateRow(driver, candidate, visibilityPrepared = false, standaloneAgent = false) {
   const canPrepareVisibility = !visibilityPrepared &&
     typeof driver._activateWindow === 'function' && typeof driver._ensureVisibleWindow === 'function';
   const expression = `
@@ -438,7 +467,7 @@ async function _locateCandidateRow(driver, candidate, visibilityPrepared = false
           var scrollable = (node.scrollHeight || 0) - clientHeight;
           var style = window.getComputedStyle ? window.getComputedStyle(node) : null;
           var overflow = style ? [style.overflowY, style.overflow].join(' ') : '';
-          var taskCount = node.querySelectorAll ? node.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]').length : 0;
+          var taskCount = node.querySelectorAll ? node.querySelectorAll(rowSelector).length : 0;
           var likelyScroller = /(auto|scroll|overlay)/i.test(overflow) || taskCount > 1 || node === el;
           if (scrollable <= 24 && !likelyScroller) return null;
           return { el: node, scrollable: scrollable, taskCount: taskCount, likelyScroller: likelyScroller };
@@ -453,34 +482,30 @@ async function _locateCandidateRow(driver, candidate, visibilityPrepared = false
       function norm(value) {
         return String(value || '').replace(/[\\u00a0\\t\\r\\n]+/g, ' ').replace(/\\s+/g, ' ').trim().toLowerCase();
       }
-      var sidebar = document.querySelector('.soloaisidebar') || document.querySelector('[class*="sidebar"]');
-      if (sidebar && sidebar.getBoundingClientRect().width === 0) {
+      var sidebar = document.querySelector('.soloaisidebar, .task-list-panel') || document.querySelector('[class*="sidebar"]');
+      if (sidebar && !sidebar.classList?.contains('task-list-panel') && sidebar.getBoundingClientRect().width === 0) {
         var openBtn = document.querySelector('a.codicon-icube-NewChat, [class*="NewChat"], [class*="new-task-button"], [class*="sidebar-toggle"]');
         if (openBtn) openBtn.click();
       }
       if (!sidebar) {
         return { error: 'sidebar_element_not_found' };
       }
-      var sidebarItemsRaw = sidebar.querySelectorAll('[class*="task-item___"], [class*="chat-item___"], [class*="conversation-item___"]');
+      ${SIDEBAR_ROWS_EXPRESSION}
+      if (${standaloneAgent} && !agentSidebar) return { error: 'standalone_agent_sidebar_changed' };
+      var sidebarItemsRaw = sidebar.querySelectorAll(agentSidebar ? rowSelector : '[class*="task-item___"], [class*="chat-item___"], [class*="conversation-item___"]');
       if ((!sidebar.offsetParent || sidebar.offsetParent === null) && sidebarItemsRaw.length === 0) {
         return { error: 'sidebar_not_visible' };
       }
       var candidate = ${safeJsValue(candidate)};
       function visibleItems() {
-        var nodes = Array.from(sidebar.querySelectorAll('[class*="task-item"], [class*="chat-item"], [class*="conversation-item"]'))
-          .filter(function(el) {
-            var cls = String(el.className || '');
-            if (/task-items-list|task-item-info|task-item-title|task-item-desc|task-item-action|task-item-actions|task-status|conversation-item-(?:info|title|desc|list|header)|chat-item-(?:info|title|desc|list|header)/i.test(cls)) return false;
-            var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-            return Boolean(text);
-          });
+        var nodes = sidebarRows();
         var seen = new Set();
         var items = [];
         for (var i = 0; i < nodes.length; i++) {
-          var text = (nodes[i].innerText || nodes[i].textContent || '').replace(/\\s+/g, ' ').trim();
+          var text = rowText(nodes[i]);
           var sessionId = (nodes[i].getAttribute('data-session-id') || '').trim();
           var identity = sessionId || text;
-          if (!text || seen.has(identity)) continue;
+          if (!identity || seen.has(identity)) continue;
           seen.add(identity);
           items.push({ el: nodes[i], text: text, sessionId: sessionId, index: items.length });
         }
@@ -498,8 +523,20 @@ async function _locateCandidateRow(driver, candidate, visibilityPrepared = false
       function pointForTarget(target) {
         if (!target) return null;
         try { target.el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+        if (${standaloneAgent}) {
+          if (rowTitle(target.el) !== candidate.title || target.el.querySelector('.taskItem.taskItemSelected, .taskWorktreeIcon')) {
+            return { error: 'standalone_agent_delete_target_changed' };
+          }
+          var item = target.el.querySelector('.taskItem');
+          var itemRect = item?.getBoundingClientRect();
+          if (!itemRect || itemRect.width <= 0 || itemRect.height <= 0) return { error: 'standalone_agent_row_not_visible' };
+          var rowX = itemRect.left + itemRect.width / 2;
+          var rowY = itemRect.top + itemRect.height / 2;
+          if (!item.contains(document.elementFromPoint(rowX, rowY))) return { error: 'standalone_agent_row_not_visible' };
+          return { rowPoint: { x: rowX, y: rowY } };
+        }
         var rect = target.el.getBoundingClientRect();
-        var action = target.el.querySelector('[class*="task-item-actions-wrap"], [class*="task-item-action"]');
+        var action = target.el.querySelector(agentSidebar ? '.taskMoreBtn' : '[class*="task-item-actions-wrap"], [class*="task-item-action"]');
         var actionRect = action && action.getBoundingClientRect ? action.getBoundingClientRect() : null;
         var sidebarRect = (sidebar && sidebar.getBoundingClientRect && sidebar.getBoundingClientRect().width > 80) ? sidebar.getBoundingClientRect() : null;
         var rightX = sidebarRect ? (sidebarRect.right - 24) : 237;
@@ -562,7 +599,7 @@ async function _locateCandidateRow(driver, candidate, visibilityPrepared = false
   const value = result.result?.value;
   if (value?.error === 'sidebar_visibility_required') {
     await driver._ensureVisibleWindow();
-    return _locateCandidateRow(driver, candidate, true);
+    return _locateCandidateRow(driver, candidate, true, standaloneAgent);
   }
   return value || null;
 }
@@ -684,6 +721,142 @@ function _isTitleMatch(expectedTitle, listedTitle) {
   return false;
 }
 
+// The 3.4.15 confirmation text is generic. Bind the menu to the exact row
+// and require the ordinary (non-worktree) confirmation before clicking.
+async function _locateStandaloneDeleteControl(driver, candidate, step) {
+  const expression = `
+    (function() {
+      var step = ${safeJsValue(step)};
+      var candidate = ${safeJsValue(candidate)};
+      function text(el) {
+        return String(el?.innerText || el?.textContent || '').replace(/\\s+/g, ' ').trim();
+      }
+      function visible(el) {
+        var rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility === 'visible';
+      }
+      function point(el, reason) {
+        if (el?.disabled || el?.getAttribute('aria-disabled') === 'true') return { reason: reason };
+        if (!el || !visible(el)) return { reason: reason, pending: true };
+        var rect = el.getBoundingClientRect();
+        var x = rect.left + rect.width / 2;
+        var y = rect.top + rect.height / 2;
+        return el.contains(document.elementFromPoint(x, y)) ? { x: x, y: y } : { reason: reason, pending: true };
+      }
+      var sidebar = document.querySelector('.task-list-panel');
+      if (!sidebar) return { reason: 'standalone_agent_sidebar_changed' };
+      var dialogs = Array.from(document.querySelectorAll(
+        '.dialog-Di86XR, .icd-modal-v2-content, [role="dialog"], [aria-modal="true"]'
+      )).filter(visible);
+      dialogs = dialogs.filter(function(el) {
+        return !dialogs.some(function(other) { return el !== other && other.contains(el); });
+      });
+      var menus = Array.from(document.querySelectorAll('.task-list-menu')).filter(visible);
+      var rows = Array.from(sidebar.querySelectorAll('.task-list-row-wrapper[data-session-id]'))
+        .filter(function(row) { return row.getAttribute('data-session-id') === candidate.sessionId; });
+      if (step === 'verify') {
+        if (dialogs.length || menus.length) {
+          return { reason: 'delete_dialog_still_open',
+            pending: dialogs.length === 1 && !menus.length && dialogs[0].matches('.dialog-Di86XR') };
+        }
+        return rows.length ? { reason: 'delete_verification_failed', pending: true } : {};
+      }
+      var row = rows[0];
+      if (rows.length !== 1 || text(row.querySelector('.taskText')) !== candidate.title
+        || row.querySelector('.taskItem.taskItemSelected, .taskWorktreeIcon')) {
+        return { reason: 'standalone_agent_delete_target_changed' };
+      }
+      var activeActions = Array.from(sidebar.querySelectorAll('.taskMoreBtn.taskIconBtnActive'));
+      var ownAction = activeActions.length === 1 && row.contains(activeActions[0]);
+      var ownMenu = menus.length === 1 && !menus[0].matches('.task-list-menu-project') && ownAction;
+      if (step === 'confirm') {
+        if (!dialogs.length && (!menus.length || ownMenu)) {
+          return { reason: 'delete_dialog_not_confirmed', pending: true };
+        }
+        var dialog = dialogs[0];
+        if (menus.length || dialogs.length !== 1 || !dialog.matches('.dialog-Di86XR')) {
+          return { reason: 'delete_dialog_not_confirmed' };
+        }
+        var heading = text(dialog.querySelector('.title-gy_zpW'));
+        var body = text(dialog.querySelector('.content-gvLXKV'));
+        var chinese = heading === '确认删除'
+          && body === '删除后，这个会话及其所有内容将从本地或云端移除，包括聊天记录和代码，且无法恢复。';
+        var english = heading === 'Confirm deletion'
+          && body === "Once deleted, this conversation and all its contents will be removed from both local or cloud storage, including chat history and code. This action can't be undone.";
+        if (!chinese && !english) return { reason: 'delete_dialog_not_confirmed' };
+        var footer = dialog.querySelector('.footer-saxmUr');
+        var buttons = Array.from(footer?.querySelectorAll('button') || []).filter(visible);
+        var deleteButton = buttons.find(function(btn) {
+          return btn.matches('.errorstrong-JRgOKW') && text(btn) === (chinese ? '删除' : 'Delete');
+        });
+        if (buttons.length !== 2 || !buttons.some(function(btn) {
+          return text(btn) === (chinese ? '取消' : 'Cancel');
+        })) return { reason: 'delete_dialog_not_confirmed' };
+        return point(deleteButton, 'delete_confirm_not_visible');
+      }
+      if (dialogs.length) return { reason: 'preexisting_dialog' };
+      if (step === 'action') {
+        if (menus.length) return { reason: 'preexisting_context_menu' };
+        return point(row.querySelector('.taskMoreBtn'), 'row_action_not_visible');
+      }
+      if (step === 'menu' && !menus.length && (!activeActions.length || ownAction)) {
+        return { reason: 'delete_menu_not_bound_to_row', pending: true };
+      }
+      if (!ownMenu) {
+        return { reason: 'delete_menu_not_bound_to_row' };
+      }
+      if (step === 'dismiss') return point(activeActions[0], 'row_action_not_visible');
+      var items = Array.from(menus[0].querySelectorAll('[data-testid="session-delete-action"].task-list-menu-item-danger'))
+        .filter(function(el) { return ['删除任务', '删除', 'Delete Task', 'Delete'].includes(text(el)); });
+      if (items.length !== 1) {
+        return { reason: 'delete_menu_not_found' };
+      }
+      return point(items[0], 'delete_menu_not_visible');
+    })()
+  `;
+  const result = await driver.client.send('Runtime.evaluate', { expression, returnByValue: true });
+  return result.result?.value || { reason: 'delete_control_unavailable' };
+}
+
+async function _deleteStandaloneAgentConversation(driver, candidate, attempt) {
+  if (!candidate.sessionId || !candidate.title) return 'standalone_agent_identity_required';
+  const located = await _locateCandidateRow(driver, candidate, false, true);
+  if (!located?.rowPoint) return located?.error || 'candidate_not_located';
+  await driver.client.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x: located.rowPoint.x, y: located.rowPoint.y, buttons: 0
+  });
+
+  let openedMenu = false;
+  try {
+    for (const [step, field] of [
+      ['action', 'actionPoint'], ['menu', 'deletePoint'], ['confirm', 'confirmPoint']
+    ]) {
+      const control = await waitForStandaloneUi(() => _locateStandaloneDeleteControl(driver, candidate, step));
+      if (control.reason) return control.reason;
+      attempt[field] = control;
+      if (step === 'confirm') openedMenu = false;
+      await _clickAt(driver, control.x, control.y);
+      if (step === 'action') openedMenu = true;
+    }
+  } finally {
+    if (openedMenu) {
+      try {
+        // The same active row button toggles its own menu closed.
+        const control = await _locateStandaloneDeleteControl(driver, candidate, 'dismiss');
+        if (!control.reason) await _clickAt(driver, control.x, control.y);
+      } catch { /* keep the original operation outcome */ }
+    }
+  }
+
+  const ui = await waitForStandaloneUi(
+    () => _locateStandaloneDeleteControl(driver, candidate, 'verify'), STANDALONE_DELETE_VERIFY_MS
+  );
+  if (ui.reason && ui.reason !== 'delete_verification_failed') return ui.reason;
+  const after = await driver.listSoloChats({ standaloneAgent: true });
+  if (after?.mode !== 'solo' || !Array.isArray(after.chats)) return 'delete_verification_unavailable';
+  return after.chats.some(chat => chat?.sessionId === candidate.sessionId) ? 'delete_verification_failed' : null;
+}
+
 async function deleteSoloChats(driver, options = {}) {
   const candidates = Array.isArray(options.candidates) ? options.candidates : [];
   const attempts = [];
@@ -700,6 +873,13 @@ async function deleteSoloChats(driver, options = {}) {
     };
 
     try {
+      if (options.standaloneAgent === true) {
+        attempt.reason = await _deleteStandaloneAgentConversation(driver, candidate, attempt);
+        attempt.success = attempt.reason === null;
+        if (attempt.success) deleted += 1;
+        attempts.push(attempt);
+        continue;
+      }
       const located = await _locateCandidateRow(driver, candidate);
       if (!located || located.error) {
         attempt.reason = located?.error || 'candidate_not_located';

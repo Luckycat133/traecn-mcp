@@ -67,12 +67,17 @@ No. TraeCN MCP controls TraeCN via the Chrome DevTools Protocol (CDP) port. It i
 
 ## Distribution and development
 
-Installable builds and the Agent Skill are distributed through the
-[public mirror](https://github.com/Luckycat133/traecnclaw-mcp-skill). The npm
-package is `@luckycat133/traecnclaw`. Builds from this checkout use
-`traecn-mcp` for stdio and `traecn-mcp <command>` for local operations.
+Download the server tarball, MCPB bundle, or Agent Skill from
+[GitHub Releases](https://github.com/Luckycat133/traecn-mcp/releases).
+The canonical source repository is `Luckycat133/traecn-mcp`, the scoped npm
+package is `@luckycat133/traecnclaw`, and historical mirror assets remain on
+[traecnclaw-mcp-skill](https://github.com/Luckycat133/traecnclaw-mcp-skill).
+Builds from this checkout use `traecn-mcp` for stdio and `traecn-mcp <command>`
+for local operations.
 
 Run `npm run verify` for local, non-live validation. See the
+[documentation index](docs/README.md),
+[changelog](CHANGELOG.md),
 [compatibility matrix](docs/COMPATIBILITY.md),
 [distribution runbook](docs/DISTRIBUTION.md), and
 [channel ledger](docs/CHANNEL-LEDGER.md). For upgrades from 0.3.x, see the

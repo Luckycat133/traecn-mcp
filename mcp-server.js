@@ -8,9 +8,12 @@
 
 const mcp = require('./src/mcp');
 
-// 直接运行（stdio MCP 服务器）
 if (require.main === module) {
-  mcp.startStdioServer();
+  if (process.argv.length > 2) {
+    require('./scripts/traecn-cli').main();
+  } else {
+    mcp.startStdioServer();
+  }
 }
 
 // 向后兼容的导出 — 所有消费者从 mcp-server.js 导入的符号

@@ -203,7 +203,8 @@ function assertSurface(result) {
       }, async client => {
         assert.strictEqual(client.getProtocolEra(), 'modern');
         assert.strictEqual(client.getNegotiatedProtocolVersion(), '2026-07-28');
-        assert.strictEqual(client.getServerVersion().name, 'traecnclaw');
+        assert.strictEqual(client.getServerVersion().name, 'traecn-mcp');
+        assert.strictEqual(client.getServerVersion().title, 'TraeCN MCP');
         const discovery = client.getDiscoverResult();
         assert.ok(discovery.supportedVersions.includes('2026-07-28'));
         assert.strictEqual(discovery.cacheScope, 'private');

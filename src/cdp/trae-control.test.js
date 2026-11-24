@@ -5,11 +5,22 @@
  *
  * Covers the public API of TraeControl: cooldown gating, mock-bridge /
  * autoStartTrae guards, isRunning() delegation to the quickstart helper,
- * and the attemptRecovery() decision tree (skip / relaunch / kill).
+ * and recovery when the TraeCN binary is unavailable.
  */
 
 const assert = require('assert');
-const { TraeControl } = require('./trae-control');
+const quickstart = require('../config/quickstart');
+
+// TraeControl captures binary discovery at import time. Simulate an
+// uninstalled app even on a host that has a real TraeCN installation.
+const findTraeCNBinary = quickstart.findTraeCNBinary;
+let TraeControl;
+try {
+  quickstart.findTraeCNBinary = () => null;
+  ({ TraeControl } = require('./trae-control'));
+} finally {
+  quickstart.findTraeCNBinary = findTraeCNBinary;
+}
 
 let passed = 0;
 let failed = 0;
@@ -109,17 +120,16 @@ async function main() {
   });
 
   await asyncTest('TraeControl: attemptRecovery exits early when no binary is found', async () => {
-    // Use a setTimeoutImpl that resolves immediately so the discover-target
-    // wait loop never blocks — we only care about the decision tree outcome.
+    const warnings = [];
     const ctrl = new TraeControl({
       isMockBridge: () => false,
       autoStartTrae: true,
       recoveryCooldownMs: 0,
-      recoveryWaitMs: 10,
-      setTimeoutImpl: (cb, _delay) => { Promise.resolve().then(cb); return null; },
+      logger: { warn: message => warnings.push(message) },
     });
     const result = await ctrl.attemptRecovery(new Error('cdp gone'));
-    assert.strictEqual(typeof result, 'boolean');
+    assert.strictEqual(result, false);
+    assert.deepStrictEqual(warnings, ['[TraeControl] recovery skipped: binary not found']);
   });
 
   console.log(`\n[trae-control.test.js] Results: ${passed} passed, ${failed} failed\n`);

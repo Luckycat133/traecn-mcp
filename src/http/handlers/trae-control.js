@@ -149,7 +149,7 @@ async function handleStopGeneration(req, res, ctx) {
       }, 409);
     }
     const result = hasDriverCapability(ctx, 'stopGeneration')
-      ? await ctx.driver.stopGeneration()
+      ? await ctx.driver.stopGeneration(active.sessionId)
       : { success: false, reason: 'driver_does_not_support_stop_generation' };
     if (ctx.auditLogger && typeof ctx.auditLogger.log === 'function') {
       ctx.auditLogger.log({
@@ -286,20 +286,23 @@ async function handleDetectMode(req, res, ctx) {
 }
 async function handleSwitchMode(req, res, ctx) {
   const body = await parseBody(req);
-  if (!body.mode) {
+  if (typeof body.mode !== 'string' || !body.mode) {
     return rejectBadRequest(req, res, ctx, 'mode is required');
   }
-  if (!['solo', 'ide'].includes(body.mode.toLowerCase())) {
+  const mode = body.mode.toLowerCase();
+  if (!['solo', 'ide'].includes(mode)) {
     return ctx._json(req, res, { error: 'mode must be "solo" or "ide"' }, 400);
   }
 
-  await ctx._ensureConnection();
-  const result = await ctx.driver.switchMode(body.mode);
+  const result = typeof ctx._selectTraeMode === 'function'
+    ? await ctx._selectTraeMode(mode)
+    : await ctx._ensureConnection().then(() => ctx.driver.switchMode(mode));
   ctx._json(req, res, {
     success: result.success,
     mode: body.mode,
     previousMode: result.previousMode || null,
-    alreadyInMode: result.alreadyInMode || false
+    alreadyInMode: result.alreadyInMode || false,
+    ...(result.error ? { error: result.error } : {})
   });
 }
 async function handleSwitchModel(req, res, ctx) {

@@ -50,6 +50,8 @@ const gatewayRoutes = [
   { method: 'GET', path: '/assets/web-console/state.js', handler: '_handleWebConsoleAsset', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/assets/web-console/app.js', handler: '_handleWebConsoleAsset', requiresAuth: false, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/openapi.json', handler: '_handleOpenApiSpec', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
+  { method: 'GET', path: '/api/trae/check-in', handler: '_handleCheckIn', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
+  { method: 'POST', path: '/api/trae/check-in', handler: '_handleCheckIn', requiresAuth: true, requiresRateLimit: true, requiresBody: true },
   { method: 'GET', path: '/api/settings/sections', handler: '_handleSettingsListSections', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/settings/options', handler: '_handleSettingsListOptions', requiresAuth: true, requiresRateLimit: true, requiresBody: false },
   { method: 'GET', path: '/api/settings/read-all', handler: '_handleSettingsReadAll', requiresAuth: true, requiresRateLimit: true, requiresBody: false },

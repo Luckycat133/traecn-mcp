@@ -805,8 +805,8 @@ function register(openClaw) {
 
 const pluginEntry = {
   id: PLUGIN_ID,
-  name: 'TraeCNclaw',
-  description: 'Delegate IDE tasks from OpenClaw to a local TraeCNclaw gateway.',
+  name: 'TraeCN MCP adapter',
+  description: 'Delegate IDE tasks from OpenClaw to the local TraeCN MCP gateway.',
   register
 };
 

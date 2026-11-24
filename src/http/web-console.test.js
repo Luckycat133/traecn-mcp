@@ -28,6 +28,7 @@ function responseHeader(res, name) {
 
 test('Web console shell uses semantic landmarks and fixed same-origin assets', () => {
   const html = renderChatUI();
+  assert.match(html, /<title>TraeCN MCP · Web Control Console<\/title>/);
   assert.match(html, /<header\b/);
   assert.match(html, /<nav\b/);
   assert.match(html, /<main\b[^>]*id="main-content"/);

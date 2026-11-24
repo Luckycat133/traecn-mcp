@@ -351,7 +351,8 @@ async function handleCleanupForeignQueue(req, res, ctx) {
   const executeDelete = body.execute === true && body.dryRun !== true;
   const maxPasses = executeDelete ? clampInt(body.maxPasses, 1, 1, 20) : 1;
   const settleMs = clampInt(body.settleMs, 250, 0, 5000);
-  const support = typeof ctx.driver.deleteSoloChats === 'function' ? 'delete_supported' : 'delete_unsupported';
+  const canDelete = ctx.traeTarget?.workspaceKind !== 'agent' && typeof ctx.driver.deleteSoloChats === 'function';
+  const support = canDelete ? 'delete_supported' : 'delete_unsupported';
   const first = await listCleanupCandidates(ctx);
   if (first.error) {
     return ctx._json(req, res, first.error.body, first.error.status);
@@ -367,11 +368,12 @@ async function handleCleanupForeignQueue(req, res, ctx) {
       support,
       deleted: 0,
       dryRun: true,
-      message: 'Dry-run cleanup result. Set { "execute": true } to attempt deletion.'
+      message: canDelete ? 'Dry-run cleanup result. Set { "execute": true } to attempt deletion.'
+        : 'Dry-run cleanup result. Deletion is unavailable in this workspace.'
     }, 200);
   }
 
-  if (typeof ctx.driver.deleteSoloChats !== 'function') {
+  if (!canDelete) {
     return ctx._json(req, res, {
       error: 'driver does not support deleteSoloChats',
       code: 'DRIVER_METHOD_MISSING',

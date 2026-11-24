@@ -133,15 +133,22 @@ async function answerQuestionDialog(driver, answer) {
     return { success: false, action: 'answer', answer: selectedAnswer, error: answerResult.error || 'Failed to answer question dialog' };
   }
 
-  await sleep(driver.config.postActionDelayMs);
-  const dialogAfter = await driver.checkForApprovalDialog();
+  const standalone = driver.traeAdapter?.environment?.target?.workspaceKind === 'agent';
+  if (!standalone) await sleep(driver.config.postActionDelayMs);
+  const deadline = Date.now() + Math.max(800, driver.config.postActionDelayMs || 0);
+  let dialogAfter = await driver.checkForApprovalDialog();
+  while (standalone && (dialogAfter.needsApproval || dialogAfter.transient) && Date.now() < deadline) {
+    await sleep(50);
+    dialogAfter = await driver.checkForApprovalDialog();
+  }
+  const cleared = dialogAfter.needsApproval === false && !dialogAfter.transient;
   return {
-    success: !dialogAfter.needsApproval,
+    success: standalone ? cleared : !dialogAfter.needsApproval,
     action: 'answer',
     answer: selectedAnswer,
     selectedOption: answerResult.selectedOption,
     buttonClicked: answerResult.buttonClicked,
-    error: dialogAfter.needsApproval ? 'Question dialog remained visible after answering' : undefined
+    error: (standalone ? !cleared : dialogAfter.needsApproval) ? 'Question dialog remained visible after answering' : undefined
   };
 }
 

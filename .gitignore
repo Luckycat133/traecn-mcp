@@ -12,8 +12,9 @@ dist/
 skills/*-workspace/
 # Only the generated project MCP Skill is included from local installs.
 .codex/skills/*
-!.codex/skills/traecnclaw-mcp/
-.agents/skills/
+!.codex/skills/traecn-mcp/
+.agents/skills/*
+!.agents/skills/traecn-mcp
 # Generated test coverage data
 .coverage/
 .workbuddy/

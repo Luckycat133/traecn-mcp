@@ -10,7 +10,7 @@ const { buildNpmPackage } = require('./build-npm-package');
 
 const repoRoot = path.resolve(__dirname, '..');
 const packageInfo = require(path.join(repoRoot, 'package.json'));
-const skillName = 'traecnclaw-mcp';
+const skillName = 'traecn-mcp';
 const skillRoot = path.join(repoRoot, 'skills');
 const skillDir = path.join(skillRoot, skillName);
 const distDir = path.join(repoRoot, 'dist');

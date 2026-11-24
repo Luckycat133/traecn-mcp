@@ -5,9 +5,9 @@ tested-platform limits; shorten fields without adding claims.
 
 ## Identity
 
-- Name: `TRAECNclaw MCP`
+- Name: `TraeCN MCP`
 - Repository: `https://github.com/Luckycat133/traecnclaw-mcp-skill`
-- Skill path: `.codex/skills/traecnclaw-mcp`
+- Skill path: `.codex/skills/traecn-mcp`
 - Category: `Developer Tools` or `MCP Servers`
 - Tags: `mcp`, `agent-skills`, `codex`, `openclaw`, `traecn`, `automation`,
   `macos`, `stdio`
@@ -24,7 +24,7 @@ tested-platform limits; shorten fields without adding claims.
 
 ## Full description
 
-> TRAECNclaw connects MCP-capable agents to the TraeCN desktop app running on
+> TraeCN MCP connects MCP-capable agents to the TraeCN desktop app running on
 > the same Mac. Its focused contract exposes exactly 20 tools for workspace,
 > model, mode, conversation, task, and exceptional-dialog intents, while the
 > local gateway owns queues, persistence, recovery, and completion delivery.
@@ -51,23 +51,23 @@ Server through npm:
 
 ```sh
 npm install --global @luckycat133/traecnclaw@<version>
-traecnclaw doctor
-traecnclaw setup-mcp
+traecn-mcp doctor
+traecn-mcp setup-mcp
 ```
 
 Server through Homebrew:
 
 ```sh
 brew install Luckycat133/tap/traecnclaw
-traecnclaw doctor
-traecnclaw setup-mcp
+traecn-mcp doctor
+traecn-mcp setup-mcp
 ```
 
 Agent Skill:
 
 ```sh
 npx skills add https://github.com/Luckycat133/traecnclaw-mcp-skill \
-  --skill traecnclaw-mcp \
+  --skill traecn-mcp \
   -g
 ```
 
@@ -79,13 +79,13 @@ Do not generate or accept an install command using unscoped
 ### AwesomeSkills.dev
 
 - GitHub URL:
-  `https://github.com/Luckycat133/traecnclaw-mcp-skill/tree/main/.codex/skills/traecnclaw-mcp`
+  `https://github.com/Luckycat133/traecnclaw-mcp-skill/tree/main/.codex/skills/traecn-mcp`
 - Expected result: one Skill entry sourced from the public mirror, not a fork.
 
 ### MCP Server Hub
 
 - URL: `https://github.com/Luckycat133/traecnclaw-mcp-skill`
-- Title: `TRAECNclaw MCP`
+- Title: `TraeCN MCP`
 - Category: `Developer Tools`
 - Keywords: `mcp, trae, traecn, coding agent, macos, local, stdio`
 - Description: use the 160-character copy above.
@@ -94,11 +94,11 @@ Do not generate or accept an install command using unscoped
 
 Title:
 
-> Add TRAECNclaw MCP — local TraeCN desktop automation
+> Add TraeCN MCP — local TraeCN desktop automation
 
 Body:
 
-> Please add TRAECNclaw MCP from
+> Please add TraeCN MCP from
 > https://github.com/Luckycat133/traecnclaw-mcp-skill. It is a local stdio MCP
 > server and Agent Skill for TraeCN desktop automation on macOS, with exactly 20
 > focused tools. It requires Node.js 22 and a local TraeCN installation; it is
@@ -108,14 +108,14 @@ Body:
 
 ### Glama correction
 
-> Sync the current public mirror and list TRAECNclaw as a local stdio server on
+> Sync the current public mirror and list TraeCN MCP as a local stdio server on
 > the user's Mac. The current MCP contract has exactly 20 tools. Do not present
 > the inspection container as a hosted connection to the user's TraeCN app, and
 > do not use the historical unscoped npm package.
 
 ### mcpservers.org update request
 
-> Please refresh the existing TRAECNclaw MCP page from the current public
+> Please refresh the existing TraeCN MCP page from the current public
 > repository `main` branch:
 > https://github.com/Luckycat133/traecnclaw-mcp-skill. The existing page still
 > renders 0.5.6 documentation. The current release is 0.5.9, uses local stdio on

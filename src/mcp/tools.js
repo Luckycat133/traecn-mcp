@@ -33,7 +33,7 @@ const TASK_ID = {
 const RAW_MCP_TOOLS = Object.freeze([
   {
     name: 'traecn_send_message',
-    description: 'Submit one user instruction to TraeCN as durable background work and return its stable taskId immediately; the gateway owns queueing, retries, recovery, and result persistence. Use this for every delegated coding request, optionally targeting an existing conversation via conversationId. Do not send follow-up messages to probe progress — track the returned task instead.',
+    description: 'Delegate one instruction as durable background work; return taskId immediately. The gateway owns queueing, retries, recovery and persistence. Track that ID; never send progress probes.',
     inputSchema: schema({
       message: { type: 'string', description: 'The exact instruction to execute.' },
       conversationId: CONVERSATION_ID
@@ -41,7 +41,7 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_get_task',
-    description: "Read one known gateway task by ID: status plus final result, or the full execution trace with detailLevel 'trace' for diagnosis. Call once when notified of completion or once later when resuming after a disconnect. Not a progress primitive — do not poll in a tight loop.",
+    description: 'Read task status and final result, or request trace for diagnosis. Read once on completion notification or after reconnecting; do not busy-poll.',
     inputSchema: schema({
       taskId: TASK_ID,
       detailLevel: {
@@ -53,12 +53,12 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_cancel_task',
-    description: 'Cancel one gateway-tracked task by ID. The gateway stops shepherding the work at its next control point and records the cancellation; results already produced remain in task history. Returns the task identity and post-cancellation status.',
+    description: 'Cancel a tracked task at the next gateway control point. Return its ID and status; retain results already stored in task history.',
     inputSchema: schema({ taskId: TASK_ID }, ['taskId'])
   },
   {
     name: 'traecn_stop_generation',
-    description: 'Stop only the generation currently visible in the named active TraeCN conversation. Visible output may belong to the user or another agent, so this requires acknowledgeUntrackedWork=true plus an audit reason. Prefer cancel_task whenever a gateway task ID exists.',
+    description: 'Stop visible generation in the named active conversation, with acknowledgement and an audit reason. It may belong to others; prefer traecn_cancel_task for tracked work.',
     inputSchema: schema({
       conversationId: CONVERSATION_ID,
       acknowledgeUntrackedWork: {
@@ -75,41 +75,41 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_open_workspace',
-    description: 'Open one absolute local folder path as the active TraeCN workspace and verify it became active before returning. Call before submitting work that depends on a specific project; afterwards do not repeat the path inside the task message.',
+    description: 'Open and verify a local workspace before project-dependent work. Do not repeat its path in the task message.',
     inputSchema: schema({ path: { type: 'string', description: 'Absolute local folder path.' } }, ['path'])
   },
   {
     name: 'traecn_list_models',
-    description: 'List the model names currently offered in the TraeCN UI together with the currently selected model. Read-only discovery; call before select_model whenever the model choice matters.',
+    description: 'Discover available models and the current selection before choosing one. Auto may report manualModelsHidden without changing modes.',
     inputSchema: schema()
   },
   {
     name: 'traecn_select_model',
-    description: 'Select one model by exact name from traecn_list_models and confirm the picker state before returning. Selecting the already-active model succeeds as a no-op. Does not wait for model availability or capacity.',
+    description: 'Select an exact discovered model and verify it. Already selected is a no-op; does not wait for capacity.',
     inputSchema: schema({
       model: { type: 'string', description: 'Exact model name as returned by traecn_list_models.' }
     }, ['model'])
   },
   {
     name: 'traecn_select_mode',
-    description: 'Switch TraeCN between Solo and IDE mode and confirm the resulting active mode. Switching to the current mode succeeds as a no-op. Call only when the requested mode differs.',
+    description: 'Switch to Solo or IDE and verify the active mode. Call only when needed; already active is a no-op.',
     inputSchema: schema({
       mode: { type: 'string', enum: ['solo', 'ide'], description: 'Target UI mode.' }
     }, ['mode'])
   },
   {
     name: 'traecn_list_setting_sections',
-    description: "List the settings sections currently visible in TraeCN's settings UI. Required first step for any settings operation; never guess a section name.",
+    description: 'Discover visible settings sections before any settings operation. Never guess section names.',
     inputSchema: schema()
   },
   {
     name: 'traecn_list_settings',
-    description: 'List the individual settings and their control types within one section returned by traecn_list_setting_sections. Read-only discovery preceding any setting mutation; never guess a label.',
+    description: 'Discover settings and control types in a listed section before changing values. Never guess labels.',
     inputSchema: schema({ section: SECTION }, ['section'])
   },
   {
     name: 'traecn_list_setting_options',
-    description: 'List the visible choices of one dropdown-style setting identified by section and label. Required before select_setting_option; never invent an option value.',
+    description: 'Discover dropdown choices before selecting a setting option. Use the listed section and label; never invent values.',
     inputSchema: schema({
       section: SECTION,
       label: LABEL
@@ -117,7 +117,7 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_set_setting_toggle',
-    description: 'Enable or disable one toggle setting identified by section and label, then read back the applied state. Applying the already-current state succeeds as a no-op.',
+    description: 'Set a discovered toggle and read back its state. Applying the current value succeeds as a no-op.',
     inputSchema: schema({
       section: SECTION,
       label: LABEL,
@@ -126,7 +126,7 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_select_setting_option',
-    description: 'Select one previously listed option for a dropdown setting identified by section and label, and confirm the applied selection. Only values returned by traecn_list_setting_options are valid.',
+    description: 'Apply a discovered dropdown option and verify it. Only values from traecn_list_setting_options are valid.',
     inputSchema: schema({
       section: SECTION,
       label: LABEL,
@@ -135,7 +135,7 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_set_setting_text',
-    description: 'Enter one text value into the setting field identified by section and label, and confirm what the field contains afterwards.',
+    description: 'Set a discovered text setting by section and label, then read back the field to verify it.',
     inputSchema: schema({
       section: SECTION,
       label: LABEL,
@@ -144,22 +144,22 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_list_conversations',
-    description: 'List the conversations available in the current TraeCN mode with stable identifiers accepted by conversation-scoped tools. Read-only; call when choosing or verifying conversation context.',
+    description: 'List current-mode conversations with stable IDs. Use when choosing or verifying conversation context.',
     inputSchema: schema()
   },
   {
     name: 'traecn_create_conversation',
-    description: 'Prepare a fresh TraeCN conversation for a genuinely new context. Returns a native conversation identity when TraeCN has allocated it; an empty draft returns conversationId=null and creationDeferred=true until its first message. Reuses an already-empty draft; otherwise creates another context. Call once per new context.',
+    description: 'Prepare one new context, reusing an empty draft. Return its native ID when allocated; otherwise conversationId=null and creationDeferred=true until the first message. Call once per new context.',
     inputSchema: schema()
   },
   {
     name: 'traecn_select_conversation',
-    description: 'Make one existing conversation the active target for subsequent visible interaction. Returns the confirmed active conversation identity.',
+    description: 'Activate an existing conversation for subsequent visible interaction; return its confirmed ID.',
     inputSchema: schema({ conversationId: CONVERSATION_ID }, ['conversationId'])
   },
   {
     name: 'traecn_delete_conversation',
-    description: 'Permanently delete one inactive TraeCN conversation by stable identifier. Requires the exact expectedTitle returned by traecn_list_conversations plus an explicit irreversible-deletion acknowledgement; there is no gateway recovery path.',
+    description: 'Permanently delete an inactive conversation using its listed ID, exact title and irreversible-deletion acknowledgement. The gateway cannot restore it.',
     inputSchema: schema({
       conversationId: CONVERSATION_ID,
       expectedTitle: {
@@ -175,14 +175,14 @@ const RAW_MCP_TOOLS = Object.freeze([
   },
   {
     name: 'traecn_answer_question',
-    description: "Resolve an exceptional question from TraeCN that the gateway could not handle mechanically by supplying the user's decision. The gateway routes the answer to the pending visible prompt and reports the outcome. Only call when a pending interaction exists.",
+    description: 'Answer a pending visible question with the user-authorized decision; return the outcome. Call only for an unresolved interaction.',
     inputSchema: schema({
       answer: { type: 'string', description: "The user's answer to the pending question." }
     }, ['answer'])
   },
   {
     name: 'traecn_decide_approval',
-    description: 'Approve or deny the unsafe or ambiguous command card currently visible in TraeCN. Approval revalidates the exact expectedCommand against the card and requires acknowledgeRisk plus an audit reason recorded locally; denial needs only the decision. Never approve beyond the scope the user authorized.',
+    description: 'Approve or deny the visible command card within user authorization. Approval revalidates expectedCommand and requires acknowledgeRisk plus an audit reason; denial needs only decision.',
     inputSchema: schema({
       decision: { type: 'string', enum: ['approve', 'deny'], description: 'The approval decision.' },
       expectedCommand: {
@@ -242,7 +242,7 @@ function asMcpContent(value) {
 // Stable execution-error codes for valid calls that cannot complete. Protocol
 // errors (malformed envelopes, unknown tools) never pass through here.
 const TOOL_ERROR_PATTERNS = Object.freeze([
-  { test: /timeout|ECONNREFUSED|ETIMEDOUT|ECONNRESET|socket hang up/i, code: 'GATEWAY_UNREACHABLE', retryable: true, nextAction: 'Verify the local gateway is running (traecnclaw doctor), then retry once.' },
+  { test: /timeout|ECONNREFUSED|ETIMEDOUT|ECONNRESET|socket hang up/i, code: 'GATEWAY_UNREACHABLE', retryable: true, nextAction: 'Verify the local gateway is running (traecn-mcp doctor), then retry once.' },
   { test: /TRAECN_BIN|TraeCN binary|binary not found|launch TraeCN/i, code: 'TRAE_NOT_READY', retryable: true, nextAction: 'Start TraeCN or set TRAECN_BIN, then retry once.' },
   { test: /not found|unknown task|no such/i, code: 'STALE_IDENTITY', retryable: false, nextAction: 'Re-list with the corresponding traecn_list_* tool and use a fresh identifier.' },
   { test: /mismatch|changed;/i, code: 'IDENTITY_MISMATCH', retryable: false, nextAction: 'Re-read the current visible state before deciding again.' },
@@ -288,7 +288,7 @@ const GATEWAY_STATUS_CLASSES = Object.freeze({
   403: { code: 'AUTHORIZATION_REQUIRED', retryable: false, nextAction: 'Supply the required gateway authorization and retry.' },
   404: { code: 'STALE_IDENTITY', retryable: false, nextAction: 'Re-list with the corresponding traecn_list_* tool and use a fresh identifier.' },
   409: { code: 'STATE_CONFLICT', retryable: false, nextAction: 'Re-read the current visible state before deciding again.' },
-  503: { code: 'GATEWAY_UNAVAILABLE', retryable: true, nextAction: 'Verify gateway health (traecnclaw doctor), then retry once.' }
+  503: { code: 'GATEWAY_UNAVAILABLE', retryable: true, nextAction: 'Verify gateway health (traecn-mcp doctor), then retry once.' }
 });
 
 // Gateway bodies carry the outcome as JSON. Non-2xx responses are execution
@@ -307,7 +307,7 @@ function unwrapGatewayResult(result) {
   const hasExplicitCode = explicitCode.length <= 64 && STABLE_ERROR_CODE_PATTERN.test(explicitCode);
   const gatewayClass = GATEWAY_STATUS_CLASSES[status]
     || (status >= 500
-      ? { code: 'GATEWAY_UNAVAILABLE', retryable: true, nextAction: 'Verify gateway health (traecnclaw doctor), then retry once.' }
+      ? { code: 'GATEWAY_UNAVAILABLE', retryable: true, nextAction: 'Verify gateway health (traecn-mcp doctor), then retry once.' }
       : { code: 'TRAECN_OPERATION_FAILED', retryable: false, nextAction: 'Check gateway diagnostics before retrying.' });
   const failure = new Error(
     (typeof body.message === 'string' && body.message)

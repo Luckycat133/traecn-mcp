@@ -29,7 +29,7 @@ function option(argv, name) {
 }
 
 function main(argv = process.argv.slice(2)) {
-  const manifestPath = path.resolve(option(argv, '--manifest') || path.join(REPO_ROOT, 'dist', 'traecnclaw-mcp-release.json'));
+  const manifestPath = path.resolve(option(argv, '--manifest') || path.join(REPO_ROOT, 'dist', 'traecn-mcp-release.json'));
   const outputPath = option(argv, '--out');
   if (!outputPath) throw new Error('Pass --out <Formula/traecnclaw.rb>');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));

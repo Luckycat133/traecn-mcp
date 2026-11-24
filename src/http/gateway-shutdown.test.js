@@ -121,7 +121,7 @@ function connectionFixture(hooks = {}) {
   };
   // Evaluate the actual production method with scoped offline dependencies.
   // Discovery/connection never reaches a WebSocket or native application.
-  gateway._ensureConnection = vm.runInNewContext(`({${Gateway.prototype._ensureConnection.toString()}})._ensureConnection`, {
+  const methods = vm.runInNewContext(`({${Gateway.prototype._ensureConnection}, ${Gateway.prototype._connectTraeTarget}})`, {
     async discoverTarget() {
       calls.discovers++;
       return hooks.discover ? hooks.discover() : { id: 'owned-page', cdpVersion: {} };
@@ -142,6 +142,7 @@ function connectionFixture(hooks = {}) {
     getConfig: () => ({}), mergeAdapterConfig: () => ({}), TraeCNAutomationError,
     process: { platform: 'darwin' }, console: { error() {}, warn() {} }
   });
+  Object.assign(gateway, methods);
   const taskSnapshot = JSON.stringify([...gateway.taskQueue]);
   return {
     gateway, calls, acquired, environment, adapter, makeClient,

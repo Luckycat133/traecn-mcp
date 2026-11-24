@@ -3,7 +3,7 @@
 const assert = require('assert');
 const vm = require('vm');
 const { DomDriver, getConfig, sanitizeActivityText, isTruncationSignal, DEFAULT_COMPOSER_SELECTORS, DEFAULT_SEND_BUTTON_SELECTORS, DEFAULT_RESPONSE_SELECTORS } = require('./dom-driver');
-const { cleanAssistantResultText } = require('./dom-handlers/response-collection');
+const { cleanAssistantResultText, NATIVE_TURN_OWNERSHIP } = require('./dom-handlers/response-collection');
 const { _normalizeModelName } = require('./dom-handlers/model');
 const { createRunner } = require('../shared/test-runner');
 
@@ -76,6 +76,24 @@ asyncTest('unavailable renderer visibility cannot authorize a send', async () =>
   fixture.driver.client.send = async () => ({ result: {} });
   await assert.rejects(() => fixture.driver._ensureVisibleWindow(), error => error.code === 'WINDOW_NOT_VISIBLE');
   assert.strictEqual(fixture.activations(), 0);
+});
+
+asyncTest('switchMode waits for a newly advertised IDE window to mount', async () => {
+  let reads = 0;
+  let tabProbes = 0;
+  const driver = new DomDriver({ async send(method, { expression }) {
+    assert.strictEqual(method, 'Runtime.evaluate');
+    if (expression.includes('tabs[0].click()')) {
+      tabProbes++;
+      return { result: { value: 'waiting' } };
+    }
+    const ready = ++reads >= 3;
+    return { result: { value: { mode: ready ? 'ide' : 'solo', confidence: ready ? 0.8 : 0.5 } } };
+  } }, getConfig(), { traeAdapter: { environment: { appVersion: '3.4.15' } } });
+  const result = await driver.switchMode('ide');
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.currentMode, 'ide');
+  assert.strictEqual(tabProbes, 1);
 });
 
 test('getConfig returns default composer selectors', () => {
@@ -1218,6 +1236,43 @@ test('newChat accepts an already blank composer as a fresh conversation', async 
   assert.strictEqual(calls, 1);
 });
 
+test('newChat verifies the standalone Agent draft and preserves unsent text', async () => {
+  let selected = true;
+  let clicks = 0;
+  const composer = { getClientRects: () => [{}], textContent: '' };
+  const draft = { getClientRects: () => selected ? [] : [{}] };
+  const button = {
+    getClientRects: () => [{}],
+    click() { clicks++; selected = false; }
+  };
+  const document = {
+    querySelector(selector) {
+      if (selector === '.initial-chat-panel') return draft;
+      if (selector === '.task-list-panel .taskItem.taskItemSelected') return selected ? {} : null;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '.chat-input-v2-input-box-editable') return [composer];
+      if (selector === '.task-list-panel .task-list-new-task-item:not(.task-list-skills-item)') return [button];
+      return [];
+    }
+  };
+  const driver = new DomDriver({
+    async send(method, payload) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      return { result: { value: vm.runInNewContext(payload.expression, { document }) } };
+    }
+  }, getConfig(), { traeAdapter: { environment: { target: { workspaceKind: 'agent' } } } });
+  driver.checkTaskReviewGate = async () => ({ awaitingReview: false, reviewCount: 0 });
+  assert.strictEqual(await driver.newChat(), true);
+  assert.strictEqual(selected, false);
+  assert.strictEqual(await driver.newChat(), true);
+  assert.strictEqual(clicks, 1);
+  composer.textContent = 'Unsent draft';
+  await assert.rejects(driver.newChat(), error => error.code === 'FRESH_CHAT_FAILED');
+  assert.strictEqual(clicks, 1);
+});
+
 test('newChat clears a populated Trae 1.107 virtualized conversation', async () => {
   const composer = { getBoundingClientRect: () => ({ width: 300, height: 50 }), offsetParent: {} };
   const turn = { getBoundingClientRect: () => ({ width: 400, height: 100 }), offsetParent: {} };
@@ -1394,28 +1449,43 @@ function responseDomMatches(element, selector) {
   return true;
 }
 
-function capturedResponseFixture({ finish = true, running = false, newUser = false, empty = false, panelSelectors = null } = {}) {
+function capturedResponseFixture({
+  finish = true, running = false, newUser = false, empty = false, panelSelectors = null, standalone = false,
+  summaryText = capturedFinishSummary, sessionIds = [],
+  prompt = '请修复 calculator.js，并运行 calculator.test.js，返回实际修改和测试结果。'
+} = {}) {
   const node = responseDomElement;
-  const prompt = '请修复 calculator.js，并运行 calculator.test.js，返回实际修改和测试结果。';
-  const summary = node('div', { class: 'markdown-renderer' }, capturedFinishSummary);
+  const summary = node('div', { class: 'markdown-renderer' }, summaryText);
   const finishCard = node('div', { class: 'agent-plan-item', 'data-toolcall-type': 'finish' }, '', [
     node('div', { class: 'core-finish-card' }, '', [node('div', { class: 'core-finish-card__summary' }, '', [summary])])
   ]);
-  const user = node('div', {}, prompt);
+  const userAttributes = standalone ? { class: 'turn__user-message', 'data-role': 'user' } : {};
+  const userMessage = text => standalone ? node('div', userAttributes, '', [
+    node('div', { class: 'user-message__text-content' }, text),
+    node('div', { class: 'user-message__expand-float' }, '展开'),
+    node('div', { class: 'user-message__bottom-bar' }, '14:07')
+  ]) : node('div', userAttributes, text);
+  const user = userMessage(prompt);
   const assistant = node('div', { class: 'turn__agent-message', 'data-role': 'assistant' }, '', [
-    node('div', { class: 'agent-message__header' }, 'Agent'),
+    node('div', { class: 'agent-message__header' }, standalone ? 'TRAE' : 'Agent'),
     node('div', { class: 'todo-progress-content' }, '思考过程：已完成第一步，将继续检查。'),
-    ...(finish ? [finishCard] : [node('div', { class: 'markdown-renderer' }, '已完成第一步，将继续检查。')])
+    ...(finish ? [finishCard] : [node('div', { class: 'markdown-renderer' }, '已完成第一步，将继续检查。')]),
+    ...(standalone ? [node('div', { class: 'agent-message' }, '由 AI 生成\n13%')] : [])
   ]);
-  const turns = empty ? [] : [node('div', { class: 'turn turn--last' }, '', [user, assistant])];
+  const turns = empty ? [] : [node('div', { class: newUser ? 'turn' : 'turn turn--last' }, '', [user, assistant])];
   if (newUser) turns.push(node('div', { class: 'turn turn--last' }, '', [
-    node('div', {}, '现在处理下一项授权修复。')
+    userMessage('现在处理下一项授权修复。')
   ]));
   if (running) turns.push(node('span', { class: 'codicon-stop-circle' }));
-  const viewport = node('div', { class: 'virtualized-message-list-view__virtuoso' }, '', turns);
+  const viewport = node('div', { class: standalone ? 'standalone-view' : 'virtualized-message-list-view__virtuoso' }, '', turns);
+  const sidebar = node('div', { class: 'task-list-panel' }, '', sessionIds.map(sessionId =>
+    node('div', { class: 'task-list-row-wrapper', 'data-session-id': sessionId }, '', [
+      node('div', { class: 'taskItem taskItemSelected' })
+    ])
+  ));
   const workbench = node('div', {
     class: 'monaco-workbench nopanel icube-ai-chat-commercial-popup-anchor', role: 'application'
-  }, capturedWorkbenchNoise, [node('style', {}, '.monaco-list { background: var(--vscode-list-focusBackground); }'.repeat(20)), viewport]);
+  }, capturedWorkbenchNoise, [node('style', {}, '.monaco-list { background: var(--vscode-list-focusBackground); }'.repeat(20)), viewport, sidebar]);
   const body = node('body', {}, '', [workbench]);
   const html = node('html', {}, '', [body]);
   const document = {
@@ -1433,12 +1503,133 @@ function capturedResponseFixture({ finish = true, running = false, newUser = fal
       return { result: { value: JSON.parse(JSON.stringify(value)) } };
     }, on() {}, off() {}
   }, config);
-  driver.detectMode = async () => ({ mode: 'ide' });
+  driver.detectMode = async () => ({ mode: standalone ? 'solo' : 'ide' });
+  if (standalone) driver.traeAdapter = { environment: { target: { workspaceKind: 'agent' } } };
   driver.checkForApprovalDialog = async () => ({ needsApproval: false });
   driver.checkTaskReviewGate = async () => ({ awaitingReview: false, taskCompleted: false });
   driver._pendingUserTask = prompt;
   return { driver, summary, assistant, workbench };
 }
+
+asyncTest('standalone Agent returns the short finish summary without UI or process text', async () => {
+  const summaryText = 'TRAECN_UAT_OK_6NQ';
+  const { driver, assistant } = capturedResponseFixture({ standalone: true, summaryText });
+  const state = await driver._queryTaskSource('');
+  assert.strictEqual(state.text, summaryText);
+  assert.strictEqual(state.hasResponse, true);
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.text, summaryText);
+  assert.strictEqual(result.stable, true);
+  assert.strictEqual(result.traceText, assistant.innerText.trim());
+});
+
+asyncTest('standalone Agent proves a final answer belongs to its exact native session and user prompt', async () => {
+  const { driver } = capturedResponseFixture({
+    standalone: true, sessionIds: ['session-a'], summaryText: 'Read-only check complete.',
+    prompt: 'Inspect this test fixture.\n\nTRAECN_UAT_PROMPT_ONLY'
+  });
+  driver._pendingUserTask = 'A previously sent prompt';
+  const expectedTask = 'Inspect  this test fixture. TRAECN_UAT_PROMPT_ONLY';
+  const result = await driver.collectResponse({ expectedSessionId: 'session-a', expectedTask });
+  assert.strictEqual(result.text, 'Read-only check complete.');
+  assert.strictEqual(result.stable, true);
+  assert.deepStrictEqual(result[NATIVE_TURN_OWNERSHIP], {
+    sessionId: 'session-a', taskText: 'Inspect this test fixture. TRAECN_UAT_PROMPT_ONLY'
+  });
+  assert.strictEqual({ ...result }[NATIVE_TURN_OWNERSHIP], undefined);
+  assert.ok(!JSON.stringify(result).includes('session-a'));
+});
+
+asyncTest('standalone Agent rejects missing or ambiguous native session and a mere prompt substring', async () => {
+  const expectedTask = 'Inspect this fixture.';
+  for (const fixtureOptions of [
+    { sessionIds: [] },
+    { sessionIds: ['session-b'] },
+    { sessionIds: ['session-a', 'session-b'] },
+    { sessionIds: ['session-a'], prompt: `Before that, ${expectedTask}` }
+  ]) {
+    const { driver } = capturedResponseFixture({ standalone: true, prompt: expectedTask, ...fixtureOptions });
+    const state = await driver._pollResponseState({ expectedSessionId: 'session-a', expectedTask });
+    assert.strictEqual(state.nativeOwnershipPending, true);
+    assert.strictEqual(state.taskComplete, false);
+    assert.strictEqual(state.taskText, '');
+    assert.strictEqual(state.nativeTurnOwnership, undefined);
+  }
+});
+
+asyncTest('standalone Agent never captures another session’s dialog or renderer log as task output', async () => {
+  const { driver } = capturedResponseFixture({ standalone: true, sessionIds: ['session-b'], prompt: 'Inspect this fixture.' });
+  driver.config.timeoutMs = 80;
+  driver.client.on = (event, callback) => {
+    if (event === 'Log.entryAdded') callback({ entry: { type: 'log', text: 'Other session log' } });
+  };
+  driver.checkForApprovalDialog = async () => assert.fail('Unbound session dialog was checked');
+  const result = await driver.collectResponse({ expectedSessionId: 'session-a', expectedTask: 'Inspect this fixture.' });
+  assert.strictEqual(result.timedOut, true);
+  assert.strictEqual(result.text, '');
+  assert.strictEqual(result[NATIVE_TURN_OWNERSHIP], undefined);
+});
+
+asyncTest('standalone Agent does not reuse an old finish summary across turns', async () => {
+  const { driver } = capturedResponseFixture({ standalone: true, newUser: true });
+  driver._pendingUserTask = '现在处理下一项授权修复。';
+  const state = await driver._pollResponseState();
+  assert.strictEqual(state.awaitingAssistant, true);
+  assert.strictEqual(state.taskComplete, false);
+  assert.strictEqual(state.taskText, '');
+  assert.strictEqual(state.responseText, '');
+});
+
+asyncTest('standalone Agent waits if the latest visible user turn still belongs to an earlier prompt', async () => {
+  const { driver } = capturedResponseFixture({ standalone: true });
+  driver._pendingUserTask = '现在处理下一项授权修复。';
+  const state = await driver._pollResponseState();
+  assert.strictEqual(state.awaitingAssistant, true);
+  assert.strictEqual(state.taskComplete, false);
+  assert.strictEqual(state.taskText, '');
+});
+
+asyncTest('standalone Agent preserves the unfinished turn and a pending native approval', async () => {
+  const { driver } = capturedResponseFixture({ standalone: true, finish: false });
+  const state = await driver._pollResponseState();
+  assert.strictEqual(state.taskInProgress, true);
+  assert.strictEqual(state.taskComplete, false);
+  assert.ok(state.taskText.includes('已完成第一步，将继续检查。'));
+  let approvalChecks = 0;
+  driver.checkForApprovalDialog = async () => (++approvalChecks > 1
+    ? { needsApproval: true, dialogType: 'tool_confirmation', question: '是否允许运行命令？' }
+    : { needsApproval: false });
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.needsApproval, true);
+  assert.strictEqual(result.question, '是否允许运行命令？');
+  assert.strictEqual(result.stable, false);
+});
+
+asyncTest('bound native turn detects approval on the next response poll', async () => {
+  const prompt = 'Inspect this fixture.';
+  const { driver } = capturedResponseFixture({ standalone: true, finish: false, sessionIds: ['session-a'], prompt });
+  driver.config.pollIntervalMs = 5;
+  driver.config.approvalPollIntervalMs = 3000;
+  driver.config.timeoutMs = 800;
+  let polls = 0;
+  const pollResponse = driver._pollResponseState.bind(driver);
+  driver._pollResponseState = options => { polls++; return pollResponse(options); };
+  driver.checkForApprovalDialog = async () => polls >= 2
+    ? { needsApproval: true, dialogType: 'command_execution', command: 'echo fixture' }
+    : { needsApproval: false };
+  const result = await driver.collectResponse({ expectedSessionId: 'session-a', expectedTask: prompt });
+  assert.strictEqual(result.needsApproval, true);
+  assert.strictEqual(result.command, 'echo fixture');
+  assert.strictEqual(polls, 2);
+});
+
+asyncTest('standalone Agent preserves line breaks and leading role words in the native final text', async () => {
+  const summaryText = 'Agent configuration\n\n开始分析 is an example.';
+  const { driver } = capturedResponseFixture({ standalone: true, summaryText });
+  const result = await driver.collectResponse();
+  assert.strictEqual(result.text, summaryText);
+  assert.strictEqual(result.stable, true);
+});
 
 asyncTest('captured IDE DOM returns the current assistant finish summary instead of workbench CSS', async () => {
   const { driver, assistant } = capturedResponseFixture();
@@ -2618,6 +2809,69 @@ test('listSoloChats keeps duplicate titles separate through native sessions and 
   assert.strictEqual(result.count, 2);
   assert.deepStrictEqual(Array.from(result.chats, chat => chat.sessionId), fixture.rows.map(row => row.sessionId));
   assert.ok(result.chats.every(chat => chat.title === 'Same title'));
+});
+
+test('standalone Agent discovers and switches conversations by native row identity', async () => {
+  const ids = ['agent-session-a', 'agent-session-b'];
+  let active = ids[0];
+  let switchUpdatesActive = true;
+  let pendingSelection;
+  let selectionReads = 0;
+  const clicks = [];
+  const rows = ids.map(id => {
+    const item = {
+      classList: { contains: name => name === 'taskItemSelected' && active === id },
+      click() {
+        clicks.push(id);
+        if (switchUpdatesActive) pendingSelection = id;
+      }
+    };
+    return {
+      className: 'task-list-row-wrapper',
+      innerText: 'New Task · 进行中',
+      getAttribute: name => name === 'data-session-id' ? id : null,
+      querySelector: selector => ({
+        '.taskText': { innerText: 'New Task' },
+        '.taskItem': item,
+        '.taskItem.taskItemSelected': active === id ? item : null
+      })[selector] || null,
+      getBoundingClientRect: () => ({ y: 100, width: 200, height: 40 }),
+      scrollIntoView() {}
+    };
+  });
+  const sidebar = {
+    classList: { contains: name => name === 'task-list-panel' },
+    offsetParent: {},
+    getBoundingClientRect: () => ({ right: 250, width: 250 }),
+    querySelectorAll: selector => selector === '.task-list-row-wrapper[data-session-id]' ? rows : []
+  };
+  const sandbox = {
+    document: { querySelector: selector => selector.includes('.task-list-panel') ? sidebar : null },
+    window: { innerHeight: 800 }
+  };
+  const driver = new DomDriver({
+    async send(method, params) {
+      assert.strictEqual(method, 'Runtime.evaluate');
+      if (pendingSelection && params.expression.includes('collectVisible(scrollInfo)') && ++selectionReads === 2) {
+        active = pendingSelection;
+        pendingSelection = null;
+      }
+      return { result: { value: await vm.runInNewContext(params.expression, sandbox) } };
+    }
+  }, { ...getConfig(), postActionDelayMs: 1 });
+  const list = await driver.listSoloChats();
+  assert.deepStrictEqual(Array.from(list.chats, chat => [chat.sessionId, chat.title, chat.active, chat.status]), [
+    [ids[0], 'New Task', true, 'unknown'], [ids[1], 'New Task', false, 'unknown']
+  ]);
+  const selected = await driver.switchSoloChat({ sessionId: ids[1] });
+  assert.strictEqual(selected.success, true);
+  assert.strictEqual(selectionReads, 2, 'selection should wait for the exact native row to become active');
+  assert.strictEqual((await driver.getActiveSoloChat()).active.sessionId, ids[1]);
+  assert.strictEqual((await driver.switchSoloChat({ sessionId: ids[1] })).success, true);
+  assert.deepStrictEqual(clicks, [ids[1]]);
+  switchUpdatesActive = false;
+  const notSelected = await driver.switchSoloChat({ sessionId: ids[0] });
+  assert.deepStrictEqual(notSelected, { success: false, reason: 'chat_switch_not_confirmed' });
 });
 
 function soloSidebarRafFixture({ scrollable = true, raf = 'never', native = true,

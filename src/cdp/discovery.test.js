@@ -1,7 +1,9 @@
 'use strict';
 
 const assert = require('assert');
-const { DEFAULT_DISCOVERY_PORTS, scoreTarget, discoverTarget, fetchCDPTargets, fetchCDPVersion, classifyTargetSurface, describeCDPSurface } = require('./discovery');
+const http = require('http');
+const { WebSocketServer } = require('ws');
+const { DEFAULT_DISCOVERY_PORTS, scoreTarget, discoverTarget, fetchCDPTargets, fetchCDPVersion, classifyTargetSurface, describeCDPSurface, isTraeCNVersion } = require('./discovery');
 const { createRunner } = require('../shared/test-runner');
 const runner = createRunner('discovery.test.js');
 const { test, asyncTest, pendingAsyncTests, summary } = runner;
@@ -81,6 +83,21 @@ test('classifyTargetSurface detects workspace pages', () => {
   }), 'workspace');
 });
 
+test('classifyTargetSurface recognizes the standalone Agent URL and excludes auxiliary pages', () => {
+  assert.strictEqual(classifyTargetSurface({
+    type: 'page',
+    title: 'Agent',
+    url: 'vscode-file://vscode-app/.../solo/solo-lite.html'
+  }), 'workspace');
+  assert.strictEqual(classifyTargetSurface({
+    type: 'page',
+    title: 'TRAE CN floating chat',
+    url: 'file:///Applications/Trae%20CN.app/.../floatingButton.html'
+  }), 'unknown');
+  assert.strictEqual(isTraeCNVersion({ 'User-Agent': 'TraeCN/1.107.1 Chrome/142.0' }), true);
+  assert.strictEqual(isTraeCNVersion({ 'User-Agent': 'Antigravity/1.0 Chrome/142.0' }), false);
+});
+
 test('describeCDPSurface prefers workspace over setup when both exist', () => {
   const surface = describeCDPSurface([
     { id: 'setup', type: 'page', title: '欢迎使用 TRAE', url: 'vscode-file://.../setup/setup.html' },
@@ -94,6 +111,70 @@ test('describeCDPSurface prefers workspace over setup when both exist', () => {
 test('DEFAULT_DISCOVERY_PORTS includes quickstart-style live ports', () => {
   assert.ok(DEFAULT_DISCOVERY_PORTS.includes('9333'));
   assert.ok(DEFAULT_DISCOVERY_PORTS.includes('9334'));
+});
+
+asyncTest('discoverTarget prefers the visible Agent and respects explicit workbench selection', async () => {
+  const targets = [
+    { id: 'floating', title: 'TRAE CN Chat', url: 'file:///Trae%20CN.app/.../floatingButton.html' },
+    { id: 'stale', title: 'SOLO', url: '' },
+    { id: 'setup', title: '欢迎使用', url: 'vscode-file://vscode-app/.../setup/setup.html' },
+    { id: 'ide', title: 'TRAE CN', url: 'vscode-file://vscode-app/.../workbench/workbench.html' },
+    { id: 'agent', title: 'Agent', url: 'vscode-file://vscode-app/.../solo/solo-lite.html' }
+  ];
+  const inspected = [];
+  let agentVisible = true;
+  const server = http.createServer((req, res) => {
+    const port = server.address().port;
+    res.setHeader('Content-Type', 'application/json');
+    const payload = req.url === '/json/version'
+      ? { 'User-Agent': 'TraeCN/1.107.1 Chrome/142.0' }
+      : targets.map(target => ({
+        ...target,
+        type: 'page',
+        webSocketDebuggerUrl: `ws://127.0.0.1:${port}/${target.id}`
+      }));
+    res.end(JSON.stringify(payload));
+  });
+  const websocketServer = new WebSocketServer({ server });
+  websocketServer.on('connection', (socket, request) => {
+    const id = request.url.slice(1);
+    inspected.push(id);
+    socket.on('message', data => {
+      const request = JSON.parse(data);
+      socket.send(JSON.stringify({
+        id: request.id,
+        result: {
+          result: {
+            value: {
+              mode: 'solo',
+              focused: id === 'ide',
+              visible: id !== 'agent' || agentVisible,
+              composer: true
+            }
+          }
+        }
+      }));
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const options = { host: '127.0.0.1', port: server.address().port };
+    const defaultTarget = await discoverTarget(options);
+    assert.strictEqual(defaultTarget.id, 'agent');
+    assert.strictEqual(defaultTarget.workspaceKind, 'agent');
+    assert.strictEqual(defaultTarget.mode, 'solo');
+    const workbench = await discoverTarget({ ...options, surface: 'workbench' });
+    assert.strictEqual(workbench.id, 'ide');
+    assert.strictEqual(workbench.mode, 'solo');
+    await assert.rejects(discoverTarget({ ...options, mode: 'ide' }), /No matching Trae CN ide target/);
+    agentVisible = false;
+    assert.strictEqual((await discoverTarget(options)).id, 'ide');
+    assert.deepStrictEqual([...new Set(inspected)].sort(), ['agent', 'ide']);
+  } finally {
+    for (const socket of websocketServer.clients) socket.terminate();
+    await new Promise(resolve => websocketServer.close(resolve));
+    await new Promise(resolve => server.close(resolve));
+  }
 });
 
 test('fetchCDPTargets rejects on connection failure', async () => {

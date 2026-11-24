@@ -6,7 +6,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
-const manifestPath = path.join(repoRoot, 'dist', 'traecnclaw-mcp-release.json');
+const manifestPath = path.join(repoRoot, 'dist', 'traecn-mcp-release.json');
 
 const packaged = spawnSync(process.execPath, [path.join(__dirname, 'package-skill.js')], {
   cwd: repoRoot,

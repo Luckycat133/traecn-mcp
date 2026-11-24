@@ -1,5 +1,7 @@
 'use strict';
 
+/* global document */
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -14,10 +16,19 @@ const DEFAULT_DISCOVERY_PORTS = ['9222', '9223', '9224', '9225', '9226', '9230',
 
 const CDP_REQUEST_TIMEOUT_MS = 5000;
 
+function classifyWorkspaceTarget(target = {}) {
+  const url = String(target.url || '').split(/[?#]/, 1)[0].toLowerCase();
+  if (!url.startsWith('vscode-file:') && !url.startsWith('vscode-app:')) return null;
+  if (url.endsWith('/solo/solo-lite.html')) return 'agent';
+  if (url.endsWith('/workbench.html')) return 'workbench';
+  return null;
+}
+
 function classifyTargetSurface(target = {}) {
   const title = String(target.title || '').toLowerCase();
   const url = String(target.url || '').toLowerCase();
 
+  if (classifyWorkspaceTarget(target)) return 'workspace';
   if (
     url.includes('/setup/setup.html') ||
     title.includes('欢迎使用') ||
@@ -30,17 +41,26 @@ function classifyTargetSurface(target = {}) {
     return 'setup';
   }
 
-  if (
-    url.includes('/workbench/workbench.html') ||
-    url.includes('/electron-sandbox/workbench/workbench.html') ||
-    url.includes('/workbench.html') ||
-    title.includes('trae cn') ||
-    title.includes('solo')
-  ) {
+  if (!url && /trae cn|solo/.test(title)) {
     return 'workspace';
   }
 
   return 'unknown';
+}
+
+// Serialized into Runtime.evaluate, so this function must be self-contained.
+function readWorkspaceMode(workspaceKind) {
+  if (workspaceKind === 'agent') return 'solo';
+  if (document.body?.classList.contains('solo-mode')) return 'solo';
+  const activeTab = document.querySelector(
+    '.icube-mode-tab-item.active, .icube-mode-tab-item.selected, .icube-mode-tab-item[aria-selected="true"]'
+  );
+  const label = activeTab?.textContent?.trim().toLowerCase() || '';
+  if (/solo|agent/.test(label)) return 'solo';
+  if (/ide|编辑器/.test(label)) return 'ide';
+  if (document.querySelector('.soloaisidebar')?.getClientRects().length) return 'solo';
+  if (document.querySelector('.monaco-workbench')?.getClientRects().length) return 'ide';
+  return null;
 }
 
 function describeCDPSurface(targets = []) {
@@ -58,7 +78,7 @@ function describeCDPSurface(targets = []) {
   const scored = pages
     .map(target => {
       const kind = classifyTargetSurface(target);
-      const rank = kind === 'workspace' ? 3 : kind === 'setup' ? 2 : 1;
+      const rank = classifyWorkspaceTarget(target) ? 4 : kind === 'workspace' ? 3 : kind === 'setup' ? 2 : 1;
       return { target, kind, rank };
     })
     .sort((left, right) => right.rank - left.rank);
@@ -213,29 +233,14 @@ async function fetchCDPVersionHTTP(host, port) {
 function isTraeCNVersion(version) {
   const browser = String(version?.Browser || '').toLowerCase();
   const userAgent = String(version?.['User-Agent'] || '').toLowerCase();
-  return (
-    browser.includes('trae') ||
-    userAgent.includes('traecn') ||
-    userAgent.includes('trae cn') ||
-    // Trae CN's agent runtime ("Antigravity") exposes its own Chromium
-    // DevTools port on a dynamic port; treat it as a valid TraeCN surface.
-    userAgent.includes('antigravity')
-  );
+  const product = /\btrae(?:\s*cn)?(?=[/\s-]|$)/;
+  return product.test(browser) || product.test(userAgent);
 }
 
 /**
- * Trae CN (IDE) and sibling apps (Antigravity agent runtime, Qoder) each
- * persist a Chromium DevTools (CDP) endpoint on a per-session port in
- *   ~/Library/Application Support/<App>/DevToolsActivePort
- * where line 1 is the port and line 2 is the browser WebSocket path
- * (e.g. /devtools/browser/<uuid>). Builds that no longer forward
- * --remote-debugging-port to the IDE process expose their working CDP
- * surface only through these files, so we must scan all of them.
- *
- * @returns {{port:string, wsPath:string}|null}
+ * Trae CN may publish its dynamic CDP port and browser WebSocket path in
+ * ~/Library/Application Support/Trae CN/DevToolsActivePort.
  */
-const DEVTOOLS_APPS = ['Antigravity', 'Trae CN', 'Qoder'];
-
 function readDevToolsActivePort(appName) {
   try {
     const file = path.join(os.homedir(), 'Library', 'Application Support', appName, 'DevToolsActivePort');
@@ -249,15 +254,6 @@ function readDevToolsActivePort(appName) {
     // File absent for this app — not fatal.
   }
   return null;
-}
-
-function getDevToolsPorts() {
-  const out = [];
-  for (const app of DEVTOOLS_APPS) {
-    const info = readDevToolsActivePort(app);
-    if (info && !out.some(o => o.port === info.port)) out.push(info);
-  }
-  return out;
 }
 
 function uniquePorts(...groups) {
@@ -288,18 +284,15 @@ async function resolveCDPEndpoint(options = {}) {
     .map(p => p.trim())
     .filter(Boolean);
 
-  const devtools = getDevToolsPorts();
-  const devtoolsPorts = devtools.map(d => d.port);
+  const devtools = readDevToolsActivePort('Trae CN');
   const wsPathByPort = {};
-  for (const d of devtools) {
-    if (d.wsPath) wsPathByPort[d.port] = d.wsPath;
-  }
+  if (devtools?.wsPath) wsPathByPort[devtools.port] = devtools.wsPath;
 
   const ports = uniquePorts(
     [configuredPort],
     [quickstartPort],
     extraPorts,
-    devtoolsPorts,
+    [devtools?.port],
     DEFAULT_DISCOVERY_PORTS
   );
   let lastError = null;
@@ -335,6 +328,7 @@ function scoreTarget(target, titleKeywords) {
   if (target.type === 'page') {
     score += 10;
   }
+  if (classifyWorkspaceTarget(target)) score += 100;
 
   for (const keyword of titleKeywords) {
     if (title.includes(keyword.toLowerCase())) {
@@ -384,6 +378,9 @@ async function discoverTarget(options = {}) {
   const endpoint = await resolveCDPEndpoint({ host: options.host || host, port: options.port || port });
   const effectiveHost = endpoint.host;
   const effectivePort = endpoint.port;
+  if (!endpoint.isTraeCN) {
+    throw TraeCNAutomationError.connectionFailed(effectiveHost, effectivePort, 'CDP belongs to a different application');
+  }
   const effectiveTitleContains = options.titleContains || titleContains;
   const effectiveUrlContains = options.urlContains || urlContains;
 
@@ -406,130 +403,75 @@ async function discoverTarget(options = {}) {
     .map(k => k.trim())
     .filter(Boolean);
 
-  let candidates = targets
-    .filter(t => t.type === 'page')
+  const pages = targets
+    .filter(t => t.type === 'page' && t.webSocketDebuggerUrl)
     .map(t => ({
       ...t,
+      surface: classifyTargetSurface(t),
+      workspaceKind: classifyWorkspaceTarget(t),
       score: scoreTarget(t, titleKeywords)
     }))
+    .filter(t => !options.surface || t.workspaceKind === options.surface)
+    .filter(t => !urlKeywords.length || urlKeywords.some(k => String(t.url || '').toLowerCase().includes(k.toLowerCase())))
     .sort((a, b) => b.score - a.score);
 
-  if (urlKeywords.length > 0) {
-    candidates = candidates.filter(t => {
-      const targetUrl = (t.url || '').toLowerCase();
-      return urlKeywords.some(k => targetUrl.includes(k.toLowerCase()));
-    });
-  }
-
-  // If no title-matched candidates, fall back to any page with SOLO Coder UI
-  if (candidates.length === 0) {
-    candidates = targets
-      .filter(t => t.type === 'page')
-      .map(t => ({ ...t, score: 0 }));
-  }
-
-  const bestCandidate = candidates[0];
-
-  const safeComposerSels = JSON.stringify([
-    '.chat-input-v2-input-box-editable', 'textarea', "[contenteditable='true']",
-    "input[type='text']", "[class*='chat-input']", "[class*='input-box']"
-  ]);
-  const safeSendSels = JSON.stringify([
-    'button.chat-input-v2-send-button', "button[data-testid*='send']",
-    "button[aria-label*='Send']", "button[aria-label*='发送']",
-    "button[type='submit']", "[class*='send-button']", "[class*='send']"
-  ]);
+  const workspaces = pages.filter(t => t.surface === 'workspace');
+  const knownWorkspaces = workspaces.filter(t => t.workspaceKind);
+  const allowSetup = !options.mode && !options.surface;
+  const candidates = knownWorkspaces.length ? knownWorkspaces
+    : workspaces.length || !allowSetup ? workspaces
+      : pages.filter(t => t.surface === 'setup');
 
   const probeResults = await Promise.allSettled(
     candidates.map(async (candidate) => {
       const client = new CDPClient(candidate.webSocketDebuggerUrl);
-      await client.connect();
       try {
-        await client.send('DOM.enable');
-        await client.send('Runtime.enable');
-
+        await client.connect();
         const checkResult = await client.send('Runtime.evaluate', {
           expression: `
-            (function() {
-              var composerSels = ${safeComposerSels};
-              var sendSels = ${safeSendSels};
-              var composer = null, sendBtn = null;
-              for (var i = 0; i < composerSels.length; i++) {
-                var el = document.querySelector(composerSels[i]);
-                if (el) { composer = { sel: composerSels[i], visible: el.getBoundingClientRect().width > 20 && el.getBoundingClientRect().height > 15 && el.offsetParent !== null }; break; }
-              }
-              for (var j = 0; j < sendSels.length; j++) {
-                var btn = document.querySelector(sendSels[j]);
-                if (btn) { sendBtn = { sel: sendSels[j] }; break; }
-              }
-              return { composer: composer, sendButton: sendBtn };
-            })()
+            ({
+              mode: (${readWorkspaceMode.toString()})(${JSON.stringify(candidate.workspaceKind)}),
+              focused: document.hasFocus(),
+              visible: document.visibilityState === 'visible',
+              composer: !!document.querySelector('.chat-input-v2-input-box-editable')?.getClientRects().length
+            })
           `,
           returnByValue: true
         });
-
-        return { candidate, client, readiness: checkResult.result?.value || {} };
-      } catch (err) {
-        // Close the client on probe failure so we don't leak WebSockets.
-        // Without this, a connected-but-rejected client is never closed
-        // because it's not in the `live` array.
+        return { candidate, readiness: checkResult.result?.value || {} };
+      } finally {
         await safeClose(client);
-        throw err;
       }
     })
   );
 
-  const live = [];
-  for (const r of probeResults) {
-    if (r.status === 'fulfilled') live.push(r.value);
-  }
-
-  // Preserve the score ordering from `candidates` instead of returning the
-  // first probe to complete — that ordering already knows which target is
-  // most likely the real IDE workbench, while Promise.allSettled returns
-  // results in completion order which has nothing to do with suitability.
-  live.sort((a, b) => (b.candidate.score || 0) - (a.candidate.score || 0));
-
-  function buildTarget(p) {
+  // The standalone Agent is the current chat surface. A restored, focused
+  // workbench must not take precedence over a visible Agent window.
+  const visibleAgent = ({ candidate, readiness }) =>
+    Number(candidate.workspaceKind === 'agent' && readiness.visible === true);
+  const selected = probeResults
+    .filter(result => result.status === 'fulfilled')
+    .map(result => result.value)
+    .filter(item => !options.mode || item.readiness.mode === options.mode)
+    .sort((left, right) => visibleAgent(right) - visibleAgent(left)
+      || Number(Boolean(right.readiness.focused)) - Number(Boolean(left.readiness.focused))
+      || Number(Boolean(right.readiness.visible)) - Number(Boolean(left.readiness.visible))
+      || Number(Boolean(right.readiness.composer)) - Number(Boolean(left.readiness.composer))
+      || right.candidate.score - left.candidate.score)[0];
+  if (selected) {
+    const { candidate, readiness } = selected;
     return {
-      id: p.candidate.id, type: p.candidate.type, title: p.candidate.title, url: p.candidate.url,
-      webSocketDebuggerUrl: p.candidate.webSocketDebuggerUrl, score: p.candidate.score,
+      ...candidate,
+      mode: candidate.surface === 'workspace' ? readiness.mode || null : null,
       cdpVersion: endpoint.version,
       cdpHost: endpoint.host,
       cdpPort: endpoint.port
     };
   }
 
-  const p1 = live.find(p => p.readiness.composer && p.readiness.sendButton);
-  if (p1) {
-    const target = buildTarget(p1);
-    await Promise.all(live.map(p => safeClose(p.client)));
-    return target;
-  }
-
-  const p2 = live.find(p => p.readiness.composer && p.readiness.composer.visible);
-  if (p2) {
-    const target = buildTarget(p2);
-    await Promise.all(live.map(p => safeClose(p.client)));
-    return target;
-  }
-
-  if (live.length > 0) {
-    const target = buildTarget(live[0]);
-    await Promise.all(live.map(p => safeClose(p.client)));
-    return target;
-  }
-
-  if (bestCandidate) {
-    throw TraeCNAutomationError.connectionFailed(
-      effectiveHost, effectivePort,
-      `No valid Trae CN workbench target found (${candidates.length} candidates probed but none had composer)`
-    );
-  }
-
   throw TraeCNAutomationError.connectionFailed(
     effectiveHost, effectivePort,
-    `No Trae CN targets found on CDP endpoint`
+    `No matching Trae CN ${options.surface || options.mode || 'workspace or setup'} target found (${candidates.length} candidates probed)`
   );
 }
 
@@ -555,12 +497,14 @@ async function connectToTarget(targetInfo) {
 module.exports = {
   DEFAULT_DISCOVERY_PORTS,
   classifyTargetSurface,
+  classifyWorkspaceTarget,
   describeCDPSurface,
   fetchCDPTargets,
   fetchCDPVersion,
   isTraeCNVersion,
   resolveCDPEndpoint,
   scoreTarget,
+  readWorkspaceMode,
   discoverTarget,
   connectToTarget
 };

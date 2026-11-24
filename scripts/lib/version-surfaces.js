@@ -18,7 +18,7 @@ function readVersions() {
   const lock = readJson('package-lock.json');
   const pluginPackage = readJson('integrations/openclaw-traecn-plugin/package.json');
   const pluginManifest = readJson('integrations/openclaw-traecn-plugin/openclaw.plugin.json');
-  const skillPath = path.join(ROOT, 'skills/traecnclaw-mcp/SKILL.md');
+  const skillPath = path.join(ROOT, 'skills/traecn-mcp/SKILL.md');
   const skill = fs.readFileSync(skillPath, 'utf8');
   const skillVersion = skill.match(/^\s*version:\s*["']?([^"'\s]+)["']?\s*$/m)?.[1];
 
@@ -47,7 +47,7 @@ function syncVersions() {
   pluginManifest.version = version;
   writeJson('integrations/openclaw-traecn-plugin/openclaw.plugin.json', pluginManifest);
 
-  const skillPath = path.join(ROOT, 'skills/traecnclaw-mcp/SKILL.md');
+  const skillPath = path.join(ROOT, 'skills/traecn-mcp/SKILL.md');
   const skill = fs.readFileSync(skillPath, 'utf8');
   const skillVersionPattern = /^(\s*version:\s*)["']?[^"'\s]+["']?\s*$/m;
   if (!skillVersionPattern.test(skill)) throw new Error('Portable skill version field was not found');

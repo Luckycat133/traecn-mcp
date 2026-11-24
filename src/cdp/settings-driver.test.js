@@ -208,16 +208,31 @@ function permissionSettingsDom({ selected = '手动审批', hiddenPanel = false,
 // siblings, while button[role=combobox] controls a Radix portal by its ID.
 // Trigger current values and another dropdown's options are deliberate decoys.
 function settingsDropdownFixture({ labelText = 'Markdown 文件的默认打开方式',
-  initialValue = 'Markdown 预览模式', values = ['代码编辑器', 'Markdown 预览模式', 'Markdown 预览模式（扩展）'] } = {}) {
+  initialValue = 'Markdown 预览模式', values = ['代码编辑器', 'Markdown 预览模式', 'Markdown 预览模式（扩展）'],
+  agent = false, delayedOptions = 0, delayedSelection = 0 } = {}) {
   const events = [];
   let opened = false;
   let selected = initialValue;
+  let pendingSelection = null;
+  let optionReads = 0;
+  let selectionReads = 0;
   const rect = (x, y) => () => ({ x, y, left: x, top: y, width: 160, height: 32 });
   const label = { innerText: labelText, textContent: labelText };
-  const current = { get innerText() { return selected; }, get textContent() { return selected; }, getBoundingClientRect: rect(500, 140) };
+  const current = {
+    get innerText() {
+      if (pendingSelection && ++selectionReads > delayedSelection) {
+        selected = pendingSelection;
+        pendingSelection = null;
+      }
+      return selected;
+    },
+    get textContent() { return selected; },
+    getBoundingClientRect: rect(500, 140)
+  };
   const trigger = {
     getAttribute: name => ({ 'aria-controls': 'radix-:owned-markdown:', 'aria-expanded': String(opened), role: 'combobox' })[name] ?? null,
     getBoundingClientRect: rect(500, 140), disabled: false,
+    scrollIntoView() {},
     dispatchEvent: event => { events.push(`trigger:${event.type}`); if (event.type === 'pointerdown') opened = true; }
   };
   const option = (text, index) => ({ textContent: text, innerText: text, getBoundingClientRect: rect(500, 180 + index * 40),
@@ -229,7 +244,7 @@ function settingsDropdownFixture({ labelText = 'Markdown 文件的默认打开�
   const choices = values.map(option);
   const portal = { getBoundingClientRect: rect(500, 180),
     getAttribute: name => name === 'role' ? 'listbox' : null,
-    querySelectorAll: selector => selector === '[role="option"]' ? choices : [] };
+    querySelectorAll: selector => selector === '[role="option"]' && ++optionReads > delayedOptions ? choices : [] };
   const unrelated = option('不属于此设置的选项', 5);
   const row = {
     get textContent() { return `${label.textContent}Markdown 文件将默认用此方式打开${selected}`; },
@@ -243,8 +258,17 @@ function settingsDropdownFixture({ labelText = 'Markdown 文件的默认打开�
     },
     dispatchEvent: event => events.push(`row:${event.type}`)
   };
+  const activeSection = {
+    getBoundingClientRect: rect(100, 180),
+    classList: { contains: name => name === 'active' },
+    querySelector: () => ({ innerText: '通用' })
+  };
+  const sidebar = { getBoundingClientRect: rect(100, 180), querySelectorAll: () => [activeSection] };
   const document = {
+    location: agent ? { pathname: '/test/solo/solo-lite.html' } : undefined,
+    querySelector: selector => agent && selector.includes('icube-settings-content-body') ? document : null,
     querySelectorAll: selector => {
+      if (agent && selector === '.icube-settings-sidebar-container') return [sidebar];
       if (selector.includes('icb-setting-item-container')) return [row];
       if (selector === '[role="option"]') return opened ? [...choices, unrelated] : [unrelated];
       if (selector.includes('auto-test-select-option')) return [current, unrelated, ...(opened ? choices : [])];
@@ -265,6 +289,7 @@ function settingsDropdownFixture({ labelText = 'Markdown 文件的默认打开�
     if (method === 'Input.dispatchMouseEvent' && parameters.type === 'mouseReleased') {
       if (parameters.y === 156) {
         opened = true;
+        optionReads = 0;
         pointerMovedSinceOpen = false;
       }
       else {
@@ -272,16 +297,18 @@ function settingsDropdownFixture({ labelText = 'Markdown 文件的默认打开�
         // The installed Radix Select prevents the first pointerup when no
         // pointermove has occurred after opening, before its value handler.
         if (choice && pointerMovedSinceOpen) {
-          selected = choice.textContent;
+          if (delayedSelection) pendingSelection = choice.textContent;
+          else selected = choice.textContent;
           opened = false;
-          events.push(`selected:${selected}`);
+          events.push(`selected:${choice.textContent}`);
         }
       }
     }
     if (method === 'Input.dispatchKeyEvent' && parameters.type === 'keyDown' && parameters.key === 'Escape') opened = false;
     return result;
   };
-  return { client, events, inputEvents, getSelected: () => selected, isOpen: () => opened };
+  return { client, events, inputEvents, getSelected: () => selected, isOpen: () => opened,
+    getOptionReads: () => optionReads, getSelectionReads: () => selectionReads };
 }
 
 function settingsToggleFixture({ checked = true, applyClick = true } = {}) {
@@ -348,6 +375,157 @@ asyncTest('SettingsDriver.listSections fallback covers every current settings pa
     '对话流', '浏览器', '索引与文档', '技能与命令', '规则与记忆', 'Hooks',
     'Beta', '关于 TRAE'
   ]);
+});
+
+function agentSettingsFixture({ delayedContent = 0 } = {}) {
+  const events = [];
+  let menuOpen = false;
+  let settingsOpen = false;
+  let activeSection = '通用';
+  let focused = null;
+  let saved = '20';
+  let checked = true;
+  let contentReads = 0;
+  const labels = ['通用', '运行环境'];
+  const node = (properties = {}) => Object.defineProperties({
+    getBoundingClientRect: () => ({ x: 10, y: 10, width: 150, height: 30 }),
+    getAttribute: () => null,
+    querySelector: () => null
+  }, Object.getOwnPropertyDescriptors(properties));
+  const text = value => ({ innerText: value });
+  const entries = labels.map(label => node({
+    querySelector: selector => selector === '.text' ? text(label) : null,
+    classList: { contains: name => name === 'active' && activeSection === label },
+    click() { activeSection = label; events.push(label); }
+  }));
+  const back = node({
+    querySelector: selector => selector === '.text' ? text('返回应用') : null,
+    click() { settingsOpen = false; events.push('返回应用'); }
+  });
+  const sidebar = node({ querySelectorAll: selector => selector.includes('.back-to-app-container') ? [back] : entries });
+  const trigger = node({ click() { menuOpen = true; events.push('account'); } });
+  const menu = node({ querySelectorAll: () => [trigger] });
+  const settings = node({
+    querySelector: selector => selector.includes('accountMenuLabel') ? text('设置') : null,
+    click() { settingsOpen = true; menuOpen = false; events.push('设置'); }
+  });
+
+  const input = node({
+    value: saved,
+    focus() { focused = this; },
+    select() { events.push('select'); },
+    blur() { saved = this.value; focused = null; events.push('blur'); }
+  });
+  const switchLabel = node({
+    click() { checked = !checked; events.push('toggle'); }
+  });
+  const checkbox = node({
+    get checked() { return checked; },
+    getBoundingClientRect: () => ({ width: 0, height: 0 }),
+    labels: [switchLabel]
+  });
+  const readOnly = node({ value: 'read-only value', readOnly: true });
+  const row = (label, selectorFragment, control) => node({
+    contains: el => control.labels?.includes(el),
+    querySelector(selector) {
+      if (selector === '.icb-setting-item-label') return text(label);
+      return selector.includes(selectorFragment) ? control : null;
+    },
+    querySelectorAll: selector => selector.includes(selectorFragment) ? [control] : []
+  });
+  const toggle = row('语音转录快捷键', 'checkbox', checkbox);
+  const threshold = row('工作树磁盘空间占用提醒', 'text', input);
+  const display = row('自定义产物存储路径', 'text', readOnly);
+  const body = { querySelectorAll: selector => selector === '.icb-setting-item-container' && ++contentReads > delayedContent
+    ? (activeSection === '通用' ? [toggle, display] : [threshold]) : [] };
+  const document = {
+    location: { pathname: '/test/solo/solo-lite.html' },
+    get activeElement() { return focused; },
+    querySelector(selector) {
+      if (selector.includes('accountHostRoot')) return menu;
+      if (selector.includes('icube-settings-content-body')) return settingsOpen ? body : null;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '.icube-settings-sidebar-container') return settingsOpen ? [sidebar] : [];
+      if (selector.includes('accountMenuItem')) return menuOpen ? [settings] : [];
+      if (selector === '.icb-setting-item-container') throw new Error('Agent settings must read the active settings body');
+      return [];
+    }
+  };
+  const client = vmSettingsClient(document);
+  const send = client.send;
+  client.send = (method, params) => {
+    if (method !== 'Input.insertText') return send(method, params);
+    assert.strictEqual(focused, input);
+    input.value = params.text;
+    events.push('insert');
+    return Promise.resolve({});
+  };
+  return { client, document, events, getSaved: () => saved, getChecked: () => checked,
+    getContentReads: () => contentReads };
+}
+
+asyncTest('Agent settings uses the real sidebar and returns to the same Agent surface', async () => {
+  const fixture = agentSettingsFixture();
+  const driver = new SettingsDriver(fixture.client);
+  assert.deepStrictEqual(Array.from(await driver.listSections()), ['通用', '运行环境']);
+  await assert.rejects(() => driver.switchTab('模型'), /Settings section "模型" was not activated/);
+  await driver.switchTab('运行环境');
+  assert.strictEqual(await driver.backToChat(), 'clicked: 返回应用');
+  assert.strictEqual(await driver.backToChat(), 'not found');
+  assert.deepStrictEqual(fixture.events, ['account', '设置', '运行环境', '返回应用']);
+});
+
+asyncTest('Agent settings fails without the native entry instead of returning legacy sections', async () => {
+  const fixture = agentSettingsFixture();
+  fixture.document.querySelector = () => null;
+  await assert.rejects(() => new SettingsDriver(fixture.client).listSections(), /Agent settings menu/);
+  assert.deepStrictEqual(fixture.events, []);
+});
+
+asyncTest('Agent settings polls for content in an active section that is still rendering', async () => {
+  const fixture = agentSettingsFixture({ delayedContent: 2 });
+  const driver = new SettingsDriver(fixture.client);
+  await driver.switchTab('运行环境');
+  const content = await driver.getContent();
+  assert.strictEqual(fixture.getContentReads(), 3);
+  assert.deepStrictEqual(content.items.map(item => item.label), ['工作树磁盘空间占用提醒']);
+});
+
+asyncTest('Agent dropdown waits for options to render and reads back a delayed selection', async () => {
+  const fixture = settingsDropdownFixture({ agent: true, delayedOptions: 2, delayedSelection: 2 });
+  const driver = new SettingsDriver(fixture.client);
+  await driver.switchTab('通用');
+  const label = 'Markdown 文件的默认打开方式';
+  assert.deepStrictEqual(Array.from(await driver.listOptions(label)), ['代码编辑器', 'Markdown 预览模式', 'Markdown 预览模式（扩展）']);
+  assert.strictEqual(fixture.getOptionReads(), 3);
+  assert.strictEqual(fixture.isOpen(), false);
+  assert.strictEqual(await driver.setDropdown(label, '代码编辑器'), 'selected: 代码编辑器');
+  assert.strictEqual(fixture.getOptionReads(), 3);
+  assert.strictEqual(fixture.getSelectionReads(), 3);
+  assert.strictEqual(fixture.getSelected(), '代码编辑器');
+  assert.strictEqual(fixture.isOpen(), false);
+});
+
+asyncTest('Agent settings commits scoped text on blur and leaves read-only inputs alone', async () => {
+  const fixture = agentSettingsFixture();
+  const driver = new SettingsDriver(fixture.client);
+  await driver.switchTab('通用');
+  const general = await driver.getContent();
+  assert.strictEqual(general.items.find(item => item.label === '自定义产物存储路径').controlType, 'display');
+  assert.match(await driver.typeText('自定义产物存储路径', 'other'), /writable control not found/);
+  assert.strictEqual(await driver.setToggle('语音转录快捷键', false), 'toggled to: false');
+  assert.strictEqual(await driver.setToggle('语音转录快捷键', false), 'already in desired state: false');
+  assert.strictEqual(fixture.getChecked(), false);
+  await driver.switchTab('运行环境');
+  assert.strictEqual(await driver.typeText('工作树磁盘空间占用提醒', '21'), 'typed: 21');
+  assert.strictEqual(fixture.getSaved(), '21');
+  const environment = await driver.getContent();
+  assert.deepStrictEqual(environment.items.map(item => [item.label, item.controlType, item.currentValue]), [
+    ['工作树磁盘空间占用提醒', 'text', '21']
+  ]);
+  assert.deepStrictEqual(fixture.events, ['account', '设置', 'toggle', '运行环境', 'select', 'insert', 'blur']);
 });
 
 asyncTest('SettingsDriver.switchTab rejects when the requested section was not activated', async () => {

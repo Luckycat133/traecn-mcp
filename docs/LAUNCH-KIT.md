@@ -84,7 +84,7 @@ old-version footage.
 1. **0–8 s — premise:** TraeCN and the MCP host visible on one Mac; overlay
    “local stdio · 20 focused tools · durable tasks”.
 2. **8–20 s — verified install:** show the public Release or scoped npm command,
-   then `traecnclaw doctor` with secrets and personal paths cropped.
+   then `traecn-mcp doctor` with secrets and personal paths cropped.
 3. **20–30 s — discovery:** MCP host lists 20 tools; briefly show first
    `traecn_send_message` and last `traecn_decide_approval`.
 4. **30–52 s — task:** use the Web Control Console to send a harmless task in a
@@ -119,12 +119,12 @@ npm package.
 
 ### 1:25–2:05 — Prepare TraeCN
 
-Run `traecnclaw doctor`, explain the CDP requirement, and use Quickstart against
+Run `traecn-mcp doctor`, explain the CDP requirement, and use Quickstart against
 the existing logged-in profile. Keep the gateway on loopback for the demo.
 
 ### 2:05–2:45 — Connect the MCP host
 
-Run `traecnclaw setup-mcp`, merge the generated entry into the chosen host, and
+Run `traecn-mcp setup-mcp`, merge the generated entry into the chosen host, and
 restart/reconnect it. Show exactly 20 tools.
 
 ### 2:45–3:50 — Run one task

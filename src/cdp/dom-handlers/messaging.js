@@ -1,5 +1,7 @@
 'use strict';
 
+/* global document */
+
 /**
  * messaging handlers.
  *
@@ -270,9 +272,35 @@ async function sendMessage(driver, text) {
   }
 }
 
-async function stopGeneration(driver) {
+function standaloneStopState(expectedSessionId, click) {
+  const active = document.querySelector('.task-list-panel .taskItem.taskItemSelected')?.closest('[data-session-id]');
+  const sessionId = active?.getAttribute('data-session-id');
+  if (!sessionId || (expectedSessionId && expectedSessionId !== sessionId)) {
+    return { state: 'active_conversation_mismatch' };
+  }
+  const buttons = Array.from(document.querySelectorAll('button.chat-input-v2-send-button'))
+    .filter(button => button.getClientRects().length && button.querySelector('.chat-input-v2-send-button-stop-icon, .codicon-stop-circle'));
+  if (buttons.length !== 1) return { state: buttons.length ? 'stop_button_ambiguous' : 'stop_button_not_found', sessionId };
+  if (!click || buttons[0].disabled || buttons[0].getAttribute('aria-disabled') === 'true') {
+    return { state: 'generating', sessionId };
+  }
+  buttons[0].click();
+  return { state: 'clicked', sessionId };
+}
+
+async function stopGeneration(driver, expectedSessionId) {
   if (!driver.client || typeof driver.client.send !== 'function') {
     return { success: false, reason: 'no_cdp_client' };
+  }
+  if (driver.traeAdapter?.environment?.target?.workspaceKind === 'agent') {
+    const before = await dom.evaluate(driver.client, standaloneStopState, [expectedSessionId || null, true]);
+    if (before.state !== 'clicked') return { success: false, reason: before.state };
+    const confirmed = await driver._waitForExpression(
+      '(' + standaloneStopState.toString() + ')(' + safeJsValue(before.sessionId) + ', false).state === "stop_button_not_found"',
+      3500, 150
+    );
+    return confirmed ? { success: true, reason: 'generation_stopped' }
+      : { success: false, reason: 'stop_not_confirmed' };
   }
   const result = await driver.client.send('Runtime.evaluate', {
     expression: `
@@ -362,7 +390,7 @@ async function delegate(driver, task, options = {}) {
     await driver.client.send('Runtime.evaluate', {
       expression: `
         (function() {
-          var sidebar = document.querySelector('.soloaisidebar');
+          var sidebar = document.querySelector('.soloaisidebar, .task-list-panel');
           if (!sidebar || sidebar.offsetHeight < 100) {
             document.body.focus();
             document.body.dispatchEvent(new KeyboardEvent('keydown', {
@@ -455,6 +483,35 @@ async function _waitForExpression(driver, expression, timeoutMs = 5000, pollMs =
   return false;
 }
 
+function standaloneDraftState(clickNew) {
+  const visible = el => Boolean(el?.getClientRects().length);
+  const composer = Array.from(document.querySelectorAll('.chat-input-v2-input-box-editable')).find(visible);
+  const selected = document.querySelector('.task-list-panel .taskItem.taskItemSelected');
+  const isDraft = Boolean(composer && visible(document.querySelector('.initial-chat-panel')) && !selected);
+  if (composer?.textContent?.trim()) return 'unsent_text';
+  if (isDraft || !clickNew) return isDraft ? 'ready' : 'not_ready';
+
+  const buttons = Array.from(document.querySelectorAll('.task-list-panel .task-list-new-task-item:not(.task-list-skills-item)')).filter(visible);
+  if (buttons.length !== 1) return 'new_task_control_unavailable';
+  buttons[0].click();
+  return 'clicked';
+}
+
+async function newStandaloneAgentChat(driver) {
+  const state = await dom.evaluate(driver.client, standaloneDraftState, [true]);
+  if (state !== 'ready') {
+    if (state !== 'clicked') throw TraeCNAutomationError.freshChatFailed(state || 'draft_state_unknown');
+    const ready = await driver._waitForExpression(
+      '(' + standaloneDraftState.toString() + ')(false) === "ready"', 4000, 200
+    );
+    if (!ready) throw TraeCNAutomationError.freshChatFailed('new draft was not confirmed');
+  }
+  driver._lastTaskText = '';
+  driver._pendingUserTask = '';
+  driver._preSendSnapshot = '';
+  return true;
+}
+
 async function newChat(driver) {
   const existingReviewGate = await driver.checkTaskReviewGate();
   if (existingReviewGate.awaitingReview && existingReviewGate.reviewCount !== 0) {
@@ -463,6 +520,10 @@ async function newChat(driver) {
       throw TraeCNAutomationError.reviewGateBlocked(`new chat blocked: ${gateResolution.reason || gateResolution.error || 'unknown'}`);
     }
     await sleep(driver.config.postActionDelayMs * 2);
+  }
+
+  if (driver.traeAdapter?.environment?.target?.workspaceKind === 'agent') {
+    return newStandaloneAgentChat(driver);
   }
 
   const alreadyFresh = await driver.client.send('Runtime.evaluate', {

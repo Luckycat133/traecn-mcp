@@ -51,6 +51,37 @@ function fixture(count = 100) {
 }
 
 (async () => {
+  await r.asyncTest('an acceptance wake coalesces before the periodic tick and is cancelled by shutdown', async () => {
+    const f = fixture(0);
+    try {
+      let scheduled;
+      let wakes = 0;
+      let cancelled;
+      f.gateway._setTimeout = (callback, delay) => {
+        assert.equal(delay, 0);
+        scheduled = { callback };
+        return scheduled;
+      };
+      f.gateway._clearTimeout = timer => { cancelled = timer; };
+      f.gateway._ensureBackgroundPolling();
+      f.gateway._pollBackgroundOnce = async () => { wakes++; };
+      f.gateway._wakeBackgroundPolling();
+      const pending = scheduled;
+      f.gateway._wakeBackgroundPolling();
+      assert.strictEqual(scheduled, pending);
+      pending.callback();
+      assert.equal(wakes, 1);
+      f.gateway._wakeBackgroundPolling();
+      const last = scheduled;
+      f.gateway._stopBackgroundPolling();
+      assert.strictEqual(cancelled, last);
+      last.callback();
+      assert.equal(wakes, 1);
+    } finally {
+      f.close();
+    }
+  });
+
   await r.asyncTest('busy queued tasks yield to native I/O while retaining each durable snapshot', async () => {
     const f = fixture();
     try {

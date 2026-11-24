@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const packageInfo = require('../../../package.json');
 const { parseBody } = require('../request-gate');
 const { rejectBadRequest } = require('./helpers');
@@ -115,6 +117,48 @@ async function handleWorkspaceContext(req, res, ctx) {
   }
 }
 
+async function openAgentProject(req, res, ctx, projectPath, { findTraeCNBinary, openProjectInExistingWindow, timeoutMs }) {
+  let requested;
+  try {
+    if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) throw new Error('absolute path required');
+    requested = fs.realpathSync(projectPath);
+    if (!fs.statSync(requested).isDirectory()) throw new Error('folder required');
+  } catch {
+    return rejectBadRequest(req, res, ctx, 'projectPath must be an existing absolute directory');
+  }
+  return ctx._withUiActionLock(async () => {
+    if (ctx.traeTarget?.workspaceKind !== 'agent') {
+      return ctx._json(req, res, { success: false, code: 'WORKSPACE_CONTEXT_CHANGED', error: 'TraeCN Agent is no longer the active target.' }, 409);
+    }
+    const driver = ctx.driver;
+    let selected = await driver.selectAgentWorkspace(requested);
+    if (selected.reason === 'agent_workspace_not_found') {
+      const binPath = findTraeCNBinary();
+      if (!binPath) return ctx._json(req, res, { success: false, error: 'TraeCN binary not found.' }, 404);
+      await openProjectInExistingWindow({ binPath, projectPath: requested, timeoutMs });
+      await ctx.client.send('Page.bringToFront').catch(() => {});
+      for (let attempt = 0; attempt < 3 && selected.reason === 'agent_workspace_not_found'; attempt++) {
+        await new Promise(resolve => ctx._setTimeout(resolve, 400));
+        selected = await driver.selectAgentWorkspace(requested);
+      }
+    }
+    if (!selected.success || selected.projectPath !== requested) {
+      return ctx._json(req, res, {
+        success: false, code: 'WORKSPACE_CONTEXT_UNAVAILABLE',
+        error: selected.reason === 'agent_workspace_draft_required'
+          ? 'Open an empty Agent draft before changing its workspace.'
+          : 'TraeCN Agent did not confirm the requested workspace.',
+        reason: selected.reason
+      }, 409);
+    }
+    ctx._selectedWorkspacePath = requested;
+    return ctx._json(req, res, {
+      success: true, alreadyRunning: true, projectPath: requested,
+      verifiedWorkspace: { folderName: path.basename(requested), rootPath: requested }
+    });
+  });
+}
+
 async function handleOpenProject(req, res, ctx) {
   const body = await parseBody(req);
   if (!body.projectPath) {
@@ -144,6 +188,19 @@ async function handleOpenProject(req, res, ctx) {
     if (alreadyRunning && !newInstance) {
       try {
         await ctx._ensureConnection();
+        if (ctx.traeTarget?.workspaceKind === 'agent' &&
+            (await ctx.driver.inspectWorkspaceBlockers()).loginVisible) {
+          return ctx._json(req, res, {
+            success: false,
+            error: 'Sign in to TraeCN Agent before selecting a workspace.',
+            code: 'LOGIN_REQUIRED'
+          }, 409);
+        }
+        if (ctx.traeTarget?.workspaceKind === 'agent' && typeof ctx.driver.selectAgentWorkspace === 'function') {
+          return openAgentProject(req, res, ctx, projectPath, {
+            findTraeCNBinary, openProjectInExistingWindow, timeoutMs: body.timeoutMs
+          });
+        }
         const current = await ctx._assertProjectWorkspace(projectPath);
         if (current?.currentPath && current.currentPath === current.requestedPath) {
           ctx._selectedWorkspacePath = projectPath;

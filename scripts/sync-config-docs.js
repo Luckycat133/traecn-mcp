@@ -5,7 +5,6 @@ const fs = require('fs');
 const path = require('path');
 const {
   renderEnvDefaultsBlock,
-  renderReadmeDefaultsBlock,
   renderConfigurationDocument
 } = require('../src/config/runtime-schema');
 
@@ -22,22 +21,14 @@ function replaceBlock(content, replacement, beginMarker, endMarker) {
 
 function expectedFiles() {
   const envPath = path.join(repoRoot, '.env.example');
-  const readmePath = path.join(repoRoot, 'README.md');
   const env = replaceBlock(
     fs.readFileSync(envPath, 'utf8'),
     renderEnvDefaultsBlock(),
     '# BEGIN GENERATED: core runtime defaults',
     '# END GENERATED: core runtime defaults'
   );
-  const readme = replaceBlock(
-    fs.readFileSync(readmePath, 'utf8'),
-    renderReadmeDefaultsBlock(),
-    '<!-- BEGIN GENERATED: runtime defaults -->',
-    '<!-- END GENERATED: runtime defaults -->'
-  );
   return new Map([
     [envPath, env],
-    [readmePath, readme],
     [path.join(repoRoot, 'docs', 'configuration.md'), renderConfigurationDocument()]
   ]);
 }

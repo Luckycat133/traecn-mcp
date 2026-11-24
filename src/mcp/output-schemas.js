@@ -12,16 +12,16 @@
  */
 
 const COMMON_RESULT_FIELDS = Object.freeze({
-  success: { type: 'boolean', description: 'Whether the operation succeeded.' },
-  status: { type: 'string', description: 'Stable operation or task status.' },
-  message: { type: 'string', description: 'Human-readable outcome summary.' },
-  taskId: { type: 'string', description: 'Stable gateway task identifier.' },
-  conversationId: { type: 'string', description: 'Stable TraeCN conversation identifier.' },
-  changed: { type: 'boolean', description: 'Whether visible TraeCN state changed.' },
-  retryable: { type: 'boolean', description: 'Whether retrying the same call can succeed later.' },
-  code: { type: 'string', description: 'Stable machine-readable result or error code.' },
-  nextAction: { type: 'string', description: 'Suggested next step after a failure.' },
-  error: { type: 'string', description: 'Error identifier or diagnostic when the operation failed.' }
+  success: { type: 'boolean', description: 'Operation succeeded.' },
+  status: { type: 'string', description: 'Operation/task status.' },
+  message: { type: 'string', description: 'Outcome summary.' },
+  taskId: { type: 'string', description: 'Stable gateway task ID.' },
+  conversationId: { type: 'string', description: 'Stable TraeCN conversation ID.' },
+  changed: { type: 'boolean', description: 'Visible TraeCN state changed.' },
+  retryable: { type: 'boolean', description: 'Same-call retry may succeed later.' },
+  code: { type: 'string', description: 'Stable result/error code.' },
+  nextAction: { type: 'string', description: 'Suggested failure recovery step.' },
+  error: { type: 'string', description: 'Failure identifier or diagnostic.' }
 });
 
 function toolOutputSchema(description, properties) {
@@ -77,7 +77,8 @@ const TASK_SNAPSHOT_PROPERTIES = {
 // ListResult family — discovery tools returning arrays of visible TraeCN state.
 const LIST_MODELS_PROPERTIES = {
   current: { type: 'string', description: 'Currently selected model name.' },
-  models: STRING_ARRAY
+  models: STRING_ARRAY,
+  manualModelsHidden: { type: 'boolean', description: 'True when Auto mode hides manual models from the native picker.' }
 };
 const LIST_SECTIONS_PROPERTIES = {
   sections: { type: 'array', items: { type: 'string' }, description: 'Visible settings section names in UI order.' }
