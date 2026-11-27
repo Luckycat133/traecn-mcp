@@ -8,6 +8,7 @@ const packageInfo = require('../package.json');
 const {
   buildPublicMirror,
   compareTrees,
+  renderGlamaDockerfile,
   synchronizeLocalSkill,
   verifyPublicMirror
 } = require('./public-mirror');
@@ -19,6 +20,17 @@ const revision = '0123456789abcdef0123456789abcdef01234567';
 const escapedVersion = packageInfo.version.replace(/\./g, '\\.');
 
 try {
+  assert.strictEqual(
+    fs.readFileSync(path.join(repoRoot, 'Dockerfile'), 'utf8'),
+    renderGlamaDockerfile(),
+    'The repository-linked Glama Dockerfile must match the current release template.'
+  );
+  assert.strictEqual(
+    fs.readFileSync(path.join(repoRoot, 'glama.json'), 'utf8'),
+    fs.readFileSync(path.join(repoRoot, 'distribution/public-mirror/glama.json'), 'utf8'),
+    'The repository-linked Glama metadata must match the public export metadata.'
+  );
+
   const localSkill = path.join(tempRoot, 'local-skill');
   assert.deepStrictEqual(synchronizeLocalSkill({ destinationRoot: localSkill, check: true })
     .filter(item => item.path === 'SKILL.md'), [{ path: 'SKILL.md', reason: 'missing' }]);

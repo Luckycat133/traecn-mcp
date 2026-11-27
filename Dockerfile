@@ -1,4 +1,4 @@
-# Glama inspection image for TraeCN MCP 0.7.0
+# Glama inspection image for TraeCN MCP 0.7.1
 #
 # This image lets Glama build the public package and inspect the stdio MCP
 # schema. Normal TRAECNclaw execution remains local-first: the gateway and
@@ -10,7 +10,7 @@ FROM node:22-alpine
 LABEL org.opencontainers.image.title="TraeCN MCP"
 LABEL org.opencontainers.image.description="Local-first MCP server and Agent Skill for TraeCN desktop automation"
 LABEL org.opencontainers.image.source="https://github.com/Luckycat133/traecn-mcp"
-LABEL org.opencontainers.image.version="0.7.0"
+LABEL org.opencontainers.image.version="0.7.1"
 
 RUN apk add --no-cache ca-certificates curl
 
@@ -18,10 +18,10 @@ RUN apk add --no-cache ca-certificates curl
 # this Linux image only to inspect the stdio schema, so bypass npm's platform
 # guard here without changing the package metadata or claiming Linux support.
 RUN curl -fsSLo /tmp/traecnclaw.tgz \
-      "https://github.com/Luckycat133/traecn-mcp/releases/download/v0.7.0/traecnclaw-0.7.0.tgz" \
+      "https://github.com/Luckycat133/traecn-mcp/releases/download/v0.7.1/traecnclaw-0.7.1.tgz" \
     && curl -fsSLo /tmp/traecn-release.json \
-      "https://github.com/Luckycat133/traecn-mcp/releases/download/v0.7.0/traecn-mcp-release.json" \
-    && node -e 'const fs = require("node:fs"); const crypto = require("node:crypto"); const artifact = require("/tmp/traecn-release.json").serverPackage.artifact; if (artifact.path !== "dist/traecnclaw-0.7.0.tgz" || crypto.createHash("sha256").update(fs.readFileSync("/tmp/traecnclaw.tgz")).digest("hex") !== artifact.sha256) process.exit(1)' \
+      "https://github.com/Luckycat133/traecn-mcp/releases/download/v0.7.1/traecn-mcp-release.json" \
+    && node -e 'const fs = require("node:fs"); const crypto = require("node:crypto"); const artifact = require("/tmp/traecn-release.json").serverPackage.artifact; if (artifact.path !== "dist/traecnclaw-0.7.1.tgz" || crypto.createHash("sha256").update(fs.readFileSync("/tmp/traecnclaw.tgz")).digest("hex") !== artifact.sha256) process.exit(1)' \
     && npm install -g --ignore-scripts --force /tmp/traecnclaw.tgz \
     && rm -f /tmp/traecnclaw.tgz /tmp/traecn-release.json \
     && npm cache clean --force
